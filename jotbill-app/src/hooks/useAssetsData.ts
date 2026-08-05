@@ -6,6 +6,19 @@ import { useQuery } from '@tanstack/react-query';
 import { useMemo } from 'react';
 import { billsService } from '../services/api/bills';
 import { QUERY_KEYS, CACHE_TIME, GC_TIME } from '../lib/queryClient';
+import type { BillStatistics } from '../types/bill';
+
+const EMPTY_BILL_STATISTICS: BillStatistics = {
+  totalIncome: 0,
+  totalExpense: 0,
+  balance: 0,
+  incomeCount: 0,
+  expenseCount: 0,
+  expenseCategoryStats: [],
+  incomeCategoryStats: [],
+  monthlyTrends: [],
+  dailyTrends: [],
+};
 
 export function useAssetsData() {
   const currentYear = new Date().getFullYear();
@@ -15,7 +28,7 @@ export function useAssetsData() {
     queryKey: ['total-assets'],
     queryFn: async () => {
       const res = await billsService.getBillStatistics({});
-      return res.data ?? { totalIncome: 0, totalExpense: 0, balance: 0 };
+      return res.data ?? EMPTY_BILL_STATISTICS;
     },
     staleTime: CACHE_TIME.DASHBOARD,
     gcTime: GC_TIME.DEFAULT,
@@ -35,7 +48,7 @@ export function useAssetsData() {
         endDate,
         granularity: 'monthly',
       });
-      return res.data ?? { monthlyTrends: [], totalIncome: 0, totalExpense: 0 };
+      return res.data ?? EMPTY_BILL_STATISTICS;
     },
     staleTime: CACHE_TIME.STATISTICS,
     gcTime: GC_TIME.DEFAULT,
