@@ -35,3 +35,7 @@ phase1-test/.env*
 *.aab
 coverage/
 **/build/
+
+# Local Gradle cache and temporary build directory
+.tmp-gradle-build/
+.tmp-gradle-tmp/

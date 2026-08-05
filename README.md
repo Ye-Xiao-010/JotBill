@@ -6,7 +6,7 @@ JotBill 是基于 LiteNote 前端改造的本地优先 AI 自动记账应用。�
 
 当前仓库同时包含两部分：
 
-- `litenote-mobile-app/` 和 `litenote-backend/` 是 LiteNote 的迁移基线，便于运行现有界面和核对旧字段。
+- `jotbill-app/` 和 `litenote-backend/` 是 LiteNote 的迁移基线，便于运行现有界面和核对旧字段。
 - JotBill 的 Room、SQLCipher、识别链路和 Native Module 正按阶段迁移，尚未全部实现。
 
 JotBill 的目标架构、业务规则和完成标准以以下文档为准：
@@ -19,7 +19,7 @@ JotBill 的目标架构、业务规则和完成标准以以下文档为准：
 
 其中 `docs/types/Native.d.ts` 是 React Native 与 Android 原生层之间的唯一接口边界；其他文档中的接口示例必须与它保持一致。
 <p align="center">
- <img src="docs/screenshots/banner.png" alt="LiteNote Banner" width="100%" />
+ <img src="docs/screenshots/banner.png" alt="JotBill Banner" width="100%" />
 </p>
 
 ## 当前基线能力
@@ -98,7 +98,7 @@ lite-note-app/
 │   │   ├── ai/              # AI 对话 + 工具调用 + ASR
 │   │   └── app-version/     # 移动端版本管理
 │   └── prisma/              # 数据库 Schema
-├── litenote-mobile-app/     # React Native 移动应用
+├── jotbill-app/     # React Native 移动应用
 │   ├── src/
 │   │   ├── screens/         # 18 个屏幕
 │   │   ├── components/      # UI / 业务 / 图表组件
@@ -155,7 +155,7 @@ npm run backend:start:dev
 
 ### 5. 启动迁移基线移动端
 
-移动端默认连接 `http://localhost:3006`（在 `litenote-mobile-app/.env.development` 中配置）。
+移动端默认连接 `http://localhost:3006`（在 `jotbill-app/.env.development` 中配置）。
 
 ```bash
 npm run mobile:android:dev
@@ -177,7 +177,7 @@ npm run mobile:android:dev
 | `ASR_API_KEY` | 否 | 语音识别 API Key |
 | `ASR_MODEL` | 否 | 语音识别模型名称 |
 
-### 移动端 (`litenote-mobile-app/.env.development`)
+### 移动端 (`jotbill-app/.env.development`)
 
 | 变量 | 说明 |
 |------|------|

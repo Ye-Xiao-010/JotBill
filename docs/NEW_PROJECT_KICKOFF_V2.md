@@ -99,14 +99,14 @@ LITENOTE_AI_PAYMENT_DESIGN.md 是识别链路的方案提案，聚焦"AI 截图�
 LiteNote 移动端的技术栈和关键入口为：
 
 ```text
-litenote-mobile-app/package.json       React Native 0.81.4 / React 19.1.0 及依赖
-litenote-mobile-app/App.tsx            RN 根组件和原生事件监听
-litenote-mobile-app/src/navigation/   Native Stack 和底部导航
-litenote-mobile-app/src/screens/      仪表盘、账单、统计、预算、目标、AI 等页面
-litenote-mobile-app/src/components/   通用控件、卡片、弹窗、图表和分类选择器
-litenote-mobile-app/src/hooks/        React Query 数据查询和页面状态
-litenote-mobile-app/src/services/     Axios、API、认证和更新服务
-litenote-mobile-app/src/providers/    AuthProvider 等上下文
+jotbill-app/package.json       React Native 0.81.4 / React 19.1.0 及依赖
+jotbill-app/App.tsx            RN 根组件和原生事件监听
+jotbill-app/src/navigation/   Native Stack 和底部导航
+jotbill-app/src/screens/      仪表盘、账单、统计、预算、目标、AI 等页面
+jotbill-app/src/components/   通用控件、卡片、弹窗、图表和分类选择器
+jotbill-app/src/hooks/        React Query 数据查询和页面状态
+jotbill-app/src/services/     Axios、API、认证和更新服务
+jotbill-app/src/providers/    AuthProvider 等上下文
 ```
 
 前端当前实际数据流是：
@@ -144,12 +144,12 @@ LiteNote Android 原生层的实际支付链路是通知触发悬浮窗，而不
 关键实现文件位于：
 
 ```text
-litenote-mobile-app/android/app/src/main/java/com/litenote/notification/PaymentNotificationService.kt
-litenote-mobile-app/android/app/src/main/java/com/litenote/notification/PaymentOverlayManager.kt
-litenote-mobile-app/android/app/src/main/java/com/litenote/notification/BillApiService.kt
-litenote-mobile-app/android/app/src/main/java/com/litenote/notification/PaymentNotificationModule.kt
-litenote-mobile-app/android/app/src/main/java/com/litenote/notification/PaymentNotificationHeadlessService.kt
-litenote-mobile-app/android/app/src/main/java/com/litenote/notification/BootCompletedReceiver.kt
+jotbill-app/android/app/src/main/java/com/litenote/notification/PaymentNotificationService.kt
+jotbill-app/android/app/src/main/java/com/litenote/notification/PaymentOverlayManager.kt
+jotbill-app/android/app/src/main/java/com/litenote/notification/BillApiService.kt
+jotbill-app/android/app/src/main/java/com/litenote/notification/PaymentNotificationModule.kt
+jotbill-app/android/app/src/main/java/com/litenote/notification/PaymentNotificationHeadlessService.kt
+jotbill-app/android/app/src/main/java/com/litenote/notification/BootCompletedReceiver.kt
 ```
 
 ```text

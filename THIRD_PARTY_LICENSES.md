@@ -11,7 +11,7 @@
 
 ## 发布前必须核验
 
-- `litenote-mobile-app/package-lock.json` 中所有生产依赖及其传递依赖。
+- `jotbill-app/package-lock.json` 中所有生产依赖及其传递依赖。
 - Android Gradle 依赖，包括 Room、SQLCipher、Hilt、OkHttp 和 WorkManager。
 - `docs/screenshots/` 中的 Logo、字体、图标和演示素材是否具有可再分发授权。
 - 阶段二 CSV/XLSX/ZIP 导入依赖及其许可证兼容性。

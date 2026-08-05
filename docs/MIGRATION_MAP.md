@@ -23,7 +23,7 @@
 
 ## 一、屏幕文件迁移清单
 
-LiteNote 实际有 **24 个 .tsx 文件**(含 reports 下 8 个 Tab/视图),路径前缀 `litenote-mobile-app/src/screens/`。
+LiteNote 实际有 **24 个 .tsx 文件**(含 reports 下 8 个 Tab/视图),路径前缀 `jotbill-app/src/screens/`。
 
 ### 1.1 顶层页面(4 个)
 
@@ -98,7 +98,7 @@ LiteNote 实际有 **24 个 .tsx 文件**(含 reports 下 8 个 Tab/视图),路�
 
 ## 二、Services 迁移清单
 
-LiteNote 路径前缀 `litenote-mobile-app/src/services/`。
+LiteNote 路径前缀 `jotbill-app/src/services/`。
 
 | 文件 | 标记 | 迁移说明 |
 |---|---|---|
@@ -122,7 +122,7 @@ LiteNote 路径前缀 `litenote-mobile-app/src/services/`。
 
 ## 三、Types 迁移清单
 
-LiteNote 路径前缀 `litenote-mobile-app/src/types/`。
+LiteNote 路径前缀 `jotbill-app/src/types/`。
 
 | 文件 | 标记 | 迁移说明 |
 |---|---|---|
@@ -142,7 +142,7 @@ LiteNote 路径前缀 `litenote-mobile-app/src/types/`。
 
 ## 四、原生模块迁移清单
 
-LiteNote 路径前缀 `litenote-mobile-app/android/app/src/main/java/com/litenote/`,包名改为 `com.jotbill.app`。
+LiteNote 路径前缀 `jotbill-app/android/app/src/main/java/com/litenote/`,包名改为 `com.jotbill.app`。
 
 ### 4.1 已有原生模块(4 个)
 

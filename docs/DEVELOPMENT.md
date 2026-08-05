@@ -16,7 +16,7 @@
 
 ## 当前代码边界
 
-- `litenote-mobile-app/` 是 LiteNote React Native 迁移基线，当前包名仍为 `com.litenote`。
+- `jotbill-app/` 是 JotBill React Native 迁移基线，当前包名仍为 `com.jotbill.app`。
 - `litenote-backend/` 只用于运行和核对 LiteNote 基线，不是 JotBill 的目标运行时。
 - JotBill 的 Room、SQLCipher、Native Module 和本地识别链路尚未全部落地。
 - 不得把旧后端 API 作为 JotBill 本地数据层的临时替代品。
