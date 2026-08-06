@@ -16,6 +16,9 @@ import com.jotbill.app.utils.SentryLogger
 import com.jotbill.app.auth.AuthTokenPackage
 import com.jotbill.app.hotupdate.HotUpdatePackage
 import com.jotbill.app.bridge.DataPackage
+import com.jotbill.app.ai.AiPackage
+import com.jotbill.app.runtime.RuntimePackage
+import com.jotbill.app.backup.BackupPackage
 import com.facebook.react.ReactInstanceManager
 import com.facebook.react.bridge.JSBundleLoader
 import java.io.File
@@ -71,6 +74,9 @@ class MainApplication : Application(), ReactApplication {
               add(AuthTokenPackage())
               add(HotUpdatePackage())
               add(DataPackage())
+              add(AiPackage())
+              add(RuntimePackage())
+              add(BackupPackage())
             }
 
         override fun getJSMainModuleName(): String = "index"

@@ -103,6 +103,7 @@ export interface Account {
 export interface AccountInput {
   name: string;
   subtype: string;
+  kind?: Account['kind'];
   initialBalanceMinor?: number;
   currency?: string;
   icon?: string;
@@ -186,7 +187,9 @@ export interface FinancialGoalInput {
   targetDate?: string | null;
 }
 
-export type FinancialGoalUpdateInput = Partial<FinancialGoalInput>;
+export type FinancialGoalUpdateInput = Partial<FinancialGoalInput> & {
+  currentAmountMinor?: number;
+};
 
 export interface Rule {
   id: string;

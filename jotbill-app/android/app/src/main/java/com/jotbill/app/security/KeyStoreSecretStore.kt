@@ -37,6 +37,22 @@ class KeyStoreSecretStore(context: Context) {
         return passphrase
     }
 
+    /** 使用 Android Keystore 加密需要持久化的敏感字符串。 */
+    fun encryptSecret(value: String): String {
+        return Base64.encodeToString(
+            encrypt(value.toByteArray(Charsets.UTF_8)),
+            Base64.NO_WRAP
+        )
+    }
+
+    /** 解密由 encryptSecret 保存的敏感字符串。 */
+    fun decryptSecret(value: String): String {
+        return String(
+            decrypt(Base64.decode(value, Base64.NO_WRAP)),
+            Charsets.UTF_8
+        )
+    }
+
     private fun encrypt(plainText: ByteArray): ByteArray {
         val cipher = Cipher.getInstance(TRANSFORMATION)
         cipher.init(Cipher.ENCRYPT_MODE, getOrCreateKey())

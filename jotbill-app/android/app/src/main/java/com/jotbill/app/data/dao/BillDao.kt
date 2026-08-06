@@ -108,6 +108,9 @@ interface BillDao {
     @Query("SELECT COUNT(*) FROM bills")
     suspend fun count(): Int
 
+    @Query("SELECT * FROM bills ORDER BY occurred_at ASC, id ASC")
+    suspend fun getAllForExport(): List<BillEntity>
+
     @Query(
         """
         SELECT

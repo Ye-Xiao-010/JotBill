@@ -62,6 +62,10 @@ declare global {
 
       // 账户管理
       Accounts: undefined;
+      AiProviders: undefined;
+      RuntimeStatus: undefined;
+      DataManagement: undefined;
+      Rules: undefined;
       CreateAccount: undefined;
       EditAccount: {
         accountId: number;

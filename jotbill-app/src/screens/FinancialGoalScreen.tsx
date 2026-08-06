@@ -12,66 +12,76 @@ import {
   TextInput,
   Modal,
   RefreshControl,
-  Dimensions,
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useMutation } from '@tanstack/react-query';
 import { ChevronLeft, Plus, Trash2 } from 'lucide-react-native';
 import { ThemeColors } from '../theme/colors';
 import { spacing, borderRadius, borderWidth, shadow } from '../theme/spacing';
 import { ProgressBar, BrutalPressable } from '../components/ui';
 import { useStyles } from '../hooks';
 import { useAlert } from '../providers';
-import { financialGoalsService } from '../services/api/financial-goals';
+import {
+  nativeData,
+  type FinancialGoal,
+  type FinancialGoalInput,
+  type FinancialGoalUpdateInput,
+} from '../native';
 import { QUERY_KEYS, invalidateCache } from '../lib/queryClient';
-import type {
-  FinancialGoalProgress,
-  CreateFinancialGoalDto,
-  UpdateFinancialGoalDto,
-} from '../types/financial-goal';
 
-const ICON_OPTIONS = ['🎯', '🏠', '🚗', '✈️', '💎', '📱', '🎓', '💰', '🏦', '🎁', '👶', '💪'];
-const { width: SCREEN_WIDTH } = Dimensions.get('window');
-// 图标网格：6列，动态计算尺寸适配弹窗宽度
-const ICON_COLS = 6;
-const MODAL_INNER_WIDTH = SCREEN_WIDTH - spacing.xl * 4; // overlay padding + modal padding
-const ICON_SIZE = Math.floor((MODAL_INNER_WIDTH - (ICON_COLS - 1) * spacing.sm) / ICON_COLS);
+interface GoalView extends FinancialGoal {
+  progress: number;
+  isCompleted: boolean;
+}
+
+function toGoalView(goal: FinancialGoal): GoalView {
+  const progress = goal.targetAmountMinor === 0
+    ? 100
+    : Math.min(100, (goal.currentAmountMinor / goal.targetAmountMinor) * 100);
+  return {
+    ...goal,
+    progress,
+    isCompleted: goal.currentAmountMinor >= goal.targetAmountMinor,
+  };
+}
+
+function formatAmount(amountMinor: number): string {
+  return (amountMinor / 100).toLocaleString('zh-CN', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+}
 
 export default function FinancialGoalScreen() {
   const navigation = useNavigation();
   const styles = useStyles(createStyles);
   const { confirm } = useAlert();
-  const queryClient = useQueryClient();
 
   // 弹窗状态
   const [showFormModal, setShowFormModal] = useState(false);
   const [showDepositModal, setShowDepositModal] = useState(false);
-  const [editingGoal, setEditingGoal] = useState<FinancialGoalProgress | null>(null);
-  const [depositGoal, setDepositGoal] = useState<FinancialGoalProgress | null>(null);
+  const [editingGoal, setEditingGoal] = useState<GoalView | null>(null);
+  const [depositGoal, setDepositGoal] = useState<GoalView | null>(null);
 
   // 表单状态
   const [formName, setFormName] = useState('');
   const [formTarget, setFormTarget] = useState('');
   const [formDeadline, setFormDeadline] = useState('');
-  const [formIcon, setFormIcon] = useState('🎯');
   const [depositAmount, setDepositAmount] = useState('');
 
   // 数据查询
   const { data: goalsData, isFetching, refetch } = useQuery({
     queryKey: QUERY_KEYS.financialGoals,
-    queryFn: async () => {
-      const res = await financialGoalsService.getProgress();
-      return Array.isArray(res) ? res : (res.data ?? []);
-    },
+    queryFn: () => nativeData.getFinancialGoals(),
   });
 
-  const goals = goalsData ?? [];
+  const goals = (goalsData ?? []).map(toGoalView);
   const totalGoals = goals.length;
   const completedGoals = goals.filter(g => g.isCompleted).length;
 
   // 创建/更新 mutation
   const createMutation = useMutation({
-    mutationFn: (data: CreateFinancialGoalDto) => financialGoalsService.create(data),
+    mutationFn: (data: FinancialGoalInput) => nativeData.addFinancialGoal(data),
     onSuccess: () => {
       invalidateCache.financialGoals();
       closeFormModal();
@@ -79,8 +89,8 @@ export default function FinancialGoalScreen() {
   });
 
   const updateMutation = useMutation({
-    mutationFn: ({ id, data }: { id: number; data: UpdateFinancialGoalDto }) =>
-      financialGoalsService.update(id, data),
+    mutationFn: ({ id, data }: { id: string; data: FinancialGoalUpdateInput }) =>
+      nativeData.updateFinancialGoal(id, data),
     onSuccess: () => {
       invalidateCache.financialGoals();
       closeFormModal();
@@ -90,7 +100,7 @@ export default function FinancialGoalScreen() {
   });
 
   const deleteMutation = useMutation({
-    mutationFn: (id: number) => financialGoalsService.delete(id),
+    mutationFn: (id: string) => nativeData.deleteFinancialGoal(id),
     onSuccess: () => invalidateCache.financialGoals(),
   });
 
@@ -100,16 +110,14 @@ export default function FinancialGoalScreen() {
     setFormName('');
     setFormTarget('');
     setFormDeadline('');
-    setFormIcon('🎯');
     setShowFormModal(true);
   };
 
-  const openEditModal = (goal: FinancialGoalProgress) => {
+  const openEditModal = (goal: GoalView) => {
     setEditingGoal(goal);
     setFormName(goal.name);
-    setFormTarget(String(goal.targetAmount));
-    setFormDeadline(goal.deadline ? goal.deadline.split('T')[0] : '');
-    setFormIcon(goal.icon || '🎯');
+    setFormTarget((goal.targetAmountMinor / 100).toFixed(2));
+    setFormDeadline(goal.targetDate ? goal.targetDate.split('T')[0] : '');
     setShowFormModal(true);
   };
 
@@ -118,7 +126,7 @@ export default function FinancialGoalScreen() {
     setEditingGoal(null);
   };
 
-  const openDepositModal = (goal: FinancialGoalProgress) => {
+  const openDepositModal = (goal: GoalView) => {
     setDepositGoal(goal);
     setDepositAmount('');
     setShowDepositModal(true);
@@ -128,11 +136,10 @@ export default function FinancialGoalScreen() {
     const target = parseFloat(formTarget);
     if (!formName.trim() || isNaN(target) || target <= 0) {return;}
 
-    const payload = {
+    const payload: FinancialGoalInput = {
       name: formName.trim(),
-      targetAmount: target,
-      deadline: formDeadline || undefined,
-      icon: formIcon,
+      targetAmountMinor: Math.round(target * 100),
+      targetDate: formDeadline || undefined,
     };
 
     if (editingGoal) {
@@ -147,19 +154,23 @@ export default function FinancialGoalScreen() {
     const amount = parseFloat(depositAmount);
     if (isNaN(amount) || amount === 0) {return;}
 
-    const newAmount = depositGoal.currentAmount + amount;
-    const isCompleted = newAmount >= depositGoal.targetAmount;
+    const newAmount = Math.max(
+      0,
+      Math.min(
+        depositGoal.targetAmountMinor,
+        depositGoal.currentAmountMinor + Math.round(amount * 100),
+      ),
+    );
 
     updateMutation.mutate({
       id: depositGoal.id,
       data: {
-        currentAmount: Math.max(0, newAmount),
-        isCompleted,
+        currentAmountMinor: newAmount,
       },
     });
   };
 
-  const handleDelete = (goal: FinancialGoalProgress) => {
+  const handleDelete = (goal: GoalView) => {
     confirm(
       '删除目标',
       `确定要删除「${goal.name}」吗？此操作不可撤销。`,
@@ -167,13 +178,6 @@ export default function FinancialGoalScreen() {
       undefined,
       { confirmText: '删除', destructive: true },
     );
-  };
-
-  const handleToggleComplete = (goal: FinancialGoalProgress) => {
-    updateMutation.mutate({
-      id: goal.id,
-      data: { isCompleted: !goal.isCompleted },
-    });
   };
 
   const onRefresh = useCallback(async () => {
@@ -248,13 +252,13 @@ export default function FinancialGoalScreen() {
               {/* Card Header */}
               <View style={styles.goalHeader}>
                 <View style={styles.goalTitleRow}>
-                  <View style={[styles.goalIconBox, goal.color ? { backgroundColor: goal.color + '30' } : undefined]}>
-                    <Text style={styles.goalIconText}>{goal.icon || '🎯'}</Text>
+                  <View style={styles.goalIconBox}>
+                    <Text style={styles.goalIconText}>🎯</Text>
                   </View>
                   <View style={styles.goalTitleGroup}>
                     <Text style={styles.goalName} numberOfLines={1}>{goal.name}</Text>
-                    {goal.deadline && (
-                      <Text style={styles.goalDeadline}>{formatDeadline(goal.deadline)}</Text>
+                    {goal.targetDate && (
+                      <Text style={styles.goalDeadline}>{formatDeadline(goal.targetDate)}</Text>
                     )}
                   </View>
                 </View>
@@ -275,7 +279,7 @@ export default function FinancialGoalScreen() {
               <View style={styles.goalProgressContainer}>
                 <ProgressBar
                   progress={goal.progress}
-                  color={goal.isCompleted ? styles._colors.success : (goal.color || styles._colors.primary)}
+                  color={goal.isCompleted ? styles._colors.success : styles._colors.primary}
                   backgroundColor={styles._colors.divider}
                   height={14}
                   style={styles.goalProgressBar}
@@ -285,10 +289,10 @@ export default function FinancialGoalScreen() {
               {/* Amounts */}
               <View style={styles.goalAmounts}>
                 <Text style={styles.goalAmountCurrent}>
-                  ¥{goal.currentAmount.toLocaleString()}
+                  ¥{formatAmount(goal.currentAmountMinor)}
                 </Text>
                 <Text style={styles.goalAmountTarget}>
-                  / ¥{goal.targetAmount.toLocaleString()}
+                  / ¥{formatAmount(goal.targetAmountMinor)}
                 </Text>
               </View>
 
@@ -360,22 +364,6 @@ export default function FinancialGoalScreen() {
               maxLength={10}
             />
 
-            <Text style={styles.inputLabel}>选择图标</Text>
-            <View style={styles.iconGrid}>
-              {ICON_OPTIONS.map((icon) => (
-                <TouchableOpacity
-                  key={icon}
-                  style={[
-                    styles.iconOption,
-                    formIcon === icon && styles.iconOptionSelected,
-                  ]}
-                  onPress={() => setFormIcon(icon)}
-                >
-                  <Text style={styles.iconOptionText}>{icon}</Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-
             <View style={styles.modalActions}>
               <TouchableOpacity style={styles.cancelButton} onPress={closeFormModal}>
                 <Text style={styles.cancelButtonText}>取消</Text>
@@ -399,10 +387,10 @@ export default function FinancialGoalScreen() {
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
             <Text style={styles.modalTitle}>
-              {depositGoal?.icon} {depositGoal?.name}
+              🎯 {depositGoal?.name}
             </Text>
             <Text style={styles.depositInfo}>
-              当前 ¥{depositGoal?.currentAmount.toLocaleString()} / 目标 ¥{depositGoal?.targetAmount.toLocaleString()}
+              当前 ¥{formatAmount(depositGoal?.currentAmountMinor ?? 0)} / 目标 ¥{formatAmount(depositGoal?.targetAmountMinor ?? 0)}
             </Text>
 
             <Text style={styles.inputLabel}>存入/取出金额</Text>
@@ -757,29 +745,6 @@ const createStyles = (colors: ThemeColors) => ({
       textAlign: 'center',
       fontFamily: 'Courier',
       marginBottom: spacing.sm,
-    },
-    iconGrid: {
-      flexDirection: 'row',
-      flexWrap: 'wrap',
-      gap: spacing.sm,
-      marginTop: spacing.sm,
-    },
-    iconOption: {
-      width: ICON_SIZE,
-      height: ICON_SIZE,
-      borderRadius: borderRadius.small,
-      borderWidth: borderWidth.thin,
-      borderColor: colors.divider,
-      alignItems: 'center',
-      justifyContent: 'center',
-    },
-    iconOptionSelected: {
-      borderColor: colors.stroke,
-      backgroundColor: colors.accent + '40',
-      borderWidth: borderWidth.medium,
-    },
-    iconOptionText: {
-      fontSize: 22,
     },
     modalActions: {
       flexDirection: 'row',

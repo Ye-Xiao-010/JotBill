@@ -24,9 +24,14 @@ import { ReportsScreen } from '../screens/reports';
 import { AIChatScreen, AIChatSessionsScreen } from '../screens/ai';
 import FinancialGoalScreen from '../screens/FinancialGoalScreen';
 import BudgetScreen from '../screens/BudgetScreen';
+import AccountsScreen from '../screens/settings/AccountsScreen';
+import AiProviderScreen from '../screens/settings/AiProviderScreen';
+import RuntimeStatusScreen from '../screens/settings/RuntimeStatusScreen';
+import DataManagementScreen from '../screens/settings/DataManagementScreen';
+import RulesScreen from '../screens/settings/RulesScreen';
 
 import { useTheme } from '../providers';
-import { spacing, borderRadius, borderWidth, shadow } from '../theme/spacing';
+import { spacing, borderRadius, borderWidth } from '../theme/spacing';
 import { ThemeColors } from '../theme/colors';
 import '../types/navigation';
 
@@ -299,6 +304,11 @@ export default function AppNavigator() {
         <Stack.Screen name="Main" component={MainNavigator} />
         <Stack.Screen name="Settings" component={SettingsScreen} />
         <Stack.Screen
+          name="Reports"
+          component={ReportsScreen}
+          options={{ headerShown: true, title: '净资产与报表' }}
+        />
+        <Stack.Screen
           name="GeneralSettings"
           component={GeneralSettingsScreen}
           options={{ headerShown: false }}
@@ -359,6 +369,31 @@ export default function AppNavigator() {
         <Stack.Screen
           name="Budgets"
           component={BudgetScreen}
+          options={{ headerShown: false }}
+        />
+        <Stack.Screen
+          name="Accounts"
+          component={AccountsScreen}
+          options={{ headerShown: false }}
+        />
+        <Stack.Screen
+          name="AiProviders"
+          component={AiProviderScreen}
+          options={{ headerShown: false }}
+        />
+        <Stack.Screen
+          name="RuntimeStatus"
+          component={RuntimeStatusScreen}
+          options={{ headerShown: false }}
+        />
+        <Stack.Screen
+          name="DataManagement"
+          component={DataManagementScreen}
+          options={{ headerShown: false }}
+        />
+        <Stack.Screen
+          name="Rules"
+          component={RulesScreen}
           options={{ headerShown: false }}
         />
         <Stack.Screen

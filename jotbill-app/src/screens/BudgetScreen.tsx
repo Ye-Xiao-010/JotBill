@@ -21,15 +21,17 @@ import { spacing, borderRadius, borderWidth, shadow } from '../theme/spacing';
 import { ProgressBar, BrutalPressable } from '../components/ui';
 import { useStyles } from '../hooks';
 import { useAlert } from '../providers';
-import { budgetsService } from '../services/api/budgets';
-import { categoriesService, CategoryData } from '../services/api/categories';
+import { nativeData, type BudgetInput, type BudgetProgress, type Category } from '../native';
 import { QUERY_KEYS, invalidateCache } from '../lib/queryClient';
-import type {
-  BudgetProgress,
-  BudgetPeriod,
-  CreateBudgetDto,
-  UpdateBudgetDto,
-} from '../types/budget';
+
+type BudgetPeriod = 'monthly' | 'yearly';
+
+function formatAmount(amountMinor: number): string {
+  return (amountMinor / 100).toLocaleString('zh-CN', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+}
 
 export default function BudgetScreen() {
   const navigation = useNavigation();
@@ -44,34 +46,29 @@ export default function BudgetScreen() {
   const [formName, setFormName] = useState('');
   const [formAmount, setFormAmount] = useState('');
   const [formPeriod, setFormPeriod] = useState<BudgetPeriod>('monthly');
-  const [formCategoryId, setFormCategoryId] = useState<number | undefined>(undefined);
+  const [formCategoryId, setFormCategoryId] = useState<string | undefined>(undefined);
   const [formAlertAt, setFormAlertAt] = useState('80');
 
   // 数据查询
-  const { data: budgetsData, isFetching, refetch } = useQuery({
-    queryKey: QUERY_KEYS.budgets,
-    queryFn: async () => {
-      const res = await budgetsService.getProgress();
-      return Array.isArray(res) ? res : (res.data ?? []);
-    },
+  const { data: budgetsData, isFetching: isBudgetsFetching, refetch } = useQuery({
+    queryKey: QUERY_KEYS.budgetProgress,
+    queryFn: () => nativeData.getBudgetProgress(),
   });
 
-  const { data: categories } = useQuery({
+  const { data: categories, isFetching: isCategoriesFetching } = useQuery({
     queryKey: QUERY_KEYS.categories.byType('expense'),
-    queryFn: async () => {
-      const res = await categoriesService.getExpenseCategories();
-      return res.data ?? [];
-    },
+    queryFn: () => nativeData.getCategories('expense'),
   });
 
   const budgets = budgetsData ?? [];
+  const categoryMap = new Map((categories ?? []).map((category) => [category.id, category]));
   const totalBudgets = budgets.length;
   const activeBudgets = budgets.filter(b => b.isActive && !b.isOverBudget).length;
   const overBudgets = budgets.filter(b => b.isOverBudget).length;
 
   // 创建 mutation
   const createMutation = useMutation({
-    mutationFn: (data: CreateBudgetDto) => budgetsService.create(data),
+    mutationFn: (data: BudgetInput) => nativeData.addBudget(data),
     onSuccess: () => {
       invalidateCache.budgets();
       closeFormModal();
@@ -80,8 +77,8 @@ export default function BudgetScreen() {
 
   // 更新 mutation
   const updateMutation = useMutation({
-    mutationFn: ({ id, data }: { id: number; data: UpdateBudgetDto }) =>
-      budgetsService.update(id, data),
+    mutationFn: ({ id, data }: { id: string; data: BudgetInput }) =>
+      nativeData.updateBudget(id, data),
     onSuccess: () => {
       invalidateCache.budgets();
       closeFormModal();
@@ -90,7 +87,7 @@ export default function BudgetScreen() {
 
   // 删除 mutation
   const deleteMutation = useMutation({
-    mutationFn: (id: number) => budgetsService.delete(id),
+    mutationFn: (id: string) => nativeData.deleteBudget(id),
     onSuccess: () => invalidateCache.budgets(),
   });
 
@@ -108,7 +105,7 @@ export default function BudgetScreen() {
   const openEditModal = (budget: BudgetProgress) => {
     setEditingBudget(budget);
     setFormName(budget.name);
-    setFormAmount(String(budget.amount));
+    setFormAmount((budget.amountMinor / 100).toFixed(2));
     setFormPeriod(budget.period);
     setFormCategoryId(budget.categoryId);
     setFormAlertAt(String(budget.alertAt));
@@ -125,9 +122,9 @@ export default function BudgetScreen() {
     const alertAt = parseInt(formAlertAt, 10);
     if (!formName.trim() || isNaN(amount) || amount <= 0) { return; }
 
-    const payload: CreateBudgetDto = {
+    const payload: BudgetInput = {
       name: formName.trim(),
-      amount,
+      amountMinor: Math.round(amount * 100),
       period: formPeriod,
       categoryId: formCategoryId,
       alertAt: isNaN(alertAt) ? 80 : alertAt,
@@ -161,7 +158,7 @@ export default function BudgetScreen() {
   };
 
   const getCategoryIcon = (budget: BudgetProgress) => {
-    return budget.category?.icon || '💰';
+    return categoryMap.get(budget.categoryId ?? '')?.icon || '💰';
   };
 
   return (
@@ -201,7 +198,12 @@ export default function BudgetScreen() {
       <ScrollView
         style={styles.scrollView}
         contentContainerStyle={styles.scrollContent}
-        refreshControl={<RefreshControl refreshing={isFetching} onRefresh={onRefresh} />}
+        refreshControl={
+          <RefreshControl
+            refreshing={isBudgetsFetching || isCategoriesFetching}
+            onRefresh={onRefresh}
+          />
+        }
         showsVerticalScrollIndicator={false}
       >
         {budgets.length === 0 ? (
@@ -224,8 +226,10 @@ export default function BudgetScreen() {
                   </View>
                   <View style={styles.budgetTitleGroup}>
                     <Text style={styles.budgetName} numberOfLines={1}>{budget.name}</Text>
-                    {budget.category && (
-                      <Text style={styles.budgetCategory}>{budget.category.name}</Text>
+                    {categoryMap.get(budget.categoryId ?? '') && (
+                      <Text style={styles.budgetCategory}>
+                        {categoryMap.get(budget.categoryId ?? '')?.name}
+                      </Text>
                     )}
                   </View>
                 </View>
@@ -243,7 +247,7 @@ export default function BudgetScreen() {
                       styles.percentText,
                       budget.isOverBudget && styles.overBudgetBadgeText,
                     ]}>
-                      {Math.round(budget.progress)}%
+                      {Math.round(budget.progress * 100)}%
                     </Text>
                   </View>
                 </View>
@@ -252,7 +256,7 @@ export default function BudgetScreen() {
               {/* Progress */}
               <View style={styles.budgetProgressContainer}>
                 <ProgressBar
-                  progress={Math.min(budget.progress, 100)}
+                  progress={Math.min(budget.progress * 100, 100)}
                   color={getProgressColor(budget)}
                   backgroundColor={styles._colors.divider}
                   height={14}
@@ -262,10 +266,10 @@ export default function BudgetScreen() {
               {/* Amounts */}
               <View style={styles.budgetAmounts}>
                 <Text style={styles.budgetAmountSpent}>
-                  已用 ¥{budget.spent.toLocaleString()}
+                  已用 ¥{formatAmount(budget.spentMinor)}
                 </Text>
                 <Text style={styles.budgetAmountTotal}>
-                  / 预算 ¥{budget.amount.toLocaleString()}
+                  / 预算 ¥{formatAmount(budget.amountMinor)}
                 </Text>
               </View>
 
@@ -273,7 +277,7 @@ export default function BudgetScreen() {
               {budget.isOverBudget && (
                 <View style={styles.warningBar}>
                   <Text style={styles.warningText}>
-                    超支 ¥{Math.abs(budget.remaining).toLocaleString()}
+                    超支 ¥{formatAmount(Math.abs(budget.remainingMinor))}
                   </Text>
                 </View>
               )}
@@ -371,7 +375,7 @@ export default function BudgetScreen() {
                     !formCategoryId && styles.categoryChipTextSelected,
                   ]}>全部分类</Text>
                 </TouchableOpacity>
-                {(categories ?? []).map((cat: CategoryData) => (
+                {(categories ?? []).map((cat: Category) => (
                   <TouchableOpacity
                     key={cat.id}
                     style={[styles.categoryChip, formCategoryId === cat.id && styles.categoryChipSelected]}

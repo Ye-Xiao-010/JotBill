@@ -12,8 +12,13 @@ import {
   Switch,
 } from 'react-native';
 import {
+  Activity,
+  Bot,
+  CreditCard,
+  Database,
   Wallet,
   Flag,
+  ListFilter,
   Settings,
   Moon,
   Info,
@@ -55,6 +60,12 @@ interface SettingGroup {
 
 // 糖果色图标背景映射
 const ICON_CANDY_COLORS: Record<string, string> = {
+  accounts: '#A5D8FF',
+  ai: '#D0BFFF',
+  runtime: '#B2F2BB',
+  data: '#FFD8A8',
+  netWorth: '#96F2D7',
+  rules: '#D3F9D8',
   wallet: '#FFD93D',
   flag: '#FF90B3',
   settings: '#7EB6FF',
@@ -67,6 +78,12 @@ export default function SettingsScreen({ navigation }: SettingsScreenProps) {
   const styles = useStyles(createStyles);
 
   const iconMap: Record<string, React.FC<{ size: number; color: string }>> = {
+    accounts: CreditCard,
+    ai: Bot,
+    runtime: Activity,
+    data: Database,
+    netWorth: Wallet,
+    rules: ListFilter,
     wallet: Wallet,
     flag: Flag,
     settings: Settings,
@@ -78,8 +95,19 @@ export default function SettingsScreen({ navigation }: SettingsScreenProps) {
     {
       title: '💰 财务',
       items: [
+        { id: 'accounts', label: '账户管理', icon: 'accounts', onPress: () => navigation?.navigate('Accounts') },
         { id: 'budget-manage', label: '预算管理', icon: 'wallet', onPress: () => navigation?.navigate('Budgets') },
         { id: 'financial-goals', label: '财务目标', icon: 'flag', onPress: () => navigation?.navigate('FinancialGoals') },
+        { id: 'net-worth', label: '净资产', icon: 'netWorth', onPress: () => navigation?.navigate('Reports') },
+      ],
+    },
+    {
+      title: '🧩 本地能力',
+      items: [
+        { id: 'ai-providers', label: 'AI 服务商', icon: 'ai', onPress: () => navigation?.navigate('AiProviders') },
+        { id: 'runtime-status', label: '运行状态', icon: 'runtime', onPress: () => navigation?.navigate('RuntimeStatus') },
+        { id: 'data-management', label: '数据管理', icon: 'data', onPress: () => navigation?.navigate('DataManagement') },
+        { id: 'rules', label: '规则', icon: 'rules', onPress: () => navigation?.navigate('Rules') },
       ],
     },
     {

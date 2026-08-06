@@ -594,9 +594,14 @@ class DataModule(
         if (targetAmountMinor < 0) {
             throw BridgeException("INVALID_ARGUMENT", "targetAmountMinor must not be negative")
         }
+        val currentAmountMinor = input.optionalLong("currentAmountMinor") ?: existing.currentAmountMinor
+        if (currentAmountMinor < 0) {
+            throw BridgeException("INVALID_ARGUMENT", "currentAmountMinor must not be negative")
+        }
         val updated = existing.copy(
             name = input.optionalString("name") ?: existing.name,
             targetAmountMinor = targetAmountMinor,
+            currentAmountMinor = currentAmountMinor.coerceAtMost(targetAmountMinor),
             targetDate = if (input.has("targetDate")) {
                 if (input.isNull("targetDate")) null else BridgeDtoMapper.parseOptionalTimestamp(input, "targetDate")
             } else {
