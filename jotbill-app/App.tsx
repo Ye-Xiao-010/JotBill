@@ -4,9 +4,8 @@ import { Provider as PaperProvider, MD3DarkTheme, MD3LightTheme } from 'react-na
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { queryClient, invalidateCache } from './src/lib/queryClient';
-import { useAppStateManager, useAppUpdate, useHotUpdate } from './src/hooks';
-import { UpdateModal } from './src/components/UpdateModal';
-import { ThemeProvider, useTheme, AuthProvider, AlertProvider } from './src/providers';
+import { useAppStateManager } from './src/hooks';
+import { ThemeProvider, useTheme, AlertProvider } from './src/providers';
 import AppNavigator from './src/navigation/AppNavigator';
 
 const { PaymentNotificationModule } = NativeModules;
@@ -17,26 +16,6 @@ function AppContent() {
 
   // 获取主题
   const { isDark, colors } = useTheme();
-
-  // 检查应用更新
-  const {
-    showModal,
-    latestVersion,
-    downloading,
-    progress,
-    hideModal,
-    downloadAndInstall,
-  } = useAppUpdate();
-
-  // 热更新（静默检查，非强制更新下次启动生效）
-  const hotUpdate = useHotUpdate();
-
-  // 有热更新且不是强制更新时自动静默下载
-  useEffect(() => {
-    if (hotUpdate.hasUpdate && hotUpdate.bundleInfo && hotUpdate.status === 'idle') {
-      hotUpdate.applyUpdate();
-    }
-  }, [hotUpdate.hasUpdate, hotUpdate.bundleInfo, hotUpdate.status]);
 
   // 监听账单创建成功事件
   useEffect(() => {
@@ -78,14 +57,6 @@ function AppContent() {
   return (
     <PaperProvider theme={paperTheme}>
       <AppNavigator />
-      <UpdateModal
-        visible={showModal}
-        versionInfo={latestVersion}
-        downloading={downloading}
-        progress={progress}
-        onConfirm={downloadAndInstall}
-        onCancel={hideModal}
-      />
     </PaperProvider>
   );
 }
@@ -95,11 +66,9 @@ export default function App() {
     <QueryClientProvider client={queryClient}>
       <SafeAreaProvider>
         <ThemeProvider>
-          <AuthProvider>
-            <AlertProvider>
-              <AppContent />
-            </AlertProvider>
-          </AuthProvider>
+          <AlertProvider>
+            <AppContent />
+          </AlertProvider>
         </ThemeProvider>
       </SafeAreaProvider>
     </QueryClientProvider>

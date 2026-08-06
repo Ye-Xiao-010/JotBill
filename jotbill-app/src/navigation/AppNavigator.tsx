@@ -3,7 +3,7 @@
  * 粗描边 Tab Bar + 糖果色活跃态 + 方圆角"+"按钮 + 实心阴影
  */
 import React, { useState, useMemo } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, SafeAreaView, ActivityIndicator } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, SafeAreaView } from 'react-native';
 import { NavigationContainer, DefaultTheme, DarkTheme } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import * as Sentry from '@sentry/react-native';
@@ -22,11 +22,10 @@ import {
 import { DashboardScreen } from '../screens/dashboard';
 import { ReportsScreen } from '../screens/reports';
 import { AIChatScreen, AIChatSessionsScreen } from '../screens/ai';
-import { LoginScreen, UserAgreementScreen, PrivacyPolicyScreen, EditProfileScreen } from '../screens/auth';
 import FinancialGoalScreen from '../screens/FinancialGoalScreen';
 import BudgetScreen from '../screens/BudgetScreen';
 
-import { useTheme, useAuth } from '../providers';
+import { useTheme } from '../providers';
 import { spacing, borderRadius, borderWidth, shadow } from '../theme/spacing';
 import { ThemeColors } from '../theme/colors';
 import '../types/navigation';
@@ -260,21 +259,9 @@ function MainNavigator({ navigation }: { navigation: any }) {
   );
 }
 
-// 加载页面
-function LoadingScreen() {
-  const { colors } = useTheme();
-
-  return (
-    <View style={[styles.loadingContainer, { backgroundColor: colors.background }]}>
-      <ActivityIndicator size="large" color={colors.primary} />
-    </View>
-  );
-}
-
 // 根导航器
 export default function AppNavigator() {
   const { isDark, colors } = useTheme();
-  const { isLoggedIn, isLoading } = useAuth();
 
   // Neo-Brutalism 导航主题
   const navigationTheme = useMemo(() => ({
@@ -306,115 +293,84 @@ export default function AppNavigator() {
     headerShadowVisible: false,
   }), [colors]);
 
-  if (isLoading) {
-    return (
-      <NavigationContainer theme={navigationTheme}>
-        <LoadingScreen />
-      </NavigationContainer>
-    );
-  }
-
   return (
     <NavigationContainer theme={navigationTheme}>
       <Stack.Navigator screenOptions={stackScreenOptions}>
-        {!isLoggedIn ? (
-          <>
-            <Stack.Screen name="Login" component={LoginScreen} />
-            <Stack.Screen
-              name="UserAgreement"
-              component={UserAgreementScreen}
-              options={{ headerShown: false }}
-            />
-            <Stack.Screen
-              name="PrivacyPolicy"
-              component={PrivacyPolicyScreen}
-              options={{ headerShown: false }}
-            />
-          </>
-        ) : (
-          <>
-            <Stack.Screen name="Main" component={MainNavigator} />
-            <Stack.Screen name="Settings" component={SettingsScreen} />
-            <Stack.Screen
-              name="GeneralSettings"
-              component={GeneralSettingsScreen}
-              options={{ headerShown: false }}
-            />
-            <Stack.Screen
-              name="CreateBill"
-              component={CreateBillScreen}
-              options={{
-                headerShown: true,
-                title: '创建账单',
-              }}
-            />
-            <Stack.Screen
-              name="EditBill"
-              component={CreateBillScreen}
-              options={{
-                headerShown: true,
-                title: '编辑账单',
-              }}
-            />
-            <Stack.Screen
-              name="AllBills"
-              component={AllBillsScreen}
-              options={{
-                headerShown: true,
-                title: '全部账单',
-              }}
-            />
-            <Stack.Screen
-              name="Statistics"
-              component={StatisticsScreen}
-              options={{
-                headerShown: true,
-                title: '统计分析',
-              }}
-            />
-            <Stack.Screen
-              name="Categories"
-              component={CategoryManageScreen}
-              options={{
-                headerShown: true,
-                title: '分类管理',
-              }}
-            />
-            <Stack.Screen
-              name="BillDetail"
-              component={BillDetailScreen}
-              options={{
-                headerShown: true,
-                title: '交易详情',
-              }}
-            />
-            <Stack.Screen
-              name="EditProfile"
-              component={EditProfileScreen}
-              options={{ headerShown: false }}
-            />
-            <Stack.Screen
-              name="FinancialGoals"
-              component={FinancialGoalScreen}
-              options={{ headerShown: false }}
-            />
-            <Stack.Screen
-              name="Budgets"
-              component={BudgetScreen}
-              options={{ headerShown: false }}
-            />
-            <Stack.Screen
-              name="AIChatSessions"
-              component={AIChatSessionsScreen}
-              options={{ headerShown: false }}
-            />
-            <Stack.Screen
-              name="AIChat"
-              component={AIChatScreen}
-              options={{ headerShown: false }}
-            />
-          </>
-        )}
+        <Stack.Screen name="Main" component={MainNavigator} />
+        <Stack.Screen name="Settings" component={SettingsScreen} />
+        <Stack.Screen
+          name="GeneralSettings"
+          component={GeneralSettingsScreen}
+          options={{ headerShown: false }}
+        />
+        <Stack.Screen
+          name="CreateBill"
+          component={CreateBillScreen}
+          options={{
+            headerShown: true,
+            title: '创建账单',
+          }}
+        />
+        <Stack.Screen
+          name="EditBill"
+          component={CreateBillScreen}
+          options={{
+            headerShown: true,
+            title: '编辑账单',
+          }}
+        />
+        <Stack.Screen
+          name="AllBills"
+          component={AllBillsScreen}
+          options={{
+            headerShown: true,
+            title: '全部账单',
+          }}
+        />
+        <Stack.Screen
+          name="Statistics"
+          component={StatisticsScreen}
+          options={{
+            headerShown: true,
+            title: '统计分析',
+          }}
+        />
+        <Stack.Screen
+          name="Categories"
+          component={CategoryManageScreen}
+          options={{
+            headerShown: true,
+            title: '分类管理',
+          }}
+        />
+        <Stack.Screen
+          name="BillDetail"
+          component={BillDetailScreen}
+          options={{
+            headerShown: true,
+            title: '交易详情',
+          }}
+        />
+        <Stack.Screen
+          name="FinancialGoals"
+          component={FinancialGoalScreen}
+          options={{ headerShown: false }}
+        />
+        <Stack.Screen
+          name="Budgets"
+          component={BudgetScreen}
+          options={{ headerShown: false }}
+        />
+        <Stack.Screen
+          name="AIChatSessions"
+          component={AIChatSessionsScreen}
+          options={{ headerShown: false }}
+        />
+        <Stack.Screen
+          name="AIChat"
+          component={AIChatScreen}
+          options={{ headerShown: false }}
+        />
       </Stack.Navigator>
     </NavigationContainer>
   );
@@ -423,10 +379,5 @@ export default function AppNavigator() {
 const styles = StyleSheet.create({
   content: {
     flex: 1,
-  },
-  loadingContainer: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
   },
 });

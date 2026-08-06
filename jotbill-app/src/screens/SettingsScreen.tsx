@@ -9,7 +9,6 @@ import {
   ScrollView,
   StyleSheet,
   TouchableOpacity,
-  Image,
   Switch,
 } from 'react-native';
 import {
@@ -18,17 +17,12 @@ import {
   Settings,
   Moon,
   Info,
-  RefreshCw,
   ChevronRight,
-  User,
-  LogOut,
 } from 'lucide-react-native';
 import { ThemeColors } from '../theme/colors';
 import { spacing, borderRadius, borderWidth, shadow } from '../theme';
-import { useStyles, useAppUpdate } from '../hooks';
-import { useTheme, useAuth, useAlert } from '../providers';
-import { UpdateModal } from '../components/UpdateModal';
-import { getAvatarUrl } from '../utils/url';
+import { useStyles } from '../hooks';
+import { useTheme } from '../providers';
 
 interface SettingsScreenProps {
   navigation?: any;
@@ -66,25 +60,11 @@ const ICON_CANDY_COLORS: Record<string, string> = {
   settings: '#7EB6FF',
   moon: '#C5A3FF',
   info: '#7DCEA0',
-  refresh: '#FFB366',
 };
 
 export default function SettingsScreen({ navigation }: SettingsScreenProps) {
   const { isDark, toggleTheme } = useTheme();
-  const { user, logout } = useAuth();
-  const { confirm } = useAlert();
   const styles = useStyles(createStyles);
-
-  const {
-    showModal,
-    latestVersion,
-    downloading,
-    progress,
-    currentVersion,
-    checkUpdate,
-    hideModal,
-    downloadAndInstall,
-  } = useAppUpdate({ autoCheck: false });
 
   const iconMap: Record<string, React.FC<{ size: number; color: string }>> = {
     wallet: Wallet,
@@ -92,7 +72,6 @@ export default function SettingsScreen({ navigation }: SettingsScreenProps) {
     settings: Settings,
     moon: Moon,
     info: Info,
-    refresh: RefreshCw,
   };
 
   const settingGroups: SettingGroup[] = [
@@ -131,53 +110,25 @@ export default function SettingsScreen({ navigation }: SettingsScreenProps) {
       title: 'ℹ️ 关于',
       items: [
         { id: 'about', label: '关于应用', icon: 'info', onPress: () => {} },
-        { id: 'check-update', label: '检测升级', icon: 'refresh', onPress: checkUpdate },
       ],
     },
   ];
 
-  const handleLogout = () => {
-    confirm(
-      '退出登录',
-      '确定要退出登录吗？',
-      async () => {
-        try {
-          await logout();
-        } catch (error) {
-          console.error('退出登录失败', error);
-        }
-      },
-      undefined,
-      { confirmText: '确定', destructive: true }
-    );
-  };
-
-  const displayAvatar = getAvatarUrl(user?.avatar);
-
   return (
     <View style={styles.container}>
-      <TouchableOpacity
-        style={styles.header}
-        onPress={() => navigation?.navigate('EditProfile')}
-        activeOpacity={0.8}
-      >
+      <View style={styles.header}>
         <View style={styles.userInfo}>
           <View style={styles.avatarContainer}>
-            {displayAvatar ? (
-              <Image source={{ uri: displayAvatar }} style={styles.avatar} />
-            ) : (
-              <View style={styles.avatarPlaceholder}>
-                <User size={32} color={styles._colors.primary} />
-              </View>
-            )}
+            <View style={styles.avatarPlaceholder}>
+              <Wallet size={32} color={styles._colors.primary} />
+            </View>
           </View>
           <View style={styles.userDetails}>
-            <Text style={styles.userName}>{user?.nickname || user?.username || '用户'}</Text>
-            <Text style={styles.userType}>{user?.email || '智能记账用户'}</Text>
+            <Text style={styles.userName}>本地账本</Text>
+            <Text style={styles.userType}>数据保存在此设备</Text>
           </View>
-          <ChevronRight size={24} color={styles._colors.stroke} strokeWidth={2.5} />
         </View>
-      </TouchableOpacity>
+      </View>
 
       <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
         {settingGroups.map((group, groupIndex) => (
@@ -225,29 +176,11 @@ export default function SettingsScreen({ navigation }: SettingsScreenProps) {
           </View>
         ))}
 
-        <TouchableOpacity
-          style={styles.logoutButton}
-          onPress={handleLogout}
-          activeOpacity={0.8}
-        >
-          <LogOut size={20} color={styles._colors.error} strokeWidth={2.5} />
-          <Text style={styles.logoutText}>退出登录</Text>
-        </TouchableOpacity>
-
         <View style={styles.versionInfo}>
-          <Text style={styles.versionText}>版本 {currentVersion}</Text>
+          <Text style={styles.versionText}>JotBill</Text>
           <Text style={styles.copyrightText}>© 2026 JotBill</Text>
         </View>
       </ScrollView>
-
-      <UpdateModal
-        visible={showModal}
-        versionInfo={latestVersion}
-        downloading={downloading}
-        progress={progress}
-        onConfirm={downloadAndInstall}
-        onCancel={hideModal}
-      />
     </View>
   );
 }
@@ -354,25 +287,6 @@ const createStyles = (colors: ThemeColors) => ({
       fontSize: 15,
       fontWeight: '700',
       color: colors.textPrimary,
-    },
-    logoutButton: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent: 'center',
-      gap: spacing.sm,
-      marginHorizontal: spacing.lg,
-      marginTop: spacing.xl,
-      paddingVertical: spacing.md,
-      backgroundColor: colors.error + '15',
-      borderRadius: borderRadius.button,
-      borderWidth: borderWidth.thin,
-      borderColor: colors.error,
-      minHeight: 48,
-    },
-    logoutText: {
-      fontSize: 15,
-      fontWeight: '800',
-      color: colors.error,
     },
     versionInfo: {
       alignItems: 'center',
