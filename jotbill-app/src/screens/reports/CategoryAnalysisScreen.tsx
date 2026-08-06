@@ -14,7 +14,8 @@ import { ThemeColors } from '../../theme/colors';
 import { borderRadius, borderWidth, spacing, shadow } from '../../theme/spacing';
 import { SegmentedControl, ProgressBar } from '../../components/ui';
 import { useStyles } from '../../hooks';
-import { billsService } from '../../services';
+import { nativeData } from '../../native';
+import { formatDate } from '../../utils/date';
 
 type TypeFilter = 'expense' | 'income';
 
@@ -43,34 +44,32 @@ export default function CategoryAnalysisScreen() {
       const today = new Date();
       const startOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
 
-      const stats = await billsService.getBillStatistics({
-        startDate: startOfMonth.toISOString().split('T')[0],
-        endDate: today.toISOString().split('T')[0],
+      const stats = await nativeData.getBillStatistics({
+        startDate: formatDate(startOfMonth),
+        endDate: formatDate(today),
       });
 
-      if (stats.success && stats.data) {
-        const categoryStats = typeFilter === 'expense'
-          ? stats.data.expenseCategoryStats
-          : stats.data.incomeCategoryStats;
+      const filteredStats = typeFilter === 'expense'
+        ? stats.expenseCategoryStats
+        : stats.incomeCategoryStats;
 
-        if (categoryStats && categoryStats.length > 0) {
-          const sorted = [...categoryStats].sort((a, b) => Number(b.amount) - Number(a.amount));
-          const total = sorted.reduce((sum: number, cat) => sum + Number(cat.amount), 0);
-          setTotalAmount(total);
+      if (filteredStats.length > 0) {
+        const sorted = [...filteredStats].sort((a, b) => b.amountMinor - a.amountMinor);
+        const total = sorted.reduce((sum: number, cat) => sum + cat.amountMinor, 0) / 100;
+        setTotalAmount(total);
 
-          const processed = sorted.map((cat) => ({
-            name: cat.categoryName,
-            icon: cat.categoryIcon,
-            amount: Number(cat.amount),
-            percentage: cat.percentage,
-            count: cat.count || 0,
-          }));
+        const processed = sorted.map((cat) => ({
+          name: cat.categoryName,
+          icon: cat.categoryIcon,
+          amount: cat.amountMinor / 100,
+          percentage: cat.percentage,
+          count: cat.count || 0,
+        }));
 
-          setCategoryStats(processed);
-        } else {
-          setCategoryStats([]);
-          setTotalAmount(0);
-        }
+        setCategoryStats(processed);
+      } else {
+        setCategoryStats([]);
+        setTotalAmount(0);
       }
     } catch (error) {
       console.error('Failed to fetch category analysis:', error);

@@ -8,7 +8,7 @@ import { PieChart } from 'react-native-gifted-charts';
 import { ThemeColors } from '../../theme/colors';
 import { borderRadius, borderWidth, spacing, shadow } from '../../theme/spacing';
 import { useStyles } from '../../hooks';
-import type { CategoryStatistic } from '../../types/bill';
+import type { ReportCategoryStatistic as CategoryStatistic } from '../../utils/nativeStatistics';
 
 const PIE_COLORS = [
   '#0052FF', '#FF6B35', '#00C853', '#FF3D00',

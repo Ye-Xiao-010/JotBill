@@ -8,7 +8,11 @@ import { useNavigation } from '@react-navigation/native';
 import { ThemeColors } from '../../theme/colors';
 import { spacing } from '../../theme/spacing';
 import { useStyles } from '../../hooks';
-import { useDailyGridData, useDailyBills } from '../../hooks/useIncomeExpenseData';
+import {
+  useDailyGridData,
+  useDailyBills,
+  type ReportBill,
+} from '../../hooks/useIncomeExpenseData';
 import { CalendarGrid, PeriodNavigator } from '../../components/reports';
 import BillItem from '../../components/business/BillItem';
 import type { BillData as BillItemData } from '../../components/business/BillItem';
@@ -69,17 +73,17 @@ export default function DailyView({
   };
 
   const handleBillPress = (bill: BillItemData) => {
-    navigation.navigate('BillDetail', { billId: Number(bill.id) });
+    navigation.navigate('BillDetail', { billId: bill.id });
   };
 
-  // 映射后端 BillData 到 BillItem 组件需要的格式
-  const mapBill = (bill: any): BillItemData => ({
-    id: String(bill.id),
+  // 映射本地账单到列表组件需要的显示格式。
+  const mapBill = (bill: ReportBill): BillItemData => ({
+    id: bill.id,
     category: bill.category?.name || '未分类',
-    amount: typeof bill.amount === 'number' ? bill.amount : parseFloat(bill.amount),
+    amount: bill.amount,
     type: bill.type,
-    date: bill.date?.split('T')[0] || bill.date,
-    description: bill.description || bill.note,
+    date: bill.date.split('T')[0],
+    description: bill.description,
     icon: bill.category?.icon || '💰',
   });
 
@@ -132,7 +136,7 @@ export default function DailyView({
               color={styles._colors.primary}
             />
           ) : bills.length > 0 ? (
-            bills.map((bill: any) => (
+            bills.map((bill) => (
               <BillItem
                 key={bill.id}
                 bill={mapBill(bill)}

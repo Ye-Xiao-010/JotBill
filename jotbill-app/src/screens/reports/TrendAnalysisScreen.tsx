@@ -15,7 +15,8 @@ import { borderRadius, borderWidth, spacing, shadow } from '../../theme/spacing'
 import { SegmentedControl } from '../../components/ui';
 import { BarChart } from '../../components/charts';
 import { useStyles } from '../../hooks';
-import { billsService } from '../../services';
+import { nativeData } from '../../native';
+import { formatDate } from '../../utils/date';
 
 type PeriodType = 'week' | 'month' | 'year';
 type DataType = 'expense' | 'income' | 'balance';
@@ -52,22 +53,23 @@ export default function TrendAnalysisScreen() {
       const today = new Date();
       let dataPoints: TrendDataPoint[] = [];
 
+      const getValue = async (startDate: string, endDate: string) => {
+        const stats = await nativeData.getBillStatistics({ startDate, endDate });
+        const amountMinor = dataType === 'expense'
+          ? stats.totalExpense
+          : dataType === 'income'
+            ? stats.totalIncome
+            : stats.balance;
+        return amountMinor / 100;
+      };
+
       switch (period) {
         case 'week':
           for (let i = 6; i >= 0; i--) {
             const date = new Date(today);
             date.setDate(today.getDate() - i);
-            const dateStr = date.toISOString().split('T')[0];
-            const stats = await billsService.getBillStatistics({
-              startDate: dateStr,
-              endDate: dateStr,
-            });
-            let value = 0;
-            if (stats.success && stats.data) {
-              if (dataType === 'expense') value = stats.data.totalExpense || 0;
-              else if (dataType === 'income') value = stats.data.totalIncome || 0;
-              else value = (stats.data.totalIncome || 0) - (stats.data.totalExpense || 0);
-            }
+            const dateStr = formatDate(date);
+            const value = await getValue(dateStr, dateStr);
             dataPoints.push({
               label: `${date.getMonth() + 1}/${date.getDate()}`,
               value,
@@ -82,17 +84,7 @@ export default function TrendAnalysisScreen() {
             const startDateWeek = new Date(endDate);
             startDateWeek.setDate(endDate.getDate() - 6);
 
-            const stats = await billsService.getBillStatistics({
-              startDate: startDateWeek.toISOString().split('T')[0],
-              endDate: endDate.toISOString().split('T')[0],
-            });
-
-            let value = 0;
-            if (stats.success && stats.data) {
-              if (dataType === 'expense') value = stats.data.totalExpense || 0;
-              else if (dataType === 'income') value = stats.data.totalIncome || 0;
-              else value = (stats.data.totalIncome || 0) - (stats.data.totalExpense || 0);
-            }
+            const value = await getValue(formatDate(startDateWeek), formatDate(endDate));
 
             dataPoints.push({
               label: `第${4 - i}周`,
@@ -106,17 +98,7 @@ export default function TrendAnalysisScreen() {
             const monthDate = new Date(today.getFullYear(), today.getMonth() - i, 1);
             const nextMonth = new Date(today.getFullYear(), today.getMonth() - i + 1, 0);
 
-            const stats = await billsService.getBillStatistics({
-              startDate: monthDate.toISOString().split('T')[0],
-              endDate: nextMonth.toISOString().split('T')[0],
-            });
-
-            let value = 0;
-            if (stats.success && stats.data) {
-              if (dataType === 'expense') value = stats.data.totalExpense || 0;
-              else if (dataType === 'income') value = stats.data.totalIncome || 0;
-              else value = (stats.data.totalIncome || 0) - (stats.data.totalExpense || 0);
-            }
+            const value = await getValue(formatDate(monthDate), formatDate(nextMonth));
 
             dataPoints.push({
               label: `${monthDate.getMonth() + 1}月`,

@@ -3,9 +3,9 @@
  * 使用 React Query 管理统计页面数据的获取和缓存
  */
 import { useQuery } from '@tanstack/react-query';
-import { billsService } from '../services';
+import { nativeData } from '../native';
 import { CACHE_TIME, QUERY_KEYS, GC_TIME } from '../lib/queryClient';
-import type { BillStatistics } from '../types/bill';
+import { toReportStatistics, type ReportStatistics } from '../utils/nativeStatistics';
 
 type PeriodType = 'week' | 'month' | 'year';
 
@@ -16,8 +16,8 @@ interface StatisticsParams {
 }
 
 interface StatisticsData {
-  current: BillStatistics | null;
-  previous: BillStatistics | null;
+  current: ReportStatistics | null;
+  previous: ReportStatistics | null;
 }
 
 /**
@@ -96,17 +96,17 @@ async function fetchStatistics(params: StatisticsParams): Promise<StatisticsData
   const prevRange = getPreviousDateRange(currentDate, params.period);
 
   // 并行获取当前周期和上一周期的数据
-  const [currentStats, prevStats] = await Promise.all([
-    billsService.getBillStatistics({ startDate, endDate }),
-    billsService.getBillStatistics({
+  const [currentStats, previousStats] = await Promise.all([
+    nativeData.getBillStatistics({ startDate, endDate }),
+    nativeData.getBillStatistics({
       startDate: prevRange.startDate,
       endDate: prevRange.endDate,
     }),
   ]);
 
   return {
-    current: currentStats.success && currentStats.data ? currentStats.data : null,
-    previous: prevStats.success && prevStats.data ? prevStats.data : null,
+    current: toReportStatistics(currentStats),
+    previous: toReportStatistics(previousStats),
   };
 }
 

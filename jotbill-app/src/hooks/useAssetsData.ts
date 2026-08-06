@@ -1,35 +1,33 @@
 /**
  * useAssetsData - 资产 Tab 数据 hook
- * 总资产 = 全部收入总和 - 全部支出总和（基于账单记录）
+ * 净资产以账户余额为准，收支统计只用于趋势和构成展示。
  */
 import { useQuery } from '@tanstack/react-query';
 import { useMemo } from 'react';
-import { billsService } from '../services/api/bills';
+import { nativeData } from '../native';
 import { QUERY_KEYS, CACHE_TIME, GC_TIME } from '../lib/queryClient';
-import type { BillStatistics } from '../types/bill';
-
-const EMPTY_BILL_STATISTICS: BillStatistics = {
-  totalIncome: 0,
-  totalExpense: 0,
-  balance: 0,
-  incomeCount: 0,
-  expenseCount: 0,
-  expenseCategoryStats: [],
-  incomeCategoryStats: [],
-  monthlyTrends: [],
-  dailyTrends: [],
-};
+import { formatDate } from '../utils/date';
+import { toReportStatistics } from '../utils/nativeStatistics';
 
 export function useAssetsData() {
-  const currentYear = new Date().getFullYear();
+  const now = new Date();
+  const currentYear = now.getFullYear();
+  const trendStart = new Date(now.getFullYear(), now.getMonth() - 11, 1);
+  const trendEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0);
 
-  // 获取全部收支统计（不限日期，得到总资产）
+  // 收支统计用于构成和总收入/总支出，不再作为净资产来源。
   const totalQuery = useQuery({
     queryKey: ['total-assets'],
     queryFn: async () => {
-      const res = await billsService.getBillStatistics({});
-      return res.data ?? EMPTY_BILL_STATISTICS;
+      return toReportStatistics(await nativeData.getBillStatistics());
     },
+    staleTime: CACHE_TIME.DASHBOARD,
+    gcTime: GC_TIME.DEFAULT,
+  });
+
+  const netWorthQuery = useQuery({
+    queryKey: ['net-worth'],
+    queryFn: () => nativeData.getNetWorth(),
     staleTime: CACHE_TIME.DASHBOARD,
     gcTime: GC_TIME.DEFAULT,
   });
@@ -38,30 +36,27 @@ export function useAssetsData() {
   const trendQuery = useQuery({
     queryKey: QUERY_KEYS.assetTrend(currentYear),
     queryFn: async () => {
-      const now = new Date();
-      const startMonth = now.getMonth() + 2;
-      const startDate = `${currentYear - 1}-${String(startMonth > 12 ? startMonth - 12 : startMonth).padStart(2, '0')}-01`;
-      const endDay = new Date(currentYear, now.getMonth() + 1, 0).getDate();
-      const endDate = `${currentYear}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(endDay).padStart(2, '0')}`;
-      const res = await billsService.getBillStatistics({
-        startDate,
-        endDate,
-        granularity: 'monthly',
+      const statistics = await nativeData.getBillStatistics({
+        startDate: formatDate(trendStart),
+        endDate: formatDate(trendEnd),
       });
-      return res.data ?? EMPTY_BILL_STATISTICS;
+      return toReportStatistics(statistics);
     },
     staleTime: CACHE_TIME.STATISTICS,
     gcTime: GC_TIME.DEFAULT,
   });
 
-  // 总资产 = 全部收入 - 全部支出
-  const netWorth = (totalQuery.data?.totalIncome ?? 0) - (totalQuery.data?.totalExpense ?? 0);
+  const netWorth = (netWorthQuery.data?.netWorthMinor ?? 0) / 100;
+  const totalAssets = (netWorthQuery.data?.totalAssetsMinor ?? 0) / 100;
+  const totalLiabilities = (netWorthQuery.data?.totalLiabilitiesMinor ?? 0) / 100;
   const totalIncome = totalQuery.data?.totalIncome ?? 0;
   const totalExpense = totalQuery.data?.totalExpense ?? 0;
 
   // 计算资产趋势折线图数据（逐月累计）
   const assetTrendData = useMemo(() => {
-    if (!trendQuery.data?.monthlyTrends) return [];
+    if (!trendQuery.data?.monthlyTrends || trendQuery.data.monthlyTrends.length === 0) {
+      return [];
+    }
 
     const trends = trendQuery.data.monthlyTrends;
     const totalNetInRange = trends.reduce((sum, t) => sum + (t.income - t.expense), 0);
@@ -82,26 +77,27 @@ export function useAssetsData() {
   const expenseCategoryStats = trendQuery.data?.expenseCategoryStats ?? [];
 
   // 趋势图日期范围描述
-  const trendDateRange = useMemo(() => {
-    const now = new Date();
-    const startMonth = now.getMonth() + 2;
-    const startY = currentYear - 1;
-    const startM = startMonth > 12 ? startMonth - 12 : startMonth;
-    return `${startY}.${startM} - ${currentYear}.${now.getMonth() + 1}`;
-  }, [currentYear]);
+  const trendDateRange = `${trendStart.getFullYear()}.${trendStart.getMonth() + 1} - ${
+    now.getFullYear()
+  }.${now.getMonth() + 1}`;
 
   return {
     netWorth,
+    totalAssets,
+    totalLiabilities,
     totalIncome,
     totalExpense,
     assetTrendData,
     trendDateRange,
     incomeCategoryStats,
     expenseCategoryStats,
-    isLoading: totalQuery.isLoading || trendQuery.isLoading,
-    refetch: () => {
-      totalQuery.refetch();
-      trendQuery.refetch();
+    isLoading: totalQuery.isLoading || netWorthQuery.isLoading || trendQuery.isLoading,
+    refetch: async () => {
+      await Promise.all([
+        totalQuery.refetch(),
+        netWorthQuery.refetch(),
+        trendQuery.refetch(),
+      ]);
     },
   };
 }

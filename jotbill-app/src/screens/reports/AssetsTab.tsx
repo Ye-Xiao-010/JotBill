@@ -13,7 +13,19 @@ import AssetCompositionChart from '../../components/reports/AssetCompositionChar
 
 export default function AssetsTab() {
   const styles = useStyles(createStyles);
-  const { netWorth, totalIncome, totalExpense, assetTrendData, trendDateRange, incomeCategoryStats, expenseCategoryStats, isLoading, refetch } = useAssetsData();
+  const {
+    netWorth,
+    totalAssets,
+    totalLiabilities,
+    totalIncome,
+    totalExpense,
+    assetTrendData,
+    trendDateRange,
+    incomeCategoryStats,
+    expenseCategoryStats,
+    isLoading,
+    refetch,
+  } = useAssetsData();
 
   const formatCurrency = (val: number) => {
     if (Math.abs(val) >= 10000) {
@@ -32,21 +44,36 @@ export default function AssetsTab() {
     >
       {/* 总资产卡片 */}
       <View style={styles.balanceCard}>
-        <Text style={styles.balanceLabel}>净资产（收入 - 支出）</Text>
+        <Text style={styles.balanceLabel}>净资产（账户余额）</Text>
         <Text style={styles.balanceAmount}>
           {formatCurrency(netWorth)}
         </Text>
         <View style={styles.balanceRow}>
           <View style={styles.balanceItem}>
-            <Text style={styles.balanceItemLabel}>总收入</Text>
-            <Text style={[styles.balanceItemValue, { color: '#4ADE80' }]}>
+            <Text style={styles.balanceItemLabel}>总资产</Text>
+            <Text style={[styles.balanceItemValue, styles.assetValue]}>
+              {formatCurrency(totalAssets)}
+            </Text>
+          </View>
+          <View style={styles.balanceDivider} />
+          <View style={styles.balanceItem}>
+            <Text style={styles.balanceItemLabel}>总负债</Text>
+            <Text style={[styles.balanceItemValue, styles.liabilityValue]}>
+              {formatCurrency(totalLiabilities)}
+            </Text>
+          </View>
+        </View>
+        <View style={styles.secondaryRow}>
+          <View style={styles.balanceItem}>
+            <Text style={styles.balanceItemLabel}>累计收入</Text>
+            <Text style={[styles.balanceItemValue, styles.assetValue]}>
               {formatCurrency(totalIncome)}
             </Text>
           </View>
           <View style={styles.balanceDivider} />
           <View style={styles.balanceItem}>
-            <Text style={styles.balanceItemLabel}>总支出</Text>
-            <Text style={[styles.balanceItemValue, { color: '#F87171' }]}>
+            <Text style={styles.balanceItemLabel}>累计支出</Text>
+            <Text style={[styles.balanceItemValue, styles.liabilityValue]}>
               {formatCurrency(totalExpense)}
             </Text>
           </View>
@@ -100,6 +127,11 @@ const createStyles = (colors: ThemeColors) => ({
       flexDirection: 'row',
       alignItems: 'center',
     },
+    secondaryRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      marginTop: spacing.lg,
+    },
     balanceItem: {
       flex: 1,
     },
@@ -120,6 +152,12 @@ const createStyles = (colors: ThemeColors) => ({
       fontSize: 16,
       fontWeight: '800',
       fontFamily: 'Courier',
+    },
+    assetValue: {
+      color: '#4ADE80',
+    },
+    liabilityValue: {
+      color: '#F87171',
     },
   }),
   _colors: colors,
