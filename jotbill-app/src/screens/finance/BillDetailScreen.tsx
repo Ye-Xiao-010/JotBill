@@ -14,28 +14,35 @@ import {
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { ThemeColors } from '../../theme/colors';
 import { borderRadius, borderWidth, spacing, shadow } from '../../theme/spacing';
-import { billsService } from '../../services';
+import { nativeData, type Bill, type Category } from '../../native';
 import { invalidateCache } from '../../lib/queryClient';
 import { useStyles } from '../../hooks';
 import { useAlert } from '../../providers';
-import type { BillData } from '../../types/bill';
 
 export default function BillDetailScreen() {
   const navigation = useNavigation();
   const route = useRoute();
-  const { billId } = route.params as { billId: number };
+  const rawBillId = (route.params as { billId: string | number }).billId;
+  const billId = String(rawBillId);
   const styles = useStyles(createStyles);
   const { alert, confirm } = useAlert();
 
-  const [bill, setBill] = useState<BillData | null>(null);
+  const [bill, setBill] = useState<Bill | null>(null);
+  const [category, setCategory] = useState<Category | null>(null);
   const [loading, setLoading] = useState(true);
   const [deleting, setDeleting] = useState(false);
 
   const fetchBill = useCallback(async () => {
     try {
       setLoading(true);
-      const response = await billsService.getBillById(billId);
-      setBill(response.data || null);
+      const loadedBill = await nativeData.getBillById(billId);
+      setBill(loadedBill);
+
+      const categoryType = loadedBill.type === 'income' || loadedBill.type === 'refund'
+        ? 'income'
+        : 'expense';
+      const categories = await nativeData.getCategories(categoryType);
+      setCategory(categories.find(item => item.id === loadedBill.categoryId) || null);
     } catch (error) {
       console.error('Failed to fetch bill:', error);
       alert('错误', '获取账单详情失败');
@@ -61,7 +68,7 @@ export default function BillDetailScreen() {
       async () => {
         try {
           setDeleting(true);
-          await billsService.deleteBill(billId);
+          await nativeData.deleteBill(billId);
           invalidateCache.bills();
           navigation.goBack();
         } catch (error) {
@@ -109,9 +116,9 @@ export default function BillDetailScreen() {
     );
   }
 
-  const isExpense = bill.type === 'expense';
-  const typeLabel = isExpense ? '支出' : '收入';
-  const amountColor = isExpense ? styles._colors.expense : styles._colors.income;
+  const isPositive = bill.type === 'income' || bill.type === 'refund';
+  const typeLabel = bill.type === 'refund' ? '退款' : isPositive ? '收入' : '支出';
+  const amountColor = isPositive ? styles._colors.income : styles._colors.expense;
 
   return (
     <View style={styles.container}>
@@ -119,15 +126,15 @@ export default function BillDetailScreen() {
         {/* 金额区域 */}
         <View style={styles.amountSection}>
           <View style={styles.categoryIconBlock}>
-            <Text style={styles.categoryEmoji}>{bill.category?.icon || '📝'}</Text>
+            <Text style={styles.categoryEmoji}>{category?.icon || '📝'}</Text>
           </View>
-          <Text style={[styles.typeBadge, { backgroundColor: isExpense ? styles._colors.expense + '20' : styles._colors.income + '20', color: amountColor }]}>
+          <Text style={[styles.typeBadge, { backgroundColor: isPositive ? styles._colors.income + '20' : styles._colors.expense + '20', color: amountColor }]}>
             {typeLabel}
           </Text>
           <Text style={[styles.amount, { color: amountColor }]}>
-            ¥ {Number(bill.amount).toFixed(2)}
+            ¥ {(bill.amountMinor / 100).toFixed(2)}
           </Text>
-          <Text style={styles.categoryLabel}>{bill.category?.name || '未分类'}</Text>
+          <Text style={styles.categoryLabel}>{category?.name || '未分类'}</Text>
         </View>
 
         {/* 详情卡片 */}
@@ -135,15 +142,26 @@ export default function BillDetailScreen() {
           <View style={styles.detailRow}>
             <Text style={styles.detailLabel}>分类</Text>
             <View style={styles.detailValueContainer}>
-              {bill.category?.icon && <Text style={styles.detailIcon}>{bill.category.icon}</Text>}
-              <Text style={styles.detailValue}>{bill.category?.name || '未分类'}</Text>
+              {category?.icon && <Text style={styles.detailIcon}>{category.icon}</Text>}
+              <Text style={styles.detailValue}>{category?.name || '未分类'}</Text>
             </View>
           </View>
           <View style={styles.divider} />
           <View style={styles.detailRow}>
             <Text style={styles.detailLabel}>时间</Text>
-            <Text style={styles.detailValueCourier}>{`${formatDate(bill.date)} ${formatTime(bill.createdAt)}`}</Text>
+            <Text style={styles.detailValueCourier}>{`${formatDate(bill.occurredAt)} ${formatTime(bill.occurredAt)}`}</Text>
           </View>
+          {(bill.merchant || bill.productDescription || bill.platform) && (
+            <>
+              <View style={styles.divider} />
+              <View style={styles.detailRow}>
+                <Text style={styles.detailLabel}>来源</Text>
+                <Text style={styles.detailValue}>
+                  {[bill.platform, bill.merchant, bill.productDescription].filter(Boolean).join(' / ')}
+                </Text>
+              </View>
+            </>
+          )}
           {bill.description && (
             <>
               <View style={styles.divider} />

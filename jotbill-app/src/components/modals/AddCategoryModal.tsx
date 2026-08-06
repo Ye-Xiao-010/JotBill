@@ -2,7 +2,7 @@
  * 添加分类模态框组件 - Neo-Brutalism 风格
  * 描边图标网格 + BrutalPressable 按钮
  */
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   View,
   Text,
@@ -14,7 +14,7 @@ import {
 import { ThemeColors } from '../../theme/colors';
 import { spacing, borderRadius, borderWidth, shadow } from '../../theme';
 import { useToast, useStyles } from '../../hooks';
-import { categoriesService } from '../../services';
+import { nativeData, type Category } from '../../native';
 import type { BillType } from '../../types/bill';
 import Modal from '../ui/Modal';
 
@@ -23,6 +23,7 @@ interface AddCategoryModalProps {
   onClose: () => void;
   onSuccess: () => void;
   billType: BillType;
+  category?: Category | null;
 }
 
 const ICON_OPTIONS = [
@@ -39,12 +40,19 @@ export const AddCategoryModal: React.FC<AddCategoryModalProps> = ({
   onClose,
   onSuccess,
   billType,
+  category = null,
 }) => {
   const styles = useStyles(createStyles);
-  const [categoryName, setCategoryName] = useState('');
-  const [selectedIcon, setSelectedIcon] = useState('🍔');
+  const [categoryName, setCategoryName] = useState(category?.name || '');
+  const [selectedIcon, setSelectedIcon] = useState(category?.icon || '🍔');
   const [loading, setLoading] = useState(false);
   const { showError, showSuccess } = useToast();
+
+  useEffect(() => {
+    if (!visible) return;
+    setCategoryName(category?.name || '');
+    setSelectedIcon(category?.icon || '🍔');
+  }, [category, visible]);
 
   const handleSave = async () => {
     if (!categoryName.trim()) {
@@ -54,14 +62,20 @@ export const AddCategoryModal: React.FC<AddCategoryModalProps> = ({
 
     setLoading(true);
     try {
-      await categoriesService.createCategory({
+      const input = {
         name: categoryName.trim(),
         type: billType,
         icon: selectedIcon,
         color: billType === 'income' ? styles._colors.income : styles._colors.expense,
-      });
+      };
 
-      showSuccess('分类创建成功');
+      if (category) {
+        await nativeData.updateCategory(category.id, input);
+      } else {
+        await nativeData.addCategory(input);
+      }
+
+      showSuccess(category ? '分类更新成功' : '分类创建成功');
       setCategoryName('');
       setSelectedIcon('🍔');
       onSuccess();
@@ -83,7 +97,7 @@ export const AddCategoryModal: React.FC<AddCategoryModalProps> = ({
     <Modal
       visible={visible}
       onClose={handleClose}
-      title="添加分类"
+      title={category ? '编辑分类' : '添加分类'}
     >
       <ScrollView
         style={styles.content}
@@ -138,7 +152,7 @@ export const AddCategoryModal: React.FC<AddCategoryModalProps> = ({
           disabled={loading}
         >
           <Text style={styles.saveButtonText}>
-            {loading ? '保存中...' : '保存'}
+            {loading ? '保存中...' : category ? '更新' : '保存'}
           </Text>
         </TouchableOpacity>
       </View>

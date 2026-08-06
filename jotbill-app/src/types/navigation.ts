@@ -3,8 +3,7 @@
  * 统一管理所有页面的路由参数，支持类型安全的导航
  */
 
-import type { BillData } from './bill';
-import type { CategoryData } from './category';
+import type { Bill } from '../native';
 
 // React Navigation 全局类型扩展
 declare global {
@@ -27,11 +26,11 @@ declare global {
 
       // 记账功能
       CreateBill: {
-        bill?: BillData;
+        bill?: Bill;
         initialType?: 'income' | 'expense';
       };
       EditBill: {
-        billId: number;
+        billId: string;
       };
       AllBills: {
         initialFilter?: 'all' | 'income' | 'expense';
@@ -51,7 +50,7 @@ declare global {
 
       // 账单详情
       BillDetail: {
-        billId: number;
+        billId: string;
       };
 
       // 分类管理

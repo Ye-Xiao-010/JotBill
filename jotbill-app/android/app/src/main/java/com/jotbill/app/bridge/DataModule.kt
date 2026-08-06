@@ -25,6 +25,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -40,6 +42,7 @@ class DataModule(
     private val reactContext: ReactApplicationContext
 ) : ReactContextBaseJavaModule(reactContext) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val defaultCategoryMutex = Mutex()
     private val events = NativeEventEmitter(reactContext)
     private val database: JotBillDatabase by lazy {
         JotBillDatabaseProvider.get(reactContext)
@@ -350,6 +353,7 @@ class DataModule(
 
     @ReactMethod
     fun getCategories(type: String?, promise: Promise) = launch(promise) {
+        ensureDefaultCategories()
         val categories = if (type.isNullOrBlank()) {
             database.categoryDao().getAll()
         } else {
@@ -414,8 +418,46 @@ class DataModule(
 
     @ReactMethod
     fun initDefaultCategories(promise: Promise) = launch(promise) {
-        // Seeding is intentionally kept in the dedicated initializer step.
+        ensureDefaultCategories()
         null
+    }
+
+    private suspend fun ensureDefaultCategories() {
+        defaultCategoryMutex.withLock {
+            if (database.categoryDao().getAll().isNotEmpty()) return@withLock
+
+            val now = System.currentTimeMillis()
+            val defaults = listOf(
+                Triple("餐饮", "expense", "🍽️"),
+                Triple("交通", "expense", "🚗"),
+                Triple("购物", "expense", "🛍️"),
+                Triple("居住", "expense", "🏠"),
+                Triple("娱乐", "expense", "🎮"),
+                Triple("医疗", "expense", "💊"),
+                Triple("教育", "expense", "📚"),
+                Triple("工资", "income", "💰"),
+                Triple("奖金", "income", "🎁"),
+                Triple("其他收入", "income", "💼")
+            )
+
+            database.withTransaction {
+                defaults.forEachIndexed { index, (name, type, icon) ->
+                    database.categoryDao().insert(
+                        CategoryEntity(
+                            id = UUID.randomUUID().toString(),
+                            name = name,
+                            type = type,
+                            icon = icon,
+                            color = null,
+                            isDefault = true,
+                            sortOrder = index,
+                            createdAt = now,
+                            updatedAt = now
+                        )
+                    )
+                }
+            }
+        }
     }
 
     @ReactMethod

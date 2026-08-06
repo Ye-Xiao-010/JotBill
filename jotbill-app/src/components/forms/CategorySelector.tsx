@@ -12,13 +12,12 @@ import {
 import { ThemeColors } from '../../theme/colors';
 import { spacing, borderRadius, borderWidth } from '../../theme';
 import { useToast, useStyles } from '../../hooks';
-import { categoriesService } from '../../services';
+import { nativeData, type Category } from '../../native';
 import type { BillType } from '../../types/bill';
-import type { CategoryData } from '../../types/category';
 
 interface CategorySelectorProps {
-  selectedCategoryId?: number;
-  onCategorySelect: (category: CategoryData) => void;
+  selectedCategoryId?: string;
+  onCategorySelect: (category: Category) => void;
   billType: BillType;
 }
 
@@ -28,17 +27,14 @@ export const CategorySelector: React.FC<CategorySelectorProps> = ({
   billType,
 }) => {
   const styles = useStyles(createStyles);
-  const [categories, setCategories] = useState<CategoryData[]>([]);
+  const [categories, setCategories] = useState<Category[]>([]);
   const [loading, setLoading] = useState(false);
   const { showError } = useToast();
 
   const loadCategories = async () => {
     setLoading(true);
     try {
-      const response = await categoriesService.getCategories(billType);
-      if (response.success && response.data) {
-        setCategories(response.data);
-      }
+      setCategories(await nativeData.getCategories(billType));
     } catch (error: any) {
       console.error('加载分类失败:', error);
       showError('加载分类失败');

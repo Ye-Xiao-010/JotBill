@@ -3,7 +3,7 @@
  * 使用 React Query 管理分类数据的获取和缓存
  */
 import { useQuery } from '@tanstack/react-query';
-import { categoriesService } from '../services';
+import { nativeData, type Category } from '../native';
 import { CACHE_TIME, QUERY_KEYS, GC_TIME } from '../lib/queryClient';
 import type { BillType } from '../types/bill';
 
@@ -15,13 +15,7 @@ import type { BillType } from '../types/bill';
 export function useCategories(type: BillType, enabled: boolean = true) {
   const query = useQuery({
     queryKey: QUERY_KEYS.categories.byType(type),
-    queryFn: async () => {
-      const response = await categoriesService.getCategories(type);
-      if (response.success && response.data) {
-        return response.data;
-      }
-      return [];
-    },
+    queryFn: (): Promise<Category[]> => nativeData.getCategories(type),
     enabled,
     staleTime: CACHE_TIME.CATEGORIES,
     gcTime: GC_TIME.DEFAULT,

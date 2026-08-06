@@ -2,7 +2,7 @@
  * 创建/编辑账单屏幕 - Neo-Brutalism 风格
  * 描边金额输入 + 糖果色类型切换 + 描边分类网格
  */
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   View,
   ScrollView,
@@ -15,10 +15,8 @@ import { Toast } from '../../components';
 import { AddCategoryModal, ConfirmModal } from '../../components/modals';
 import { useToast, useCategories, useStyles } from '../../hooks';
 import { useAlert } from '../../providers';
-import { billsService, categoriesService } from '../../services';
+import { nativeData, type Bill, type Category } from '../../native';
 import { invalidateCache } from '../../lib/queryClient';
-import type { BillData, CreateBillDto, UpdateBillDto } from '../../types/bill';
-import type { CategoryData } from '../../types/category';
 import { ThemeColors } from '../../theme/colors';
 import { spacing, borderRadius, borderWidth, shadow } from '../../theme';
 
@@ -37,7 +35,7 @@ interface CreateBillScreenProps {
   navigation: any;
   route?: {
     params?: {
-      bill?: BillData;
+      bill?: Bill;
       initialType?: 'income' | 'expense';
     };
   };
@@ -52,32 +50,39 @@ const CreateBillScreen: React.FC<CreateBillScreenProps> = ({ navigation, route }
   const initialType = route?.params?.initialType;
   const isEditing = !!editingBill;
 
-  const [amount, setAmount] = useState(editingBill?.amount?.toString() || '');
+  const [amount, setAmount] = useState(
+    editingBill ? (editingBill.amountMinor / 100).toFixed(2) : ''
+  );
   const [type, setType] = useState<'income' | 'expense'>(
-    editingBill?.type || initialType || 'expense'
+    editingBill?.type === 'income' ? 'income' : initialType || 'expense'
   );
-  const [selectedCategory, setSelectedCategory] = useState<CategoryData | null>(
-    editingBill?.category || null
-  );
+  const [selectedCategory, setSelectedCategory] = useState<Category | null>(null);
   const [description, setDescription] = useState(editingBill?.description || '');
   const [loading, setLoading] = useState(false);
 
   const { categories } = useCategories(type);
 
+  useEffect(() => {
+    if (!editingBill?.categoryId) return;
+    setSelectedCategory(
+      categories.find(category => category.id === editingBill.categoryId) || null
+    );
+  }, [categories, editingBill?.categoryId]);
+
   const [showAddCategoryModal, setShowAddCategoryModal] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
-  const [categoryToDelete, setCategoryToDelete] = useState<CategoryData | null>(null);
+  const [categoryToDelete, setCategoryToDelete] = useState<Category | null>(null);
 
   const handleTypeChange = (newType: 'income' | 'expense') => {
     setType(newType);
     setSelectedCategory(null);
   };
 
-  const handleCategorySelect = (category: CategoryData) => {
+  const handleCategorySelect = (category: Category) => {
     setSelectedCategory(category);
   };
 
-  const handleCategoryLongPress = (category: CategoryData) => {
+  const handleCategoryLongPress = (category: Category) => {
     if (category.isDefault) {
       showError('系统默认分类不能删除');
       return;
@@ -89,7 +94,7 @@ const CreateBillScreen: React.FC<CreateBillScreenProps> = ({ navigation, route }
   const handleConfirmDelete = async () => {
     if (!categoryToDelete) return;
     try {
-      await categoriesService.deleteCategory(categoryToDelete.id);
+      await nativeData.deleteCategory(categoryToDelete.id);
       showSuccess('分类删除成功');
       invalidateCache.categories();
       if (selectedCategory?.id === categoryToDelete.id) {
@@ -112,7 +117,7 @@ const CreateBillScreen: React.FC<CreateBillScreenProps> = ({ navigation, route }
   };
 
   const getCategoryList = () => {
-    const mergedCategories: CategoryData[] = [];
+    const mergedCategories: Category[] = [];
     FIXED_CATEGORIES.forEach(fixedCat => {
       const matchedCategory = categories.find(cat => cat.name === fixedCat.name);
       if (matchedCategory) {
@@ -141,28 +146,28 @@ const CreateBillScreen: React.FC<CreateBillScreenProps> = ({ navigation, route }
     if (!validateForm()) return;
     try {
       setLoading(true);
+      const amountMinor = Math.round(parseFloat(amount) * 100);
       const billData = {
-        amount: parseFloat(amount),
+        amountMinor,
         type,
-        description,
-        date: isEditing
-          ? new Date(editingBill!.date).toISOString().split('T')[0]
-          : new Date().toISOString().split('T')[0],
+        description: description.trim() || null,
+        occurredAt: editingBill?.occurredAt || new Date().toISOString(),
         categoryId: selectedCategory!.id,
+        sourceType: editingBill?.sourceType || 'manual' as const,
       };
-      let response;
+
       if (isEditing) {
-        response = await billsService.updateBill(editingBill!.id, billData as UpdateBillDto);
+        await nativeData.updateBill(editingBill!.id, {
+          ...billData,
+          version: editingBill!.version,
+        });
       } else {
-        response = await billsService.createBill(billData as CreateBillDto);
+        await nativeData.addBill(billData);
       }
-      if (response.success) {
-        invalidateCache.bills();
-        showSuccess(isEditing ? '账单更新成功' : '账单创建成功');
-        navigation.goBack();
-      } else {
-        showError(response.message || '操作失败');
-      }
+
+      invalidateCache.bills();
+      showSuccess(isEditing ? '账单更新成功' : '账单创建成功');
+      navigation.goBack();
     } catch (error: any) {
       showError(error.message || '操作失败');
     } finally {
@@ -178,14 +183,10 @@ const CreateBillScreen: React.FC<CreateBillScreenProps> = ({ navigation, route }
       async () => {
         try {
           setLoading(true);
-          const response = await billsService.deleteBill(editingBill!.id);
-          if (response.success) {
-            invalidateCache.bills();
-            showSuccess('账单删除成功');
-            setTimeout(() => navigation.goBack(), 1000);
-          } else {
-            showError(response.message || '删除失败');
-          }
+          await nativeData.deleteBill(editingBill!.id);
+          invalidateCache.bills();
+          showSuccess('账单删除成功');
+          navigation.goBack();
         } catch (error: any) {
           showError(error.message || '删除失败');
         } finally {

@@ -15,8 +15,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import { AddCategoryModal } from '../../components/modals/AddCategoryModal';
 import { useToast, useStyles } from '../../hooks';
 import { useAlert } from '../../providers';
-import { categoriesService } from '../../services';
-import type { CategoryData } from '../../types/category';
+import { nativeData, type Category } from '../../native';
 import { ThemeColors } from '../../theme/colors';
 import { spacing, borderRadius, borderWidth, shadow } from '../../theme';
 
@@ -25,19 +24,16 @@ const CategoryManageScreen: React.FC = () => {
   const { confirm } = useAlert();
   const styles = useStyles(createStyles);
 
-  const [categories, setCategories] = useState<CategoryData[]>([]);
+  const [categories, setCategories] = useState<Category[]>([]);
   const [loading, setLoading] = useState(false);
   const [selectedType, setSelectedType] = useState<'expense' | 'income'>('expense');
   const [showAddModal, setShowAddModal] = useState(false);
-  const [selectedCategory, setSelectedCategory] = useState<CategoryData | null>(null);
+  const [selectedCategory, setSelectedCategory] = useState<Category | null>(null);
 
   const fetchCategories = async () => {
     try {
       setLoading(true);
-      const response = await categoriesService.getCategories(selectedType);
-      if (response.success && response.data) {
-        setCategories(response.data);
-      }
+      setCategories(await nativeData.getCategories(selectedType));
     } catch (error: any) {
       showError(error.message || '加载分类失败');
     } finally {
@@ -51,7 +47,7 @@ const CategoryManageScreen: React.FC = () => {
     }, [selectedType])
   );
 
-  const handleDeleteCategory = (category: CategoryData) => {
+  const handleDeleteCategory = (category: Category) => {
     if (category.isDefault) {
       showError('默认分类不能删除');
       return;
@@ -62,13 +58,9 @@ const CategoryManageScreen: React.FC = () => {
       `确定要删除"${category.name}"分类吗？`,
       async () => {
         try {
-          const response = await categoriesService.deleteCategory(category.id);
-          if (response.success) {
-            showSuccess('分类删除成功');
-            fetchCategories();
-          } else {
-            showError(response.message || '删除失败');
-          }
+          await nativeData.deleteCategory(category.id);
+          showSuccess('分类删除成功');
+          fetchCategories();
         } catch (error: any) {
           showError(error.message || '删除失败');
         }
@@ -78,7 +70,7 @@ const CategoryManageScreen: React.FC = () => {
     );
   };
 
-  const handleEditCategory = (category: CategoryData) => {
+  const handleEditCategory = (category: Category) => {
     if (category.isDefault) {
       showError('默认分类不能编辑');
       return;
@@ -208,7 +200,8 @@ const CategoryManageScreen: React.FC = () => {
           setSelectedCategory(null);
         }}
         onSuccess={handleAddSuccess}
-        billType={selectedType}
+        billType={selectedCategory?.type || selectedType}
+        category={selectedCategory}
       />
     </View>
   );

@@ -42,7 +42,7 @@ export interface BillInput {
   amountMinor: number;
   type: TransactionType;
   occurredAt: string;
-  description?: string;
+  description?: string | null;
   categoryId?: string;
   accountId?: string;
   targetAccountId?: string;

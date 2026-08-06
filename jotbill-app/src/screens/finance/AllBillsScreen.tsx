@@ -2,7 +2,7 @@
  * 全部账单页面 - Neo-Brutalism 风格
  * 描边筛选栏 + 描边月份分组 + 列表项
  */
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
@@ -12,13 +12,23 @@ import {
   StyleSheet,
   ActivityIndicator,
 } from 'react-native';
-import { useNavigation, useRoute, useFocusEffect } from '@react-navigation/native';
+import {
+  useNavigation,
+  useRoute,
+  useFocusEffect,
+} from '@react-navigation/native';
+import { useQuery } from '@tanstack/react-query';
 import { BillItem } from '../../components';
 import { useToast, useStyles } from '../../hooks';
-import { nativeData } from '../../native';
+import { nativeData, type Category } from '../../native';
+import { CACHE_TIME, GC_TIME, QUERY_KEYS } from '../../lib/queryClient';
 import { ThemeColors } from '../../theme/colors';
 import { spacing, borderRadius, borderWidth } from '../../theme';
-import { getCurrentMonthRange, getLastMonthRange, formatMonthDisplay } from '../../utils/date';
+import {
+  getCurrentMonthRange,
+  getLastMonthRange,
+  formatMonthDisplay,
+} from '../../utils/date';
 import type { Bill, BillFilter } from '../../native';
 
 const AllBillsScreen: React.FC = () => {
@@ -27,13 +37,35 @@ const AllBillsScreen: React.FC = () => {
   const { showError } = useToast();
   const styles = useStyles(createStyles);
 
-  const routeParams = route.params as { initialFilter?: 'all' | 'income' | 'expense' } | undefined;
+  const routeParams = route.params as
+    | { initialFilter?: 'all' | 'income' | 'expense' }
+    | undefined;
 
-  const [groupedBills, setGroupedBills] = useState<{ [key: string]: Bill[] }>({});
+  const [groupedBills, setGroupedBills] = useState<{ [key: string]: Bill[] }>(
+    {},
+  );
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
-  const [filter, setFilter] = useState<'all' | 'income' | 'expense'>(routeParams?.initialFilter || 'all');
-  const [timeRange, setTimeRange] = useState<'all' | 'month' | 'lastMonth' | 'custom'>('all');
+  const [filter, setFilter] = useState<'all' | 'income' | 'expense'>(
+    routeParams?.initialFilter || 'all',
+  );
+  const [timeRange, setTimeRange] = useState<
+    'all' | 'month' | 'lastMonth' | 'custom'
+  >('all');
+
+  const { data: categories = [] } = useQuery({
+    queryKey: QUERY_KEYS.categories.all,
+    queryFn: () => nativeData.getCategories(),
+    staleTime: CACHE_TIME.CATEGORIES,
+    gcTime: GC_TIME.DEFAULT,
+  });
+  const categoryById = useMemo(
+    () =>
+      new Map<string, Category>(
+        categories.map(category => [category.id, category]),
+      ),
+    [categories],
+  );
 
   const fetchBills = useCallback(
     async (isRefresh = false) => {
@@ -80,7 +112,7 @@ const AllBillsScreen: React.FC = () => {
         setRefreshing(false);
       }
     },
-    [filter, timeRange, showError]
+    [filter, timeRange, showError],
   );
 
   const groupBillsByMonth = (billList: Bill[]) => {
@@ -103,16 +135,16 @@ const AllBillsScreen: React.FC = () => {
     }, 0);
   };
 
- useFocusEffect(
+  useFocusEffect(
     useCallback(() => {
       fetchBills();
-    }, [fetchBills])
+    }, [fetchBills]),
   );
 
   const handleBillPress = (bill: Bill) => {
     navigation.navigate({
-      name: 'CreateBill',
-      params: { bill },
+      name: 'BillDetail',
+      params: { billId: bill.id },
     } as never);
   };
 
@@ -126,34 +158,84 @@ const AllBillsScreen: React.FC = () => {
       <View style={styles.filterBar}>
         <ScrollView horizontal showsHorizontalScrollIndicator={false}>
           <TouchableOpacity
-            style={[styles.filterBtn, filter === 'all' && styles.filterBtnActive]}
+            style={[
+              styles.filterBtn,
+              filter === 'all' && styles.filterBtnActive,
+            ]}
             onPress={() => setFilter('all')}
           >
-            <Text style={[styles.filterText, filter === 'all' && styles.filterTextActive]}>全部</Text>
+            <Text
+              style={[
+                styles.filterText,
+                filter === 'all' && styles.filterTextActive,
+              ]}
+            >
+              全部
+            </Text>
           </TouchableOpacity>
           <TouchableOpacity
-            style={[styles.filterBtn, filter === 'expense' && styles.filterBtnActive]}
+            style={[
+              styles.filterBtn,
+              filter === 'expense' && styles.filterBtnActive,
+            ]}
             onPress={() => setFilter('expense')}
           >
-            <Text style={[styles.filterText, filter === 'expense' && styles.filterTextActive]}>支出</Text>
+            <Text
+              style={[
+                styles.filterText,
+                filter === 'expense' && styles.filterTextActive,
+              ]}
+            >
+              支出
+            </Text>
           </TouchableOpacity>
           <TouchableOpacity
-            style={[styles.filterBtn, filter === 'income' && styles.filterBtnActive]}
+            style={[
+              styles.filterBtn,
+              filter === 'income' && styles.filterBtnActive,
+            ]}
             onPress={() => setFilter('income')}
           >
-            <Text style={[styles.filterText, filter === 'income' && styles.filterTextActive]}>收入</Text>
+            <Text
+              style={[
+                styles.filterText,
+                filter === 'income' && styles.filterTextActive,
+              ]}
+            >
+              收入
+            </Text>
           </TouchableOpacity>
           <TouchableOpacity
-            style={[styles.filterBtn, timeRange === 'month' && styles.filterBtnActive]}
+            style={[
+              styles.filterBtn,
+              timeRange === 'month' && styles.filterBtnActive,
+            ]}
             onPress={() => setTimeRange('month')}
           >
-            <Text style={[styles.filterText, timeRange === 'month' && styles.filterTextActive]}>本月</Text>
+            <Text
+              style={[
+                styles.filterText,
+                timeRange === 'month' && styles.filterTextActive,
+              ]}
+            >
+              本月
+            </Text>
           </TouchableOpacity>
           <TouchableOpacity
-            style={[styles.filterBtn, timeRange === 'lastMonth' && styles.filterBtnActive]}
+            style={[
+              styles.filterBtn,
+              timeRange === 'lastMonth' && styles.filterBtnActive,
+            ]}
             onPress={() => setTimeRange('lastMonth')}
           >
-            <Text style={[styles.filterText, timeRange === 'lastMonth' && styles.filterTextActive]}>上月</Text>
+            <Text
+              style={[
+                styles.filterText,
+                timeRange === 'lastMonth' && styles.filterTextActive,
+              ]}
+            >
+              上月
+            </Text>
           </TouchableOpacity>
         </ScrollView>
       </View>
@@ -162,7 +244,9 @@ const AllBillsScreen: React.FC = () => {
       <ScrollView
         style={styles.scrollView}
         showsVerticalScrollIndicator={false}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={handleRefresh} />}
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} />
+        }
       >
         {loading && !refreshing ? (
           <View style={styles.loadingContainer}>
@@ -182,30 +266,56 @@ const AllBillsScreen: React.FC = () => {
               <View key={month} style={styles.monthSection}>
                 <View style={styles.monthHeader}>
                   <Text style={styles.monthTitle}>{month}</Text>
-                  <Text style={[
-                    styles.monthTotal,
-                    { color: monthTotal >= 0 ? styles._colors.income : styles._colors.expense }
-                  ]}>
+                  <Text
+                    style={[
+                      styles.monthTotal,
+                      {
+                        color:
+                          monthTotal >= 0
+                            ? styles._colors.income
+                            : styles._colors.expense,
+                      },
+                    ]}
+                  >
                     ¥{Math.abs(monthTotal).toFixed(2)}
                   </Text>
                 </View>
 
                 <View style={styles.billList}>
-                  {monthBills.map(bill => (
-                    <BillItem
-                      key={bill.id}
-                      bill={{
-                        id: bill.id.toString(),
-                        category: bill.merchant || bill.productDescription || bill.platform || '未分类',
-                        amount: bill.amountMinor / 100,
-                        type: bill.type === 'income' || bill.type === 'refund' ? 'income' : 'expense',
-                        date: new Date(bill.occurredAt).toLocaleString('zh-CN'),
-                        description: bill.description,
-                        icon: '📝',
-                      }}
-                      onPress={() => handleBillPress(bill)}
-                    />
-                  ))}
+                  {monthBills.map(rawBill => {
+                    const category = rawBill.categoryId
+                      ? categoryById.get(rawBill.categoryId)
+                      : undefined;
+                    const bill = {
+                      ...rawBill,
+                      merchant: rawBill.merchant || category?.name,
+                    };
+
+                    return (
+                      <BillItem
+                        key={bill.id}
+                        bill={{
+                          id: bill.id.toString(),
+                          category:
+                            bill.merchant ||
+                            bill.productDescription ||
+                            bill.platform ||
+                            '未分类',
+                          amount: bill.amountMinor / 100,
+                          type:
+                            bill.type === 'income' || bill.type === 'refund'
+                              ? 'income'
+                              : 'expense',
+                          date: new Date(bill.occurredAt).toLocaleString(
+                            'zh-CN',
+                          ),
+                          description: bill.description,
+                          icon: category?.icon || '📝',
+                        }}
+                        onPress={() => handleBillPress(rawBill)}
+                      />
+                    );
+                  })}
                 </View>
               </View>
             );
@@ -268,9 +378,24 @@ const createStyles = (colors: ThemeColors) => ({
       fontFamily: 'Courier',
     },
     billList: { backgroundColor: colors.background },
-    loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingTop: 100 },
-    loadingText: { marginTop: spacing.md, fontSize: 15, fontWeight: '600', color: colors.textSecondary },
-    emptyContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingTop: 100 },
+    loadingContainer: {
+      flex: 1,
+      justifyContent: 'center',
+      alignItems: 'center',
+      paddingTop: 100,
+    },
+    loadingText: {
+      marginTop: spacing.md,
+      fontSize: 15,
+      fontWeight: '600',
+      color: colors.textSecondary,
+    },
+    emptyContainer: {
+      flex: 1,
+      justifyContent: 'center',
+      alignItems: 'center',
+      paddingTop: 100,
+    },
     emptyIcon: { fontSize: 48, marginBottom: spacing.md },
     emptyText: { fontSize: 15, fontWeight: '700', color: colors.textTertiary },
   }),

@@ -3,7 +3,13 @@
  * 粗线框、饱和糖果色块、粗描边、平移阴影
  * 像彩色积木构成的界面
  */
-import React, { useCallback, useRef, useEffect, useMemo, useState } from 'react';
+import React, {
+  useCallback,
+  useRef,
+  useEffect,
+  useMemo,
+  useState,
+} from 'react';
 import {
   View,
   Text,
@@ -18,13 +24,23 @@ import {
 import { useNavigation } from '@react-navigation/native';
 import { useQuery } from '@tanstack/react-query';
 import { ThemeColors } from '../../theme/colors';
-import { borderRadius, borderWidth, spacing, shadow } from '../../theme/spacing';
+import {
+  borderRadius,
+  borderWidth,
+  spacing,
+  shadow,
+} from '../../theme/spacing';
 import { ProgressBar, BrutalPressable } from '../../components/ui';
 import { DashboardSkeleton } from '../../components/skeleton';
 import { useDashboard, useStyles } from '../../hooks';
 import { nativeData } from '../../native';
-import { QUERY_KEYS } from '../../lib/queryClient';
-import type { Bill, BudgetProgress, FinancialGoal } from '../../native';
+import { CACHE_TIME, GC_TIME, QUERY_KEYS } from '../../lib/queryClient';
+import type {
+  Bill,
+  BudgetProgress,
+  Category,
+  FinancialGoal,
+} from '../../native';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const SWIPE_THRESHOLD = 80;
@@ -76,10 +92,9 @@ function SwipeableCardStack({
       onStartShouldSetPanResponder: () => true,
       onMoveShouldSetPanResponder: (_, g) =>
         Math.abs(g.dx) > 5 || Math.abs(g.dy) > 5,
-      onPanResponderMove: Animated.event(
-        [null, { dx: pan.x, dy: pan.y }],
-        { useNativeDriver: false },
-      ),
+      onPanResponderMove: Animated.event([null, { dx: pan.x, dy: pan.y }], {
+        useNativeDriver: false,
+      }),
       onPanResponderRelease: (_, g) => {
         const dist = Math.sqrt(g.dx * g.dx + g.dy * g.dy);
         const vel = Math.sqrt(g.vx * g.vx + g.vy * g.vy);
@@ -87,7 +102,7 @@ function SwipeableCardStack({
 
         if (shouldDismiss && cards.length > 1) {
           // 沿滑动方向飞出（放大到屏幕外）
-          const scale = SCREEN_WIDTH * 1.5 / Math.max(dist, 1);
+          const scale = (SCREEN_WIDTH * 1.5) / Math.max(dist, 1);
           const toX = g.dx * scale;
           const toY = g.dy * scale;
           Animated.timing(pan, {
@@ -95,7 +110,7 @@ function SwipeableCardStack({
             duration: 280,
             useNativeDriver: true,
           }).start(() => {
-            setTopIndex((prev) => (prev + 1) % cards.length);
+            setTopIndex(prev => (prev + 1) % cards.length);
             pan.setValue({ x: 0, y: 0 });
           });
         } else {
@@ -110,7 +125,9 @@ function SwipeableCardStack({
     }),
   ).current;
 
-  if (cards.length === 0) {return null;}
+  if (cards.length === 0) {
+    return null;
+  }
 
   const topRotate = pan.x.interpolate({
     inputRange: [-SCREEN_WIDTH, 0, SCREEN_WIDTH],
@@ -154,18 +171,22 @@ function SwipeableCardStack({
               </Text>
             </View>
           </View>
-          <View style={[
-            styles.budgetPercentBadge,
-            card.progress >= 100 && card.type === 'goal'
-              ? { backgroundColor: colors.success }
-              : undefined,
-          ]}>
-            <Text style={[
-              styles.budgetPercentText,
+          <View
+            style={[
+              styles.budgetPercentBadge,
               card.progress >= 100 && card.type === 'goal'
-                ? { color: '#FFFFFF' }
+                ? { backgroundColor: colors.success }
                 : undefined,
-            ]}>
+            ]}
+          >
+            <Text
+              style={[
+                styles.budgetPercentText,
+                card.progress >= 100 && card.type === 'goal'
+                  ? { color: '#FFFFFF' }
+                  : undefined,
+              ]}
+            >
               {Math.round(card.progress)}%
             </Text>
           </View>
@@ -194,7 +215,13 @@ function SwipeableCardStack({
  * 列表项入场动画 - 交错滑入 + 淡入
  * 每个 item 延迟 index * 80ms，从下方 24px 滑入
  */
-function AnimatedListItem({ children, index }: { children: React.ReactNode; index: number }) {
+function AnimatedListItem({
+  children,
+  index,
+}: {
+  children: React.ReactNode;
+  index: number;
+}) {
   const anim = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
@@ -210,12 +237,14 @@ function AnimatedListItem({ children, index }: { children: React.ReactNode; inde
     <Animated.View
       style={{
         opacity: anim,
-        transform: [{
-          translateY: anim.interpolate({
-            inputRange: [0, 1],
-            outputRange: [24, 0],
-          }),
-        }],
+        transform: [
+          {
+            translateY: anim.interpolate({
+              inputRange: [0, 1],
+              outputRange: [24, 0],
+            }),
+          },
+        ],
       }}
     >
       {children}
@@ -236,6 +265,20 @@ export default function DashboardScreen() {
     refetch,
   } = useDashboard();
 
+  const { data: categories = [] } = useQuery({
+    queryKey: QUERY_KEYS.categories.all,
+    queryFn: () => nativeData.getCategories(),
+    staleTime: CACHE_TIME.CATEGORIES,
+    gcTime: GC_TIME.DEFAULT,
+  });
+  const categoryById = useMemo(
+    () =>
+      new Map<string, Category>(
+        categories.map(category => [category.id, category]),
+      ),
+    [categories],
+  );
+
   // 预算进度查询
   const { data: budgetProgressData, refetch: refetchBudgets } = useQuery({
     queryKey: QUERY_KEYS.budgetProgress,
@@ -247,10 +290,11 @@ export default function DashboardScreen() {
     queryKey: QUERY_KEYS.financialGoals,
     queryFn: async (): Promise<GoalProgress[]> => {
       const goals = await nativeData.getFinancialGoals();
-      return goals.map((goal) => {
-        const progress = goal.targetAmountMinor === 0
-          ? 0
-          : goal.currentAmountMinor / goal.targetAmountMinor * 100;
+      return goals.map(goal => {
+        const progress =
+          goal.targetAmountMinor === 0
+            ? 0
+            : (goal.currentAmountMinor / goal.targetAmountMinor) * 100;
         return {
           ...goal,
           progress,
@@ -276,25 +320,30 @@ export default function DashboardScreen() {
         totalAmount: b.amountMinor / 100,
         color: styles._colors.primary,
         labelLeft: `已用 ¥${(b.spentMinor / 100).toLocaleString()}`,
-        labelRight: `剩余 ¥${Math.max(0, b.remainingMinor / 100).toLocaleString()}`,
+        labelRight: `剩余 ¥${Math.max(
+          0,
+          b.remainingMinor / 100,
+        ).toLocaleString()}`,
       });
     });
 
     // 财务目标卡片（手动维护，作为补充）
-    (goalProgressData ?? []).filter((g) => !g.isCompleted).forEach((g) => {
-      cards.push({
-        id: `goal-${g.id}`,
-        type: 'goal',
-        title: g.name,
-        icon: '🎯',
-        progress: g.progress,
-        currentAmount: g.currentAmountMinor / 100,
-        totalAmount: g.targetAmountMinor / 100,
-        color: styles._colors.success,
-        labelLeft: `已存 ¥${(g.currentAmountMinor / 100).toLocaleString()}`,
-        labelRight: `目标 ¥${(g.targetAmountMinor / 100).toLocaleString()}`,
+    (goalProgressData ?? [])
+      .filter(g => !g.isCompleted)
+      .forEach(g => {
+        cards.push({
+          id: `goal-${g.id}`,
+          type: 'goal',
+          title: g.name,
+          icon: '🎯',
+          progress: g.progress,
+          currentAmount: g.currentAmountMinor / 100,
+          totalAmount: g.targetAmountMinor / 100,
+          color: styles._colors.success,
+          labelLeft: `已存 ¥${(g.currentAmountMinor / 100).toLocaleString()}`,
+          labelRight: `目标 ¥${(g.targetAmountMinor / 100).toLocaleString()}`,
+        });
       });
-    });
 
     return cards;
   }, [budgetProgressData, goalProgressData, styles._colors]);
@@ -325,22 +374,22 @@ export default function DashboardScreen() {
 
   const handleViewBillDetail = (bill: Bill) => {
     navigation.navigate({
-      name: 'CreateBill',
-      params: { bill },
+      name: 'BillDetail',
+      params: { billId: bill.id },
     } as never);
   };
 
   // 分类图标
   const getCategoryIcon = (categoryName?: string): string => {
     const iconMap: { [key: string]: string } = {
-      '餐饮': '☕',
-      '交通': '🚗',
-      '购物': '🛍️',
-      '收入': '💰',
-      '工资': '💼',
-      '娱乐': '🎮',
-      '医疗': '🏥',
-      '教育': '📚',
+      餐饮: '☕',
+      交通: '🚗',
+      购物: '🛍️',
+      收入: '💰',
+      工资: '💼',
+      娱乐: '🎮',
+      医疗: '🏥',
+      教育: '📚',
     };
     return iconMap[categoryName || ''] || '📝';
   };
@@ -348,14 +397,14 @@ export default function DashboardScreen() {
   // Neo-Brutalism 分类色块 - 饱和糖果色
   const getCategoryBlockColor = (categoryName?: string): string => {
     const colorMap: { [key: string]: string } = {
-      '餐饮': '#FACC15',    // 明黄
-      '交通': '#3B82F6',    // 蓝
-      '购物': '#EC4899',    // 粉
-      '收入': '#22C55E',    // 绿
-      '工资': '#22C55E',    // 绿
-      '娱乐': '#A855F7',    // 紫
-      '医疗': '#EF4444',    // 红
-      '教育': '#F97316',    // 橙
+      餐饮: '#FACC15', // 明黄
+      交通: '#3B82F6', // 蓝
+      购物: '#EC4899', // 粉
+      收入: '#22C55E', // 绿
+      工资: '#22C55E', // 绿
+      娱乐: '#A855F7', // 紫
+      医疗: '#EF4444', // 红
+      教育: '#F97316', // 橙
     };
     return colorMap[categoryName || ''] || '#E5E5E5';
   };
@@ -392,21 +441,31 @@ export default function DashboardScreen() {
         </View>
         <View style={styles.overviewContent}>
           <Text style={styles.overviewLabel}>本月结余</Text>
-          <Text style={styles.overviewBalance}>¥ {monthBalance.toFixed(2)}</Text>
+          <Text style={styles.overviewBalance}>
+            ¥ {monthBalance.toFixed(2)}
+          </Text>
 
           <View style={styles.overviewDivider} />
 
           <View style={styles.overviewStats}>
-            <TouchableOpacity style={styles.statBlock} onPress={handleViewExpense}>
+            <TouchableOpacity
+              style={styles.statBlock}
+              onPress={handleViewExpense}
+            >
               <View style={styles.statIconBlock}>
                 <Text style={styles.statIcon}>↘</Text>
               </View>
               <View>
                 <Text style={styles.statLabel}>总支出</Text>
-                <Text style={styles.statValue}>¥ {monthExpense.toFixed(2)}</Text>
+                <Text style={styles.statValue}>
+                  ¥ {monthExpense.toFixed(2)}
+                </Text>
               </View>
             </TouchableOpacity>
-            <TouchableOpacity style={styles.statBlockGreen} onPress={handleViewIncome}>
+            <TouchableOpacity
+              style={styles.statBlockGreen}
+              onPress={handleViewIncome}
+            >
               <View style={styles.statIconBlockGreen}>
                 <Text style={styles.statIcon}>↗</Text>
               </View>
@@ -435,7 +494,9 @@ export default function DashboardScreen() {
           activeOpacity={0.8}
         >
           <Text style={styles.progressEmptyIcon}>📊</Text>
-          <Text style={styles.progressEmptyText}>设置预算或财务目标来追踪进度</Text>
+          <Text style={styles.progressEmptyText}>
+            设置预算或财务目标来追踪进度
+          </Text>
           <Text style={styles.progressEmptyHint}>点击前往设置 →</Text>
         </TouchableOpacity>
       )}
@@ -459,52 +520,100 @@ export default function DashboardScreen() {
 
         {recentBills.length > 0 ? (
           <View style={styles.transactionList}>
-            {recentBills.map((bill, index) => (
-              <AnimatedListItem key={bill.id} index={index}>
-                <BrutalPressable
-                  style={styles.transactionItem}
-                  shadowOffset={3}
-                  shadowColor={styles._colors.stroke}
-                  onPress={() => handleViewBillDetail(bill)}
-                >
-                  <View style={styles.transactionLeft}>
-                    <View style={[
-                      styles.transactionIcon,
-                      { backgroundColor: getCategoryBlockColor(bill.description) },
-                    ]}>
-                      <Text style={styles.transactionIconText}>
-                        {getCategoryIcon(bill.description)}
+            {recentBills.map((rawBill, index) => {
+              const category = rawBill.categoryId
+                ? categoryById.get(rawBill.categoryId)
+                : undefined;
+              const categoryName =
+                category?.name ||
+                rawBill.merchant ||
+                rawBill.productDescription ||
+                rawBill.platform ||
+                '未分类';
+              const categoryIcon =
+                category?.icon || getCategoryIcon(category?.name);
+              const bill = {
+                ...rawBill,
+                description:
+                  rawBill.description ||
+                  rawBill.merchant ||
+                  rawBill.productDescription ||
+                  categoryName,
+                platform: rawBill.platform || categoryName,
+              };
+
+              return (
+                <AnimatedListItem key={bill.id} index={index}>
+                  <BrutalPressable
+                    style={styles.transactionItem}
+                    shadowOffset={3}
+                    shadowColor={styles._colors.stroke}
+                    onPress={() => handleViewBillDetail(bill)}
+                  >
+                    <View style={styles.transactionLeft}>
+                      <View
+                        style={[
+                          styles.transactionIcon,
+                          {
+                            backgroundColor: getCategoryBlockColor(
+                              category?.name,
+                            ),
+                          },
+                        ]}
+                      >
+                        <Text style={styles.transactionIconText}>
+                          {categoryIcon}
+                        </Text>
+                      </View>
+                      <View style={styles.transactionInfo}>
+                        <Text style={styles.transactionTitle}>
+                          {bill.description ||
+                            bill.merchant ||
+                            bill.productDescription ||
+                            '未分类'}
+                        </Text>
+                        <Text style={styles.transactionMeta}>
+                          {new Date(bill.occurredAt).toLocaleDateString(
+                            'zh-CN',
+                            { month: 'short', day: 'numeric' },
+                          )}{' '}
+                          · {bill.platform || '未分类'}
+                        </Text>
+                      </View>
+                    </View>
+                    <View
+                      style={[
+                        styles.amountBadge,
+                        bill.type === 'income'
+                          ? styles.incomeBadge
+                          : styles.expenseBadge,
+                      ]}
+                    >
+                      <Text
+                        style={[
+                          styles.transactionAmount,
+                          bill.type === 'income'
+                            ? styles.incomeAmount
+                            : styles.expenseAmount,
+                        ]}
+                      >
+                        {bill.type === 'income' ? '+' : '-'}¥
+                        {(bill.amountMinor / 100).toFixed(2)}
                       </Text>
                     </View>
-                    <View style={styles.transactionInfo}>
-                      <Text style={styles.transactionTitle}>
-                        {bill.description || bill.merchant || bill.productDescription || '未分类'}
-                      </Text>
-                      <Text style={styles.transactionMeta}>
-                        {new Date(bill.occurredAt).toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' })} · {bill.platform || '未分类'}
-                      </Text>
-                    </View>
-                  </View>
-                  <View style={[
-                    styles.amountBadge,
-                    bill.type === 'income' ? styles.incomeBadge : styles.expenseBadge,
-                  ]}>
-                    <Text style={[
-                      styles.transactionAmount,
-                      bill.type === 'income' ? styles.incomeAmount : styles.expenseAmount,
-                    ]}>
-                      {bill.type === 'income' ? '+' : '-'}¥{(bill.amountMinor / 100).toFixed(2)}
-                    </Text>
-                  </View>
-                </BrutalPressable>
-              </AnimatedListItem>
-            ))}
+                  </BrutalPressable>
+                </AnimatedListItem>
+              );
+            })}
           </View>
         ) : (
           <View style={styles.emptyState}>
             <Text style={styles.emptyIcon}>📝</Text>
             <Text style={styles.emptyText}>暂无交易记录</Text>
-            <TouchableOpacity style={styles.emptyButton} onPress={handleAddBill}>
+            <TouchableOpacity
+              style={styles.emptyButton}
+              onPress={handleAddBill}
+            >
               <Text style={styles.emptyButtonText}>添加第一笔</Text>
             </TouchableOpacity>
           </View>
@@ -728,8 +837,7 @@ const createStyles = (colors: ThemeColors) => ({
       overflow: 'hidden',
       marginBottom: spacing.md,
     },
-    budgetProgressBar: {
-    },
+    budgetProgressBar: {},
     budgetLabels: {
       flexDirection: 'row',
       justifyContent: 'space-between',
@@ -770,8 +878,7 @@ const createStyles = (colors: ThemeColors) => ({
     },
 
     // ===== Section =====
-    section: {
-    },
+    section: {},
     sectionHeader: {
       flexDirection: 'row',
       justifyContent: 'space-between',
@@ -911,7 +1018,6 @@ const createStyles = (colors: ThemeColors) => ({
       fontWeight: '800',
       color: '#FFFFFF',
     },
-
   }),
   _colors: colors,
 });
