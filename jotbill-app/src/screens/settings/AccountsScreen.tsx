@@ -214,8 +214,8 @@ export default function AccountsScreen() {
             })}
           </Text>
           <View style={styles.summaryRow}>
-            <Text style={styles.summaryMeta}>资产 ¥{formatMoney(netWorthQuery.data?.totalAssetsMinor ?? 0, 'asset')}</Text>
-            <Text style={styles.summaryMeta}>负债 ¥{formatMoney(netWorthQuery.data?.totalLiabilitiesMinor ?? 0, 'liability')}</Text>
+            <Text style={styles.summaryMeta}>资产 {formatMoney(netWorthQuery.data?.totalAssetsMinor ?? 0, 'asset')}</Text>
+            <Text style={styles.summaryMeta}>负债 {formatMoney(netWorthQuery.data?.totalLiabilitiesMinor ?? 0, 'liability')}</Text>
           </View>
         </View>
 

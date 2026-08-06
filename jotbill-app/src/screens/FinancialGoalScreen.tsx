@@ -139,7 +139,7 @@ export default function FinancialGoalScreen() {
     const payload: FinancialGoalInput = {
       name: formName.trim(),
       targetAmountMinor: Math.round(target * 100),
-      targetDate: formDeadline || undefined,
+      targetDate: formDeadline.trim() || null,
     };
 
     if (editingGoal) {
