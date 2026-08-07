@@ -59,7 +59,7 @@ import com.jotbill.app.data.entity.TransactionCandidateEntity
         ChatSessionEntity::class,
         ChatMessageEntity::class
     ],
-    version = 2,
+    version = 3,
     exportSchema = true
 )
 @TypeConverters(DatabaseConverters::class)
@@ -140,5 +140,19 @@ object DatabaseMigrations {
         }
     }
 
-    val all: Array<Migration> = arrayOf(migration1To2)
+    private val migration2To3 = object : Migration(2, 3) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            // 将历史智谱模型配置迁移到当前默认模型。
+            db.execSQL(
+                """
+                UPDATE `ai_provider_configs`
+                SET `model` = 'glm-4.6v-flash'
+                WHERE `provider` = 'glm'
+                  AND lower(`model`) IN ('glm-4-flash', 'glm-4-plus')
+                """.trimIndent()
+            )
+        }
+    }
+
+    val all: Array<Migration> = arrayOf(migration1To2, migration2To3)
 }

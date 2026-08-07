@@ -48,6 +48,8 @@ export interface UpdateAIConfigDto {
   isDefault?: boolean;
 }
 
+export const GLM_DEFAULT_MODEL = 'glm-4.6v-flash';
+
 // 解析账单请求
 export interface ParseBillRequest {
   type: 'image' | 'text';
@@ -187,7 +189,7 @@ export const AI_PROVIDERS: Record<AIProvider, ProviderPreset> = {
   glm: {
     name: '智谱 GLM',
     defaultUrl: 'https://open.bigmodel.cn',
-    models: ['glm-4-flash', 'glm-4-plus'],
+    models: [GLM_DEFAULT_MODEL],
     supportsVision: true,
   },
   siliconflow: {

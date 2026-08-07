@@ -18,6 +18,7 @@ import { nativeAi, type AiProvider, type AiProviderConfig, type AiProviderInput,
 import { borderRadius, borderWidth, shadow, spacing } from '../../theme/spacing';
 import { ThemeColors } from '../../theme/colors';
 import { useStyles } from '../../hooks';
+import { GLM_DEFAULT_MODEL } from '../../types/ai';
 
 interface ProviderOption {
   value: AiProvider;
@@ -39,7 +40,7 @@ const PROVIDER_OPTIONS: ProviderOption[] = [
     value: 'glm',
     label: '智谱 GLM',
     baseUrl: 'https://open.bigmodel.cn',
-    models: ['glm-4-flash', 'glm-4-plus'],
+    models: [GLM_DEFAULT_MODEL],
     supportsVision: true,
   },
   {
