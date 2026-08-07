@@ -3,11 +3,18 @@
  */
 
 // 支持的 AI 服务商
-export type AIProvider = 'claude' | 'openai' | 'deepseek' | 'qwen';
+export type AIProvider =
+  | 'claude'
+  | 'openai'
+  | 'deepseek'
+  | 'qwen'
+  | 'glm'
+  | 'siliconflow'
+  | 'custom';
 
 // AI 模型配置
 export interface AIModelConfig {
-  id: number;
+  id: string;
   name: string;
   provider: AIProvider;
   model: string;
@@ -67,10 +74,10 @@ export interface TestConnectionResult {
 
 // 聊天会话
 export interface ChatSession {
-  id: number;
-  userId: string;
+  id: string;
+  userId?: string;
   title: string | null;
-  aiConfigId: number | null;
+  aiConfigId: string | null;
   isActive: boolean;
   isPinned: boolean;
   createdAt: string;
@@ -80,8 +87,8 @@ export interface ChatSession {
 
 // 聊天消息（服务端）
 export interface ChatMessageData {
-  id: number;
-  sessionId: number;
+  id: string;
+  sessionId: string;
   seqNum: number;
   role: 'system' | 'user' | 'assistant' | 'tool';
   content: string | null;
@@ -110,14 +117,14 @@ export interface ToolResultData {
 // 聊天请求
 export interface ChatRequest {
   content: string;
-  sessionId?: number;
-  configId?: number;
+  sessionId?: string;
+  configId?: string;
   imageBase64List?: string[];
 }
 
 // 聊天响应
 export interface ChatResponseData {
-  sessionId: number;
+  sessionId: string;
   content: string;
   toolResults: Array<{
     toolCallId: string;
@@ -129,7 +136,7 @@ export interface ChatResponseData {
 // ========== SSE 流式回调 ==========
 
 export interface StreamCallbacks {
-  onSessionCreated?: (data: { sessionId: number }) => void;
+  onSessionCreated?: (data: { sessionId: string }) => void;
   onThinking?: (data: { round: number }) => void;
   onThinkingDelta?: (data: { content: string }) => void;
   onTextDelta?: (data: { content: string }) => void;
@@ -139,7 +146,7 @@ export interface StreamCallbacks {
     toolName: string;
     result: ToolResultData;
   }) => void;
-  onDone?: (data: { sessionId: number; thinkingTimeMs: number }) => void;
+  onDone?: (data: { sessionId: string; thinkingTimeMs: number; cancelled?: boolean }) => void;
   onError?: (data: { message: string }) => void;
 }
 
@@ -176,6 +183,24 @@ export const AI_PROVIDERS: Record<AIProvider, ProviderPreset> = {
     defaultUrl: 'https://dashscope.aliyuncs.com',
     models: ['qwen-turbo', 'qwen-plus', 'qwen-max', 'qwen-vl-plus'],
     supportsVision: true,
+  },
+  glm: {
+    name: '智谱 GLM',
+    defaultUrl: 'https://open.bigmodel.cn',
+    models: ['glm-4-flash', 'glm-4-plus'],
+    supportsVision: true,
+  },
+  siliconflow: {
+    name: 'SiliconFlow',
+    defaultUrl: 'https://api.siliconflow.cn',
+    models: ['Qwen/Qwen2.5-7B-Instruct', 'deepseek-ai/DeepSeek-V3'],
+    supportsVision: false,
+  },
+  custom: {
+    name: '自定义服务商',
+    defaultUrl: '',
+    models: [],
+    supportsVision: false,
   },
 };
 

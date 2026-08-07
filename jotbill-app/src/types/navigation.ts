@@ -57,7 +57,7 @@ declare global {
       CategoryManagement: undefined;
 
       // AI 助手
-      AIChat: { sessionId?: number } | undefined;
+      AIChat: { sessionId?: string } | undefined;
       AIChatSessions: undefined;
 
       // 账户管理

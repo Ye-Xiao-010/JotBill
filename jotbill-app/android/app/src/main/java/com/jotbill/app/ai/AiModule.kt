@@ -28,6 +28,10 @@ class AiModule(
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val database: JotBillDatabase by lazy { JotBillDatabaseProvider.get(reactContext) }
     private val secretStore: KeyStoreSecretStore by lazy { KeyStoreSecretStore(reactContext) }
+    private val chatModuleDelegate = lazy {
+        AiChatModule(reactContext, database, secretStore, scope)
+    }
+    private val chatModule by chatModuleDelegate
     private val httpClient = OkHttpClient.Builder()
         .connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(15, TimeUnit.SECONDS)
@@ -155,8 +159,58 @@ class AiModule(
         }
     }
 
+    @ReactMethod
+    fun sendMessage(inputJson: String, promise: Promise) = launch(promise) {
+        chatModule.sendMessage(inputJson)
+    }
+
+    @ReactMethod
+    fun cancelMessage(sessionId: String, promise: Promise) = launch(promise) {
+        chatModule.cancelMessage(sessionId)
+    }
+
+    @ReactMethod
+    fun getChatSessions(page: Double, limit: Double, promise: Promise) = launch(promise) {
+        chatModule.getChatSessions(page.toInt(), limit.toInt())
+    }
+
+    @ReactMethod
+    fun getChatSession(sessionId: String, promise: Promise) = launch(promise) {
+        chatModule.getChatSession(sessionId)
+    }
+
+    @ReactMethod
+    fun deleteChatSession(sessionId: String, promise: Promise) = launch(promise) {
+        chatModule.deleteChatSession(sessionId)
+        null
+    }
+
+    @ReactMethod
+    fun renameChatSession(sessionId: String, title: String, promise: Promise) = launch(promise) {
+        chatModule.renameChatSession(sessionId, title)
+        null
+    }
+
+    @ReactMethod
+    fun togglePinChatSession(sessionId: String, promise: Promise) = launch(promise) {
+        chatModule.togglePinChatSession(sessionId)
+    }
+
+    @ReactMethod
+    fun transcribeAudio(audioBase64: String, mimeType: String?, promise: Promise) = launch(promise) {
+        chatModule.transcribeAudio(audioBase64, mimeType)
+    }
+
+    /** NativeEventEmitter 在 Android 上要求模块提供这两个监听生命周期方法。 */
+    @ReactMethod
+    fun addListener(eventName: String) = Unit
+
+    @ReactMethod
+    fun removeListeners(count: Double) = Unit
+
     override fun invalidate() {
         scope.coroutineContext.cancel()
+        if (chatModuleDelegate.isInitialized()) chatModule.close()
         httpClient.dispatcher.executorService.shutdown()
         httpClient.connectionPool.evictAll()
         super.invalidate()
@@ -218,12 +272,14 @@ class AiModule(
         return optString(key).trim().takeIf { it.isNotEmpty() }
     }
 
-    private fun launch(promise: Promise, block: suspend () -> String?) {
+    private fun launch(promise: Promise, block: suspend () -> Any?) {
         scope.launch {
             try {
                 val result = block()
                 withContext(Dispatchers.Main) { promise.resolve(result) }
             } catch (error: AiException) {
+                withContext(Dispatchers.Main) { promise.reject(error.code, error.message, error) }
+            } catch (error: AiChatException) {
                 withContext(Dispatchers.Main) { promise.reject(error.code, error.message, error) }
             } catch (error: Exception) {
                 withContext(Dispatchers.Main) { promise.reject("AI_CONFIG_ERROR", error.message, error) }

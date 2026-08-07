@@ -1,7 +1,7 @@
 /**
  * AI 聊天会话列表屏幕
  */
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useCallback } from 'react';
 import {
   View,
   Text,
@@ -15,7 +15,7 @@ import { MessageCircle, Plus, Trash2, ChevronRight } from 'lucide-react-native';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { useAlert } from '../../providers';
 import { ThemeColors } from '../../theme/colors';
-import { borderRadius, borderWidth, spacing, shadow } from '../../theme/spacing';
+import { borderRadius, borderWidth, spacing } from '../../theme/spacing';
 import { useStyles } from '../../hooks';
 import { aiService } from '../../services/api/ai';
 import type { ChatSession } from '../../types/ai';
@@ -58,11 +58,11 @@ export default function AIChatSessionsScreen() {
     navigation.navigate('AIChat', {});
   };
 
-  const handleOpenSession = (sessionId: number) => {
+  const handleOpenSession = (sessionId: string) => {
     navigation.navigate('AIChat', { sessionId });
   };
 
-  const handleDeleteSession = (sessionId: number) => {
+  const handleDeleteSession = (sessionId: string) => {
     confirm(
       '删除会话',
       '确定要删除这个会话吗？删除后无法恢复。',

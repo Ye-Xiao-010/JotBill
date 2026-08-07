@@ -2,7 +2,7 @@
  * 通用配置屏幕 - Neo-Brutalism 风格
  * 描边配置卡片 + 粗标签 + 糖果色强调
  */
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -31,6 +31,8 @@ import type {
 } from '../types/ai';
 import { AI_PROVIDERS } from '../types/ai';
 import { ProviderIcon } from '../components/icons';
+
+const NATIVE_AI_PROVIDERS: AIProvider[] = ['qwen', 'glm', 'siliconflow', 'custom'];
 
 interface GeneralSettingsScreenProps {
   navigation?: any;
@@ -68,7 +70,7 @@ function AIConfigModal({
 }: AIConfigModalProps) {
   const { alert: showConfigAlert } = useAlert();
   const [name, setName] = useState('');
-  const [provider, setProvider] = useState<AIProvider>('claude');
+  const [provider, setProvider] = useState<AIProvider>('qwen');
   const [apiKey, setApiKey] = useState('');
   const [apiBaseUrl, setApiBaseUrl] = useState('');
   const [model, setModel] = useState('');
@@ -87,10 +89,10 @@ function AIConfigModal({
       setIsDefault(config.isDefault);
     } else {
       setName('');
-      setProvider('claude');
+      setProvider('qwen');
       setApiKey('');
       setApiBaseUrl('');
-      setModel(AI_PROVIDERS.claude.models[0]);
+      setModel(AI_PROVIDERS.qwen.models[0]);
       setSupportsVision(true);
       setIsDefault(false);
     }
@@ -284,7 +286,7 @@ function AIConfigModal({
             onPress={() => setShowProviderPicker(false)}
           >
             <View style={modalStyles.pickerList}>
-              {(Object.keys(AI_PROVIDERS) as AIProvider[]).map((p) => (
+              {NATIVE_AI_PROVIDERS.map((p) => (
                 <TouchableOpacity
                   key={p}
                   style={[modalStyles.pickerItem, provider === p && modalStyles.pickerItemActive]}
@@ -507,7 +509,7 @@ const createModalStyles = (colors: ThemeColors) =>
     },
   });
 
-export default function GeneralSettingsScreen({ navigation }: GeneralSettingsScreenProps) {
+export default function GeneralSettingsScreen({ navigation: _navigation }: GeneralSettingsScreenProps) {
   const styles = useStyles(createStyles);
   const { alert, confirm } = useAlert();
 
@@ -526,7 +528,7 @@ export default function GeneralSettingsScreen({ navigation }: GeneralSettingsScr
   const [showAiConfigModal, setShowAiConfigModal] = useState(false);
   const [editingAiConfig, setEditingAiConfig] = useState<AIModelConfig | null>(null);
   const [savingAiConfig, setSavingAiConfig] = useState(false);
-  const [testingConfigId, setTestingConfigId] = useState<number | null>(null);
+  const [testingConfigId, setTestingConfigId] = useState<string | null>(null);
 
   // 其他状态
   const [newAppName, setNewAppName] = useState('');

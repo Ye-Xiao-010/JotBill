@@ -1,4 +1,5 @@
-import { NativeModules } from 'react-native';
+import { NativeEventEmitter, NativeModules } from 'react-native';
+import type { ChatMessageData, ChatSession } from '../types/ai';
 
 export type AiProvider = 'qwen' | 'glm' | 'siliconflow' | 'custom';
 
@@ -33,6 +34,46 @@ export interface TestConnectionResult {
   latencyMs?: number;
 }
 
+export interface NativeChatRequest {
+  requestId: string;
+  content: string;
+  sessionId?: string;
+  configId?: string;
+  imageBase64List?: string[];
+}
+
+export interface NativeChatStartResult {
+  requestId: string;
+  sessionId: string;
+}
+
+export interface NativeChatSessionDetail {
+  session: ChatSession;
+  messages: ChatMessageData[];
+}
+
+export interface NativeAiStreamChunk {
+  requestId: string;
+  sessionId: string;
+  type:
+    | 'session_created'
+    | 'thinking'
+    | 'thinking_delta'
+    | 'text_delta'
+    | 'tool_call_start'
+    | 'tool_result'
+    | 'done'
+    | 'error';
+  content?: string;
+  round?: number;
+  thinkingTimeMs?: number;
+  cancelled?: boolean;
+  message?: string;
+  toolCallId?: string;
+  toolName?: string;
+  resultJson?: string;
+}
+
 interface RawAiModule {
   getAiProviders(): Promise<string>;
   addAiProvider(inputJson: string): Promise<string>;
@@ -40,6 +81,16 @@ interface RawAiModule {
   deleteAiProvider(id: string): Promise<null>;
   setDefaultAiProvider(id: string): Promise<string>;
   testAiProvider(id: string): Promise<string>;
+  sendMessage(inputJson: string): Promise<string>;
+  cancelMessage(sessionId: string): Promise<boolean>;
+  getChatSessions(page: number, limit: number): Promise<string>;
+  getChatSession(sessionId: string): Promise<string>;
+  deleteChatSession(sessionId: string): Promise<null>;
+  renameChatSession(sessionId: string, title: string): Promise<null>;
+  togglePinChatSession(sessionId: string): Promise<boolean>;
+  transcribeAudio(audioBase64: string, mimeType?: string | null): Promise<string>;
+  addListener(eventName: string): void;
+  removeListeners(count: number): void;
 }
 
 function getRawAiModule(): RawAiModule {
@@ -97,6 +148,60 @@ export const nativeAi = {
       'testAiProvider',
     );
   },
+
+  async sendMessage(input: NativeChatRequest): Promise<NativeChatStartResult> {
+    return parseJson(
+      await getRawAiModule().sendMessage(JSON.stringify(input)),
+      'sendMessage',
+    );
+  },
+
+  async cancelMessage(sessionId: string): Promise<boolean> {
+    return getRawAiModule().cancelMessage(sessionId);
+  },
+
+  async getChatSessions(page = 1, limit = 50): Promise<ChatSession[]> {
+    return parseJson(
+      await getRawAiModule().getChatSessions(page, limit),
+      'getChatSessions',
+    );
+  },
+
+  async getChatSession(sessionId: string): Promise<NativeChatSessionDetail> {
+    return parseJson(
+      await getRawAiModule().getChatSession(sessionId),
+      'getChatSession',
+    );
+  },
+
+  async deleteChatSession(sessionId: string): Promise<void> {
+    await getRawAiModule().deleteChatSession(sessionId);
+  },
+
+  async renameChatSession(sessionId: string, title: string): Promise<void> {
+    await getRawAiModule().renameChatSession(sessionId, title);
+  },
+
+  async togglePinChatSession(sessionId: string): Promise<boolean> {
+    return getRawAiModule().togglePinChatSession(sessionId);
+  },
+
+  async transcribeAudio(
+    audioBase64: string,
+    mimeType?: string,
+  ): Promise<{ text: string; latencyMs: number }> {
+    return parseJson(
+      await getRawAiModule().transcribeAudio(audioBase64, mimeType ?? null),
+      'transcribeAudio',
+    );
+  },
 };
+
+export function addAiStreamListener(
+  listener: (chunk: NativeAiStreamChunk) => void,
+): { remove: () => void } {
+  const emitter = new NativeEventEmitter(getRawAiModule() as never);
+  return emitter.addListener('onAiStreamChunk', listener);
+}
 
 export type NativeAi = typeof nativeAi;

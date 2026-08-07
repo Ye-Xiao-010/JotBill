@@ -21,17 +21,6 @@ export const API_ENDPOINTS = {
   USER_PROFILE: '/user/profile',
   USER_SETTINGS: '/user/settings',
 
-  // AI 相关
-  AI_CONFIGS: '/ai/configs',
-  AI_CONFIG_BY_ID: (id: number) => `/ai/configs/${id}`,
-  AI_CONFIG_SET_DEFAULT: (id: number) => `/ai/configs/${id}/set-default`,
-  AI_CONFIG_TEST: (id: number) => `/ai/configs/${id}/test`,
-  AI_PARSE_BILLS: '/ai/parse-bills',
-
-  // AI 聊天
-  AI_CHAT_SEND: '/ai/chat/send',
-  AI_CHAT_SESSIONS: '/ai/chat/sessions',
-  AI_CHAT_SESSION_BY_ID: (id: number) => `/ai/chat/sessions/${id}`,
 } as const;
 
 // HTTP状态码

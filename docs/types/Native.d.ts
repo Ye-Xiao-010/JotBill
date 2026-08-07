@@ -668,6 +668,53 @@ export interface TestConnectionResult {
   latencyMs?: number;
 }
 
+/** 本地 AI 对话会话。 */
+export interface AiChatSession {
+  id: string;
+  title?: string;
+  aiConfigId?: string;
+  isActive: boolean;
+  isPinned: boolean;
+  createdAt: string;
+  updatedAt: string;
+  _count?: { messages: number };
+}
+
+/** 本地 AI 对话消息。 */
+export interface AiChatMessage {
+  id: string;
+  sessionId: string;
+  seqNum: number;
+  role: 'system' | 'user' | 'assistant' | 'tool';
+  content?: string;
+  imageUrl?: string;
+  createdAt: string;
+}
+
+/** 发起一次原生 AI 流式请求。 */
+export interface AiChatRequest {
+  requestId: string;
+  content: string;
+  sessionId?: string;
+  configId?: string;
+  imageBase64List?: string[];
+}
+
+/** 原生 AI 流式事件。 */
+export interface AiStreamChunk {
+  requestId: string;
+  sessionId: string;
+  type: 'session_created' | 'thinking' | 'thinking_delta' | 'text_delta' | 'tool_call_start' | 'tool_result' | 'done' | 'error';
+  content?: string;
+  round?: number;
+  thinkingTimeMs?: number;
+  cancelled?: boolean;
+  message?: string;
+  toolCallId?: string;
+  toolName?: string;
+  resultJson?: string;
+}
+
 // ============================================================================
 // 第十部分:运行健康状态(对应设计文档 FR-003)
 // ============================================================================
@@ -816,6 +863,17 @@ export interface AiModule {
   getAiBudget(): Promise<AiBudgetSummary>;
   setAiBudget(monthlyBudgetMinor: number): Promise<void>;
   getAiCostRecords(month?: string): Promise<AiCostRecord[]>;
+  sendMessage(input: AiChatRequest): Promise<{ requestId: string; sessionId: string }>;
+  cancelMessage(sessionId: string): Promise<boolean>;
+  getChatSessions(page?: number, limit?: number): Promise<AiChatSession[]>;
+  getChatSession(sessionId: string): Promise<{
+    session: AiChatSession;
+    messages: AiChatMessage[];
+  }>;
+  deleteChatSession(sessionId: string): Promise<void>;
+  renameChatSession(sessionId: string, title: string): Promise<void>;
+  togglePinChatSession(sessionId: string): Promise<boolean>;
+  transcribeAudio(audioBase64: string, mimeType?: string): Promise<{ text: string; latencyMs: number }>;
 }
 
 /**
@@ -863,6 +921,7 @@ export interface RecognitionEvents {
   onRuntimeHealthChanged?: (data: RuntimeHealth) => void;
   onAiBudgetExceeded?: (data: AiBudgetSummary) => void;
   onBudgetAlert?: (data: { budgetId: string; budgetName: string; progress: number; isOverBudget: boolean }) => void;
+  onAiStreamChunk?: (data: AiStreamChunk) => void;
 }
 
 /**

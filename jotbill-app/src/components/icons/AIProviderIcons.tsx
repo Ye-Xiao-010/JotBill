@@ -3,7 +3,7 @@
  * 使用 PNG 图片文件
  */
 import React from 'react';
-import { Image, StyleSheet } from 'react-native';
+import { Image } from 'react-native';
 
 interface IconProps {
   size?: number;
@@ -17,16 +17,28 @@ const icons = {
   qwen: require('../../../public/icons/qwen-color.png'),
 };
 
+type ProviderName = keyof typeof icons | 'glm' | 'siliconflow' | 'custom';
+
+const providerIconMap: Record<ProviderName, keyof typeof icons> = {
+  claude: 'claude',
+  openai: 'openai',
+  deepseek: 'deepseek',
+  qwen: 'qwen',
+  glm: 'openai',
+  siliconflow: 'deepseek',
+  custom: 'openai',
+};
+
 /**
  * 通用服务商图标组件
  */
-export const ProviderIcon: React.FC<IconProps & { provider: 'claude' | 'openai' | 'deepseek' | 'qwen' }> = ({
+export const ProviderIcon: React.FC<IconProps & { provider: ProviderName }> = ({
   provider,
   size = 24,
 }) => {
   return (
     <Image
-      source={icons[provider] || icons.claude}
+      source={icons[providerIconMap[provider]] || icons.openai}
       style={{ width: size, height: size }}
       resizeMode="contain"
     />

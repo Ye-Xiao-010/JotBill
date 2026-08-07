@@ -24,4 +24,7 @@ interface AiProviderConfigDao {
 
     @Query("SELECT * FROM ai_provider_configs WHERE is_default = 1 LIMIT 1")
     suspend fun getDefault(): AiProviderConfigEntity?
+
+    @Query("SELECT * FROM ai_provider_configs WHERE id = :id LIMIT 1")
+    suspend fun getById(id: String): AiProviderConfigEntity?
 }

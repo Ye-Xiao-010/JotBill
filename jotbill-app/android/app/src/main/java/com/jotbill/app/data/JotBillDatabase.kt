@@ -4,6 +4,7 @@ import androidx.room.Database
 import androidx.room.RoomDatabase
 import androidx.room.TypeConverters
 import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import com.jotbill.app.data.dao.AccountDao
 import com.jotbill.app.data.dao.AiCostRecordDao
 import com.jotbill.app.data.dao.AiProviderConfigDao
@@ -13,6 +14,7 @@ import com.jotbill.app.data.dao.BalanceCalibrationDao
 import com.jotbill.app.data.dao.BillDao
 import com.jotbill.app.data.dao.BudgetDao
 import com.jotbill.app.data.dao.CategoryDao
+import com.jotbill.app.data.dao.ChatDao
 import com.jotbill.app.data.dao.CheckoutSessionDao
 import com.jotbill.app.data.dao.FinancialGoalDao
 import com.jotbill.app.data.dao.PaymentEvidenceDao
@@ -28,6 +30,8 @@ import com.jotbill.app.data.entity.BalanceCalibrationEntity
 import com.jotbill.app.data.entity.BillEntity
 import com.jotbill.app.data.entity.BudgetEntity
 import com.jotbill.app.data.entity.CategoryEntity
+import com.jotbill.app.data.entity.ChatMessageEntity
+import com.jotbill.app.data.entity.ChatSessionEntity
 import com.jotbill.app.data.entity.CheckoutSessionEntity
 import com.jotbill.app.data.entity.FinancialGoalEntity
 import com.jotbill.app.data.entity.PaymentEvidenceEntity
@@ -51,9 +55,11 @@ import com.jotbill.app.data.entity.TransactionCandidateEntity
         AiCostRecordEntity::class,
         BalanceCalibrationEntity::class,
         AuditEntryEntity::class,
-        AppSettingEntity::class
+        AppSettingEntity::class,
+        ChatSessionEntity::class,
+        ChatMessageEntity::class
     ],
-    version = 1,
+    version = 2,
     exportSchema = true
 )
 @TypeConverters(DatabaseConverters::class)
@@ -73,8 +79,66 @@ abstract class JotBillDatabase : RoomDatabase() {
     abstract fun balanceCalibrationDao(): BalanceCalibrationDao
     abstract fun auditEntryDao(): AuditEntryDao
     abstract fun appSettingDao(): AppSettingDao
+    abstract fun chatDao(): ChatDao
 }
 
 object DatabaseMigrations {
-    val all: Array<Migration> = emptyArray()
+    private val migration1To2 = object : Migration(1, 2) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `chat_sessions` (
+                    `id` TEXT NOT NULL,
+                    `title` TEXT,
+                    `ai_provider_id` TEXT,
+                    `is_active` INTEGER NOT NULL,
+                    `is_pinned` INTEGER NOT NULL,
+                    `created_at` INTEGER NOT NULL,
+                    `updated_at` INTEGER NOT NULL,
+                    PRIMARY KEY(`id`),
+                    FOREIGN KEY(`ai_provider_id`) REFERENCES `ai_provider_configs`(`id`)
+                        ON UPDATE NO ACTION ON DELETE SET NULL
+                )
+                """.trimIndent()
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS `index_chat_sessions_updated_at` " +
+                    "ON `chat_sessions` (`updated_at`)"
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS `index_chat_sessions_is_pinned` " +
+                    "ON `chat_sessions` (`is_pinned`)"
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS `index_chat_sessions_ai_provider_id` " +
+                    "ON `chat_sessions` (`ai_provider_id`)"
+            )
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `chat_messages` (
+                    `id` TEXT NOT NULL,
+                    `session_id` TEXT NOT NULL,
+                    `seq_num` INTEGER NOT NULL,
+                    `role` TEXT NOT NULL,
+                    `content` TEXT,
+                    `image_data_json` TEXT,
+                    `created_at` INTEGER NOT NULL,
+                    PRIMARY KEY(`id`),
+                    FOREIGN KEY(`session_id`) REFERENCES `chat_sessions`(`id`)
+                        ON UPDATE NO ACTION ON DELETE CASCADE
+                )
+                """.trimIndent()
+            )
+            db.execSQL(
+                "CREATE UNIQUE INDEX IF NOT EXISTS `index_chat_messages_session_id_seq_num` " +
+                    "ON `chat_messages` (`session_id`, `seq_num`)"
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS `index_chat_messages_created_at` " +
+                    "ON `chat_messages` (`created_at`)"
+            )
+        }
+    }
+
+    val all: Array<Migration> = arrayOf(migration1To2)
 }

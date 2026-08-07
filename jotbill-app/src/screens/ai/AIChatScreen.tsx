@@ -22,7 +22,7 @@ import {
   PanResponderGestureState,
   Image,
 } from 'react-native';
-import { Camera, Mic, Send, X, Check, Edit2, Trash2, Keyboard, Menu, SquarePen, ChevronLeft, Pin, ChevronDown, Plus } from 'lucide-react-native';
+import { Camera, Mic, Send, Square, X, Check, Edit2, Trash2, Keyboard, Menu, SquarePen, ChevronLeft, Pin, ChevronDown, Plus } from 'lucide-react-native';
 import { launchCamera, launchImageLibrary, ImagePickerResponse } from 'react-native-image-picker';
 import ImageViewing from 'react-native-image-viewing';
 import { ThemeColors } from '../../theme/colors';
@@ -33,14 +33,14 @@ import { useAlert } from '../../providers';
 import { aiService } from '../../services/api/ai';
 import { audioRecorderService } from '../../services/audio/audioRecorderService';
 import type { RecordingProgress } from '../../services/audio/audioRecorderService';
-import { billsService, categoriesService } from '../../services';
+import { nativeData, type Category } from '../../native';
 import { Skeleton, SkeletonCircle } from '../../components/skeleton/Skeleton';
 import type { ParsedBill, AIModelConfig, ChatSession } from '../../types/ai';
-import type { CategoryData } from '../../types/category';
 import { ProviderIcon } from '../../components/icons';
 import storage from '../../utils/storage';
 
 const SIDEBAR_WIDTH = Dimensions.get('window').width * 0.78;
+const WELCOME_MESSAGE = '你好！我是你的 AI 助手，可以帮你：\n\n📝 整理待确认账单 — “午餐花了35元”\n🔍 查账 — “今天记了什么”\n📊 统计 — “这个月花了多少”\n📷 识别账单图片\n💬 闲聊 — 随便聊什么都行\n\nAI 不会直接删除或修改账单。';
 
 // 会话分组类型
 interface SessionGroup {
@@ -52,7 +52,7 @@ interface SessionGroup {
 interface BillItem extends ParsedBill {
   id: string;
   categoryIcon?: string;
-  categoryId?: number;
+  categoryId?: string;
 }
 
 // 流式步骤类型
@@ -95,7 +95,7 @@ interface Message {
 interface EditBillModalProps {
   visible: boolean;
   bill: BillItem | null;
-  categories: CategoryData[];
+  categories: Category[];
   onClose: () => void;
   onSave: (bill: BillItem) => void;
   colors: ThemeColors;
@@ -114,7 +114,7 @@ function EditBillModal({
   const [description, setDescription] = useState('');
   const [date, setDate] = useState('');
   const [type, setType] = useState<'income' | 'expense'>('expense');
-  const [selectedCategoryId, setSelectedCategoryId] = useState<number | undefined>();
+  const [selectedCategoryId, setSelectedCategoryId] = useState<string | undefined>();
 
   useEffect(() => {
     if (bill) {
@@ -862,28 +862,28 @@ export default function AIChatScreen() {
   const { alert, confirm } = useAlert();
   const route = useRoute();
   const navigation = useNavigation();
-  const routeSessionId = (route.params as any)?.sessionId as number | undefined;
+  const routeSessionId = (route.params as any)?.sessionId as string | undefined;
   // 是否从会话列表导航过来（stack 模式）
   const isStackMode = routeSessionId !== undefined;
   const [messages, setMessages] = useState<Message[]>([
     {
       id: 'welcome',
       type: 'text',
-      content: '你好！我是你的 AI 助手，可以帮你：\n\n📝 记账 — "午餐花了35元"\n🔍 查账 — "今天记了什么"\n📊 统计 — "这个月花了多少"\n🗑️ 删除 — "删掉刚才那条"\n💬 闲聊 — 随便聊什么都行\n\n试着发送一条消息吧！',
+      content: WELCOME_MESSAGE,
       isUser: false,
       timestamp: new Date(),
     },
   ]);
   const [inputText, setInputText] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-  const [categories, setCategories] = useState<CategoryData[]>([]);
+  const [categories, setCategories] = useState<Category[]>([]);
   const [editingBill, setEditingBill] = useState<BillItem | null>(null);
   const [showEditModal, setShowEditModal] = useState(false);
   const [pendingBills, setPendingBills] = useState<BillItem[]>([]);
   const [savingBills, setSavingBills] = useState(false);
   const [defaultAIConfig, setDefaultAIConfig] = useState<AIModelConfig | null>(null);
   const [configLoaded, setConfigLoaded] = useState(false);
-  const [sessionId, setSessionId] = useState<number | null>(null);
+  const [sessionId, setSessionId] = useState<string | null>(null);
   const [sessionRestoring, setSessionRestoring] = useState(true);
   const [imageViewerVisible, setImageViewerVisible] = useState(false);
   const [imageViewerUrl, setImageViewerUrl] = useState<string>('');
@@ -891,7 +891,7 @@ export default function AIChatScreen() {
   const flatListRef = useRef<FlatList>(null);
 
   // 流式连接引用（用于取消）
-  const streamRef = useRef<{ close: () => void } | null>(null);
+  const streamRef = useRef<{ close: () => void; stop: () => void } | null>(null);
 
   // 组件卸载时关闭流式连接
   useEffect(() => {
@@ -928,38 +928,12 @@ export default function AIChatScreen() {
   const waveAnims = useRef(
     Array.from({ length: 20 }, () => new Animated.Value(0.3))
   ).current;
-  const waveAnimationRef = useRef<Animated.CompositeAnimation | null>(null);
 
   // 取消阈值（上滑距离）
   const CANCEL_THRESHOLD = 80;
 
-  // 启动声波动画
-  const startWaveAnimation = () => {
-    const animations = waveAnims.map((anim) => {
-      return Animated.loop(
-        Animated.sequence([
-          Animated.timing(anim, {
-            toValue: 0.3 + Math.random() * 0.7,
-            duration: 100 + Math.random() * 200,
-            useNativeDriver: true,
-          }),
-          Animated.timing(anim, {
-            toValue: 0.3,
-            duration: 100 + Math.random() * 200,
-            useNativeDriver: true,
-          }),
-        ])
-      );
-    });
-    waveAnimationRef.current = Animated.parallel(animations);
-    waveAnimationRef.current.start();
-  };
-
   // 停止声波动画
   const stopWaveAnimation = () => {
-    if (waveAnimationRef.current) {
-      waveAnimationRef.current.stop();
-    }
     waveAnims.forEach(anim => anim.setValue(0.3));
   };
 
@@ -1068,7 +1042,7 @@ export default function AIChatScreen() {
       {
         id: 'welcome',
         type: 'text',
-        content: '你好！我是你的 AI 助手，可以帮你：\n\n📝 记账 — "午餐花了35元"\n🔍 查账 — "今天记了什么"\n📊 统计 — "这个月花了多少"\n🗑️ 删除 — "删掉刚才那条"\n💬 闲聊 — 随便聊什么都行\n\n试着发送一条消息吧！',
+        content: WELCOME_MESSAGE,
         isUser: false,
         timestamp: new Date(),
       },
@@ -1172,7 +1146,7 @@ export default function AIChatScreen() {
   };
 
   // 选择会话
-  const handleSelectSession = (sid: number) => {
+  const handleSelectSession = (sid: string) => {
     closeSidebar();
     if (sid === sessionId) return;
     loadSessionHistory(sid);
@@ -1219,7 +1193,7 @@ export default function AIChatScreen() {
   };
 
   // 删除会话
-  const handleDeleteSession = async (sid: number) => {
+  const handleDeleteSession = async (sid: string) => {
     try {
       await aiService.deleteChatSession(sid);
       setSessions(prev => prev.filter(s => s.id !== sid));
@@ -1325,14 +1299,18 @@ export default function AIChatScreen() {
       // 普通进入：恢复上次会话
       restoreLastSession();
     }
+    // 仅在首次进入页面时恢复会话。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // 恢复上次会话
   const restoreLastSession = async () => {
     try {
-      const lastSid = await storage.getItem<number>(LAST_SESSION_ID_KEY);
-      if (lastSid) {
+      const lastSid = await storage.getItem<string | number>(LAST_SESSION_ID_KEY);
+      if (typeof lastSid === 'string' && lastSid) {
         await loadSessionHistory(lastSid);
+      } else if (lastSid !== null) {
+        await storage.removeItem(LAST_SESSION_ID_KEY);
       }
     } catch (error) {
       console.error('恢复上次会话失败:', error);
@@ -1342,7 +1320,7 @@ export default function AIChatScreen() {
   };
 
   // 加载历史会话消息
-  const loadSessionHistory = async (sid: number) => {
+  const loadSessionHistory = async (sid: string) => {
     try {
       const response = await aiService.getChatSession(sid);
       if (response.success && response.data) {
@@ -1392,10 +1370,7 @@ export default function AIChatScreen() {
 
   const loadCategories = async () => {
     try {
-      const response = await categoriesService.getCategories();
-      if (response.success && response.data) {
-        setCategories(response.data);
-      }
+      setCategories(await nativeData.getCategories());
     } catch (error) {
       console.error('加载分类失败:', error);
     }
@@ -1541,7 +1516,6 @@ export default function AIChatScreen() {
           // 将思维链内容追加到当前活跃的 thinking 步骤
           const activeIdx = currentSteps.findIndex(s => s.type === 'thinking' && s.isActive);
           if (activeIdx !== -1) {
-            const step = currentSteps[activeIdx];
             currentSteps = currentSteps.map((s, i) =>
               i === activeIdx
                 ? { ...s, thinkingContent: (s.thinkingContent || '') + data.content }
@@ -1662,7 +1636,20 @@ export default function AIChatScreen() {
       },
     );
 
-    streamRef.current = stream;
+    const stop = () => {
+      stream.close();
+      finishActiveSteps();
+      updateMessage(streamMsgId, {
+        streamSteps: [...currentSteps],
+        streamingText: accumulatedText || undefined,
+        isStreamComplete: true,
+        totalThinkingMs: Date.now() - streamStartTime,
+      });
+      setIsLoading(false);
+      streamRef.current = null;
+    };
+
+    streamRef.current = { close: stream.close, stop };
   };
 
   const handleImagePress = () => {
@@ -1722,7 +1709,7 @@ export default function AIChatScreen() {
     return iconMap[categoryName] || '📦';
   };
 
-  const getCategoryId = (categoryName: string, type: 'income' | 'expense'): number | undefined => {
+  const getCategoryId = (categoryName: string, type: 'income' | 'expense'): string | undefined => {
     const category = categories.find(c => c.name === categoryName && c.type === type);
     return category?.id;
   };
@@ -1785,12 +1772,13 @@ export default function AIChatScreen() {
 
     for (const bill of pendingBills) {
       try {
-        await billsService.createBill({
-          amount: bill.amount,
+        await nativeData.addBill({
+          amountMinor: Math.round(bill.amount * 100),
           type: bill.type,
           description: bill.description,
-          date: bill.date,
+          occurredAt: new Date(`${bill.date}T12:00:00`).toISOString(),
           categoryId: bill.categoryId,
+          sourceType: 'ai_chat',
         });
         successCount++;
       } catch (error) {
@@ -2190,13 +2178,20 @@ export default function AIChatScreen() {
           </View>
         )}
 
-        {/* 右侧按钮：发送/语音切换 */}
-        {!isVoiceMode && (inputText.trim() || pendingImages.length > 0) ? (
+        {/* 右侧按钮：停止/发送/语音切换 */}
+        {isLoading ? (
           <TouchableOpacity
-            style={[styles.sendButton, isLoading && styles.buttonDisabled]}
+            style={styles.sendButton}
+            onPress={() => streamRef.current?.stop()}
+            activeOpacity={0.7}
+          >
+            <Square size={18} color="#FFFFFF" fill="#FFFFFF" strokeWidth={2} />
+          </TouchableOpacity>
+        ) : !isVoiceMode && (inputText.trim() || pendingImages.length > 0) ? (
+          <TouchableOpacity
+            style={styles.sendButton}
             onPress={() => handleSend()}
             activeOpacity={0.7}
-            disabled={isLoading}
           >
             <Send size={20} color="#FFFFFF" strokeWidth={2} />
           </TouchableOpacity>
