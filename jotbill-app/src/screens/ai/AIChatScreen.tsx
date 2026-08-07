@@ -38,6 +38,7 @@ import { Skeleton, SkeletonCircle } from '../../components/skeleton/Skeleton';
 import type { ParsedBill, AIModelConfig, ChatSession } from '../../types/ai';
 import { ProviderIcon } from '../../components/icons';
 import storage from '../../utils/storage';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const SIDEBAR_WIDTH = Dimensions.get('window').width * 0.78;
 const WELCOME_MESSAGE = '你好！我是你的 AI 助手，可以帮你：\n\n📝 整理待确认账单 — “午餐花了35元”\n🔍 查账 — “今天记了什么”\n📊 统计 — “这个月花了多少”\n📷 识别账单图片\n💬 闲聊 — 随便聊什么都行\n\nAI 不会直接删除或修改账单。';
@@ -859,6 +860,7 @@ const chatSkeletonStyles = StyleSheet.create({
 
 export default function AIChatScreen() {
   const styles = useStyles(createStyles);
+  const insets = useSafeAreaInsets();
   const { alert, confirm } = useAlert();
   const route = useRoute();
   const navigation = useNavigation();
@@ -2004,11 +2006,11 @@ export default function AIChatScreen() {
   return (
     <KeyboardAvoidingView
       style={styles.container}
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-      keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}
+      behavior="padding"
+      keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : insets.bottom}
     >
       {/* 顶部导航栏 */}
-      <View style={styles.chatHeader}>
+      <View style={[styles.chatHeader, isStackMode && { paddingTop: spacing.sm + insets.top }]}>
         {isStackMode ? (
           <TouchableOpacity
             style={styles.headerButton}
@@ -2042,6 +2044,7 @@ export default function AIChatScreen() {
       ) : (
         <FlatList
           ref={flatListRef}
+          style={styles.messageListContainer}
           data={messages}
           renderItem={renderMessage}
           keyExtractor={item => item.id}
@@ -2134,7 +2137,7 @@ export default function AIChatScreen() {
       )}
 
       {/* 输入区域 */}
-      <View style={styles.inputContainer}>
+      <View style={[styles.inputContainer, { paddingBottom: spacing.lg + insets.bottom }]}>
         {/* 图片上传按钮 */}
         <TouchableOpacity
           style={[styles.mediaButton, isRecording && styles.buttonDisabled]}
@@ -2442,6 +2445,9 @@ const createStyles = (colors: ThemeColors) => ({
       borderBottomWidth: borderWidth.thin,
       borderBottomColor: colors.stroke,
     },
+    messageListContainer: {
+      flex: 1,
+    },
     headerTitle: {
       fontSize: 18,
       fontWeight: '800',
@@ -2613,6 +2619,8 @@ const createStyles = (colors: ThemeColors) => ({
     inputContainer: {
       flexDirection: 'row',
       alignItems: 'center',
+      flexGrow: 0,
+      flexShrink: 0,
       padding: spacing.md,
       paddingBottom: spacing.lg,
       backgroundColor: colors.surface,
@@ -2645,6 +2653,7 @@ const createStyles = (colors: ThemeColors) => ({
       fontSize: 15,
       fontWeight: '600',
       color: colors.textPrimary,
+      textAlignVertical: 'top',
       maxHeight: 100,
       paddingVertical: spacing.sm,
     },
