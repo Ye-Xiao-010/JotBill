@@ -31,6 +31,7 @@ import type {
 } from '../types/ai';
 import { AI_PROVIDERS } from '../types/ai';
 import { ProviderIcon } from '../components/icons';
+import { ChevronDown } from 'lucide-react-native';
 
 const NATIVE_AI_PROVIDERS: AIProvider[] = ['qwen', 'glm', 'siliconflow', 'custom'];
 
@@ -77,6 +78,7 @@ function AIConfigModal({
   const [supportsVision, setSupportsVision] = useState(true);
   const [isDefault, setIsDefault] = useState(false);
   const [showProviderPicker, setShowProviderPicker] = useState(false);
+  const [showModelPicker, setShowModelPicker] = useState(false);
 
   useEffect(() => {
     if (config) {
@@ -96,15 +98,23 @@ function AIConfigModal({
       setSupportsVision(true);
       setIsDefault(false);
     }
+    setShowProviderPicker(false);
+    setShowModelPicker(false);
   }, [config, visible]);
 
   const handleProviderChange = (newProvider: AIProvider) => {
     setProvider(newProvider);
-    if (!config) {
-      setModel(AI_PROVIDERS[newProvider].models[0]);
+    if (!config || newProvider !== provider) {
+      setModel(AI_PROVIDERS[newProvider].models[0] ?? '');
     }
     setSupportsVision(AI_PROVIDERS[newProvider].supportsVision);
     setShowProviderPicker(false);
+    setShowModelPicker(false);
+  };
+
+  const handleModelChange = (newModel: string) => {
+    setModel(newModel);
+    setShowModelPicker(false);
   };
 
   const handleSave = () => {
@@ -137,6 +147,9 @@ function AIConfigModal({
     onSave(data);
   };
 
+  const modelOptions = AI_PROVIDERS[provider].models.includes(model) || !model
+    ? AI_PROVIDERS[provider].models
+    : [model, ...AI_PROVIDERS[provider].models];
   const modalStyles = createModalStyles(colors);
 
   return (
@@ -207,15 +220,27 @@ function AIConfigModal({
             {/* 模型 */}
             <View style={modalStyles.field}>
               <Text style={modalStyles.label}>模型</Text>
-              <TextInput
-                style={modalStyles.input}
-                value={model}
-                onChangeText={setModel}
-                placeholder={`如: ${AI_PROVIDERS[provider].models[0]}`}
-                placeholderTextColor={colors.textTertiary}
-                autoCapitalize="none"
-                autoCorrect={false}
-              />
+              {AI_PROVIDERS[provider].models.length > 0 ? (
+                <TouchableOpacity
+                  style={modalStyles.picker}
+                  onPress={() => setShowModelPicker(true)}
+                >
+                  <View style={modalStyles.pickerContent}>
+                    <Text style={modalStyles.pickerText}>{model || '请选择模型'}</Text>
+                  </View>
+                  <ChevronDown size={18} color={colors.textSecondary} />
+                </TouchableOpacity>
+              ) : (
+                <TextInput
+                  style={modalStyles.input}
+                  value={model}
+                  onChangeText={setModel}
+                  placeholder="请输入自定义模型名称"
+                  placeholderTextColor={colors.textTertiary}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                />
+              )}
             </View>
 
             {/* 支持图片 */}
@@ -303,6 +328,40 @@ function AIConfigModal({
                       {AI_PROVIDERS[p].name}
                     </Text>
                   </View>
+                </TouchableOpacity>
+              ))}
+            </View>
+          </TouchableOpacity>
+        </Modal>
+
+        {/* 模型选择器 */}
+        <Modal
+          visible={showModelPicker}
+          transparent
+          animationType="fade"
+          onRequestClose={() => setShowModelPicker(false)}
+        >
+          <TouchableOpacity
+            style={modalStyles.pickerOverlay}
+            activeOpacity={1}
+            onPress={() => setShowModelPicker(false)}
+          >
+            <View style={modalStyles.pickerList}>
+              <Text style={modalStyles.pickerListTitle}>选择模型</Text>
+              {modelOptions.map((option) => (
+                <TouchableOpacity
+                  key={option}
+                  style={[modalStyles.pickerItem, model === option && modalStyles.pickerItemActive]}
+                  onPress={() => handleModelChange(option)}
+                >
+                  <Text
+                    style={[
+                      modalStyles.pickerItemText,
+                      model === option && modalStyles.pickerItemTextActive,
+                    ]}
+                  >
+                    {option}
+                  </Text>
                 </TouchableOpacity>
               ))}
             </View>
@@ -408,6 +467,13 @@ const createModalStyles = (colors: ThemeColors) =>
       fontSize: 12,
       fontWeight: '800',
       color: colors.textSecondary,
+    },
+    pickerListTitle: {
+      paddingHorizontal: spacing.md,
+      paddingVertical: spacing.sm,
+      fontSize: 16,
+      fontWeight: '800',
+      color: colors.textPrimary,
     },
     switchRow: {
       flexDirection: 'row',

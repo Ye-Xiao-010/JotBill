@@ -48,7 +48,9 @@ export interface UpdateAIConfigDto {
   isDefault?: boolean;
 }
 
-export const GLM_DEFAULT_MODEL = 'glm-4.6v-flash';
+export const GLM_DEFAULT_MODEL = 'glm-4v-flash';
+// 智谱视觉模型列表，保留新旧配置可选项。
+export const GLM_MODEL_OPTIONS = [GLM_DEFAULT_MODEL, 'glm-4.6v-flash'];
 
 // 解析账单请求
 export interface ParseBillRequest {
@@ -189,7 +191,7 @@ export const AI_PROVIDERS: Record<AIProvider, ProviderPreset> = {
   glm: {
     name: '智谱 GLM',
     defaultUrl: 'https://open.bigmodel.cn',
-    models: [GLM_DEFAULT_MODEL],
+    models: GLM_MODEL_OPTIONS,
     supportsVision: true,
   },
   siliconflow: {

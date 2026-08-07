@@ -13,12 +13,12 @@ import {
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Bot, Check, ChevronLeft, Pencil, Plus, Trash2, Wifi } from 'lucide-react-native';
+import { Bot, Check, ChevronDown, ChevronLeft, Pencil, Plus, Trash2, Wifi } from 'lucide-react-native';
 import { nativeAi, type AiProvider, type AiProviderConfig, type AiProviderInput, type AiProviderUpdateInput } from '../../native';
 import { borderRadius, borderWidth, shadow, spacing } from '../../theme/spacing';
 import { ThemeColors } from '../../theme/colors';
 import { useStyles } from '../../hooks';
-import { GLM_DEFAULT_MODEL } from '../../types/ai';
+import { GLM_MODEL_OPTIONS } from '../../types/ai';
 
 interface ProviderOption {
   value: AiProvider;
@@ -40,7 +40,7 @@ const PROVIDER_OPTIONS: ProviderOption[] = [
     value: 'glm',
     label: '智谱 GLM',
     baseUrl: 'https://open.bigmodel.cn',
-    models: [GLM_DEFAULT_MODEL],
+    models: GLM_MODEL_OPTIONS,
     supportsVision: true,
   },
   {
@@ -66,6 +66,7 @@ export default function AiProviderScreen() {
   const queryClient = useQueryClient();
   const styles = useStyles(createStyles);
   const [showForm, setShowForm] = useState(false);
+  const [showModelPicker, setShowModelPicker] = useState(false);
   const [editingProvider, setEditingProvider] = useState<AiProviderConfig | null>(null);
   const [name, setName] = useState('');
   const [provider, setProvider] = useState<AiProvider>('qwen');
@@ -114,6 +115,9 @@ export default function AiProviderScreen() {
   });
 
   const selectedProvider = PROVIDER_OPTIONS.find((option) => option.value === provider) ?? PROVIDER_OPTIONS[0];
+  const modelOptions = selectedProvider.models.includes(model) || !model
+    ? selectedProvider.models
+    : [model, ...selectedProvider.models];
 
   const openCreate = () => {
     setEditingProvider(null);
@@ -142,15 +146,22 @@ export default function AiProviderScreen() {
 
   const closeForm = () => {
     setShowForm(false);
+    setShowModelPicker(false);
     setEditingProvider(null);
   };
 
   const changeProvider = (value: AiProvider) => {
     const option = PROVIDER_OPTIONS.find((item) => item.value === value) ?? PROVIDER_OPTIONS[0];
     setProvider(value);
-    if (!editingProvider) setModel(option.models[0] ?? '');
+    if (!editingProvider || value !== provider) setModel(option.models[0] ?? '');
     setBaseUrl(option.baseUrl);
     setSupportsVision(option.supportsVision);
+    setShowModelPicker(false);
+  };
+
+  const selectModel = (value: string) => {
+    setModel(value);
+    setShowModelPicker(false);
   };
 
   const submitForm = () => {
@@ -287,7 +298,14 @@ export default function AiProviderScreen() {
               <Text style={styles.inputLabel}>API 地址</Text>
               <TextInput style={styles.input} value={baseUrl} onChangeText={setBaseUrl} placeholder="https://" placeholderTextColor={styles._colors.textTertiary} autoCapitalize="none" autoCorrect={false} />
               <Text style={styles.inputLabel}>模型</Text>
-              <TextInput style={styles.input} value={model} onChangeText={setModel} placeholder={selectedProvider.models[0] ?? '模型名称'} placeholderTextColor={styles._colors.textTertiary} autoCapitalize="none" autoCorrect={false} />
+              {selectedProvider.models.length > 0 ? (
+                <TouchableOpacity style={styles.modelPicker} onPress={() => setShowModelPicker(true)}>
+                  <Text style={styles.modelPickerText}>{model || '请选择模型'}</Text>
+                  <ChevronDown size={18} color={styles._colors.textSecondary} />
+                </TouchableOpacity>
+              ) : (
+                <TextInput style={styles.input} value={model} onChangeText={setModel} placeholder="请输入自定义模型名称" placeholderTextColor={styles._colors.textTertiary} autoCapitalize="none" autoCorrect={false} />
+              )}
               <View style={styles.switchRow}>
                 <Text style={styles.switchText}>支持视觉识别</Text>
                 <Switch value={supportsVision} onValueChange={setSupportsVision} trackColor={{ false: styles._colors.divider, true: styles._colors.primary }} disabled={!selectedProvider.supportsVision && provider !== 'custom'} />
@@ -303,6 +321,19 @@ export default function AiProviderScreen() {
             </View>
           </ScrollView>
         </View>
+      </Modal>
+
+      <Modal visible={showModelPicker} transparent animationType="fade" onRequestClose={() => setShowModelPicker(false)}>
+        <TouchableOpacity style={styles.modelPickerOverlay} activeOpacity={1} onPress={() => setShowModelPicker(false)}>
+          <View style={styles.modelPickerList}>
+            <Text style={styles.modelPickerTitle}>选择模型</Text>
+            {modelOptions.map((option) => (
+              <TouchableOpacity key={option} style={[styles.modelPickerItem, model === option && styles.modelPickerItemSelected]} onPress={() => selectModel(option)}>
+                <Text style={[styles.modelPickerItemText, model === option && styles.modelPickerItemTextSelected]}>{option}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        </TouchableOpacity>
       </Modal>
     </View>
   );
@@ -344,6 +375,15 @@ const createStyles = (colors: ThemeColors) => ({
     modalTitle: { fontSize: 20, fontWeight: '900', color: colors.textPrimary, marginBottom: spacing.md },
     inputLabel: { marginTop: spacing.sm, marginBottom: spacing.xs, fontSize: 13, fontWeight: '800', color: colors.textPrimary },
     input: { paddingHorizontal: spacing.md, paddingVertical: spacing.md, fontSize: 15, color: colors.textPrimary, backgroundColor: colors.background, borderWidth: borderWidth.thin, borderColor: colors.stroke, borderRadius: borderRadius.small },
+    modelPicker: { minHeight: 52, paddingHorizontal: spacing.md, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: colors.background, borderWidth: borderWidth.thin, borderColor: colors.stroke, borderRadius: borderRadius.small },
+    modelPickerText: { flex: 1, fontSize: 15, color: colors.textPrimary },
+    modelPickerOverlay: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing.lg, backgroundColor: 'rgba(0,0,0,0.45)' },
+    modelPickerList: { width: '100%', maxWidth: 420, padding: spacing.sm, backgroundColor: colors.surface, borderWidth: borderWidth.medium, borderColor: colors.stroke, borderRadius: borderRadius.card, ...shadow.medium },
+    modelPickerTitle: { paddingHorizontal: spacing.sm, paddingVertical: spacing.sm, fontSize: 16, fontWeight: '800', color: colors.textPrimary },
+    modelPickerItem: { paddingHorizontal: spacing.md, paddingVertical: spacing.md, borderRadius: borderRadius.small },
+    modelPickerItemSelected: { backgroundColor: colors.accent, borderWidth: borderWidth.thin, borderColor: colors.stroke },
+    modelPickerItemText: { fontSize: 15, fontWeight: '600', color: colors.textPrimary },
+    modelPickerItemTextSelected: { fontWeight: '800', color: colors.primary },
     providerOptions: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
     providerOption: { paddingVertical: spacing.sm, paddingHorizontal: spacing.sm, borderWidth: borderWidth.thin, borderColor: colors.divider, borderRadius: borderRadius.small },
     providerOptionSelected: { backgroundColor: colors.primaryLight, borderColor: colors.stroke, borderWidth: borderWidth.medium },
