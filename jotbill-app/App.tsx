@@ -1,5 +1,5 @@
 import React, { useEffect } from 'react';
-import { NativeModules, NativeEventEmitter } from 'react-native';
+import { NativeModules, NativeEventEmitter, StatusBar } from 'react-native';
 import { Provider as PaperProvider, MD3DarkTheme, MD3LightTheme } from 'react-native-paper';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { QueryClientProvider } from '@tanstack/react-query';
@@ -56,6 +56,7 @@ function AppContent() {
 
   return (
     <PaperProvider theme={paperTheme}>
+      <StatusBar barStyle="dark-content" backgroundColor={colors.surface} />
       <AppNavigator />
     </PaperProvider>
   );
