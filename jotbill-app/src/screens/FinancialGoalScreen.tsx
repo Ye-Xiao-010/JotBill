@@ -28,6 +28,7 @@ import {
   type FinancialGoalUpdateInput,
 } from '../native';
 import { QUERY_KEYS, invalidateCache } from '../lib/queryClient';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 interface GoalView extends FinancialGoal {
   progress: number;
@@ -197,7 +198,7 @@ export default function FinancialGoalScreen() {
   };
 
   return (
-    <View style={styles.container}>
+    <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
       {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
@@ -421,7 +422,7 @@ export default function FinancialGoalScreen() {
           </View>
         </View>
       </Modal>
-    </View>
+    </SafeAreaView>
   );
 }
 

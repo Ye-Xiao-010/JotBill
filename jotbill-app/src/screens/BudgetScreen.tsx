@@ -23,6 +23,7 @@ import { useStyles } from '../hooks';
 import { useAlert } from '../providers';
 import { nativeData, type BudgetInput, type BudgetProgress, type Category } from '../native';
 import { QUERY_KEYS, invalidateCache } from '../lib/queryClient';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 type BudgetPeriod = 'monthly' | 'yearly';
 
@@ -162,7 +163,7 @@ export default function BudgetScreen() {
   };
 
   return (
-    <View style={styles.container}>
+    <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
       {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
@@ -419,7 +420,7 @@ export default function BudgetScreen() {
           </ScrollView>
         </View>
       </Modal>
-    </View>
+    </SafeAreaView>
   );
 }
 
