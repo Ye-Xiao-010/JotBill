@@ -12,7 +12,7 @@ import {
   type HotUpdateState,
   type UpdateStatus,
 } from '../services/hotUpdate';
-import type { HotUpdateBundleInfo } from '../services/api/hotUpdate';
+import type { HotUpdateBundleInfo } from '../services/update/hotUpdate';
 
 interface UseHotUpdateOptions {
   /** 是否在 hook 挂载时自动检查热更新，默认 true */

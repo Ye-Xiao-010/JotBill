@@ -1,7 +1,7 @@
 /**
  * 热更新 API 服务
  */
-import httpService from '../http';
+import { getUpdateJson } from './client';
 
 export interface HotUpdateBundleInfo {
   bundleVersion: number;
@@ -32,11 +32,11 @@ export const hotUpdateApi = {
     platform = 'android',
   ): Promise<CheckHotUpdateResponse> {
     console.log('[HotUpdate] 检查热更新, nativeVersion:', nativeVersion, 'bundleVersion:', bundleVersion);
-    const response = await httpService.get<CheckHotUpdateResponse>(
-      '/hot-update/check',
-      { params: { nativeVersion, bundleVersion, platform } },
-    );
-    const result = (response as any).data || response;
+    const result = await getUpdateJson<CheckHotUpdateResponse>('/hot-update/check', {
+      nativeVersion,
+      bundleVersion,
+      platform,
+    });
     console.log('[HotUpdate] 检查结果:', JSON.stringify(result));
     return result;
   },

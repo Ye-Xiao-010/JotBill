@@ -73,29 +73,6 @@ def enableProguardInReleaseBuilds = false
  */
 def jscFlavor = 'io.github.react-native-community:jsc-android:2026004.+'
 
-// 读取 .env 文件获取 API_BASE_URL
-def getApiBaseUrl(buildType) {
-    // 根据构建类型选择对应的 .env 文件
-    def envFileName = buildType == "release" ? ".env.production" : ".env.development"
-    def envFile = file("../../${envFileName}")
-    
-    // 如果指定的环境文件不存在，尝试使用默认的 .env
-    if (!envFile.exists()) {
-        envFile = file("../../.env.development")
-    }
-    
-    if (envFile.exists()) {
-        def props = new Properties()
-        props.load(new FileInputStream(envFile))
-        def apiUrl = props.getProperty("API_BASE_URL", "http://localhost:3006/")
-        println "构建类型: ${buildType}, 使用环境文件: ${envFileName}, API_BASE_URL: ${apiUrl}"
-        return apiUrl
-    }
-    
-    println "警告: 未找到环境配置文件，使用默认 API 地址"
-    return "http://localhost:3006/"
-}
-
 def getSentryDsn(buildType) {
     def envFileName = buildType == "release" ? ".env.production" : ".env.development"
     def envFile = file("../../${envFileName}")
@@ -147,7 +124,6 @@ android {
         debug {
             signingConfig signingConfigs.debug
             manifestPlaceholders = [usesCleartextTraffic: "true"]
-            buildConfigField "String", "API_BASE_URL", "\"${getApiBaseUrl("debug")}\""
             buildConfigField "String", "SENTRY_DSN", "\"${getSentryDsn("debug")}\""
         }
         release {
@@ -155,7 +131,6 @@ android {
             minifyEnabled enableProguardInReleaseBuilds
             proguardFiles getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro"
             manifestPlaceholders = [usesCleartextTraffic: "true"]
-            buildConfigField "String", "API_BASE_URL", "\"${getApiBaseUrl("release")}\""
             buildConfigField "String", "SENTRY_DSN", "\"${getSentryDsn("release")}\""
         }
     }

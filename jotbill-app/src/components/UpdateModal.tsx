@@ -9,7 +9,7 @@ import {
   StyleSheet,
   TouchableOpacity,
 } from 'react-native';
-import { AppVersionInfo } from '../services/api/appVersion';
+import { AppVersionInfo } from '../services/update/appVersion';
 import { ThemeColors } from '../theme/colors';
 import { borderRadius, borderWidth, spacing, shadow } from '../theme/spacing';
 import { useStyles } from '../hooks';

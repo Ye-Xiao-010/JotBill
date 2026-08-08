@@ -13,7 +13,6 @@ import com.facebook.react.defaults.DefaultReactNativeHost
 import com.jotbill.app.notification.PaymentNotificationPackage
 import com.jotbill.app.utils.InstallApkPackage
 import com.jotbill.app.utils.SentryLogger
-import com.jotbill.app.auth.AuthTokenPackage
 import com.jotbill.app.hotupdate.HotUpdatePackage
 import com.jotbill.app.bridge.DataPackage
 import com.jotbill.app.ai.AiPackage
@@ -71,7 +70,6 @@ class MainApplication : Application(), ReactApplication {
             PackageList(this).packages.apply {
               add(PaymentNotificationPackage())
               add(InstallApkPackage())
-              add(AuthTokenPackage())
               add(HotUpdatePackage())
               add(DataPackage())
               add(AiPackage())

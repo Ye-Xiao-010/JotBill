@@ -4,8 +4,6 @@
 
 // 存储键名
 export const STORAGE_KEYS = {
-  USER_TOKEN: '@accounting_app/user_token',
-  USER_INFO: '@accounting_app/user_info',
   APP_SETTINGS: '@accounting_app/app_settings',
   LAST_SYNC_TIME: '@accounting_app/last_sync_time',
 } as const;

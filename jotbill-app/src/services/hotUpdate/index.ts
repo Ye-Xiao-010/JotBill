@@ -5,7 +5,7 @@
 import { NativeModules, Platform } from 'react-native';
 import RNFS from 'react-native-fs';
 import { unzip } from 'react-native-zip-archive';
-import { hotUpdateApi, HotUpdateBundleInfo } from '../api/hotUpdate';
+import { hotUpdateApi, HotUpdateBundleInfo } from '../update/hotUpdate';
 import bundleMeta from '../../../bundle-version.json';
 import packageJson from '../../../package.json';
 

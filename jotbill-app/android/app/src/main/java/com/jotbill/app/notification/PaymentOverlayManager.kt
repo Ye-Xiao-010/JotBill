@@ -20,7 +20,18 @@ import android.widget.EditText
 import android.widget.ImageButton
 import android.widget.LinearLayout
 import android.widget.TextView
+import androidx.room.withTransaction
 import com.jotbill.app.R
+import com.jotbill.app.data.JotBillDatabaseProvider
+import com.jotbill.app.data.LedgerRepository
+import com.jotbill.app.data.entity.BillEntity
+import com.jotbill.app.data.entity.CategoryEntity
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+import java.util.UUID
+import kotlin.math.roundToLong
 
 /**
  * 支付悬浮窗管理器
@@ -65,8 +76,9 @@ class PaymentOverlayManager(private val context: Context) {
     private val mainHandler = Handler(Looper.getMainLooper())
     private var autoDismissRunnable: Runnable? = null
 
-    // API 服务
-    private val apiService = BillApiService(context)
+    private val database by lazy { JotBillDatabaseProvider.get(context) }
+    private val ledgerRepository by lazy { LedgerRepository(database) }
+    private val ioScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     // SharedPreferences 用于存储上次选择的分类
     private val prefs: SharedPreferences = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -106,15 +118,20 @@ class PaymentOverlayManager(private val context: Context) {
     /**
      * 获取上次选择的分类 ID
      */
-    private fun getLastCategoryId(): Int {
-        return prefs.getInt(KEY_LAST_CATEGORY_ID, -1)
+    private fun getLastCategoryId(): String? {
+        return try {
+            prefs.getString(KEY_LAST_CATEGORY_ID, null)
+        } catch (_: ClassCastException) {
+            // 兼容旧版本保存的整数分类 ID；本地 UUID 分类无法直接复用旧值。
+            null
+        }
     }
 
     /**
      * 保存上次选择的分类 ID
      */
-    private fun saveLastCategoryId(categoryId: Int) {
-        prefs.edit().putInt(KEY_LAST_CATEGORY_ID, categoryId).apply()
+    private fun saveLastCategoryId(categoryId: String) {
+        prefs.edit().putString(KEY_LAST_CATEGORY_ID, categoryId).apply()
     }
 
     /**
@@ -337,31 +354,45 @@ class PaymentOverlayManager(private val context: Context) {
             confirmButton.isEnabled = false
             confirmButton.text = "记账中..."
 
-            // 调用 API 创建账单
+            // 在本地账本事务中创建账单，通知服务不依赖登录状态或网络。
             val remark = remarkInput.text?.toString()?.trim().orEmpty().ifBlank { null }
-            apiService.createBill(
-                amount = amount,
-                categoryId = category.id,
-                description = remark
-            ) { success, errorMessage ->
-                mainHandler.post {
-                    if (success) {
-                        // 保存分类选择
-                        saveLastCategoryId(category.id)
-
-                        // 发送广播通知 RN 层刷新数据
-                        sendBillCreatedBroadcast()
-
-                        // 显示成功反馈
-                        showSuccessFeedback(view, amount, category.name)
-                    } else {
-                        // 显示失败反馈
-                        showErrorFeedback(view, amount, errorMessage) {
-                            // 重试时恢复按钮状态
+            ioScope.launch {
+                try {
+                    val now = System.currentTimeMillis()
+                    val bill = BillEntity(
+                        id = UUID.randomUUID().toString(),
+                        amountMinor = (amount * 100.0).roundToLong(),
+                        type = "expense",
+                        occurredAt = now,
+                        description = remark,
+                        categoryId = category.id,
+                        accountId = null,
+                        targetAccountId = null,
+                        platform = source,
+                        merchant = null,
+                        productDescription = null,
+                        sourceType = "notification",
+                        originalTransactionId = null,
+                        orderId = null,
+                        createdAt = now,
+                        updatedAt = now,
+                        version = 1,
+                    )
+                    ledgerRepository.createBillWithBalanceUpdate(bill)
+                } catch (error: Exception) {
+                    mainHandler.post {
+                        showErrorFeedback(view, amount, error.message) {
                             confirmButton.isEnabled = true
                             confirmButton.text = "记账"
                         }
                     }
+                    return@launch
+                }
+
+                mainHandler.post {
+                    saveLastCategoryId(category.id)
+                    sendBillCreatedBroadcast()
+                    showSuccessFeedback(view, amount, category.name)
                 }
             }
         }
@@ -399,7 +430,13 @@ class PaymentOverlayManager(private val context: Context) {
         loadingContainer.visibility = View.VISIBLE
         scrollView.visibility = View.GONE
 
-        apiService.getExpenseCategories { categories ->
+        ioScope.launch {
+            val categories = try {
+                loadLocalExpenseCategories()
+            } catch (error: Exception) {
+                Log.e(TAG, "加载本地分类失败", error)
+                emptyList()
+            }
             mainHandler.post {
                 loadingContainer.visibility = View.GONE
 
@@ -478,6 +515,42 @@ class PaymentOverlayManager(private val context: Context) {
                 scrollView.visibility = View.VISIBLE
             }
         }
+    }
+
+    /** 读取本地支出分类，首次使用通知功能时补齐默认分类。 */
+    private suspend fun loadLocalExpenseCategories(): List<CategoryData> {
+        var categories = database.categoryDao().getByType("expense")
+        if (categories.isEmpty()) {
+            val now = System.currentTimeMillis()
+            val defaults = listOf(
+                Triple("餐饮", "🍽️", 0),
+                Triple("交通", "🚗", 1),
+                Triple("购物", "🛍️", 2),
+                Triple("居住", "🏠", 3),
+                Triple("娱乐", "🎮", 4),
+                Triple("医疗", "💊", 5),
+                Triple("教育", "📚", 6),
+            )
+            database.withTransaction {
+                defaults.forEach { (name, icon, sortOrder) ->
+                    database.categoryDao().insert(
+                        CategoryEntity(
+                            id = UUID.randomUUID().toString(),
+                            name = name,
+                            type = "expense",
+                            icon = icon,
+                            color = null,
+                            isDefault = true,
+                            sortOrder = sortOrder,
+                            createdAt = now,
+                            updatedAt = now,
+                        )
+                    )
+                }
+            }
+            categories = database.categoryDao().getByType("expense")
+        }
+        return categories.map { CategoryData(it.id, it.name, it.icon, it.color) }
     }
 
     /**

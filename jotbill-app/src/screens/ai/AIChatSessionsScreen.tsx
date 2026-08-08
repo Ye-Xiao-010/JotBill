@@ -17,7 +17,7 @@ import { useAlert } from '../../providers';
 import { ThemeColors } from '../../theme/colors';
 import { borderRadius, borderWidth, spacing } from '../../theme/spacing';
 import { useStyles } from '../../hooks';
-import { aiService } from '../../services/api/ai';
+import { aiService } from '../../services/ai';
 import type { ChatSession } from '../../types/ai';
 import { SafeAreaView } from 'react-native-safe-area-context';
 

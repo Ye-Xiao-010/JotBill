@@ -22,7 +22,7 @@ import { PaymentNotificationSettings } from '../components/business';
 import { paymentNotificationService } from '../services/paymentNotification';
 import { useStyles } from '../hooks';
 import { useAlert } from '../providers';
-import { aiService } from '../services/api/ai';
+import { aiService } from '../services/ai';
 import type {
   AIModelConfig,
   AIProvider,

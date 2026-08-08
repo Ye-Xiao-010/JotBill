@@ -4,7 +4,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { Platform, NativeModules } from 'react-native';
 import RNFS from 'react-native-fs';
-import { appVersionApi, AppVersionInfo } from '../services/api/appVersion';
+import { appVersionApi, AppVersionInfo } from '../services/update/appVersion';
 import { useAlert } from '../providers';
 import packageJson from '../../package.json';
 
