@@ -323,7 +323,7 @@ interface RawDataModule {
   addRule(inputJson: string): Promise<string>;
   updateRule(id: string, inputJson: string): Promise<string>;
   deleteRule(id: string): Promise<null>;
-  applyRulesToExisting(ruleId: string | null): Promise<unknown>;
+  applyRulesToExisting(ruleId: string | null): Promise<string>;
   getPendingTransactions(filterJson?: string | null): Promise<string>;
   getPendingTransaction(id: string): Promise<string>;
   ignorePendingTransaction(id: string, version: number): Promise<null>;
@@ -531,8 +531,11 @@ export const nativeData = {
     await getRawDataModule().deleteRule(id);
   },
 
-  async applyRulesToExisting(ruleId?: string): Promise<void> {
-    await getRawDataModule().applyRulesToExisting(ruleId ?? null);
+  async applyRulesToExisting(ruleId?: string): Promise<{ affected: number }> {
+    return parseJson(
+      await getRawDataModule().applyRulesToExisting(ruleId ?? null),
+      'applyRulesToExisting',
+    );
   },
 
   async getPendingTransactions(

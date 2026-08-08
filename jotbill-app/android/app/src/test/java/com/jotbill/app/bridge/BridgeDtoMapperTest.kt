@@ -30,4 +30,9 @@ class BridgeDtoMapperTest {
         }
         throw AssertionError("Unsupported source type was accepted")
     }
+
+    @Test
+    fun restrictedForeignKeyIsExposedAsDataConflict() {
+        assertEquals("DATA_CONFLICT", dataErrorCode("FOREIGN KEY constraint failed"))
+    }
 }

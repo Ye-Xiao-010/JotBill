@@ -905,6 +905,8 @@ object AdapterFactory {
 
 ## 7. RuntimeModule 实现
 
+> 阶段二只承诺 `getRuntimeHealth()` 返回数据库版本、账单/分类/账户数量和启动时间等基础摘要。系统权限跳转和完整健康检查属于后续阶段，当前公共契约以 `docs/types/Native.d.ts` 为准。
+
 ```kotlin
 /**
  * 运行健康状态模块
@@ -1042,6 +1044,8 @@ class OverlayModule(
 ---
 
 ## 9. BackupModule 实现
+
+> 阶段二只落地 CSV 导出和清除本地数据；完整备份、恢复预览、恢复执行和文件导入在后续阶段实现，当前公共契约以 `docs/types/Native.d.ts` 为准。
 
 ```kotlin
 /**

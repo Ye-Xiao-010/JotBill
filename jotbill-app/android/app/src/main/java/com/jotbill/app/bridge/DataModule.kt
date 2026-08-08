@@ -902,14 +902,21 @@ class DataModule(
             } catch (error: BridgeException) {
                 promise.reject(error.code, error.message, error)
             } catch (error: Exception) {
-                val code = if (error.message?.contains("UNIQUE", ignoreCase = true) == true) {
-                    "DATA_CONFLICT"
-                } else {
-                    "DB_ERROR"
-                }
+                val code = dataErrorCode(error.message)
                 promise.reject(code, error.message ?: "Local data operation failed", error)
             }
         }
+    }
+}
+
+internal fun dataErrorCode(message: String?): String {
+    return if (
+        message?.contains("UNIQUE", ignoreCase = true) == true ||
+        message?.contains("FOREIGN KEY", ignoreCase = true) == true
+    ) {
+        "DATA_CONFLICT"
+    } else {
+        "DB_ERROR"
     }
 }
 
