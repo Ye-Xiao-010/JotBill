@@ -1292,6 +1292,8 @@ suspend fun checkBudgetAfterBill(
 
 ## 5. Migration 策略
 
+> 当前 Android 实现的 Room 数据库版本为 4；`3 -> 4` 迁移会重建 `bills` 表，将分类、账户和目标账户外键统一收口为 `RESTRICT`，并恢复全部账单索引。本节下方的 `1 -> 2` 代码仅表示早期设计示例。
+
 ### 5.1 迁移前自动备份
 
 ```kotlin
