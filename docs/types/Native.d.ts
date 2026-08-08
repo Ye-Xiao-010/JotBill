@@ -417,6 +417,10 @@ export interface FinancialGoalInput {
   targetDate?: string | null;
 }
 
+export type FinancialGoalUpdateInput = Partial<FinancialGoalInput> & {
+  currentAmountMinor?: number;
+};
+
 // ============================================================================
 // 第七部分:识别链路类型(新增,对应设计文档第6-10节)
 // ============================================================================
@@ -622,6 +626,10 @@ export interface RuleInput {
   priority?: number;
 }
 
+export type RuleUpdateInput = Partial<RuleInput> & {
+  isActive?: boolean;
+};
+
 // ============================================================================
 // 第九部分:AI 服务商配置类型(对应设计文档 FR-013)
 // ============================================================================
@@ -696,8 +704,8 @@ export interface TestConnectionResult {
 /** 本地 AI 对话会话。 */
 export interface AiChatSession {
   id: string;
-  title?: string;
-  aiConfigId?: string;
+  title: string | null;
+  aiConfigId: string | null;
   isActive: boolean;
   isPinned: boolean;
   createdAt: string;
@@ -711,8 +719,12 @@ export interface AiChatMessage {
   sessionId: string;
   seqNum: number;
   role: 'system' | 'user' | 'assistant' | 'tool';
-  content?: string;
-  imageUrl?: string;
+  content: string | null;
+  toolCalls: unknown[] | null;
+  toolCallId: string | null;
+  toolName: string | null;
+  toolResult: unknown | null;
+  imageUrl: string | null;
   createdAt: string;
 }
 
@@ -841,13 +853,13 @@ export interface DataModule {
   // 财务目标
   getFinancialGoals(): Promise<FinancialGoal[]>;
   addFinancialGoal(input: FinancialGoalInput): Promise<FinancialGoal>;
-  updateFinancialGoal(id: string, input: Partial<FinancialGoalInput>): Promise<FinancialGoal>;
+  updateFinancialGoal(id: string, input: FinancialGoalUpdateInput): Promise<FinancialGoal>;
   deleteFinancialGoal(id: string): Promise<void>;
 
   // 规则
   getRules(): Promise<Rule[]>;
   addRule(input: RuleInput): Promise<Rule>;
-  updateRule(id: string, input: Partial<RuleInput>): Promise<Rule>;
+  updateRule(id: string, input: RuleUpdateInput): Promise<Rule>;
   deleteRule(id: string): Promise<void>;
   applyRulesToExisting(ruleId?: string): Promise<{ affected: number }>;
 }

@@ -3,9 +3,14 @@ import { nativeAi, type AiBudgetSummary, type AiCostRecord } from '../src/native
 import { nativeBackup } from '../src/native/backup';
 import { nativeData, type Bill, type BillInput } from '../src/native/data';
 import { nativeRuntime, type RuntimeHealth } from '../src/native/runtime';
+import type { ChatMessageData, ChatSession } from '../src/types/ai';
 import type {
+  AiChatMessage as DeclaredAiChatMessage,
+  AiChatSession as DeclaredAiChatSession,
   AiBudgetSummary as DeclaredAiBudgetSummary,
   BillInput as DeclaredBillInput,
+  FinancialGoalUpdateInput as DeclaredFinancialGoalUpdateInput,
+  RuleUpdateInput as DeclaredRuleUpdateInput,
   RuntimeHealth as DeclaredRuntimeHealth,
 } from '../../docs/types/Native';
 
@@ -33,6 +38,12 @@ const billInput: BillInput = {
 const declaredBillInput = (value: DeclaredBillInput): BillInput => value;
 const declaredBudget = (value: DeclaredAiBudgetSummary): AiBudgetSummary => value;
 const declaredRuntime = (value: DeclaredRuntimeHealth): RuntimeHealth => value;
+const declaredFinancialGoalUpdate = (
+  value: DeclaredFinancialGoalUpdateInput,
+): DeclaredFinancialGoalUpdateInput => value;
+const declaredRuleUpdate = (value: DeclaredRuleUpdateInput): DeclaredRuleUpdateInput => value;
+const declaredChatSession = (value: ChatSession): DeclaredAiChatSession => value;
+const declaredChatMessage = (value: ChatMessageData): DeclaredAiChatMessage => value;
 
 test('Data 模块保留 sourceType 并使用 JSON 边界', async () => {
   const addBill = jest.fn().mockResolvedValue(JSON.stringify(bill));
@@ -63,6 +74,39 @@ test('Ai 模块暴露预算和成本记录 DTO', async () => {
   expect(await nativeAi.getAiCostRecords('2026-08')).toEqual(records);
   expect(setAiBudget).toHaveBeenCalledWith(2000);
   expect(getAiCostRecords).toHaveBeenCalledWith('2026-08');
+});
+
+test('Data 和 Ai 更新及会话 DTO 与 Native.d.ts 一致', () => {
+  expect(declaredFinancialGoalUpdate({ currentAmountMinor: 300 })).toEqual({
+    currentAmountMinor: 300,
+  });
+  expect(declaredRuleUpdate({ isActive: false })).toEqual({ isActive: false });
+
+  const session: ChatSession = {
+    id: 'session-1',
+    title: null,
+    aiConfigId: null,
+    isActive: true,
+    isPinned: false,
+    createdAt: '2026-08-08T00:00:00Z',
+    updatedAt: '2026-08-08T00:00:00Z',
+  };
+  const message: ChatMessageData = {
+    id: 'message-1',
+    sessionId: session.id,
+    seqNum: 1,
+    role: 'user',
+    content: null,
+    toolCalls: null,
+    toolCallId: null,
+    toolName: null,
+    toolResult: null,
+    imageUrl: null,
+    createdAt: session.createdAt,
+  };
+
+  expect(declaredChatSession(session)).toEqual(session);
+  expect(declaredChatMessage(message)).toEqual(message);
 });
 
 test('Runtime 模块返回阶段二基础状态摘要', async () => {
