@@ -59,7 +59,7 @@ import com.jotbill.app.data.entity.TransactionCandidateEntity
         ChatSessionEntity::class,
         ChatMessageEntity::class
     ],
-    version = 3,
+    version = 4,
     exportSchema = true
 )
 @TypeConverters(DatabaseConverters::class)
@@ -154,5 +154,79 @@ object DatabaseMigrations {
         }
     }
 
-    val all: Array<Migration> = arrayOf(migration1To2, migration2To3)
+    private val migration3To4 = object : Migration(3, 4) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            // 外键策略从 SET NULL 改为 RESTRICT，需要重建账单表才能保留 SQLite 约束。
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `bills_new` (
+                    `id` TEXT NOT NULL,
+                    `amount_minor` INTEGER NOT NULL,
+                    `type` TEXT NOT NULL,
+                    `occurred_at` INTEGER NOT NULL,
+                    `description` TEXT,
+                    `category_id` TEXT,
+                    `account_id` TEXT,
+                    `target_account_id` TEXT,
+                    `platform` TEXT,
+                    `merchant` TEXT,
+                    `product_description` TEXT,
+                    `source_type` TEXT NOT NULL,
+                    `original_transaction_id` TEXT,
+                    `order_id` TEXT,
+                    `created_at` INTEGER NOT NULL,
+                    `updated_at` INTEGER NOT NULL,
+                    `version` INTEGER NOT NULL,
+                    PRIMARY KEY(`id`),
+                    FOREIGN KEY(`category_id`) REFERENCES `categories`(`id`)
+                        ON UPDATE NO ACTION ON DELETE RESTRICT,
+                    FOREIGN KEY(`account_id`) REFERENCES `accounts`(`id`)
+                        ON UPDATE NO ACTION ON DELETE RESTRICT,
+                    FOREIGN KEY(`target_account_id`) REFERENCES `accounts`(`id`)
+                        ON UPDATE NO ACTION ON DELETE RESTRICT
+                )
+                """.trimIndent()
+            )
+            db.execSQL(
+                """
+                INSERT INTO `bills_new` (
+                    `id`, `amount_minor`, `type`, `occurred_at`, `description`,
+                    `category_id`, `account_id`, `target_account_id`, `platform`,
+                    `merchant`, `product_description`, `source_type`,
+                    `original_transaction_id`, `order_id`, `created_at`,
+                    `updated_at`, `version`
+                )
+                SELECT
+                    `id`, `amount_minor`, `type`, `occurred_at`, `description`,
+                    `category_id`, `account_id`, `target_account_id`, `platform`,
+                    `merchant`, `product_description`, `source_type`,
+                    `original_transaction_id`, `order_id`, `created_at`,
+                    `updated_at`, `version`
+                FROM `bills`
+                """.trimIndent()
+            )
+            db.execSQL("DROP TABLE `bills`")
+            db.execSQL("ALTER TABLE `bills_new` RENAME TO `bills`")
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_bills_occurred_at` ON `bills` (`occurred_at`)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_bills_category_id` ON `bills` (`category_id`)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_bills_account_id` ON `bills` (`account_id`)")
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS `index_bills_target_account_id` " +
+                    "ON `bills` (`target_account_id`)"
+            )
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_bills_platform` ON `bills` (`platform`)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_bills_order_id` ON `bills` (`order_id`)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_bills_source_type` ON `bills` (`source_type`)")
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS `index_bills_original_transaction_id` " +
+                    "ON `bills` (`original_transaction_id`)"
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS `index_bills_occurred_at_type` " +
+                    "ON `bills` (`occurred_at`, `type`)"
+            )
+        }
+    }
+
+    val all: Array<Migration> = arrayOf(migration1To2, migration2To3, migration3To4)
 }
