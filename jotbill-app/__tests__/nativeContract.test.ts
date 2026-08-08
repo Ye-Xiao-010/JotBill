@@ -1,7 +1,13 @@
 import { NativeModules } from 'react-native';
 import { nativeAi, type AiBudgetSummary, type AiCostRecord } from '../src/native/ai';
 import { nativeBackup } from '../src/native/backup';
-import { nativeData, type Bill, type BillInput } from '../src/native/data';
+import {
+  nativeData,
+  type Bill,
+  type BillInput,
+  type FinancialGoalUpdateInput,
+  type RuleUpdateInput,
+} from '../src/native/data';
 import { nativeRuntime, type RuntimeHealth } from '../src/native/runtime';
 import type { ChatMessageData, ChatSession } from '../src/types/ai';
 import type {
@@ -40,8 +46,8 @@ const declaredBudget = (value: DeclaredAiBudgetSummary): AiBudgetSummary => valu
 const declaredRuntime = (value: DeclaredRuntimeHealth): RuntimeHealth => value;
 const declaredFinancialGoalUpdate = (
   value: DeclaredFinancialGoalUpdateInput,
-): DeclaredFinancialGoalUpdateInput => value;
-const declaredRuleUpdate = (value: DeclaredRuleUpdateInput): DeclaredRuleUpdateInput => value;
+): FinancialGoalUpdateInput => value;
+const declaredRuleUpdate = (value: DeclaredRuleUpdateInput): RuleUpdateInput => value;
 const declaredChatSession = (value: ChatSession): DeclaredAiChatSession => value;
 const declaredChatMessage = (value: ChatMessageData): DeclaredAiChatMessage => value;
 
