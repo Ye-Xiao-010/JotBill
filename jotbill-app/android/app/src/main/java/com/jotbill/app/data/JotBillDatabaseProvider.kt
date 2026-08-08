@@ -5,10 +5,11 @@ import net.sqlcipher.database.SQLiteDatabase
 import net.sqlcipher.database.SupportFactory
 import androidx.room.Room
 import com.jotbill.app.security.KeyStoreSecretStore
+import com.jotbill.app.data.seed.DefaultDataInitializer
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.runBlocking
 
-/**
- * Process-wide database holder. The application context prevents Activity leaks.
- */
+/** 按进程复用数据库实例，并使用应用上下文避免持有 Activity。 */
 object JotBillDatabaseProvider {
     private const val DATABASE_NAME = "jotbill.db"
 
@@ -33,9 +34,15 @@ object JotBillDatabaseProvider {
         val passphrase = KeyStoreSecretStore(context).getOrCreateDatabasePassphrase()
         val factory = SupportFactory(passphrase)
 
-        return Room.databaseBuilder(context, JotBillDatabase::class.java, DATABASE_NAME)
+        val database = Room.databaseBuilder(context, JotBillDatabase::class.java, DATABASE_NAME)
             .openHelperFactory(factory)
             .addMigrations(*DatabaseMigrations.all)
             .build()
+
+        // 等待迁移完成后再初始化默认数据，确保数据库交给调用方时已经可用。
+        runBlocking(Dispatchers.IO) {
+            DefaultDataInitializer(database).initializeIfFirstRun()
+        }
+        return database
     }
 }
