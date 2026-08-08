@@ -39,6 +39,8 @@ import com.jotbill.app.data.entity.PendingTransactionEntity
 import com.jotbill.app.data.entity.RuleEntity
 import com.jotbill.app.data.entity.TransactionCandidateEntity
 
+const val JOT_BILL_DATABASE_VERSION = 4
+
 @Database(
     entities = [
         BillEntity::class,
@@ -59,7 +61,7 @@ import com.jotbill.app.data.entity.TransactionCandidateEntity
         ChatSessionEntity::class,
         ChatMessageEntity::class
     ],
-    version = 4,
+    version = JOT_BILL_DATABASE_VERSION,
     exportSchema = true
 )
 @TypeConverters(DatabaseConverters::class)

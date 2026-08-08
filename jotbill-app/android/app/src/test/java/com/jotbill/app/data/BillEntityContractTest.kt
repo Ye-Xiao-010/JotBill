@@ -39,7 +39,7 @@ class BillEntityContractTest {
     fun foreignKeyChangeHasDatabaseMigration() {
         val database = JotBillDatabase::class.java.getAnnotation(Database::class.java)
 
-        assertEquals(4, database.version)
+        assertEquals(JOT_BILL_DATABASE_VERSION, database.version)
         assertTrue(DatabaseMigrations.all.any { it.startVersion == 3 && it.endVersion == 4 })
     }
 }

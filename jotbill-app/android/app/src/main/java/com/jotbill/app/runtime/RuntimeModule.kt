@@ -4,6 +4,7 @@ import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
+import com.jotbill.app.data.JOT_BILL_DATABASE_VERSION
 import com.jotbill.app.data.JotBillDatabase
 import com.jotbill.app.data.JotBillDatabaseProvider
 import kotlinx.coroutines.CoroutineScope
@@ -36,7 +37,7 @@ class RuntimeModule(
         scope.launch {
             try {
                 val result = JSONObject().apply {
-                    put("databaseVersion", DATABASE_VERSION)
+                    put("databaseVersion", JOT_BILL_DATABASE_VERSION)
                     put("billCount", database.billDao().count())
                     put("categoryCount", database.categoryDao().getAll().size)
                     put("accountCount", database.accountDao().getAll().size)
@@ -62,7 +63,6 @@ class RuntimeModule(
     }
 
     private companion object {
-        const val DATABASE_VERSION = 1
         const val PREFERENCES_NAME = "jotbill_runtime"
         const val LAST_LAUNCH_KEY = "last_launch_at"
     }
