@@ -1,5 +1,6 @@
 package com.jotbill.app.data
 
+import androidx.room.Database
 import androidx.room.Entity
 import androidx.room.ForeignKey
 import com.jotbill.app.data.entity.AccountEntity
@@ -32,5 +33,13 @@ class BillEntityContractTest {
                 .map { it.entity }
                 .toSet()
         )
+    }
+
+    @Test
+    fun foreignKeyChangeHasDatabaseMigration() {
+        val database = JotBillDatabase::class.java.getAnnotation(Database::class.java)
+
+        assertEquals(4, database.version)
+        assertTrue(DatabaseMigrations.all.any { it.startVersion == 3 && it.endVersion == 4 })
     }
 }
