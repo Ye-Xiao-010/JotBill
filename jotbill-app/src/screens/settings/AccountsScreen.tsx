@@ -18,6 +18,7 @@ import { QUERY_KEYS } from '../../lib/queryClient';
 import { borderRadius, borderWidth, shadow, spacing } from '../../theme/spacing';
 import { ThemeColors } from '../../theme/colors';
 import { useStyles } from '../../hooks';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 interface AccountOption {
   label: string;
@@ -184,7 +185,7 @@ export default function AccountsScreen() {
   const accounts = accountsQuery.data ?? [];
 
   return (
-    <View style={styles.container}>
+    <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
       <View style={styles.header}>
         <TouchableOpacity onPress={() => navigation.goBack()} style={styles.iconButton}>
           <ChevronLeft size={24} color={styles._colors.textPrimary} />
@@ -361,7 +362,7 @@ export default function AccountsScreen() {
           </View>
         </View>
       </Modal>
-    </View>
+    </SafeAreaView>
   );
 }
 

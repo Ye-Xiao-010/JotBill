@@ -32,6 +32,7 @@ import type {
 import { AI_PROVIDERS } from '../types/ai';
 import { ProviderIcon } from '../components/icons';
 import { ChevronDown } from 'lucide-react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 const NATIVE_AI_PROVIDERS: AIProvider[] = ['qwen', 'glm', 'siliconflow', 'custom'];
 
@@ -839,7 +840,7 @@ export default function GeneralSettingsScreen({ navigation: _navigation }: Gener
   );
 
   return (
-    <View style={styles.container}>
+    <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
       <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
         <PaymentNotificationSettings style={styles.card} />
 
@@ -1092,7 +1093,7 @@ export default function GeneralSettingsScreen({ navigation: _navigation }: Gener
           </View>
         </View>
       </Modal>
-    </View>
+    </SafeAreaView>
   );
 }
 

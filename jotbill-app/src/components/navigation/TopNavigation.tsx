@@ -9,8 +9,8 @@ import {
   TouchableOpacity,
   StyleSheet,
   StatusBar,
-  SafeAreaView,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { ThemeColors } from '../../theme/colors';
 import { spacing, borderRadius, borderWidth } from '../../theme/spacing';
 import { useStyles } from '../../hooks';
@@ -33,7 +33,7 @@ const TopNavigation: React.FC<TopNavigationProps> = ({
   const styles = useStyles(createStyles);
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={styles.container} edges={['top']}>
       <StatusBar barStyle="dark-content" />
       <View style={styles.header}>
         <View style={styles.titleContainer}>

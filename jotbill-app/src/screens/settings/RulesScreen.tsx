@@ -7,6 +7,7 @@ import { nativeData, type Rule } from '../../native';
 import { borderRadius, borderWidth, spacing } from '../../theme/spacing';
 import { ThemeColors } from '../../theme/colors';
 import { useStyles } from '../../hooks';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 export default function RulesScreen() {
   const navigation = useNavigation();
@@ -15,7 +16,7 @@ export default function RulesScreen() {
   const rules = query.data ?? [];
 
   return (
-    <View style={styles.container}>
+    <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
       <View style={styles.header}>
         <TouchableOpacity onPress={() => navigation.goBack()} style={styles.iconButton}>
           <ChevronLeft size={24} color={styles._colors.textPrimary} />
@@ -40,7 +41,7 @@ export default function RulesScreen() {
           rules.map((rule) => <RuleCard key={rule.id} rule={rule} styles={styles} />)
         )}
       </ScrollView>
-    </View>
+    </SafeAreaView>
   );
 }
 

@@ -19,6 +19,7 @@ import { borderRadius, borderWidth, spacing } from '../../theme/spacing';
 import { useStyles } from '../../hooks';
 import { aiService } from '../../services/api/ai';
 import type { ChatSession } from '../../types/ai';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 export default function AIChatSessionsScreen() {
   const styles = useStyles(createStyles);
@@ -135,14 +136,14 @@ export default function AIChatSessionsScreen() {
 
   if (loading) {
     return (
-      <View style={[styles.container, styles.centerContent]}>
+      <SafeAreaView style={[styles.container, styles.centerContent]} edges={['top', 'bottom']}>
         <ActivityIndicator size="large" color={styles._colors.primary} />
-      </View>
+      </SafeAreaView>
     );
   }
 
   return (
-    <View style={styles.container}>
+    <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
       {/* 头部 */}
       <View style={styles.header}>
         <Text style={styles.headerTitle}>对话记录</Text>
@@ -171,7 +172,7 @@ export default function AIChatSessionsScreen() {
           />
         }
       />
-    </View>
+    </SafeAreaView>
   );
 }
 
