@@ -34,6 +34,26 @@ export interface TestConnectionResult {
   latencyMs?: number;
 }
 
+export interface AiCostRecord {
+  id: string;
+  provider: AiProvider;
+  model: string;
+  requestType: 'vision' | 'chat' | 'asr';
+  tokensIn?: number;
+  tokensOut?: number;
+  costMinor: number;
+  success: boolean;
+  createdAt: string;
+}
+
+export interface AiBudgetSummary {
+  monthlyBudgetMinor: number;
+  monthlySpentMinor: number;
+  remainingMinor: number;
+  requestCount: number;
+  month: string;
+}
+
 export interface NativeChatRequest {
   requestId: string;
   content: string;
@@ -81,6 +101,9 @@ interface RawAiModule {
   deleteAiProvider(id: string): Promise<null>;
   setDefaultAiProvider(id: string): Promise<string>;
   testAiProvider(id: string): Promise<string>;
+  getAiBudget(): Promise<string>;
+  setAiBudget(monthlyBudgetMinor: number): Promise<null>;
+  getAiCostRecords(month?: string | null): Promise<string>;
   sendMessage(inputJson: string): Promise<string>;
   cancelMessage(sessionId: string): Promise<boolean>;
   getChatSessions(page: number, limit: number): Promise<string>;
@@ -146,6 +169,21 @@ export const nativeAi = {
     return parseJson(
       await getRawAiModule().testAiProvider(id),
       'testAiProvider',
+    );
+  },
+
+  async getAiBudget(): Promise<AiBudgetSummary> {
+    return parseJson(await getRawAiModule().getAiBudget(), 'getAiBudget');
+  },
+
+  async setAiBudget(monthlyBudgetMinor: number): Promise<void> {
+    await getRawAiModule().setAiBudget(monthlyBudgetMinor);
+  },
+
+  async getAiCostRecords(month?: string): Promise<AiCostRecord[]> {
+    return parseJson(
+      await getRawAiModule().getAiCostRecords(month ?? null),
+      'getAiCostRecords',
     );
   },
 

@@ -6,7 +6,9 @@ import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
 import com.jotbill.app.data.JotBillDatabase
 import com.jotbill.app.data.JotBillDatabaseProvider
+import com.jotbill.app.data.entity.AiCostRecordEntity
 import com.jotbill.app.data.entity.AiProviderConfigEntity
+import com.jotbill.app.data.entity.AppSettingEntity
 import com.jotbill.app.security.KeyStoreSecretStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -18,6 +20,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONArray
 import org.json.JSONObject
+import java.time.YearMonth
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 
@@ -160,6 +163,58 @@ class AiModule(
     }
 
     @ReactMethod
+    fun getAiBudget(promise: Promise) = launch(promise) {
+        val month = YearMonth.now().toString()
+        val budget = database.appSettingDao().get(AI_MONTHLY_BUDGET_KEY)
+            ?.toLongOrNull()
+            ?: DEFAULT_AI_BUDGET_MINOR
+        val spent = database.aiCostRecordDao().getMonthlyCost(month)
+        val requestCount = database.aiCostRecordDao().getMonthlySuccessCount(month)
+        JSONObject()
+            .put("monthlyBudgetMinor", budget)
+            .put("monthlySpentMinor", spent)
+            .put("remainingMinor", budget - spent)
+            .put("requestCount", requestCount)
+            .put("month", month)
+            .toString()
+    }
+
+    @ReactMethod
+    fun setAiBudget(monthlyBudgetMinor: Double, promise: Promise) = launch(promise) {
+        if (!monthlyBudgetMinor.isFinite() ||
+            monthlyBudgetMinor < 0.0 ||
+            monthlyBudgetMinor % 1.0 != 0.0 ||
+            monthlyBudgetMinor > Long.MAX_VALUE.toDouble()
+        ) {
+            throw AiException("INVALID_ARGUMENT", "monthlyBudgetMinor must be a non-negative integer")
+        }
+        database.appSettingDao().set(
+            AppSettingEntity(
+                key = AI_MONTHLY_BUDGET_KEY,
+                value = monthlyBudgetMinor.toLong().toString(),
+                updatedAt = System.currentTimeMillis()
+            )
+        )
+        null
+    }
+
+    @ReactMethod
+    fun getAiCostRecords(month: String?, promise: Promise) = launch(promise) {
+        val requestedMonth = month?.trim().takeUnless { it.isNullOrEmpty() }
+            ?: YearMonth.now().toString()
+        try {
+            YearMonth.parse(requestedMonth)
+        } catch (error: Exception) {
+            throw AiException("INVALID_ARGUMENT", "month must use YYYY-MM format")
+        }
+
+        JSONArray().also { array ->
+            database.aiCostRecordDao().getByMonth(requestedMonth)
+                .forEach { array.put(costRecordToJson(it)) }
+        }.toString()
+    }
+
+    @ReactMethod
     fun sendMessage(inputJson: String, promise: Promise) = launch(promise) {
         chatModule.sendMessage(inputJson)
     }
@@ -236,6 +291,19 @@ class AiModule(
         put("updatedAt", java.time.Instant.ofEpochMilli(entity.updatedAt).toString())
     }
 
+    private fun costRecordToJson(entity: AiCostRecordEntity): JSONObject =
+        JSONObject().apply {
+            put("id", entity.id)
+            put("provider", entity.provider)
+            put("model", entity.model)
+            put("requestType", entity.requestType)
+            entity.tokensIn?.let { put("tokensIn", it) }
+            entity.tokensOut?.let { put("tokensOut", it) }
+            put("costMinor", entity.costMinor)
+            put("success", entity.success)
+            put("createdAt", java.time.Instant.ofEpochMilli(entity.createdAt).toString())
+        }
+
     private fun requiredString(input: JSONObject, key: String): String {
         val value = input.optString(key).trim()
         if (value.isEmpty()) throw AiException("INVALID_ARGUMENT", "缺少字段: $key")
@@ -291,6 +359,8 @@ class AiModule(
 
     private companion object {
         const val MASKED_KEY = "********"
+        const val AI_MONTHLY_BUDGET_KEY = "ai_monthly_budget_minor"
+        const val DEFAULT_AI_BUDGET_MINOR = 1000L
         val SUPPORTED_PROVIDERS = setOf("qwen", "glm", "siliconflow", "custom")
     }
 }

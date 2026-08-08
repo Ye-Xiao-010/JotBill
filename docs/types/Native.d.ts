@@ -31,6 +31,22 @@ export interface NativeResponse<T> {
  * 原生错误码(对应设计文档 13.1 节)
  */
 export type NativeErrorCode =
+  | 'INVALID_ARGUMENT'     // 参数格式或取值无效
+  | 'NOT_FOUND'             // 本地记录不存在
+  | 'VERSION_CONFLICT'      // 乐观锁版本冲突
+  | 'DATA_CONFLICT'         // 唯一约束或外键约束冲突
+  | 'DB_ERROR'              // 本地数据库错误
+  | 'NOT_IMPLEMENTED'       // 当前阶段尚未开放的能力
+  | 'AI_CONFIG_ERROR'       // AI 配置错误
+  | 'AI_CONFIG_MISSING'     // 未配置可用的 AI 服务商
+  | 'AI_VISION_UNSUPPORTED' // 当前服务商不支持图片输入
+  | 'AI_ASR_ERROR'          // 语音转写失败
+  | 'RUNTIME_STATUS_ERROR'  // 运行状态读取失败
+  | 'UNSUPPORTED_FORMAT'    // 不支持的导出格式
+  | 'EXPORT_IN_PROGRESS'    // 已有导出任务等待文件位置
+  | 'EXPORT_CANCELLED'      // 用户取消导出
+  | 'EXPORT_ERROR'          // 导出失败
+  | 'CLEAR_DATA_ERROR'      // 清除本地数据失败
   | 'AI_TIMEOUT'          // AI 识别超时
   | 'AI_AUTH'             // API Key 无效或模型下线
   | 'AI_PARSE'            // AI 返回格式无法解析
@@ -138,13 +154,14 @@ export interface BillInput {
   amountMinor: number;
   type: TransactionType;
   occurredAt: string;
-  description?: string;
+  description?: string | null;
   categoryId?: string;
   accountId?: string;
   targetAccountId?: string;
   platform?: string;
   merchant?: string;
   productDescription?: string;
+  sourceType: TransactionSource;
   orderId?: string;
   originalTransactionId?: string;
 }
@@ -269,7 +286,8 @@ export interface Account {
 export interface AccountInput {
   name: string;
   subtype: AccountSubtype;
-  initialBalanceMinor: number;
+  kind?: AccountKind;
+  initialBalanceMinor?: number;
   currency?: string;
   icon?: string;
   color?: string;
@@ -362,7 +380,7 @@ export interface Budget {
 export interface BudgetInput {
   name: string;
   amountMinor: number;
-  period: BudgetPeriod;
+  period?: BudgetPeriod;
   categoryId?: string;
   alertAt?: number;
 }
@@ -396,7 +414,7 @@ export interface FinancialGoal {
 export interface FinancialGoalInput {
   name: string;
   targetAmountMinor: number;
-  targetDate?: string;
+  targetDate?: string | null;
 }
 
 // ============================================================================
@@ -541,6 +559,13 @@ export interface PendingTransaction {
   createdAt: string;
   version: number;
 }
+
+export interface PendingTransactionFilter {
+  page?: number;
+  limit?: number;
+}
+
+export type PendingConfirmationInput = Partial<BillInput>;
 
 /**
  * AI 识别结果(对应设计文档 8.1 节 JSON Schema)
@@ -720,22 +745,17 @@ export interface AiStreamChunk {
 // ============================================================================
 
 export interface RuntimeHealth {
+  databaseVersion: number;
+  billCount: number;
+  categoryCount: number;
+  accountCount: number;
+  lastLaunchAt: string;
+  checkedAt: string;
+  // 以下字段由阶段二原生实现附带返回，后续阶段再补齐真实健康检查。
+  aiProviderConfigured: boolean;
   accessibilityEnabled: boolean;
   notificationEnabled: boolean;
   overlayPermissionGranted: boolean;  // 悬浮窗权限
-  usageStatsEnabled: boolean;
-  batteryOptimizationIgnored: boolean;
-  aiProviderConfigured: boolean;
-  // 服务状态
-  accessibilityServiceRunning: boolean;
-  notificationServiceRunning: boolean;
-  // 限制
-  backgroundRestrictions: boolean;
-  // AI 状态
-  aiAvailable: boolean;
-  aiBudgetRemaining: boolean;
-  lastAiError?: NativeError;
-  checkedAt: string;
 }
 
 // ============================================================================
@@ -789,12 +809,10 @@ export interface DataModule {
   getBillStatistics(filter?: BillFilter): Promise<BillStatistics>;
 
   // 待确认
-  getPendingTransactions(filter?: BillFilter): Promise<PaginatedResponse<PendingTransaction>>;
+  getPendingTransactions(filter?: PendingTransactionFilter): Promise<PaginatedResponse<PendingTransaction>>;
   getPendingTransaction(id: string): Promise<PendingTransaction>;
-  confirmPendingTransaction(id: string, input: BillInput, version: number): Promise<Bill>;
+  confirmPendingTransaction(id: string, input: PendingConfirmationInput, version: number): Promise<Bill>;
   ignorePendingTransaction(id: string, version: number): Promise<void>;
-  mergePendingTransactions(ids: string[], target: BillInput): Promise<Bill>;
-  splitPendingTransaction(id: string, splits: BillInput[]): Promise<Bill[]>;
 
   // 账户
   getAccounts(): Promise<Account[]>;
@@ -881,11 +899,6 @@ export interface AiModule {
  */
 export interface RuntimeModule {
   getRuntimeHealth(): Promise<RuntimeHealth>;
-  openAccessibilitySettings(): Promise<void>;
-  openNotificationSettings(): Promise<void>;
-  openOverlaySettings(): Promise<void>;
-  openBatteryOptimizationSettings(): Promise<void>;
-  openUsageStatsSettings(): Promise<void>;
 }
 
 /**
@@ -901,11 +914,9 @@ export interface OverlayModule {
  * 备份与导入接口
  */
 export interface BackupModule {
-  createBackup(options?: { encrypt?: boolean }): Promise<BackupSummary>;
-  restoreBackup(filePath: string): Promise<RestorePreview>;
-  executeRestore(filePath: string, strategy: 'overwrite' | 'merge'): Promise<ImportResult>;
-  exportData(format: 'csv' | 'xlsx' | 'json'): Promise<{ filePath: string }>;
-  importData(filePath: string): Promise<ImportResult>;
+  // 阶段二只开放 CSV 导出和清除本地数据，完整备份恢复在后续阶段实现。
+  exportData(format: 'csv'): Promise<{ filePath: string }>;
+  clearData(): Promise<void>;
 }
 
 /**
