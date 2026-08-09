@@ -94,7 +94,13 @@ export default function DataManagementScreen() {
   };
 
   const chooseBackup = async () => {
-    if (clearingRef.current) return;
+    if (
+      busy ||
+      exportingRef.current ||
+      creatingBackupRef.current ||
+      restoringRef.current ||
+      clearingRef.current
+    ) return;
     restoringRef.current = true;
     setRestoring(true);
     setStatus(null);
@@ -112,7 +118,14 @@ export default function DataManagementScreen() {
   };
 
   const executeOverwriteRestore = async () => {
-    if (!preview || clearingRef.current) return;
+    if (
+      !preview ||
+      busy ||
+      exportingRef.current ||
+      creatingBackupRef.current ||
+      restoringRef.current ||
+      clearingRef.current
+    ) return;
     restoringRef.current = true;
     setRestoring(true);
     setStatus(null);
@@ -135,7 +148,14 @@ export default function DataManagementScreen() {
   };
 
   const confirmOverwriteRestore = () => {
-    if (!preview || restoringRef.current || clearingRef.current) return;
+    if (
+      !preview ||
+      busy ||
+      exportingRef.current ||
+      creatingBackupRef.current ||
+      restoringRef.current ||
+      clearingRef.current
+    ) return;
     Alert.alert(
       '确认覆盖恢复',
       `将替换备份范围内的账单、账户、分类等数据。重复记录按替换处理，恢复失败会回滚。\n\n备份记录：${countText(preview.recordSummary.totalCount)}`,
@@ -184,10 +204,21 @@ export default function DataManagementScreen() {
     ]);
   };
 
+  const handleBack = () => {
+    if (
+      busy ||
+      exportingRef.current ||
+      creatingBackupRef.current ||
+      restoringRef.current ||
+      clearingRef.current
+    ) return;
+    navigation.goBack();
+  };
+
   return (
     <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => navigation.goBack()} style={[styles.iconButton, busy && styles.disabledButton]} disabled={busy} accessibilityLabel="返回">
+        <TouchableOpacity onPress={handleBack} style={[styles.iconButton, busy && styles.disabledButton]} disabled={busy} accessibilityLabel="返回">
           <ChevronLeft size={24} color={styles._colors.textPrimary} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>数据管理</Text>

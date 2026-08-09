@@ -222,10 +222,6 @@ internal class BackupManager(
                 put("existingRecordSummary", existing.toJson())
                 put("duplicateCount", duplicateCount)
                 put("duplicateRecordPolicy", DUPLICATE_REPLACE)
-                put(
-                    "skippedFields",
-                    JSONObject().put("aiProviderApiBaseUrl", parsed.aiProviderApiBaseUrlSkippedCount),
-                )
             }
         }
 
@@ -283,10 +279,6 @@ internal class BackupManager(
             put("errors", warnings)
             put("recordSummary", parsed.recordSummary)
             put("strategy", STRATEGY_OVERWRITE)
-            put(
-                "skippedFields",
-                JSONObject().put("aiProviderApiBaseUrl", parsed.aiProviderApiBaseUrlSkippedCount),
-            )
         }
     }
 
@@ -712,7 +704,7 @@ internal class BackupManager(
             val uri = URI(normalized)
             val scheme = uri.scheme?.lowercase(Locale.US)
             if (scheme !in HTTP_SCHEMES || uri.host.isNullOrBlank()) return null
-            if (uri.userInfo != null || uri.rawQuery != null || uri.rawFragment != null) return null
+            if (uri.userInfo != null || uri.rawFragment != null) return null
 
             val authority = decodeUriPart(uri.rawAuthority ?: return null) ?: return null
             if (authority.contains('@')) return null
@@ -721,10 +713,33 @@ internal class BackupManager(
             if (path.contains('@') || path.contains('?') || path.contains('#') || hasCredentialPath(path)) {
                 return null
             }
+            if (!isSafeQuery(uri.rawQuery)) return null
             normalized
         } catch (_: Exception) {
             null
         }
+    }
+
+    private fun isSafeQuery(rawQuery: String?): Boolean {
+        if (rawQuery == null || rawQuery.isEmpty()) return true
+        for (rawParameter in rawQuery.split('&')) {
+            if (rawParameter.isEmpty()) return false
+            val separator = rawParameter.indexOf('=')
+            val rawKey = if (separator < 0) rawParameter else rawParameter.substring(0, separator)
+            val rawValue = if (separator < 0) "" else rawParameter.substring(separator + 1)
+            val key = decodeUriPart(rawKey)?.trim() ?: return false
+            val value = decodeUriPart(rawValue)?.trim() ?: return false
+            if (key.isEmpty() || key.any { it.isWhitespace() || it.isISOControl() }) return false
+            if (value.any { it.isWhitespace() || it.isISOControl() }) return false
+            if (hasSensitiveQueryPart(key) || hasSensitiveQueryPart(value)) return false
+        }
+        return true
+    }
+
+    private fun hasSensitiveQueryPart(value: String): Boolean {
+        return SENSITIVE_QUERY_TOKEN_PATTERN.containsMatchIn(value) ||
+            value.contains("bearer", ignoreCase = true) ||
+            value.contains("basic", ignoreCase = true)
     }
 
     private fun decodeUriPart(value: String): String? = try {
@@ -1574,6 +1589,10 @@ internal class BackupManager(
         val AI_REQUEST_TYPES = setOf("vision", "chat", "asr")
         val CREDENTIAL_PATH_PATTERN = Regex(
             "^(api[-_]?key|access[-_]?token|token|password|secret|credentials?|auth|key)([-_=].*)?$",
+            RegexOption.IGNORE_CASE,
+        )
+        val SENSITIVE_QUERY_TOKEN_PATTERN = Regex(
+            "(^|[^A-Za-z0-9])(api[-_.]?key|access[-_.]?token|token|password|secret|credentials?|auth|key)([^A-Za-z0-9]|$)",
             RegexOption.IGNORE_CASE,
         )
         val ACCOUNT_SUBTYPES = setOf("cash", "e_wallet", "bank_debit", "credit_card", "consumer_loan", "other")
