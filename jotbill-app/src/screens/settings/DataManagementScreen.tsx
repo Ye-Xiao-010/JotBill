@@ -37,9 +37,6 @@ const getErrorMessage = (error: unknown): string => {
 
 const countText = (value: number): string => value.toLocaleString('zh-CN');
 
-const restorableCount = (summary: BackupSummary['recordSummary']): number =>
-  summary.totalCount - summary.aiProviderConfigCount - summary.aiCostRecordCount;
-
 export default function DataManagementScreen() {
   const navigation = useNavigation();
   const queryClient = useQueryClient();
@@ -78,7 +75,7 @@ export default function DataManagementScreen() {
       setStatus({
         kind: 'success',
         title: '备份已保存',
-        message: `文件已保存。包含 ${countText(restorableCount(result.recordSummary))} 条可恢复记录。`,
+        message: `文件已保存。包含 ${countText(result.recordSummary.totalCount)} 条可恢复非敏感记录；API Key 等凭据未写入备份。`,
       });
     } catch (error) {
       if (isErrorWithCode(error, 'BACKUP_CANCELLED')) return;
@@ -115,7 +112,7 @@ export default function DataManagementScreen() {
       setStatus({
         kind: 'success',
         title: '覆盖恢复完成',
-        message: `已恢复 ${countText(result.imported)} 条记录，替换 ${countText(result.replaced)} 条重复记录。`,
+        message: `已恢复 ${countText(result.imported)} 条非敏感记录，跳过 ${countText(result.skipped)} 条未包含记录，替换 ${countText(result.replaced)} 条重复记录；API Key 等凭据未恢复。`,
       });
     } catch (error) {
       setStatus({ kind: 'error', title: '恢复失败', message: getErrorMessage(error) });
@@ -137,17 +134,20 @@ export default function DataManagementScreen() {
   };
 
   const cancelPreview = () => {
+    if (restoring) return;
     setPreview(null);
     setStatus({ kind: 'info', title: '已取消恢复', message: '备份文件未写入数据库。' });
   };
 
   const clearData = () => {
+    if (busy) return;
     Alert.alert('清除本地数据', '这会删除本机账单、账户、分类、预算和目标，且不能撤销。请先导出 CSV。', [
       { text: '取消', style: 'cancel' },
       {
         text: '继续清除',
         style: 'destructive',
         onPress: async () => {
+          if (exporting || creatingBackup || restoring) return;
           setClearing(true);
           try {
             await nativeBackup.clearData();
@@ -167,7 +167,7 @@ export default function DataManagementScreen() {
   return (
     <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.iconButton} accessibilityLabel="返回">
+        <TouchableOpacity onPress={() => navigation.goBack()} style={[styles.iconButton, busy && styles.disabledButton]} disabled={busy} accessibilityLabel="返回">
           <ChevronLeft size={24} color={styles._colors.textPrimary} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>数据管理</Text>
@@ -229,7 +229,7 @@ export default function DataManagementScreen() {
                 <Text style={styles.panelTitle}>恢复预览</Text>
                 <Text style={styles.panelText} numberOfLines={2} ellipsizeMode="middle">{preview.filePath}</Text>
               </View>
-              <TouchableOpacity onPress={cancelPreview} style={styles.smallIconButton} accessibilityLabel="取消恢复预览">
+              <TouchableOpacity onPress={cancelPreview} style={[styles.smallIconButton, restoring && styles.disabledButton]} disabled={restoring} accessibilityLabel="取消恢复预览">
                 <X size={20} color={styles._colors.textPrimary} />
               </TouchableOpacity>
             </View>
@@ -240,7 +240,7 @@ export default function DataManagementScreen() {
               <View style={styles.metric}><Text style={styles.metricValue}>{countText(preview.duplicateCount)}</Text><Text style={styles.metricLabel}>重复替换</Text></View>
             </View>
             <Text style={styles.panelMeta}>格式 {preview.format} v{preview.formatVersion} · 校验摘要 {preview.checksum.slice(0, 12)}…</Text>
-            <Text style={styles.panelMeta}>AI 配置和成本仅保留计数，不写回敏感配置。当前策略：覆盖，重复记录替换。</Text>
+            <Text style={styles.panelMeta}>AI Provider 非敏感字段和成本记录会恢复；API Key、密钥和凭据不会写入备份。当前策略：覆盖，重复记录替换。</Text>
             <TouchableOpacity style={styles.restoreButton} onPress={confirmOverwriteRestore} disabled={restoring}>
               {restoring ? <ActivityIndicator color={styles._colors.surface} /> : <Archive size={19} color={styles._colors.surface} />}
               <Text style={styles.restoreButtonText}>确认覆盖恢复</Text>
@@ -278,6 +278,7 @@ const createStyles = (colors: ThemeColors) => ({
     header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.md, paddingTop: spacing.xl, paddingBottom: spacing.md, backgroundColor: colors.surface, borderBottomWidth: borderWidth.medium, borderBottomColor: colors.stroke },
     iconButton: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
     smallIconButton: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
+    disabledButton: { opacity: 0.45 },
     headerTitle: { fontSize: 20, fontWeight: '800', color: colors.textPrimary },
     scrollView: { flex: 1 },
     content: { padding: spacing.lg, gap: spacing.md },
