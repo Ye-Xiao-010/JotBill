@@ -124,6 +124,7 @@ export const invalidateCache = {
    */
   bills: () => {
     queryClient.invalidateQueries({ queryKey: QUERY_KEYS.bills.all });
+    queryClient.invalidateQueries({ queryKey: QUERY_KEYS.budgetProgress });
     // 同时使首页和统计数据失效，因为它们依赖账单数据
     queryClient.invalidateQueries({ queryKey: ['dashboard'] });
     queryClient.invalidateQueries({ queryKey: ['statistics'] });

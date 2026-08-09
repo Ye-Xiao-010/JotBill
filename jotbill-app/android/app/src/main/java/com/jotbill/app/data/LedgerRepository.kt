@@ -221,7 +221,7 @@ class LedgerRepository(private val database: JotBillDatabase) {
                     action = "create",
                     fieldName = null,
                     oldValue = null,
-                    newValue = adjustmentBill.amountMinor.toString(),
+                    newValue = billAuditValue(adjustmentBill),
                     operator = "system",
                     createdAt = now
                 )
