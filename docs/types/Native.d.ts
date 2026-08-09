@@ -47,6 +47,11 @@ export type NativeErrorCode =
   | 'EXPORT_CANCELLED'      // 用户取消导出
   | 'EXPORT_ERROR'          // 导出失败
   | 'CLEAR_DATA_ERROR'      // 清除本地数据失败
+  | 'BACKUP_FAILED'         // 创建备份失败
+  | 'RESTORE_PREVIEW_FAILED' // 恢复预览失败
+  | 'RESTORE_FAILED'        // 恢复执行失败
+  | 'EXPORT_FAILED'         // 备份模块导出失败
+  | 'IMPORT_FAILED'         // 文件导入失败
   | 'BACKUP_UNSUPPORTED_FORMAT' // 备份格式或格式版本不支持
   | 'BACKUP_VALIDATION_FAILED' // 备份文件校验失败
   | 'BACKUP_CANCELLED'      // 用户取消备份或恢复
@@ -781,6 +786,8 @@ export interface RuntimeHealth {
 // ============================================================================
 
 export type BackupFormat = 'jotbill';
+export type ImportFormat = BackupFormat | 'csv';
+/** 来源标签仅描述输入来源，具体格式由各 DTO 的判别字段共同约束。 */
 export type BackupSource = 'local_database' | 'backup_file' | 'csv_file';
 export type RestoreStrategy = 'overwrite' | 'merge';
 export type DuplicateRecordPolicy = 'skip' | 'replace' | 'fail';
@@ -802,7 +809,9 @@ export interface BackupRecordSummary {
   ruleCount: number;
   balanceCalibrationCount: number;
   auditLogCount: number;
-  appConfigCount: number;
+  appSettingCount: number;
+  aiProviderConfigCount: number;
+  aiCostRecordCount: number;
   totalCount: number;
 }
 
@@ -811,19 +820,19 @@ export interface CreateBackupOptions {
 }
 
 /**
- * 恢复策略及重复记录处理规则。原生实现可按策略提供默认重复规则。
+ * 恢复请求只包含用户明确选择的覆盖/合并策略。
+ * duplicateRecordPolicy 是原生根据策略解析出的规则，写入预览和结果，不是当前 bridge 的输入字段。
  */
 export interface RestoreOptions {
   strategy: RestoreStrategy;
-  duplicateRecordPolicy?: DuplicateRecordPolicy;
 }
 
 export interface BackupSummary {
   filePath: string;
   fileSize: number;
-  format: BackupFormat;
+  source: 'local_database';
+  format: 'jotbill';
   formatVersion: BackupFormatVersion;
-  source: BackupSource;
   checksum: string;
   recordSummary: BackupRecordSummary;
   // 以下扁平字段保留旧契约兼容，权威计数以 recordSummary 为准。
@@ -832,17 +841,15 @@ export interface BackupSummary {
   categoryCount: number;
   ruleCount: number;
   createdAt: string;
-  version: number;
   encrypted: boolean;
 }
 
 export interface RestorePreview {
   filePath: string;
-  format: BackupFormat;
+  source: 'backup_file';
+  format: 'jotbill';
   formatVersion: BackupFormatVersion;
-  source: BackupSource;
   checksum: string;
-  version: number;
   billCount: number;
   accountCount: number;
   categoryCount: number;
@@ -852,89 +859,64 @@ export interface RestorePreview {
   recordSummary: BackupRecordSummary;
   existingRecordSummary: BackupRecordSummary;
   duplicateCount: number;
+  // 原生根据恢复策略解析出的重复处理规则，不是预览调用的输入。
   duplicateRecordPolicy: DuplicateRecordPolicy;
 }
 
-export interface ImportResult {
+interface ImportResultBase {
   status: 'import_succeeded';
-  source: BackupSource;
-  format: BackupFormat | 'csv';
-  formatVersion?: BackupFormatVersion;
   imported: number;
   skipped: number;
   duplicates: number;
   replaced: number;
   failed: number;
   duplicateRecordPolicy: DuplicateRecordPolicy;
-  recordSummary?: BackupRecordSummary;
   errors: string[];
 }
 
-export interface RestoreResult extends Omit<ImportResult, 'status' | 'source' | 'format' | 'formatVersion'> {
-  status: 'restore_succeeded';
+export interface BackupImportResult extends ImportResultBase {
   source: 'backup_file';
-  format: BackupFormat;
+  format: 'jotbill';
   formatVersion: BackupFormatVersion;
-  strategy: RestoreStrategy;
-  rolledBack: false;
+  recordSummary?: BackupRecordSummary;
+  strategy?: RestoreStrategy;
 }
 
-export type BackupErrorCode =
-  | 'BACKUP_UNSUPPORTED_FORMAT'
-  | 'BACKUP_VALIDATION_FAILED'
-  | 'BACKUP_CANCELLED'
-  | 'BACKUP_TRANSACTION_FAILED'
-  | 'BACKUP_IO_ERROR'
-  | 'BACKUP_ENCRYPTION_ERROR';
+export interface CsvImportResult extends ImportResultBase {
+  source: 'csv_file';
+  format: 'csv';
+  formatVersion?: never;
+  recordSummary?: never;
+  strategy?: never;
+}
 
-export interface BackupError {
+/** 导入和恢复共用同一份直接返回 DTO，避免引入第二套恢复结果模型。 */
+export type ImportResult = BackupImportResult | CsvImportResult;
+
+/** 备份错误码以通用 NativeErrorCode 为唯一来源，避免重复维护两套枚举。 */
+export type BackupErrorCode = NativeErrorCode;
+
+export interface BackupError extends NativeError {
   code: BackupErrorCode;
-  message: string;
-  retryable: boolean;
+  status?: BackupFailureStatus;
 }
 
 export type BackupFailureStatus =
+  | 'not_implemented'
+  | 'backup_failed'
+  | 'restore_preview_failed'
+  | 'restore_failed'
+  | 'import_failed'
+  | 'export_failed'
+  | 'clear_data_failed'
   | 'unsupported_format'
   | 'validation_failed'
   | 'cancelled'
-  | 'transaction_failed';
-
-export interface BackupFailureResult {
-  ok: false;
-  status: BackupFailureStatus;
-  error: BackupError;
-}
-
-export interface BackupCreatedResult {
-  ok: true;
-  status: 'backup_succeeded';
-  data: BackupSummary;
-}
-
-export interface PreviewSuccessResult {
-  ok: true;
-  status: 'preview_succeeded';
-  data: RestorePreview;
-}
-
-export interface RestoreSuccessResult {
-  ok: true;
-  status: 'restore_succeeded';
-  data: RestoreResult;
-}
-
-export interface ImportSuccessResult {
-  ok: true;
-  status: 'import_succeeded';
-  data: ImportResult;
-}
-
-export type BackupOperationResult =
-  | BackupCreatedResult
-  | PreviewSuccessResult
-  | RestoreSuccessResult
-  | ImportSuccessResult
-  | BackupFailureResult;
+  | 'transaction_failed'
+  | 'io_error'
+  | 'encryption_error'
+  | 'permission_denied'
+  | 'database_error';
 
 export interface ExportDataResult {
   filePath: string;
@@ -1072,7 +1054,7 @@ export interface BackupModule {
   /** 仅检查备份文件并返回预览，不修改当前数据库，失败通过 BackupError reject。 */
   restoreBackup(filePath: string): Promise<RestorePreview>;
   /** 按覆盖或合并策略执行恢复，失败时原生事务必须回滚并通过 BackupError reject。 */
-  executeRestore(filePath: string, strategy: RestoreStrategy): Promise<RestoreResult>;
+  executeRestore(filePath: string, strategy: RestoreOptions['strategy']): Promise<ImportResult>;
   /** 保留阶段二的 CSV 导出调用。 */
   exportData(format: 'csv'): Promise<ExportDataResult>;
   /** 导入文件并返回明确的导入及重复记录计数，失败通过 BackupError reject。 */
