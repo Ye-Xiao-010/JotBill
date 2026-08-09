@@ -12,16 +12,19 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
+import { useQueryClient } from '@tanstack/react-query';
 import { AddCategoryModal } from '../../components/modals/AddCategoryModal';
 import { useToast, useStyles } from '../../hooks';
 import { useAlert } from '../../providers';
 import { nativeData, type Category } from '../../native';
+import { QUERY_KEYS } from '../../lib/queryClient';
 import { ThemeColors } from '../../theme/colors';
 import { spacing, borderRadius, borderWidth, shadow } from '../../theme';
 
 const CategoryManageScreen: React.FC = () => {
   const { showSuccess, showError } = useToast();
   const { confirm } = useAlert();
+  const queryClient = useQueryClient();
   const styles = useStyles(createStyles);
 
   const [categories, setCategories] = useState<Category[]>([]);
@@ -30,7 +33,7 @@ const CategoryManageScreen: React.FC = () => {
   const [showAddModal, setShowAddModal] = useState(false);
   const [selectedCategory, setSelectedCategory] = useState<Category | null>(null);
 
-  const fetchCategories = async () => {
+  const fetchCategories = useCallback(async () => {
     try {
       setLoading(true);
       setCategories(await nativeData.getCategories(selectedType));
@@ -39,13 +42,18 @@ const CategoryManageScreen: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [selectedType, showError]);
 
   useFocusEffect(
     useCallback(() => {
-      fetchCategories();
-    }, [selectedType])
+      void fetchCategories();
+    }, [fetchCategories]),
   );
+
+  const refreshCategoryQueries = useCallback(() => {
+    void queryClient.invalidateQueries({ queryKey: QUERY_KEYS.categories.all });
+    void fetchCategories();
+  }, [fetchCategories, queryClient]);
 
   const handleDeleteCategory = (category: Category) => {
     if (category.isDefault) {
@@ -60,7 +68,7 @@ const CategoryManageScreen: React.FC = () => {
         try {
           await nativeData.deleteCategory(category.id);
           showSuccess('分类删除成功');
-          fetchCategories();
+          refreshCategoryQueries();
         } catch (error: any) {
           showError(error.message || '删除失败');
         }
@@ -80,7 +88,7 @@ const CategoryManageScreen: React.FC = () => {
   };
 
   const handleAddSuccess = () => {
-    fetchCategories();
+    refreshCategoryQueries();
   };
 
   const defaultCategories = categories.filter(cat => cat.isDefault);

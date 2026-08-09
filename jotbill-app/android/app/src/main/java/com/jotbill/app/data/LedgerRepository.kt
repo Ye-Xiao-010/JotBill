@@ -2,11 +2,14 @@ package com.jotbill.app.data
 
 import androidx.room.withTransaction
 import com.jotbill.app.data.entity.AuditEntryEntity
+import com.jotbill.app.data.entity.BalanceCalibrationEntity
 import com.jotbill.app.data.entity.BillEntity
 import com.jotbill.app.data.entity.PendingTransactionEntity
+import org.json.JSONObject
+import java.util.UUID
 
 /**
- * Coordinates the first write path that must update both a bill and balances.
+ * 负责账单、账户余额及余额校准的本地事务。
  */
 class LedgerRepository(private val database: JotBillDatabase) {
     suspend fun createBillWithBalanceUpdate(bill: BillEntity) {
@@ -93,6 +96,94 @@ class LedgerRepository(private val database: JotBillDatabase) {
                     createdAt = now
                 )
             )
+        }
+    }
+
+    suspend fun calibrateAccountBalance(
+        accountId: String,
+        actualBalanceMinor: Long,
+        note: String?
+    ): BalanceCalibrationEntity {
+        val now = System.currentTimeMillis()
+        return database.withTransaction {
+            val account = requireNotNull(database.accountDao().getById(accountId)) {
+                "Account $accountId does not exist"
+            }
+            val diffMinor = try {
+                Math.subtractExact(actualBalanceMinor, account.currentBalanceMinor)
+            } catch (error: ArithmeticException) {
+                throw IllegalArgumentException("Balance calibration difference is out of range", error)
+            }
+            val calibration = BalanceCalibrationEntity(
+                id = UUID.randomUUID().toString(),
+                accountId = account.id,
+                beforeBalanceMinor = account.currentBalanceMinor,
+                afterBalanceMinor = actualBalanceMinor,
+                diffMinor = diffMinor,
+                note = note?.trim()?.takeIf { it.isNotEmpty() },
+                createdAt = now
+            )
+            val adjustmentBill = BillEntity(
+                id = calibration.id,
+                amountMinor = if (diffMinor < 0L) -diffMinor else diffMinor,
+                type = "adjustment",
+                occurredAt = now,
+                description = calibration.note ?: "余额校准",
+                categoryId = null,
+                accountId = account.id,
+                targetAccountId = null,
+                platform = null,
+                merchant = null,
+                productDescription = null,
+                sourceType = "manual",
+                originalTransactionId = null,
+                orderId = null,
+                createdAt = now,
+                updatedAt = now,
+                version = 1
+            )
+
+            database.billDao().insert(adjustmentBill)
+            database.accountDao().update(
+                account.copy(
+                    currentBalanceMinor = actualBalanceMinor,
+                    updatedAt = now
+                )
+            )
+            database.balanceCalibrationDao().insert(calibration)
+            database.auditEntryDao().insert(
+                AuditEntryEntity(
+                    id = "${calibration.id}:adjustment",
+                    entityType = "balance_calibration",
+                    entityId = calibration.id,
+                    action = "adjustment",
+                    fieldName = "current_balance_minor",
+                    oldValue = account.currentBalanceMinor.toString(),
+                    newValue = JSONObject().apply {
+                        put("accountId", account.id)
+                        put("beforeBalanceMinor", calibration.beforeBalanceMinor)
+                        put("afterBalanceMinor", calibration.afterBalanceMinor)
+                        put("diffMinor", calibration.diffMinor)
+                        put("adjustmentBillId", adjustmentBill.id)
+                    }.toString(),
+                    operator = "system",
+                    createdAt = now
+                )
+            )
+            database.auditEntryDao().insert(
+                AuditEntryEntity(
+                    id = "${adjustmentBill.id}:create",
+                    entityType = "bill",
+                    entityId = adjustmentBill.id,
+                    action = "create",
+                    fieldName = null,
+                    oldValue = null,
+                    newValue = adjustmentBill.amountMinor.toString(),
+                    operator = "system",
+                    createdAt = now
+                )
+            )
+            calibration
         }
     }
 

@@ -10,10 +10,16 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import { useNavigation } from '@react-navigation/native';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Check, ChevronLeft, CreditCard, Pencil, Plus, SlidersHorizontal } from 'lucide-react-native';
-import { nativeData, type Account, type AccountInput, type AccountUpdateInput } from '../../native';
+import {
+  nativeData,
+  type Account,
+  type AccountInput,
+  type AccountSubtype,
+  type AccountUpdateInput,
+} from '../../native';
 import { QUERY_KEYS } from '../../lib/queryClient';
 import { borderRadius, borderWidth, shadow, spacing } from '../../theme/spacing';
 import { ThemeColors } from '../../theme/colors';
@@ -22,7 +28,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 interface AccountOption {
   label: string;
-  subtype: string;
+  subtype: AccountSubtype;
   kind: Account['kind'];
 }
 
@@ -40,7 +46,17 @@ function formatMoney(amountMinor: number, kind: Account['kind']): string {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   });
+  if (amountMinor === 0) return '¥0.00';
   return kind === 'liability' || amountMinor < 0 ? `-¥${amount}` : `¥${amount}`;
+}
+
+function parseMinorInput(value: string): number | null {
+  const normalized = value.trim();
+  if (!normalized) return null;
+  const amount = Number(normalized);
+  if (!Number.isFinite(amount)) return null;
+  const minor = Math.round(amount * 100);
+  return Number.isSafeInteger(minor) ? minor : null;
 }
 
 export default function AccountsScreen() {
@@ -52,7 +68,7 @@ export default function AccountsScreen() {
   const [editingAccount, setEditingAccount] = useState<Account | null>(null);
   const [calibrationAccount, setCalibrationAccount] = useState<Account | null>(null);
   const [name, setName] = useState('');
-  const [subtype, setSubtype] = useState('cash');
+  const [subtype, setSubtype] = useState<AccountSubtype>('cash');
   const [initialBalance, setInitialBalance] = useState('');
   const [actualBalance, setActualBalance] = useState('');
   const [calibrationNote, setCalibrationNote] = useState('');
@@ -65,6 +81,8 @@ export default function AccountsScreen() {
     queryKey: QUERY_KEYS.accountsBalance,
     queryFn: () => nativeData.getNetWorth(),
   });
+  const refetchAccounts = accountsQuery.refetch;
+  const refetchNetWorth = netWorthQuery.refetch;
 
   const selectedOption = useMemo(
     () => ACCOUNT_OPTIONS.find((option) => option.subtype === subtype) ?? ACCOUNT_OPTIONS[0],
@@ -141,17 +159,24 @@ export default function AccountsScreen() {
       });
       return;
     }
-    const amount = Number(initialBalance || 0);
-    if (!Number.isFinite(amount)) {
+    const amountMinor = parseMinorInput(initialBalance || '0');
+    if (amountMinor === null) {
       Alert.alert('提示', '请输入有效的初始余额');
       return;
     }
+    if (selectedOption.kind === 'asset' && amountMinor < 0) {
+      Alert.alert('提示', '资产账户初始余额不能为负数');
+      return;
+    }
+    const normalizedInitialBalance = selectedOption.kind === 'liability'
+      ? -Math.abs(amountMinor)
+      : amountMinor;
     saveMutation.mutate({
       input: {
         name: name.trim(),
         subtype,
         kind: selectedOption.kind,
-        initialBalanceMinor: Math.round(amount * 100),
+        initialBalanceMinor: normalizedInitialBalance,
         currency: 'CNY',
       },
     });
@@ -166,23 +191,30 @@ export default function AccountsScreen() {
 
   const submitCalibration = () => {
     if (!calibrationAccount) return;
-    const amount = Number(actualBalance);
-    if (!Number.isFinite(amount)) {
+    const amountMinor = parseMinorInput(actualBalance);
+    if (amountMinor === null) {
       Alert.alert('提示', '请输入有效余额');
       return;
     }
     calibrationMutation.mutate({
       id: calibrationAccount.id,
-      amountMinor: Math.round(amount * 100),
+      amountMinor,
       note: calibrationNote.trim() || undefined,
     });
   };
 
   const onRefresh = useCallback(async () => {
-    await Promise.all([accountsQuery.refetch(), netWorthQuery.refetch()]);
-  }, [accountsQuery, netWorthQuery]);
+    await Promise.all([refetchAccounts(), refetchNetWorth()]);
+  }, [refetchAccounts, refetchNetWorth]);
 
   const accounts = accountsQuery.data ?? [];
+
+  useFocusEffect(
+    useCallback(() => {
+      void refetchAccounts();
+      void refetchNetWorth();
+    }, [refetchAccounts, refetchNetWorth]),
+  );
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
@@ -216,7 +248,7 @@ export default function AccountsScreen() {
           </Text>
           <View style={styles.summaryRow}>
             <Text style={styles.summaryMeta}>资产 {formatMoney(netWorthQuery.data?.totalAssetsMinor ?? 0, 'asset')}</Text>
-            <Text style={styles.summaryMeta}>负债 {formatMoney(netWorthQuery.data?.totalLiabilitiesMinor ?? 0, 'liability')}</Text>
+            <Text style={styles.summaryMeta}>负债 {formatMoney(netWorthQuery.data?.totalLiabilitiesMinor ?? 0, 'asset')}</Text>
           </View>
         </View>
 

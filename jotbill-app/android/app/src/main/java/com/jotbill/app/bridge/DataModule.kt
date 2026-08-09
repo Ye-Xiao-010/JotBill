@@ -10,8 +10,6 @@ import com.jotbill.app.data.JotBillDatabaseProvider
 import com.jotbill.app.data.LedgerRepository
 import com.jotbill.app.data.seed.DefaultDataInitializer
 import com.jotbill.app.data.entity.AccountEntity
-import com.jotbill.app.data.entity.AuditEntryEntity
-import com.jotbill.app.data.entity.BalanceCalibrationEntity
 import com.jotbill.app.data.entity.BillEntity
 import com.jotbill.app.data.entity.BudgetEntity
 import com.jotbill.app.data.entity.CategoryEntity
@@ -34,8 +32,7 @@ import java.time.ZoneId
 import java.util.UUID
 
 /**
- * Local-first data bridge. Methods resolve JSON strings so the JS wrapper can
- * keep one stable contract across Android bridge implementations.
+ * 本地优先的数据桥接层。方法使用 JSON 字符串作为边界，保持 JS 封装层的稳定契约。
  */
 class DataModule(
     private val reactContext: ReactApplicationContext
@@ -241,15 +238,17 @@ class DataModule(
         val input = parseJson(inputJson)
         val now = System.currentTimeMillis()
         val subtype = BridgeDtoMapper.requiredString(input, "subtype")
-        val initialBalance = input.optionalLong("initialBalanceMinor") ?: 0L
-        if (initialBalance < 0 && accountKind(subtype) == "asset") {
-            throw BridgeException("INVALID_ARGUMENT", "Asset initial balance must not be negative")
-        }
+        validateAccountSubtype(subtype)
+        val kind = resolveAccountKind(input, subtype)
+        val initialBalance = normalizeInitialBalance(
+            kind,
+            input.optionalMinor("initialBalanceMinor") ?: 0L
+        )
         val account = AccountEntity(
             id = UUID.randomUUID().toString(),
             name = BridgeDtoMapper.requiredString(input, "name"),
             subtype = subtype,
-            kind = input.optionalString("kind") ?: accountKind(subtype),
+            kind = kind,
             initialBalanceMinor = initialBalance,
             currentBalanceMinor = initialBalance,
             currency = input.optionalString("currency") ?: "CNY",
@@ -267,32 +266,54 @@ class DataModule(
 
     @ReactMethod
     fun updateAccount(id: String, inputJson: String, promise: Promise) = launch(promise) {
-        val existing = database.accountDao().getById(requireId(id, "account"))
-            ?: throw BridgeException("NOT_FOUND", "Account $id was not found")
+        val accountId = requireId(id, "account")
         val input = parseJson(inputJson)
-        val subtype = input.optionalString("subtype") ?: existing.subtype
-        val updated = existing.copy(
-            name = input.optionalString("name") ?: existing.name,
-            subtype = subtype,
-            kind = input.optionalString("kind") ?: accountKind(subtype),
-            currency = input.optionalString("currency") ?: existing.currency,
-            icon = input.updatedNullableString("icon", existing.icon),
-            color = input.updatedNullableString("color", existing.color),
-            sortOrder = input.optionalInt("sortOrder") ?: existing.sortOrder,
-            isActive = input.optionalBoolean("isActive") ?: existing.isActive,
-            updatedAt = System.currentTimeMillis()
-        )
-        database.accountDao().update(updated)
+        val updated = database.withTransaction {
+            val existing = database.accountDao().getById(accountId)
+                ?: throw BridgeException("NOT_FOUND", "Account $id was not found")
+            val subtype = input.optionalString("subtype") ?: existing.subtype
+            validateAccountSubtype(subtype)
+            val kind = resolveAccountKind(input, subtype)
+            if (kind != existing.kind) {
+                throw BridgeException(
+                    "INVALID_ARGUMENT",
+                    "Account kind cannot be changed after creation"
+                )
+            }
+            val updated = existing.copy(
+                name = input.optionalString("name") ?: existing.name,
+                subtype = subtype,
+                kind = kind,
+                currency = input.optionalString("currency") ?: existing.currency,
+                icon = input.updatedNullableString("icon", existing.icon),
+                color = input.updatedNullableString("color", existing.color),
+                sortOrder = input.optionalInt("sortOrder") ?: existing.sortOrder,
+                isActive = input.optionalBoolean("isActive") ?: existing.isActive,
+                updatedAt = System.currentTimeMillis()
+            )
+            database.accountDao().update(updated)
+            updated
+        }
         events.emit("onAccountChanged", BridgeDtoMapper.account(updated))
         BridgeDtoMapper.account(updated).toString()
     }
 
     @ReactMethod
     fun deleteAccount(id: String, promise: Promise) = launch(promise) {
-        val account = database.accountDao().getById(requireId(id, "account"))
-            ?: throw BridgeException("NOT_FOUND", "Account $id was not found")
-        database.accountDao().delete(account)
-        events.emit("onAccountChanged", JSONObject().put("id", account.id).put("deleted", true))
+        val accountId = requireId(id, "account")
+        val account = database.withTransaction {
+            val existing = database.accountDao().getById(accountId)
+                ?: throw BridgeException("NOT_FOUND", "Account $id was not found")
+            val deactivated = existing.copy(
+                isActive = false,
+                updatedAt = System.currentTimeMillis()
+            )
+            database.accountDao().update(deactivated)
+            deactivated
+        }
+        events.emit("onAccountChanged", BridgeDtoMapper.account(account).apply {
+            put("deactivated", true)
+        })
         null
     }
 
@@ -304,27 +325,16 @@ class DataModule(
         promise: Promise
     ) = launch(promise) {
         val accountId = requireId(id, "account")
-        val actual = actualBalanceMinor.toLong()
-        val now = System.currentTimeMillis()
-        val calibration = database.withTransaction {
-            val account = database.accountDao().getById(accountId)
-                ?: throw BridgeException("NOT_FOUND", "Account $id was not found")
-            val record = BalanceCalibrationEntity(
-                id = UUID.randomUUID().toString(),
-                accountId = account.id,
-                beforeBalanceMinor = account.currentBalanceMinor,
-                afterBalanceMinor = actual,
-                diffMinor = actual - account.currentBalanceMinor,
-                note = note,
-                createdAt = now
-            )
-            database.accountDao().update(
-                account.copy(currentBalanceMinor = actual, updatedAt = now)
-            )
-            database.balanceCalibrationDao().insert(record)
-            record
-        }
-        events.emit("onAccountChanged", JSONObject().put("id", accountId))
+        val existingAccount = database.accountDao().getById(accountId)
+            ?: throw BridgeException("NOT_FOUND", "Account $id was not found")
+        val actual = normalizeBalance(
+            existingAccount.kind,
+            requireMinorUnit(actualBalanceMinor, "actualBalanceMinor")
+        )
+        val calibration = repository.calibrateAccountBalance(accountId, actual, note)
+        val updatedAccount = database.accountDao().getById(accountId)
+            ?: throw BridgeException("NOT_FOUND", "Account $id was not found")
+        events.emit("onAccountChanged", BridgeDtoMapper.account(updatedAccount))
         BridgeDtoMapper.calibration(calibration).toString()
     }
 
@@ -388,6 +398,9 @@ class DataModule(
     fun updateCategory(id: String, inputJson: String, promise: Promise) = launch(promise) {
         val existing = database.categoryDao().getById(requireId(id, "category"))
             ?: throw BridgeException("NOT_FOUND", "Category $id was not found")
+        if (existing.isDefault) {
+            throw BridgeException("INVALID_ARGUMENT", "Default categories cannot be edited")
+        }
         val input = parseJson(inputJson)
         val type = input.optionalString("type") ?: existing.type
         validateCategoryType(type)
@@ -408,6 +421,9 @@ class DataModule(
     fun deleteCategory(id: String, promise: Promise) = launch(promise) {
         val category = database.categoryDao().getById(requireId(id, "category"))
             ?: throw BridgeException("NOT_FOUND", "Category $id was not found")
+        if (category.isDefault) {
+            throw BridgeException("INVALID_ARGUMENT", "Default categories cannot be deleted")
+        }
         database.categoryDao().delete(category)
         events.emit("onCategoryChanged", JSONObject().put("id", category.id).put("deleted", true))
         null
@@ -816,6 +832,45 @@ class DataModule(
         return normalized
     }
 
+    private fun validateAccountSubtype(subtype: String) {
+        if (subtype !in setOf("cash", "e_wallet", "bank_debit", "credit_card", "consumer_loan", "other")) {
+            throw BridgeException("INVALID_ARGUMENT", "Unsupported account subtype: $subtype")
+        }
+    }
+
+    private fun resolveAccountKind(input: JSONObject, subtype: String): String {
+        val derivedKind = accountKind(subtype)
+        val requestedKind = input.optionalString("kind")
+        if (requestedKind != null && requestedKind != derivedKind) {
+            throw BridgeException("INVALID_ARGUMENT", "Account kind must match subtype")
+        }
+        return derivedKind
+    }
+
+    private fun normalizeInitialBalance(kind: String, balanceMinor: Long): Long {
+        if (kind == "asset" && balanceMinor < 0L) {
+            throw BridgeException("INVALID_ARGUMENT", "Asset initial balance must not be negative")
+        }
+        return normalizeBalance(kind, balanceMinor)
+    }
+
+    private fun normalizeBalance(kind: String, balanceMinor: Long): Long {
+        return if (kind == "liability" && balanceMinor > 0L) -balanceMinor else balanceMinor
+    }
+
+    private fun requireMinorUnit(value: Double, field: String): Long {
+        if (
+            value.isNaN() ||
+            value.isInfinite() ||
+            value % 1.0 != 0.0 ||
+            value > MAX_SAFE_MINOR_UNIT.toDouble() ||
+            value < -MAX_SAFE_MINOR_UNIT.toDouble()
+        ) {
+            throw BridgeException("INVALID_ARGUMENT", "Field $field must be a safe integer minor unit")
+        }
+        return value.toLong()
+    }
+
     private fun accountKind(subtype: String): String = when (subtype) {
         "credit_card", "consumer_loan" -> "liability"
         else -> "asset"
@@ -868,6 +923,8 @@ class DataModule(
     }
 }
 
+private const val MAX_SAFE_MINOR_UNIT = 9_007_199_254_740_991L
+
 internal fun dataErrorCode(message: String?): String {
     return if (
         message?.contains("UNIQUE", ignoreCase = true) == true ||
@@ -893,6 +950,36 @@ private fun JSONObject.optionalLong(key: String): Long? {
     } catch (error: Exception) {
         throw BridgeException("INVALID_ARGUMENT", "Field $key must be an integer", error)
     }
+}
+
+private fun JSONObject.optionalMinor(key: String): Long? {
+    if (!hasValue(key)) return null
+    val value = get(key)
+    return when (value) {
+        is Byte, is Short, is Int -> (value as Number).toLong()
+        is Long -> {
+            if (value !in -MAX_SAFE_MINOR_UNIT..MAX_SAFE_MINOR_UNIT) {
+                throw BridgeException("INVALID_ARGUMENT", "Field $key must be a safe integer minor unit")
+            }
+            value
+        }
+        is Float -> requireMinorUnitValue(value.toDouble(), key)
+        is Double -> requireMinorUnitValue(value, key)
+        else -> throw BridgeException("INVALID_ARGUMENT", "Field $key must be an integer minor unit")
+    }
+}
+
+private fun requireMinorUnitValue(value: Double, field: String): Long {
+    if (
+        value.isNaN() ||
+        value.isInfinite() ||
+        value % 1.0 != 0.0 ||
+        value > MAX_SAFE_MINOR_UNIT.toDouble() ||
+        value < -MAX_SAFE_MINOR_UNIT.toDouble()
+    ) {
+        throw BridgeException("INVALID_ARGUMENT", "Field $field must be a safe integer minor unit")
+    }
+    return value.toLong()
 }
 
 private fun JSONObject.optionalInt(key: String): Int? = optionalLong(key)?.toInt()

@@ -84,10 +84,18 @@ export interface PaginatedResponse<T> {
   hasMore: boolean;
 }
 
+export type AccountSubtype =
+  | 'cash'
+  | 'e_wallet'
+  | 'bank_debit'
+  | 'credit_card'
+  | 'consumer_loan'
+  | 'other';
+
 export interface Account {
   id: string;
   name: string;
-  subtype: string;
+  subtype: AccountSubtype;
   kind: 'asset' | 'liability';
   initialBalanceMinor: number;
   currentBalanceMinor: number;
@@ -102,7 +110,7 @@ export interface Account {
 
 export interface AccountInput {
   name: string;
-  subtype: string;
+  subtype: AccountSubtype;
   kind?: Account['kind'];
   initialBalanceMinor?: number;
   currency?: string;
@@ -305,7 +313,7 @@ interface RawDataModule {
   calibrateAccountBalance(id: string, actualBalanceMinor: number, note?: string | null): Promise<string>;
   getNetWorth(): Promise<string>;
   getBalanceCalibrations(accountId: string): Promise<string>;
-  getCategories(type?: string | null): Promise<string>;
+  getCategories(type?: Category['type'] | null): Promise<string>;
   addCategory(inputJson: string): Promise<string>;
   updateCategory(id: string, inputJson: string): Promise<string>;
   deleteCategory(id: string): Promise<null>;
@@ -350,6 +358,13 @@ function parseJson<T>(value: string, operation: string): T {
   }
 }
 
+function assertMinorUnit(value: number, field: string): number {
+  if (!Number.isSafeInteger(value)) {
+    throw new Error(`${field} must be a safe integer minor unit`);
+  }
+  return value;
+}
+
 export const nativeData = {
   async getBills(filter: BillFilter = {}): Promise<PaginatedResponse<Bill>> {
     return parseJson(await getRawDataModule().getBills(JSON.stringify(filter)), 'getBills');
@@ -387,7 +402,16 @@ export const nativeData = {
   },
 
   async addAccount(input: AccountInput): Promise<Account> {
-    return parseJson(await getRawDataModule().addAccount(JSON.stringify(input)), 'addAccount');
+    const normalizedInput = input.initialBalanceMinor === undefined
+      ? input
+      : {
+          ...input,
+          initialBalanceMinor: assertMinorUnit(input.initialBalanceMinor, 'initialBalanceMinor'),
+        };
+    return parseJson(
+      await getRawDataModule().addAccount(JSON.stringify(normalizedInput)),
+      'addAccount',
+    );
   },
 
   async updateAccount(id: string, input: AccountUpdateInput): Promise<Account> {
@@ -406,8 +430,9 @@ export const nativeData = {
     actualBalanceMinor: number,
     note?: string,
   ): Promise<BalanceCalibration> {
+    const actual = assertMinorUnit(actualBalanceMinor, 'actualBalanceMinor');
     return parseJson(
-      await getRawDataModule().calibrateAccountBalance(id, actualBalanceMinor, note ?? null),
+      await getRawDataModule().calibrateAccountBalance(id, actual, note ?? null),
       'calibrateAccountBalance',
     );
   },
