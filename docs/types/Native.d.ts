@@ -47,6 +47,12 @@ export type NativeErrorCode =
   | 'EXPORT_CANCELLED'      // 用户取消导出
   | 'EXPORT_ERROR'          // 导出失败
   | 'CLEAR_DATA_ERROR'      // 清除本地数据失败
+  | 'BACKUP_UNSUPPORTED_FORMAT' // 备份格式或格式版本不支持
+  | 'BACKUP_VALIDATION_FAILED' // 备份文件校验失败
+  | 'BACKUP_CANCELLED'      // 用户取消备份或恢复
+  | 'BACKUP_TRANSACTION_FAILED' // 恢复事务失败并回滚
+  | 'BACKUP_IO_ERROR'       // 备份文件读写失败
+  | 'BACKUP_ENCRYPTION_ERROR' // 备份加密或解密失败
   | 'AI_TIMEOUT'          // AI 识别超时
   | 'AI_AUTH'             // API Key 无效或模型下线
   | 'AI_PARSE'            // AI 返回格式无法解析
@@ -774,9 +780,53 @@ export interface RuntimeHealth {
 // 第十一部分:备份与导入(对应设计文档 FR-100~FR-105)
 // ============================================================================
 
+export type BackupFormat = 'jotbill';
+export type BackupSource = 'local_database' | 'backup_file' | 'csv_file';
+export type RestoreStrategy = 'overwrite' | 'merge';
+export type DuplicateRecordPolicy = 'skip' | 'replace' | 'fail';
+
+/**
+ * 备份文件格式版本。版本变化必须经过兼容性检查，不能用数据库版本代替。
+ */
+export type BackupFormatVersion = number;
+
+/**
+ * 备份中包含的记录数量摘要，不包含记录内容或任何凭据。
+ */
+export interface BackupRecordSummary {
+  billCount: number;
+  accountCount: number;
+  categoryCount: number;
+  budgetCount: number;
+  financialGoalCount: number;
+  ruleCount: number;
+  balanceCalibrationCount: number;
+  auditLogCount: number;
+  appConfigCount: number;
+  totalCount: number;
+}
+
+export interface CreateBackupOptions {
+  encrypt?: boolean;
+}
+
+/**
+ * 恢复策略及重复记录处理规则。原生实现可按策略提供默认重复规则。
+ */
+export interface RestoreOptions {
+  strategy: RestoreStrategy;
+  duplicateRecordPolicy?: DuplicateRecordPolicy;
+}
+
 export interface BackupSummary {
   filePath: string;
   fileSize: number;
+  format: BackupFormat;
+  formatVersion: BackupFormatVersion;
+  source: BackupSource;
+  checksum: string;
+  recordSummary: BackupRecordSummary;
+  // 以下扁平字段保留旧契约兼容，权威计数以 recordSummary 为准。
   billCount: number;
   accountCount: number;
   categoryCount: number;
@@ -787,6 +837,11 @@ export interface BackupSummary {
 }
 
 export interface RestorePreview {
+  filePath: string;
+  format: BackupFormat;
+  formatVersion: BackupFormatVersion;
+  source: BackupSource;
+  checksum: string;
   version: number;
   billCount: number;
   accountCount: number;
@@ -794,14 +849,100 @@ export interface RestorePreview {
   ruleCount: number;
   backupCreatedAt: string;
   compatible: boolean;
+  recordSummary: BackupRecordSummary;
+  existingRecordSummary: BackupRecordSummary;
+  duplicateCount: number;
+  duplicateRecordPolicy: DuplicateRecordPolicy;
 }
 
 export interface ImportResult {
+  status: 'import_succeeded';
+  source: BackupSource;
+  format: BackupFormat | 'csv';
+  formatVersion?: BackupFormatVersion;
   imported: number;
   skipped: number;
   duplicates: number;
+  replaced: number;
+  failed: number;
+  duplicateRecordPolicy: DuplicateRecordPolicy;
+  recordSummary?: BackupRecordSummary;
   errors: string[];
 }
+
+export interface RestoreResult extends Omit<ImportResult, 'status' | 'source' | 'format' | 'formatVersion'> {
+  status: 'restore_succeeded';
+  source: 'backup_file';
+  format: BackupFormat;
+  formatVersion: BackupFormatVersion;
+  strategy: RestoreStrategy;
+  rolledBack: false;
+}
+
+export type BackupErrorCode =
+  | 'BACKUP_UNSUPPORTED_FORMAT'
+  | 'BACKUP_VALIDATION_FAILED'
+  | 'BACKUP_CANCELLED'
+  | 'BACKUP_TRANSACTION_FAILED'
+  | 'BACKUP_IO_ERROR'
+  | 'BACKUP_ENCRYPTION_ERROR';
+
+export interface BackupError {
+  code: BackupErrorCode;
+  message: string;
+  retryable: boolean;
+}
+
+export type BackupFailureStatus =
+  | 'unsupported_format'
+  | 'validation_failed'
+  | 'cancelled'
+  | 'transaction_failed';
+
+export interface BackupFailureResult {
+  ok: false;
+  status: BackupFailureStatus;
+  error: BackupError;
+}
+
+export interface BackupCreatedResult {
+  ok: true;
+  status: 'backup_succeeded';
+  data: BackupSummary;
+}
+
+export interface PreviewSuccessResult {
+  ok: true;
+  status: 'preview_succeeded';
+  data: RestorePreview;
+}
+
+export interface RestoreSuccessResult {
+  ok: true;
+  status: 'restore_succeeded';
+  data: RestoreResult;
+}
+
+export interface ImportSuccessResult {
+  ok: true;
+  status: 'import_succeeded';
+  data: ImportResult;
+}
+
+export type BackupOperationResult =
+  | BackupCreatedResult
+  | PreviewSuccessResult
+  | RestoreSuccessResult
+  | ImportSuccessResult
+  | BackupFailureResult;
+
+export interface ExportDataResult {
+  filePath: string;
+  format?: 'csv';
+}
+
+/** 旧包装器导出的名称，保留给现有调用方使用。 */
+export type ExportResult = ExportDataResult;
 
 // ============================================================================
 // 第十二部分:Native Module 接口(对应设计文档第16节)
@@ -926,8 +1067,16 @@ export interface OverlayModule {
  * 备份与导入接口
  */
 export interface BackupModule {
-  // 阶段二只开放 CSV 导出和清除本地数据，完整备份恢复在后续阶段实现。
-  exportData(format: 'csv'): Promise<{ filePath: string }>;
+  /** 创建带格式版本、来源、校验值和记录摘要的本地备份，失败通过 BackupError reject。 */
+  createBackup(options?: CreateBackupOptions): Promise<BackupSummary>;
+  /** 仅检查备份文件并返回预览，不修改当前数据库，失败通过 BackupError reject。 */
+  restoreBackup(filePath: string): Promise<RestorePreview>;
+  /** 按覆盖或合并策略执行恢复，失败时原生事务必须回滚并通过 BackupError reject。 */
+  executeRestore(filePath: string, strategy: RestoreStrategy): Promise<RestoreResult>;
+  /** 保留阶段二的 CSV 导出调用。 */
+  exportData(format: 'csv'): Promise<ExportDataResult>;
+  /** 导入文件并返回明确的导入及重复记录计数，失败通过 BackupError reject。 */
+  importData(filePath: string): Promise<ImportResult>;
   clearData(): Promise<void>;
 }
 
