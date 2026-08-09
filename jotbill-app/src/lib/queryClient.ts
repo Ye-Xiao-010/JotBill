@@ -133,6 +133,8 @@ export const invalidateCache = {
     queryClient.invalidateQueries({ queryKey: ['monthly-grid'] });
     queryClient.invalidateQueries({ queryKey: ['yearly-grid'] });
     queryClient.invalidateQueries({ queryKey: ['asset-trend'] });
+    queryClient.invalidateQueries({ queryKey: ['total-assets'] });
+    queryClient.invalidateQueries({ queryKey: ['net-worth'] });
     queryClient.invalidateQueries({ queryKey: ['accounts'] });
   },
 

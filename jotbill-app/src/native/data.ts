@@ -375,11 +375,27 @@ export const nativeData = {
   },
 
   async addBill(input: BillInput): Promise<Bill> {
-    return parseJson(await getRawDataModule().addBill(JSON.stringify(input)), 'addBill');
+    const normalizedInput = {
+      ...input,
+      amountMinor: assertMinorUnit(input.amountMinor, 'amountMinor'),
+    };
+    return parseJson(
+      await getRawDataModule().addBill(JSON.stringify(normalizedInput)),
+      'addBill',
+    );
   },
 
   async updateBill(id: string, input: BillUpdateInput): Promise<Bill> {
-    return parseJson(await getRawDataModule().updateBill(id, JSON.stringify(input)), 'updateBill');
+    const normalizedInput = input.amountMinor === undefined
+      ? input
+      : {
+          ...input,
+          amountMinor: assertMinorUnit(input.amountMinor, 'amountMinor'),
+        };
+    return parseJson(
+      await getRawDataModule().updateBill(id, JSON.stringify(normalizedInput)),
+      'updateBill',
+    );
   },
 
   async deleteBill(id: string): Promise<void> {

@@ -26,7 +26,7 @@ class LedgerRepository(private val database: JotBillDatabase) {
                     action = "create",
                     fieldName = null,
                     oldValue = null,
-                    newValue = bill.amountMinor.toString(),
+                    newValue = billAuditValue(bill),
                     operator = "system",
                     createdAt = now
                 )
@@ -34,15 +34,47 @@ class LedgerRepository(private val database: JotBillDatabase) {
         }
     }
 
-    suspend fun updateBillWithBalanceUpdate(existing: BillEntity, updated: BillEntity) {
-        require(existing.type != "adjustment" && updated.type != "adjustment") {
-            "Adjustment bills are immutable"
+    suspend fun updateBillWithBalanceUpdate(existing: BillEntity, updated: BillEntity): Boolean {
+        require(existing.id == updated.id) {
+            "Bill ids must match for update"
+        }
+        requireMutableBill(existing)
+        requireMutableBill(updated)
+        require(updated.version == existing.version + 1) {
+            "Bill version must increase by one"
         }
         val now = System.currentTimeMillis()
-        database.withTransaction {
-            applyBalanceDelta(existing, multiplier = -1L, updatedAt = now)
+        return database.withTransaction {
+            val current = database.billDao().getById(existing.id)
+                ?: return@withTransaction false
+            requireMutableBill(current)
+            if (current.version != existing.version) {
+                return@withTransaction false
+            }
+            val updatedRows = database.billDao().updateIfVersion(
+                id = updated.id,
+                expectedVersion = current.version,
+                amountMinor = updated.amountMinor,
+                type = updated.type,
+                occurredAt = updated.occurredAt,
+                description = updated.description,
+                categoryId = updated.categoryId,
+                accountId = updated.accountId,
+                targetAccountId = updated.targetAccountId,
+                platform = updated.platform,
+                merchant = updated.merchant,
+                productDescription = updated.productDescription,
+                sourceType = updated.sourceType,
+                originalTransactionId = updated.originalTransactionId,
+                orderId = updated.orderId,
+                updatedAt = updated.updatedAt,
+                newVersion = updated.version
+            )
+            if (updatedRows != 1) {
+                return@withTransaction false
+            }
+            applyBalanceDelta(current, multiplier = -1L, updatedAt = now)
             applyBalanceDelta(updated, multiplier = 1L, updatedAt = now)
-            database.billDao().update(updated)
             database.auditEntryDao().insert(
                 AuditEntryEntity(
                     id = "${updated.id}:update:${updated.version}",
@@ -50,36 +82,41 @@ class LedgerRepository(private val database: JotBillDatabase) {
                     entityId = updated.id,
                     action = "update",
                     fieldName = null,
-                    oldValue = existing.amountMinor.toString(),
-                    newValue = updated.amountMinor.toString(),
+                    oldValue = billAuditValue(current),
+                    newValue = billAuditValue(updated),
                     operator = "system",
                     createdAt = now
                 )
             )
+            true
         }
     }
 
-    suspend fun deleteBillWithBalanceUpdate(bill: BillEntity) {
-        require(bill.type != "adjustment") {
-            "Adjustment bills are immutable"
-        }
+    suspend fun deleteBillWithBalanceUpdate(bill: BillEntity): Boolean {
+        requireMutableBill(bill)
         val now = System.currentTimeMillis()
-        database.withTransaction {
-            applyBalanceDelta(bill, multiplier = -1L, updatedAt = now)
-            database.billDao().delete(bill)
+        return database.withTransaction {
+            val current = database.billDao().getById(bill.id)
+                ?: return@withTransaction false
+            requireMutableBill(current)
+            if (database.billDao().deleteById(current.id) != 1) {
+                return@withTransaction false
+            }
+            applyBalanceDelta(current, multiplier = -1L, updatedAt = now)
             database.auditEntryDao().insert(
                 AuditEntryEntity(
-                    id = "${bill.id}:delete",
+                    id = "${current.id}:delete",
                     entityType = "bill",
-                    entityId = bill.id,
+                    entityId = current.id,
                     action = "delete",
                     fieldName = null,
-                    oldValue = bill.amountMinor.toString(),
+                    oldValue = billAuditValue(current),
                     newValue = null,
                     operator = "system",
                     createdAt = now
                 )
             )
+            true
         }
     }
 
@@ -97,7 +134,7 @@ class LedgerRepository(private val database: JotBillDatabase) {
                     action = "create",
                     fieldName = null,
                     oldValue = null,
-                    newValue = bill.amountMinor.toString(),
+                    newValue = billAuditValue(bill),
                     operator = "system",
                     createdAt = now
                 )
@@ -218,6 +255,36 @@ class LedgerRepository(private val database: JotBillDatabase) {
                 )
             }
         }
+    }
+
+    private fun requireMutableBill(bill: BillEntity) {
+        require(bill.type != "adjustment") {
+            "Adjustment bills are immutable"
+        }
+    }
+
+    private fun billAuditValue(bill: BillEntity): String = JSONObject().apply {
+        put("id", bill.id)
+        put("amountMinor", bill.amountMinor)
+        put("type", bill.type)
+        put("occurredAt", bill.occurredAt)
+        putNullable("description", bill.description)
+        putNullable("categoryId", bill.categoryId)
+        putNullable("accountId", bill.accountId)
+        putNullable("targetAccountId", bill.targetAccountId)
+        putNullable("platform", bill.platform)
+        putNullable("merchant", bill.merchant)
+        putNullable("productDescription", bill.productDescription)
+        put("sourceType", bill.sourceType)
+        putNullable("originalTransactionId", bill.originalTransactionId)
+        putNullable("orderId", bill.orderId)
+        put("createdAt", bill.createdAt)
+        put("updatedAt", bill.updatedAt)
+        put("version", bill.version)
+    }.toString()
+
+    private fun JSONObject.putNullable(key: String, value: String?) {
+        put(key, value ?: JSONObject.NULL)
     }
 }
 

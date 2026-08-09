@@ -175,7 +175,12 @@ class DataModule(
         if (updated.amountMinor < 0) {
             throw BridgeException("INVALID_ARGUMENT", "amountMinor must not be negative")
         }
-        repository.updateBillWithBalanceUpdate(existing, updated)
+        if (!repository.updateBillWithBalanceUpdate(existing, updated)) {
+            if (database.billDao().getById(existing.id) == null) {
+                throw BridgeException("NOT_FOUND", "Bill $id was not found")
+            }
+            throw BridgeException("VERSION_CONFLICT", "Bill $id has changed; refresh before updating")
+        }
         events.emit("onBillUpdated", BridgeDtoMapper.bill(updated))
         BridgeDtoMapper.bill(updated).toString()
     }
@@ -187,7 +192,9 @@ class DataModule(
         if (bill.type == "adjustment") {
             throw BridgeException("ADJUSTMENT_IMMUTABLE", "Adjustment bills cannot be deleted")
         }
-        repository.deleteBillWithBalanceUpdate(bill)
+        if (!repository.deleteBillWithBalanceUpdate(bill)) {
+            throw BridgeException("NOT_FOUND", "Bill $id was not found")
+        }
         events.emit("onBillDeleted", JSONObject().put("id", bill.id))
         null
     }
@@ -428,12 +435,18 @@ class DataModule(
 
     @ReactMethod
     fun deleteCategory(id: String, promise: Promise) = launch(promise) {
-        val category = database.categoryDao().getById(requireId(id, "category"))
-            ?: throw BridgeException("NOT_FOUND", "Category $id was not found")
-        if (category.isDefault) {
-            throw BridgeException("INVALID_ARGUMENT", "Default categories cannot be deleted")
+        val category = database.withTransaction {
+            val existing = database.categoryDao().getById(requireId(id, "category"))
+                ?: throw BridgeException("NOT_FOUND", "Category $id was not found")
+            if (existing.isDefault) {
+                throw BridgeException("INVALID_ARGUMENT", "Default categories cannot be deleted")
+            }
+            if (database.billDao().countByCategoryId(existing.id) > 0) {
+                throw BridgeException("DATA_CONFLICT", "Category $id is referenced by bills")
+            }
+            database.categoryDao().delete(existing)
+            existing
         }
-        database.categoryDao().delete(category)
         events.emit("onCategoryChanged", JSONObject().put("id", category.id).put("deleted", true))
         null
     }
