@@ -8,6 +8,8 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 import com.jotbill.app.data.JotBillDatabase
 import org.json.JSONArray
 import org.json.JSONObject
+import java.net.URI
+import java.net.URLDecoder
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 import java.time.Instant
@@ -39,6 +41,7 @@ internal class BackupManager(
         val counts: RecordCounts,
         val aiProviderConfigsIncluded: Boolean,
         val aiCostRecordsIncluded: Boolean,
+        val aiProviderApiBaseUrlSkippedCount: Int,
     )
 
     internal data class RecordCounts(
@@ -114,6 +117,12 @@ internal class BackupManager(
     private data class Snapshot(
         val data: JSONObject,
         val counts: RecordCounts,
+        val aiProviderApiBaseUrlSkippedCount: Int,
+    )
+
+    private data class RestoreMutationResult(
+        val duplicateCount: Int,
+        val retainedProviderCount: Int,
     )
 
     /** 在数据库事务中读取一致的快照，避免摘要和记录来自不同时间点。 */
@@ -136,7 +145,8 @@ internal class BackupManager(
                 "ai",
                 JSONObject()
                     .put("providerConfigCount", snapshot.counts.aiProviderConfigCount)
-                    .put("costRecordCount", snapshot.counts.aiCostRecordCount),
+                    .put("costRecordCount", snapshot.counts.aiCostRecordCount)
+                    .put("apiBaseUrlSkippedCount", snapshot.aiProviderApiBaseUrlSkippedCount),
             )
         }
         val checksum = sha256(canonicalJson(root).toByteArray(StandardCharsets.UTF_8))
@@ -212,6 +222,10 @@ internal class BackupManager(
                 put("existingRecordSummary", existing.toJson())
                 put("duplicateCount", duplicateCount)
                 put("duplicateRecordPolicy", DUPLICATE_REPLACE)
+                put(
+                    "skippedFields",
+                    JSONObject().put("aiProviderApiBaseUrl", parsed.aiProviderApiBaseUrlSkippedCount),
+                )
             }
         }
 
@@ -223,13 +237,13 @@ internal class BackupManager(
             throw BackupException("INVALID_ARGUMENT", "不支持的恢复策略")
         }
 
-        val duplicateCount = try {
+        val mutation = try {
             database.withTransaction {
                 val sqlite = database.openHelper.writableDatabase
                 val duplicates = countDuplicates(sqlite, parsed)
-                deleteRestorableData(sqlite, parsed)
-                insertRestorableData(sqlite, parsed)
-                duplicates
+                deleteRestorableData(sqlite)
+                val retainedProviderCount = insertRestorableData(sqlite, parsed)
+                RestoreMutationResult(duplicates, retainedProviderCount)
             }
         } catch (error: BackupException) {
             throw error
@@ -240,14 +254,20 @@ internal class BackupManager(
         val skipped = (if (parsed.aiProviderConfigsIncluded) 0 else parsed.counts.aiProviderConfigCount) +
             (if (parsed.aiCostRecordsIncluded) 0 else parsed.counts.aiCostRecordCount)
         val warnings = JSONArray()
-        if (parsed.counts.aiProviderConfigCount > 0) {
+        if (parsed.aiProviderConfigsIncluded && parsed.counts.aiProviderConfigCount > 0) {
             warnings.put("AI Provider 的非敏感配置字段已恢复；API Key、密钥和凭据未写入备份，也不会由恢复生成")
         }
-        if (!parsed.aiProviderConfigsIncluded && parsed.counts.aiProviderConfigCount > 0) {
-            warnings.put("旧版备份缺少 AI Provider 配置记录，本次跳过这些记录")
+        if (!parsed.aiProviderConfigsIncluded) {
+            warnings.put("备份未包含 AI Provider 配置数组，本类按跳过处理并保留当前配置")
         }
-        if (!parsed.aiCostRecordsIncluded && parsed.counts.aiCostRecordCount > 0) {
-            warnings.put("旧版备份缺少 AI 成本记录，本次跳过这些记录")
+        if (!parsed.aiCostRecordsIncluded) {
+            warnings.put("备份未包含 AI 成本记录数组，本类按跳过处理并保留当前记录")
+        }
+        if (parsed.aiProviderApiBaseUrlSkippedCount > 0) {
+            warnings.put("${parsed.aiProviderApiBaseUrlSkippedCount} 个不安全的 AI Provider 地址字段已省略")
+        }
+        if (mutation.retainedProviderCount > 0) {
+            warnings.put("${mutation.retainedProviderCount} 个仍被聊天会话引用的旧 AI Provider 配置已保留")
         }
         return JSONObject().apply {
             put("status", "import_succeeded")
@@ -256,13 +276,17 @@ internal class BackupManager(
             put("formatVersion", parsed.formatVersion)
             put("imported", parsed.counts.restorableCount - skipped)
             put("skipped", skipped)
-            put("duplicates", duplicateCount)
-            put("replaced", duplicateCount)
+            put("duplicates", mutation.duplicateCount)
+            put("replaced", mutation.duplicateCount)
             put("failed", 0)
             put("duplicateRecordPolicy", DUPLICATE_REPLACE)
             put("errors", warnings)
             put("recordSummary", parsed.recordSummary)
             put("strategy", STRATEGY_OVERWRITE)
+            put(
+                "skippedFields",
+                JSONObject().put("aiProviderApiBaseUrl", parsed.aiProviderApiBaseUrlSkippedCount),
+            )
         }
     }
 
@@ -304,6 +328,14 @@ internal class BackupManager(
         val ai = requiredObject(root, "ai")
         val aiProviderConfigCount = requiredNonNegativeInt(ai, "providerConfigCount")
         val aiCostRecordCount = requiredNonNegativeInt(ai, "costRecordCount")
+        val aiProviderApiBaseUrlSkippedCount = if (ai.has("apiBaseUrlSkippedCount")) {
+            requiredNonNegativeInt(ai, "apiBaseUrlSkippedCount")
+        } else {
+            0
+        }
+        if (aiProviderApiBaseUrlSkippedCount > aiProviderConfigCount) {
+            throw BackupException("BACKUP_VALIDATION_FAILED", "AI Provider 地址跳过数量不合法")
+        }
         val data = requiredObject(root, "data")
         val recordSummary = requiredObject(root, "recordSummary")
         val arrays = requiredArrays(data, aiProviderConfigCount, aiCostRecordCount)
@@ -332,6 +364,7 @@ internal class BackupManager(
             counts = counts,
             aiProviderConfigsIncluded = arrays.aiProviderConfigsIncluded,
             aiCostRecordsIncluded = arrays.aiCostRecordsIncluded,
+            aiProviderApiBaseUrlSkippedCount = aiProviderApiBaseUrlSkippedCount,
         )
     }
 
@@ -381,9 +414,9 @@ internal class BackupManager(
     }
 
     private fun optionalArray(parent: JSONObject, key: String, expectedCount: Int): OptionalBackupArray {
-        if (!parent.has(key) || parent.isNull(key)) {
-            // 接受早期 v1 文件的旧形状，但执行恢复时会如实报告缺失的 AI 记录。
-            return OptionalBackupArray(JSONArray(), included = expectedCount == 0)
+        if (!parent.has(key)) {
+            // 缺失字段表示旧版备份未覆盖该类数据，不能按空数组删除当前记录。
+            return OptionalBackupArray(JSONArray(), included = false)
         }
         val value = parent.opt(key)
         if (value !is JSONArray || value.length() != expectedCount) {
@@ -622,7 +655,10 @@ internal class BackupManager(
             }
             validateText(row, "id")
             validateText(row, "name")
-            validateText(row, "provider")
+            val provider = requiredString(row, "provider")
+            if (provider !in AI_PROVIDERS) {
+                throw BackupException("BACKUP_VALIDATION_FAILED", "AI Provider 类型不受支持")
+            }
             validateText(row, "model")
             val apiBaseUrl = optionalString(row, "apiBaseUrl")
             if (apiBaseUrl != null) {
@@ -644,9 +680,15 @@ internal class BackupManager(
         }
         forEachObject(rows) { row ->
             validateText(row, "id")
-            validateText(row, "provider")
+            val provider = requiredString(row, "provider")
+            if (provider !in AI_PROVIDERS) {
+                throw BackupException("BACKUP_VALIDATION_FAILED", "AI 成本记录的 Provider 类型不受支持")
+            }
             validateText(row, "model")
-            validateText(row, "requestType")
+            val requestType = requiredString(row, "requestType")
+            if (requestType !in AI_REQUEST_TYPES) {
+                throw BackupException("BACKUP_VALIDATION_FAILED", "AI 请求类型不受支持")
+            }
             optionalInt(row, "tokensIn")?.let { tokens ->
                 if (tokens < 0) throw BackupException("BACKUP_VALIDATION_FAILED", "AI 输入 Token 数不能为负")
             }
@@ -656,23 +698,44 @@ internal class BackupManager(
             validateMinor(requiredLong(row, "costMinor"), allowNegative = false)
             requiredBoolean(row, "success")
             validateTimestamp(row, "createdAt")
-            validateText(row, "month")
+            val month = requiredString(row, "month")
+            if (!MONTH_PATTERN.matches(month)) {
+                throw BackupException("BACKUP_VALIDATION_FAILED", "AI 成本记录月份格式无效")
+            }
         }
     }
 
     private fun safeApiBaseUrl(value: String?): String? {
         val normalized = value?.trim()?.takeIf { it.isNotEmpty() } ?: return null
-        val lower = normalized.lowercase(Locale.US)
-        val containsCredentialMarker = lower.contains("apikey") ||
-            lower.contains("api_key") ||
-            lower.contains("access_token") ||
-            lower.contains("password") ||
-            lower.contains("secret") ||
-            lower.contains("credential")
-        return if (containsCredentialMarker || normalized.contains('@') || normalized.contains('?') || normalized.contains('#')) {
-            null
-        } else {
+        if (normalized.any { it.isWhitespace() || it.isISOControl() }) return null
+        return try {
+            val uri = URI(normalized)
+            val scheme = uri.scheme?.lowercase(Locale.US)
+            if (scheme !in HTTP_SCHEMES || uri.host.isNullOrBlank()) return null
+            if (uri.userInfo != null || uri.rawQuery != null || uri.rawFragment != null) return null
+
+            val authority = decodeUriPart(uri.rawAuthority ?: return null) ?: return null
+            if (authority.contains('@')) return null
+
+            val path = decodeUriPart(uri.rawPath ?: "") ?: return null
+            if (path.contains('@') || path.contains('?') || path.contains('#') || hasCredentialPath(path)) {
+                return null
+            }
             normalized
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun decodeUriPart(value: String): String? = try {
+        URLDecoder.decode(value, StandardCharsets.UTF_8.name())
+    } catch (_: Exception) {
+        null
+    }
+
+    private fun hasCredentialPath(path: String): Boolean {
+        return path.split('/').any { segment ->
+            CREDENTIAL_PATH_PATTERN.matches(segment.trim())
         }
     }
 
@@ -798,17 +861,26 @@ internal class BackupManager(
                 put("updatedAt", cursor.long("updated_at"))
             }
         }.filterObjects { requiredString(it, "key") in SAFE_SETTING_KEYS }
+        var aiProviderApiBaseUrlSkippedCount = 0
         val aiProviderConfigs = readRowsWithColumns(
             table = "ai_provider_configs",
             columns = "id, name, provider, model, api_base_url, is_default, supports_vision, created_at, updated_at",
             orderBy = "is_default DESC, id ASC",
         ) { cursor ->
+            val rawApiBaseUrl = cursor.string("api_base_url")
+            val sanitizedApiBaseUrl = safeApiBaseUrl(rawApiBaseUrl)
+            if (!rawApiBaseUrl.isNullOrBlank() && sanitizedApiBaseUrl == null) {
+                aiProviderApiBaseUrlSkippedCount++
+            }
             JSONObject().apply {
                 put("id", cursor.string("id"))
                 put("name", cursor.string("name"))
                 put("provider", cursor.string("provider"))
                 put("model", cursor.string("model"))
-                putNullable("apiBaseUrl", safeApiBaseUrl(cursor.string("api_base_url")))
+                when {
+                    rawApiBaseUrl.isNullOrBlank() -> put("apiBaseUrl", JSONObject.NULL)
+                    sanitizedApiBaseUrl != null -> put("apiBaseUrl", sanitizedApiBaseUrl)
+                }
                 put("isDefault", cursor.bool("is_default"))
                 put("supportsVision", cursor.bool("supports_vision"))
                 put("createdAt", cursor.long("created_at"))
@@ -860,6 +932,7 @@ internal class BackupManager(
                 aiProviderConfigCount = aiProviderConfigs.length(),
                 aiCostRecordCount = aiCostRecords.length(),
             ),
+            aiProviderApiBaseUrlSkippedCount = aiProviderApiBaseUrlSkippedCount,
         )
     }
 
@@ -916,7 +989,7 @@ internal class BackupManager(
         return duplicateCount
     }
 
-    private fun deleteRestorableData(db: SupportSQLiteDatabase, parsed: ParsedBackup) {
+    private fun deleteRestorableData(db: SupportSQLiteDatabase) {
         // 先删除引用子表，再删除账户和分类，保留未纳入 MVP 的会话与待确认数据。
         db.execSQL("DELETE FROM bills")
         db.execSQL("DELETE FROM balance_calibrations")
@@ -924,8 +997,6 @@ internal class BackupManager(
         db.execSQL("DELETE FROM audit_entries")
         db.execSQL("DELETE FROM financial_goals")
         db.execSQL("DELETE FROM rules")
-        if (parsed.aiCostRecordsIncluded) db.execSQL("DELETE FROM ai_cost_records")
-        if (parsed.aiProviderConfigsIncluded) db.execSQL("DELETE FROM ai_provider_configs")
         // 只替换备份允许恢复的设置，保留未纳入 MVP 的本地设置。
         SAFE_SETTING_KEYS.forEach { key ->
             db.delete("app_settings", "key = ?", arrayOf(key))
@@ -934,7 +1005,7 @@ internal class BackupManager(
         db.execSQL("DELETE FROM accounts")
     }
 
-    private fun insertRestorableData(db: SupportSQLiteDatabase, parsed: ParsedBackup) {
+    private fun insertRestorableData(db: SupportSQLiteDatabase, parsed: ParsedBackup): Int {
         val arrays = requiredArrays(
             data = parsed.data,
             aiProviderConfigCount = parsed.counts.aiProviderConfigCount,
@@ -949,8 +1020,13 @@ internal class BackupManager(
         insertBalanceCalibrations(db, arrays.balanceCalibrations)
         insertAuditEntries(db, arrays.auditEntries)
         insertAppSettings(db, arrays.appSettings)
-        if (parsed.aiProviderConfigsIncluded) insertAiProviderConfigs(db, arrays.aiProviderConfigs)
-        if (parsed.aiCostRecordsIncluded) insertAiCostRecords(db, arrays.aiCostRecords)
+        val retainedProviderCount = if (parsed.aiProviderConfigsIncluded) {
+            syncAiProviderConfigs(db, arrays.aiProviderConfigs)
+        } else {
+            0
+        }
+        if (parsed.aiCostRecordsIncluded) syncAiCostRecords(db, arrays.aiCostRecords)
+        return retainedProviderCount
     }
 
     private fun insertAccounts(db: SupportSQLiteDatabase, rows: JSONArray) {
@@ -1100,37 +1176,90 @@ internal class BackupManager(
         }
     }
 
-    private fun insertAiProviderConfigs(db: SupportSQLiteDatabase, rows: JSONArray) {
+    private fun syncAiProviderConfigs(db: SupportSQLiteDatabase, rows: JSONArray): Int {
+        val existingIds = readIds(db, "ai_provider_configs", "id")
+        val backupIds = HashSet<String>()
         forEachObject(rows) { row ->
-            // 故意不提供 api_key_encrypted，Room 会将其保留为 NULL。
-            insertRow(db, "ai_provider_configs", ContentValues().apply {
-                put("id", requiredString(row, "id"))
-                put("name", requiredString(row, "name"))
-                put("provider", requiredString(row, "provider"))
-                put("model", requiredString(row, "model"))
-                putNullableString("api_base_url", optionalString(row, "apiBaseUrl"))
-                put("is_default", requiredBooleanInt(row, "isDefault"))
-                put("supports_vision", requiredBooleanInt(row, "supportsVision"))
-                put("created_at", requiredLong(row, "createdAt"))
-                put("updated_at", requiredLong(row, "updatedAt"))
-            })
+            val id = requiredString(row, "id")
+            backupIds += id
+            val values = aiProviderValues(row)
+            if (id in existingIds) {
+                if (db.update("ai_provider_configs", SQLiteDatabase.CONFLICT_ABORT, values, "id = ?", arrayOf(id)) != 1) {
+                    throw IllegalStateException("更新 AI Provider 配置失败")
+                }
+            } else {
+                // 故意不提供 api_key_encrypted，新增配置的凭据保持为空。
+                insertRow(db, "ai_provider_configs", values.withId(id))
+            }
+        }
+
+        var retainedProviderCount = 0
+        existingIds.filterNot { it in backupIds }.forEach { id ->
+            if (hasChatSessionReference(db, id)) {
+                retainedProviderCount++
+            } else {
+                db.delete("ai_provider_configs", "id = ?", arrayOf(id))
+            }
+        }
+        return retainedProviderCount
+    }
+
+    private fun syncAiCostRecords(db: SupportSQLiteDatabase, rows: JSONArray) {
+        val existingIds = readIds(db, "ai_cost_records", "id")
+        val backupIds = HashSet<String>()
+        forEachObject(rows) { row ->
+            val id = requiredString(row, "id")
+            backupIds += id
+            val values = aiCostValues(row)
+            if (id in existingIds) {
+                if (db.update("ai_cost_records", SQLiteDatabase.CONFLICT_ABORT, values, "id = ?", arrayOf(id)) != 1) {
+                    throw IllegalStateException("更新 AI 成本记录失败")
+                }
+            } else {
+                insertRow(db, "ai_cost_records", values.withId(id))
+            }
+        }
+        existingIds.filterNot { it in backupIds }.forEach { id ->
+            db.delete("ai_cost_records", "id = ?", arrayOf(id))
         }
     }
 
-    private fun insertAiCostRecords(db: SupportSQLiteDatabase, rows: JSONArray) {
-        forEachObject(rows) { row ->
-            insertRow(db, "ai_cost_records", ContentValues().apply {
-                put("id", requiredString(row, "id"))
-                put("provider", requiredString(row, "provider"))
-                put("model", requiredString(row, "model"))
-                put("request_type", requiredString(row, "requestType"))
-                putNullableInt("tokens_in", optionalInt(row, "tokensIn"))
-                putNullableInt("tokens_out", optionalInt(row, "tokensOut"))
-                put("cost_minor", requiredLong(row, "costMinor"))
-                put("success", requiredBooleanInt(row, "success"))
-                put("created_at", requiredLong(row, "createdAt"))
-                put("month", requiredString(row, "month"))
-            })
+    private fun aiProviderValues(row: JSONObject): ContentValues = ContentValues().apply {
+        put("name", requiredString(row, "name"))
+        put("provider", requiredString(row, "provider"))
+        put("model", requiredString(row, "model"))
+        if (row.has("apiBaseUrl")) {
+            // 缺失地址字段表示它被安全过滤，更新时保留当前值；显式 NULL 才清空地址。
+            optionalString(row, "apiBaseUrl")?.let { put("api_base_url", it) } ?: putNull("api_base_url")
+        }
+        put("is_default", requiredBooleanInt(row, "isDefault"))
+        put("supports_vision", requiredBooleanInt(row, "supportsVision"))
+        put("created_at", requiredLong(row, "createdAt"))
+        put("updated_at", requiredLong(row, "updatedAt"))
+    }
+
+    private fun aiCostValues(row: JSONObject): ContentValues = ContentValues().apply {
+        put("provider", requiredString(row, "provider"))
+        put("model", requiredString(row, "model"))
+        put("request_type", requiredString(row, "requestType"))
+        putNullableInt("tokens_in", optionalInt(row, "tokensIn"))
+        putNullableInt("tokens_out", optionalInt(row, "tokensOut"))
+        put("cost_minor", requiredLong(row, "costMinor"))
+        put("success", requiredBooleanInt(row, "success"))
+        put("created_at", requiredLong(row, "createdAt"))
+        put("month", requiredString(row, "month"))
+    }
+
+    private fun ContentValues.withId(id: String): ContentValues = apply {
+        put("id", id)
+    }
+
+    private fun hasChatSessionReference(db: SupportSQLiteDatabase, providerId: String): Boolean {
+        db.query(
+            "SELECT 1 FROM chat_sessions WHERE ai_provider_id = ? LIMIT 1",
+            arrayOf(providerId),
+        ).use { cursor ->
+            return cursor.moveToFirst()
         }
     }
 
@@ -1439,6 +1568,14 @@ internal class BackupManager(
         const val MAX_TEXT_LENGTH = 100_000
         const val MAX_SAFE_MINOR = 9_007_199_254_740_991L
         val CHECKSUM_PATTERN = Regex("[0-9a-fA-F]{64}")
+        val MONTH_PATTERN = Regex("\\d{4}-(0[1-9]|1[0-2])")
+        val HTTP_SCHEMES = setOf("http", "https")
+        val AI_PROVIDERS = setOf("qwen", "glm", "siliconflow", "custom")
+        val AI_REQUEST_TYPES = setOf("vision", "chat", "asr")
+        val CREDENTIAL_PATH_PATTERN = Regex(
+            "^(api[-_]?key|access[-_]?token|token|password|secret|credentials?|auth|key)([-_=].*)?$",
+            RegexOption.IGNORE_CASE,
+        )
         val ACCOUNT_SUBTYPES = setOf("cash", "e_wallet", "bank_debit", "credit_card", "consumer_loan", "other")
         val CATEGORY_TYPES = setOf("income", "expense")
         val BILL_TYPES = setOf("income", "expense", "transfer", "refund", "repayment", "fee", "adjustment")

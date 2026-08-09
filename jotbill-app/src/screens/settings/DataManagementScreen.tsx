@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { ActivityIndicator, Alert, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { useQueryClient } from '@tanstack/react-query';
@@ -48,10 +48,15 @@ export default function DataManagementScreen() {
   const [preview, setPreview] = useState<RestorePreview | null>(null);
   const [backup, setBackup] = useState<BackupSummary | null>(null);
   const [status, setStatus] = useState<ScreenStatus | null>(null);
+  const exportingRef = useRef(false);
+  const creatingBackupRef = useRef(false);
+  const restoringRef = useRef(false);
+  const clearingRef = useRef(false);
 
   const busy = exporting || creatingBackup || restoring || clearing;
 
   const exportCsv = async () => {
+    exportingRef.current = true;
     setExporting(true);
     setStatus(null);
     try {
@@ -62,11 +67,13 @@ export default function DataManagementScreen() {
       if (isErrorWithCode(error, 'EXPORT_CANCELLED')) return;
       setStatus({ kind: 'error', title: 'CSV 导出失败', message: getErrorMessage(error) });
     } finally {
+      exportingRef.current = false;
       setExporting(false);
     }
   };
 
   const createBackup = async () => {
+    creatingBackupRef.current = true;
     setCreatingBackup(true);
     setStatus(null);
     try {
@@ -81,11 +88,14 @@ export default function DataManagementScreen() {
       if (isErrorWithCode(error, 'BACKUP_CANCELLED')) return;
       setStatus({ kind: 'error', title: '备份失败', message: getErrorMessage(error) });
     } finally {
+      creatingBackupRef.current = false;
       setCreatingBackup(false);
     }
   };
 
   const chooseBackup = async () => {
+    if (clearingRef.current) return;
+    restoringRef.current = true;
     setRestoring(true);
     setStatus(null);
     try {
@@ -96,12 +106,14 @@ export default function DataManagementScreen() {
       if (isErrorWithCode(error, 'BACKUP_CANCELLED')) return;
       setStatus({ kind: 'error', title: '备份预览失败', message: getErrorMessage(error) });
     } finally {
+      restoringRef.current = false;
       setRestoring(false);
     }
   };
 
   const executeOverwriteRestore = async () => {
-    if (!preview) return;
+    if (!preview || clearingRef.current) return;
+    restoringRef.current = true;
     setRestoring(true);
     setStatus(null);
     try {
@@ -117,12 +129,13 @@ export default function DataManagementScreen() {
     } catch (error) {
       setStatus({ kind: 'error', title: '恢复失败', message: getErrorMessage(error) });
     } finally {
+      restoringRef.current = false;
       setRestoring(false);
     }
   };
 
   const confirmOverwriteRestore = () => {
-    if (!preview) return;
+    if (!preview || restoringRef.current || clearingRef.current) return;
     Alert.alert(
       '确认覆盖恢复',
       `将替换备份范围内的账单、账户、分类等数据。重复记录按替换处理，恢复失败会回滚。\n\n备份记录：${countText(preview.recordSummary.totalCount)}`,
@@ -134,20 +147,26 @@ export default function DataManagementScreen() {
   };
 
   const cancelPreview = () => {
-    if (restoring) return;
+    if (restoring || restoringRef.current) return;
     setPreview(null);
     setStatus({ kind: 'info', title: '已取消恢复', message: '备份文件未写入数据库。' });
   };
 
   const clearData = () => {
-    if (busy) return;
+    if (busy || restoringRef.current) return;
     Alert.alert('清除本地数据', '这会删除本机账单、账户、分类、预算和目标，且不能撤销。请先导出 CSV。', [
       { text: '取消', style: 'cancel' },
       {
         text: '继续清除',
         style: 'destructive',
         onPress: async () => {
-          if (exporting || creatingBackup || restoring) return;
+          if (
+            exportingRef.current ||
+            creatingBackupRef.current ||
+            restoringRef.current ||
+            clearingRef.current
+          ) return;
+          clearingRef.current = true;
           setClearing(true);
           try {
             await nativeBackup.clearData();
@@ -157,6 +176,7 @@ export default function DataManagementScreen() {
           } catch (error) {
             setStatus({ kind: 'error', title: '清除失败', message: getErrorMessage(error) });
           } finally {
+            clearingRef.current = false;
             setClearing(false);
           }
         },
