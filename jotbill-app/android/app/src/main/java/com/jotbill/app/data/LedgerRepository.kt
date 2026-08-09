@@ -35,6 +35,9 @@ class LedgerRepository(private val database: JotBillDatabase) {
     }
 
     suspend fun updateBillWithBalanceUpdate(existing: BillEntity, updated: BillEntity) {
+        require(existing.type != "adjustment" && updated.type != "adjustment") {
+            "Adjustment bills are immutable"
+        }
         val now = System.currentTimeMillis()
         database.withTransaction {
             applyBalanceDelta(existing, multiplier = -1L, updatedAt = now)
@@ -57,6 +60,9 @@ class LedgerRepository(private val database: JotBillDatabase) {
     }
 
     suspend fun deleteBillWithBalanceUpdate(bill: BillEntity) {
+        require(bill.type != "adjustment") {
+            "Adjustment bills are immutable"
+        }
         val now = System.currentTimeMillis()
         database.withTransaction {
             applyBalanceDelta(bill, multiplier = -1L, updatedAt = now)

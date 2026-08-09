@@ -131,6 +131,9 @@ class DataModule(
     fun updateBill(id: String, inputJson: String, promise: Promise) = launch(promise) {
         val existing = database.billDao().getById(requireId(id, "bill"))
             ?: throw BridgeException("NOT_FOUND", "Bill $id was not found")
+        if (existing.type == "adjustment") {
+            throw BridgeException("ADJUSTMENT_IMMUTABLE", "Adjustment bills cannot be edited")
+        }
         val input = parseJson(inputJson)
         val requestedVersion = input.optionalLong("version")?.toInt()
             ?: throw BridgeException("INVALID_ARGUMENT", "Missing required field: version")
@@ -140,6 +143,9 @@ class DataModule(
 
         val type = input.optionalString("type") ?: existing.type
         BridgeDtoMapper.validateBillType(type)
+        if (type == "adjustment") {
+            throw BridgeException("ADJUSTMENT_IMMUTABLE", "Adjustment bills cannot be edited")
+        }
         val sourceType = input.optionalString("sourceType") ?: existing.sourceType
         BridgeDtoMapper.validateSourceType(sourceType)
         val updated = existing.copy(
@@ -178,6 +184,9 @@ class DataModule(
     fun deleteBill(id: String, promise: Promise) = launch(promise) {
         val bill = database.billDao().getById(requireId(id, "bill"))
             ?: throw BridgeException("NOT_FOUND", "Bill $id was not found")
+        if (bill.type == "adjustment") {
+            throw BridgeException("ADJUSTMENT_IMMUTABLE", "Adjustment bills cannot be deleted")
+        }
         repository.deleteBillWithBalanceUpdate(bill)
         events.emit("onBillDeleted", JSONObject().put("id", bill.id))
         null
