@@ -789,6 +789,13 @@ export type BackupFormat = 'jotbill';
 export type ImportFormat = BackupFormat | 'csv';
 /** 来源标签仅描述输入来源，具体格式由各 DTO 的判别字段共同约束。 */
 export type BackupSource = 'local_database' | 'backup_file' | 'csv_file';
+export type BackupOperation =
+  | 'createBackup'
+  | 'restoreBackup'
+  | 'executeRestore'
+  | 'exportData'
+  | 'importData'
+  | 'clearData';
 export type RestoreStrategy = 'overwrite' | 'merge';
 export type DuplicateRecordPolicy = 'skip' | 'replace' | 'fail';
 
@@ -882,6 +889,12 @@ export interface BackupImportResult extends ImportResultBase {
   strategy?: RestoreStrategy;
 }
 
+/** executeRestore 的专用返回类型，仍完整遵循 ImportResult 字段语义。 */
+export interface RestoreImportResult extends BackupImportResult {
+  recordSummary: BackupRecordSummary;
+  strategy: RestoreStrategy;
+}
+
 export interface CsvImportResult extends ImportResultBase {
   source: 'csv_file';
   format: 'csv';
@@ -893,30 +906,62 @@ export interface CsvImportResult extends ImportResultBase {
 /** 导入和恢复共用同一份直接返回 DTO，避免引入第二套恢复结果模型。 */
 export type ImportResult = BackupImportResult | CsvImportResult;
 
-/** 备份错误码以通用 NativeErrorCode 为唯一来源，避免重复维护两套枚举。 */
-export type BackupErrorCode = NativeErrorCode;
+/** 备份包装器能够消费的原生错误码边界，不接受 AI、截图等无关错误码。 */
+export type BackupErrorCode =
+  | 'INVALID_ARGUMENT'
+  | 'NOT_FOUND'
+  | 'DATA_CONFLICT'
+  | 'DB_ERROR'
+  | 'NOT_IMPLEMENTED'
+  | 'UNSUPPORTED_FORMAT'
+  | 'EXPORT_IN_PROGRESS'
+  | 'EXPORT_CANCELLED'
+  | 'EXPORT_ERROR'
+  | 'CLEAR_DATA_ERROR'
+  | 'BACKUP_FAILED'
+  | 'RESTORE_PREVIEW_FAILED'
+  | 'RESTORE_FAILED'
+  | 'EXPORT_FAILED'
+  | 'IMPORT_FAILED'
+  | 'BACKUP_UNSUPPORTED_FORMAT'
+  | 'BACKUP_VALIDATION_FAILED'
+  | 'BACKUP_CANCELLED'
+  | 'BACKUP_TRANSACTION_FAILED'
+  | 'BACKUP_IO_ERROR'
+  | 'BACKUP_ENCRYPTION_ERROR'
+  | 'PERMISSION_DENIED'
+  | 'UNKNOWN';
 
-export interface BackupError extends NativeError {
+export interface BackupError {
+  name: 'NativeBackupError';
+  operation: BackupOperation;
   code: BackupErrorCode;
-  status?: BackupFailureStatus;
+  status: BackupFailureStatus;
+  message: string;
+  retryable: boolean;
 }
 
 export type BackupFailureStatus =
+  | 'invalid_argument'
+  | 'not_found'
+  | 'data_conflict'
+  | 'database_error'
   | 'not_implemented'
-  | 'backup_failed'
-  | 'restore_preview_failed'
-  | 'restore_failed'
-  | 'import_failed'
-  | 'export_failed'
-  | 'clear_data_failed'
   | 'unsupported_format'
-  | 'validation_failed'
+  | 'in_progress'
   | 'cancelled'
+  | 'validation_failed'
   | 'transaction_failed'
   | 'io_error'
   | 'encryption_error'
   | 'permission_denied'
-  | 'database_error';
+  | 'backup_failed'
+  | 'restore_preview_failed'
+  | 'restore_failed'
+  | 'export_failed'
+  | 'import_failed'
+  | 'clear_data_failed'
+  | 'unknown';
 
 export interface ExportDataResult {
   filePath: string;
@@ -1054,7 +1099,7 @@ export interface BackupModule {
   /** 仅检查备份文件并返回预览，不修改当前数据库，失败通过 BackupError reject。 */
   restoreBackup(filePath: string): Promise<RestorePreview>;
   /** 按覆盖或合并策略执行恢复，失败时原生事务必须回滚并通过 BackupError reject。 */
-  executeRestore(filePath: string, strategy: RestoreOptions['strategy']): Promise<ImportResult>;
+  executeRestore(filePath: string, strategy: RestoreOptions['strategy']): Promise<RestoreImportResult>;
   /** 保留阶段二的 CSV 导出调用。 */
   exportData(format: 'csv'): Promise<ExportDataResult>;
   /** 导入文件并返回明确的导入及重复记录计数，失败通过 BackupError reject。 */
