@@ -55,6 +55,11 @@ export const QUERY_KEYS = {
   // 资产 Tab
   accountsBalance: ['accounts', 'balance'] as const,
   accountsList: ['accounts', 'list'] as const,
+  // 资产余额时间线支持按月份生成完整 key，也支持使用前缀一次失效全部月份。
+  assetBalanceTimeline: (year?: number, month?: number) =>
+    typeof year === 'number' && typeof month === 'number'
+      ? ['asset-balance-timeline', year, month] as const
+      : ['asset-balance-timeline'] as const,
   assetTrend: (year: number) => ['asset-trend', year] as const,
 
   // 收支网格
@@ -133,6 +138,7 @@ export const invalidateCache = {
     queryClient.invalidateQueries({ queryKey: ['daily-bills'] });
     queryClient.invalidateQueries({ queryKey: ['monthly-grid'] });
     queryClient.invalidateQueries({ queryKey: ['yearly-grid'] });
+    queryClient.invalidateQueries({ queryKey: QUERY_KEYS.assetBalanceTimeline() });
     queryClient.invalidateQueries({ queryKey: ['asset-trend'] });
     queryClient.invalidateQueries({ queryKey: ['total-assets'] });
     queryClient.invalidateQueries({ queryKey: ['net-worth'] });

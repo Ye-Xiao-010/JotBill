@@ -4,7 +4,7 @@
  */
 import { useQuery } from '@tanstack/react-query';
 import { nativeData } from '../native';
-import { CACHE_TIME, GC_TIME } from '../lib/queryClient';
+import { CACHE_TIME, GC_TIME, QUERY_KEYS } from '../lib/queryClient';
 import { formatDate } from '../utils/date';
 import { toReportStatistics } from '../utils/nativeStatistics';
 
@@ -34,7 +34,7 @@ export function useAssetsData() {
 
   // 资产趋势必须使用 Native 账户余额时间线，不能用收支差反推净资产。
   const assetTimelineQuery = useQuery({
-    queryKey: ['asset-balance-timeline', currentYear, currentMonth],
+    queryKey: QUERY_KEYS.assetBalanceTimeline(currentYear, currentMonth),
     queryFn: () =>
       nativeData.getAccountBalanceTimeline({
         startDate: formatDate(trendStart),

@@ -93,6 +93,7 @@ export default function AccountsScreen() {
     queryClient.invalidateQueries({ queryKey: QUERY_KEYS.accountsList });
     queryClient.invalidateQueries({ queryKey: QUERY_KEYS.accountsBalance });
     queryClient.invalidateQueries({ queryKey: ['net-worth'] });
+    queryClient.invalidateQueries({ queryKey: QUERY_KEYS.assetBalanceTimeline() });
     queryClient.invalidateQueries({ queryKey: ['asset-trend'] });
   }, [queryClient]);
 

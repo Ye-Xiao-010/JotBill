@@ -39,6 +39,7 @@ import type { ParsedBill, AIModelConfig, ChatSession } from '../../types/ai';
 import { ProviderIcon } from '../../components/icons';
 import storage from '../../utils/storage';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { invalidateCache } from '../../lib/queryClient';
 
 const SIDEBAR_WIDTH = Dimensions.get('window').width * 0.78;
 const WELCOME_MESSAGE = '你好！我是你的 AI 助手，可以帮你：\n\n📝 整理待确认账单 — “午餐花了35元”\n🔍 查账 — “今天记了什么”\n📊 统计 — “这个月花了多少”\n📷 识别账单图片\n💬 闲聊 — 随便聊什么都行\n\nAI 不会直接删除或修改账单。';
@@ -1790,6 +1791,10 @@ export default function AIChatScreen() {
     }
 
     setSavingBills(false);
+    if (successCount > 0) {
+      // 至少有一条账单成功后，刷新所有依赖账单的本地缓存。
+      invalidateCache.bills();
+    }
 
     if (failCount === 0) {
       alert('保存成功', `已成功保存 ${successCount} 条账单`);
