@@ -39,6 +39,7 @@ export default function MonthlyView({
   const { dailyMap } = useDailyGridData(
     year,
     selectedMonth ? selectedMonth - 1 : 0,
+    selectedMonth !== null,
   );
 
   const isNextDisabled = year >= now.getFullYear();

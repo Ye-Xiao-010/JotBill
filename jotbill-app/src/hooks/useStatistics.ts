@@ -85,10 +85,36 @@ function formatDate(date: Date): string {
   return `${year}-${month}-${day}`;
 }
 
-/** 将 YYYY-MM-DD 按本地日历解析，避免 JavaScript 按 UTC 解释日期字符串。 */
-function parseLocalDate(dateString: string): Date {
-  const [year, month, day] = dateString.split('-').map(Number);
-  return new Date(year, month - 1, day);
+/** 严格按本地日历解析日期，拒绝溢出日期和非标准输入。 */
+function parseLocalDate(dateString: string): Date | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateString);
+  if (!match) return null;
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  if (
+    !Number.isInteger(year) ||
+    !Number.isInteger(month) ||
+    !Number.isInteger(day) ||
+    year < 1 ||
+    year > 9999 ||
+    month < 1 ||
+    month > 12 ||
+    day < 1 ||
+    day > 31
+  ) {
+    return null;
+  }
+
+  const date = new Date(0);
+  date.setHours(0, 0, 0, 0);
+  date.setFullYear(year, month - 1, day);
+  return date.getFullYear() === year &&
+    date.getMonth() === month - 1 &&
+    date.getDate() === day
+    ? date
+    : null;
 }
 
 /**
@@ -99,6 +125,9 @@ async function fetchStatistics(params: StatisticsParams): Promise<StatisticsData
 
   // 计算上一周期的日期范围
   const currentDate = parseLocalDate(startDate);
+  if (!currentDate) {
+    throw new Error('统计起始日期格式无效');
+  }
   const prevRange = getPreviousDateRange(currentDate, params.period);
 
   // 并行获取当前周期和上一周期的数据

@@ -1,6 +1,6 @@
 /**
  * AssetsTab - 资产页签
- * 总资产(收入-支出) + 资产趋势折线图 + 收支构成饼图
+ * 账户余额净资产 + 资产趋势折线图 + 收支构成饼图
  */
 import React from 'react';
 import { View, Text, ScrollView, RefreshControl, StyleSheet } from 'react-native';
