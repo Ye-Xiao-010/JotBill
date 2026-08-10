@@ -182,6 +182,9 @@ export function useDailyGridData(year: number, month: number, enabled = true) {
     dailyMap,
     statistics: query.data,
     isLoading: query.isLoading,
+    isFetching: query.isFetching,
+    isError: query.isError,
+    error: query.error,
     refetch: query.refetch,
   };
 }
@@ -292,6 +295,9 @@ export function useMonthlyGridData(year: number) {
     monthlyData,
     statistics: query.data,
     isLoading: query.isLoading,
+    isFetching: query.isFetching,
+    isError: query.isError,
+    error: query.error,
     refetch: query.refetch,
   };
 }
@@ -368,6 +374,9 @@ export function useYearlyGridData() {
     yearlyData,
     getMonthlyDataForYear,
     isLoading: query.isLoading,
+    isFetching: query.isFetching,
+    isError: query.isError,
+    error: query.error,
     refetch: query.refetch,
   };
 }

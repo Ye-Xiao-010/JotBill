@@ -44,7 +44,13 @@ export default function DailyView({
     if (initialSelectedDay !== undefined) setSelectedDay(initialSelectedDay);
   }, [initialYear, initialMonth, initialSelectedDay]);
 
-  const { dailyMap, isLoading, refetch } = useDailyGridData(year, month);
+  const {
+    dailyMap,
+    isFetching: dailyFetching,
+    isError: dailyError,
+    error: dailyQueryError,
+    refetch,
+  } = useDailyGridData(year, month);
   const {
     bills,
     isLoading: billsLoading,
@@ -101,7 +107,7 @@ export default function DailyView({
   return (
     <ScrollView
       style={styles.container}
-      refreshControl={<RefreshControl refreshing={isLoading} onRefresh={refetch} />}
+      refreshControl={<RefreshControl refreshing={dailyFetching} onRefresh={refetch} />}
       showsVerticalScrollIndicator={false}
     >
       <PeriodNavigator
@@ -111,13 +117,33 @@ export default function DailyView({
         disableNext={isNextDisabled}
       />
 
-      <CalendarGrid
-        year={year}
-        month={month}
-        dailyData={dailyMap}
-        selectedDay={selectedDay}
-        onDayPress={handleDayPress}
-      />
+      {dailyError ? (
+        <View style={styles.errorState}>
+          <Text style={styles.errorTitle}>本月收支统计加载失败</Text>
+          <Text style={styles.errorText}>
+            {dailyQueryError instanceof Error && dailyQueryError.message
+              ? dailyQueryError.message
+              : '本地收支统计读取失败，请重试。'}
+          </Text>
+          <Button
+            title="重新加载"
+            variant="outline"
+            size="small"
+            loading={dailyFetching}
+            onPress={() => {
+              void refetch();
+            }}
+          />
+        </View>
+      ) : (
+        <CalendarGrid
+          year={year}
+          month={month}
+          dailyData={dailyMap}
+          selectedDay={selectedDay}
+          onDayPress={handleDayPress}
+        />
+      )}
 
       {/* 选中日的明细 */}
       {selectedDay && (

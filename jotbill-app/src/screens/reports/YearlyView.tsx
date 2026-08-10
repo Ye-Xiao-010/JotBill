@@ -9,6 +9,7 @@ import { spacing } from '../../theme/spacing';
 import { useStyles } from '../../hooks';
 import { useYearlyGridData } from '../../hooks/useIncomeExpenseData';
 import { YearGrid, MonthlySummaryList } from '../../components/reports';
+import { Button } from '../../components/ui';
 
 interface YearlyViewProps {
   onJumpToMonthly?: (year: number, month?: number) => void;
@@ -18,7 +19,14 @@ export default function YearlyView({ onJumpToMonthly }: YearlyViewProps) {
   const styles = useStyles(createStyles);
   const [selectedYear, setSelectedYear] = useState<number | null>(null);
 
-  const { yearlyData, getMonthlyDataForYear, isLoading, refetch } = useYearlyGridData();
+  const {
+    yearlyData,
+    getMonthlyDataForYear,
+    isFetching,
+    isError,
+    error,
+    refetch,
+  } = useYearlyGridData();
 
   const handleYearPress = (year: number) => {
     setSelectedYear(selectedYear === year ? null : year);
@@ -51,21 +59,41 @@ export default function YearlyView({ onJumpToMonthly }: YearlyViewProps) {
   return (
     <ScrollView
       style={styles.container}
-      refreshControl={<RefreshControl refreshing={isLoading} onRefresh={refetch} />}
+      refreshControl={<RefreshControl refreshing={isFetching} onRefresh={refetch} />}
       showsVerticalScrollIndicator={false}
     >
       <View style={styles.header}>
         <Text style={styles.headerTitle}>近5年收支</Text>
       </View>
 
-      <YearGrid
-        years={yearlyData}
-        selectedYear={selectedYear}
-        onYearPress={handleYearPress}
-      />
+      {isError ? (
+        <View style={styles.errorState}>
+          <Text style={styles.errorTitle}>年度收支统计加载失败</Text>
+          <Text style={styles.errorText}>
+            {error instanceof Error && error.message
+              ? error.message
+              : '本地年度统计读取失败，请重试。'}
+          </Text>
+          <Button
+            title="重新加载"
+            variant="outline"
+            size="small"
+            loading={isFetching}
+            onPress={() => {
+              void refetch();
+            }}
+          />
+        </View>
+      ) : (
+        <YearGrid
+          years={yearlyData}
+          selectedYear={selectedYear}
+          onYearPress={handleYearPress}
+        />
+      )}
 
       {/* 选中年的12月汇总 */}
-      {selectedYear && (
+      {selectedYear && !isError && (
         <View style={styles.detailSection}>
           <Text style={styles.detailTitle}>
             {selectedYear}年 每月收支
@@ -105,6 +133,24 @@ const createStyles = (colors: ThemeColors) => ({
       fontWeight: '800',
       color: colors.textPrimary,
       paddingHorizontal: spacing.lg,
+      marginBottom: spacing.md,
+    },
+    errorState: {
+      alignItems: 'center',
+      paddingHorizontal: spacing.lg,
+      paddingVertical: spacing.xxl,
+    },
+    errorTitle: {
+      fontSize: 15,
+      fontWeight: '800',
+      color: colors.error,
+      textAlign: 'center',
+      marginBottom: spacing.sm,
+    },
+    errorText: {
+      fontSize: 13,
+      color: colors.textSecondary,
+      textAlign: 'center',
       marginBottom: spacing.md,
     },
   }),

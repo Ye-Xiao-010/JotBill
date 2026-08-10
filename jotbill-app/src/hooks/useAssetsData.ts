@@ -59,6 +59,9 @@ export function useAssetsData() {
   const incomeCategoryStats = trendQuery.data?.incomeCategoryStats ?? [];
   const expenseCategoryStats = trendQuery.data?.expenseCategoryStats ?? [];
 
+  const isError = totalQuery.isError || netWorthQuery.isError || trendQuery.isError;
+  const error = totalQuery.error ?? netWorthQuery.error ?? trendQuery.error;
+
   // 趋势图日期范围描述
   const trendDateRange = `${trendStart.getFullYear()}.${trendStart.getMonth() + 1} - ${
     now.getFullYear()
@@ -76,6 +79,9 @@ export function useAssetsData() {
     incomeCategoryStats,
     expenseCategoryStats,
     isLoading: totalQuery.isLoading || netWorthQuery.isLoading || trendQuery.isLoading,
+    isFetching: totalQuery.isFetching || netWorthQuery.isFetching || trendQuery.isFetching,
+    isError,
+    error,
     refetch: async () => {
       await Promise.all([
         totalQuery.refetch(),

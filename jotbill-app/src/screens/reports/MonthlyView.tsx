@@ -3,12 +3,13 @@
  * 12个月网格 + 点击某月展示每日汇总 + 点击某天跳转日收支
  */
 import React, { useState, useEffect } from 'react';
-import { View, Text, ScrollView, RefreshControl, StyleSheet } from 'react-native';
+import { View, Text, ScrollView, RefreshControl, StyleSheet, ActivityIndicator } from 'react-native';
 import { ThemeColors } from '../../theme/colors';
 import { spacing } from '../../theme/spacing';
 import { useStyles } from '../../hooks';
 import { useMonthlyGridData, useDailyGridData } from '../../hooks/useIncomeExpenseData';
 import { MonthGrid, PeriodNavigator, DailySummaryList } from '../../components/reports';
+import { Button } from '../../components/ui';
 
 interface MonthlyViewProps {
   initialYear?: number;
@@ -33,10 +34,23 @@ export default function MonthlyView({
     if (initialSelectedMonth !== undefined) setSelectedMonth(initialSelectedMonth);
   }, [initialYear, initialSelectedMonth]);
 
-  const { monthlyData, isLoading, refetch } = useMonthlyGridData(year);
+  const {
+    monthlyData,
+    isFetching: monthlyFetching,
+    isError: monthlyError,
+    error: monthlyQueryError,
+    refetch,
+  } = useMonthlyGridData(year);
 
   // 当选中月份时，获取该月每日数据
-  const { dailyMap } = useDailyGridData(
+  const {
+    dailyMap,
+    isLoading: dailyLoading,
+    isFetching: dailyFetching,
+    isError: dailyError,
+    error: dailyQueryError,
+    refetch: refetchDaily,
+  } = useDailyGridData(
     year,
     selectedMonth ? selectedMonth - 1 : 0,
     selectedMonth !== null,
@@ -78,7 +92,12 @@ export default function MonthlyView({
   return (
     <ScrollView
       style={styles.container}
-      refreshControl={<RefreshControl refreshing={isLoading} onRefresh={refetch} />}
+      refreshControl={
+        <RefreshControl
+          refreshing={monthlyFetching || dailyFetching}
+          onRefresh={refetch}
+        />
+      }
       showsVerticalScrollIndicator={false}
     >
       <PeriodNavigator
@@ -88,23 +107,68 @@ export default function MonthlyView({
         disableNext={isNextDisabled}
       />
 
-      <MonthGrid
-        year={year}
-        monthlyData={monthlyData}
-        selectedMonth={selectedMonth}
-        onMonthPress={handleMonthPress}
-      />
+      {monthlyError ? (
+        <View style={styles.errorState}>
+          <Text style={styles.errorTitle}>月度收支统计加载失败</Text>
+          <Text style={styles.errorText}>
+            {monthlyQueryError instanceof Error && monthlyQueryError.message
+              ? monthlyQueryError.message
+              : '本地月度统计读取失败，请重试。'}
+          </Text>
+          <Button
+            title="重新加载"
+            variant="outline"
+            size="small"
+            loading={monthlyFetching}
+            onPress={() => {
+              void refetch();
+            }}
+          />
+        </View>
+      ) : (
+        <MonthGrid
+          year={year}
+          monthlyData={monthlyData}
+          selectedMonth={selectedMonth}
+          onMonthPress={handleMonthPress}
+        />
+      )}
 
       {/* 选中月的每日汇总 */}
-      {selectedMonth && (
+      {selectedMonth && !monthlyError && (
         <View style={styles.detailSection}>
           <Text style={styles.detailTitle}>
             {year}年{selectedMonth}月 每日收支
           </Text>
-          <DailySummaryList
-            data={dailySummaryData}
-            onDayPress={handleDayPress}
-          />
+          {dailyLoading ? (
+            <ActivityIndicator
+              style={styles.loading}
+              color={styles._colors.primary}
+            />
+          ) : dailyError ? (
+            <View style={styles.errorState}>
+              <Text style={styles.errorTitle}>月内日统计加载失败</Text>
+              <Text style={styles.errorText}>
+                {dailyQueryError instanceof Error && dailyQueryError.message
+                  ? dailyQueryError.message
+                  : '本地日统计读取失败，请重试。'}
+              </Text>
+              <Button
+                title="重新加载"
+                variant="outline"
+                size="small"
+                loading={dailyFetching}
+                onPress={() => {
+                  void refetchDaily();
+                }}
+              />
+            </View>
+          ) : (
+            <DailySummaryList
+              data={dailySummaryData}
+              onDayPress={handleDayPress}
+            />
+          )}
         </View>
       )}
 
@@ -126,6 +190,27 @@ const createStyles = (colors: ThemeColors) => ({
       fontWeight: '800',
       color: colors.textPrimary,
       paddingHorizontal: spacing.lg,
+      marginBottom: spacing.md,
+    },
+    loading: {
+      padding: spacing.xxxl,
+    },
+    errorState: {
+      alignItems: 'center',
+      paddingHorizontal: spacing.lg,
+      paddingVertical: spacing.xxl,
+    },
+    errorTitle: {
+      fontSize: 15,
+      fontWeight: '800',
+      color: colors.error,
+      textAlign: 'center',
+      marginBottom: spacing.sm,
+    },
+    errorText: {
+      fontSize: 13,
+      color: colors.textSecondary,
+      textAlign: 'center',
       marginBottom: spacing.md,
     },
   }),
