@@ -23,6 +23,24 @@ interface UseAppUpdateOptions {
   autoCheck?: boolean;
 }
 
+// 检查、下载和安装共用模块级队列，跨 Hook 实例也不会操作同一个更新文件。
+let appUpdateQueue: Promise<void> = Promise.resolve();
+let appCheckInFlight: Promise<void> | null = null;
+let appDownloadInFlight: Promise<void> | null = null;
+let apkSequence = 0;
+
+function enqueueAppUpdate<T>(operation: () => Promise<T>): Promise<T> {
+  const queued = appUpdateQueue.then(operation, operation);
+  appUpdateQueue = queued.then(() => undefined, () => undefined);
+  return queued;
+}
+
+function createApkPath(version: string): string {
+  apkSequence = (apkSequence + 1) % 1000000;
+  const safeVersion = version.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 64) || 'latest';
+  return `${RNFS.CachesDirectoryPath}/app-v${safeVersion}-${Date.now()}-${apkSequence}.apk`;
+}
+
 export function useAppUpdate(options: UseAppUpdateOptions = {}) {
   const { autoCheck = false } = options;
   const { alert } = useAlert();
@@ -36,76 +54,63 @@ export function useAppUpdate(options: UseAppUpdateOptions = {}) {
   });
   const currentVersion = packageJson.version;
 
-  const checkUpdate = useCallback(async (showNoUpdateAlert = false) => {
-    if (Platform.OS !== 'android') return;
+  const checkUpdate = useCallback((showNoUpdateAlert = false): Promise<void> => {
+    if (Platform.OS !== 'android') return Promise.resolve();
+    if (appCheckInFlight) return appCheckInFlight;
 
-    console.log('[useAppUpdate] 开始检查更新...');
-    setState(prev => ({ ...prev, checking: true }));
+    const operation = enqueueAppUpdate(async () => {
+      console.log('[useAppUpdate] 开始检查更新...');
+      setState(prev => ({ ...prev, checking: true }));
 
-    try {
-      const result = await appVersionApi.checkUpdate(currentVersion);
-      console.log('[useAppUpdate] 更新检查完成:', result.hasUpdate);
-      if (result.latestVersion) {
-        getSafeUpdateUrl(result.latestVersion.downloadUrl);
+      try {
+        const result = await appVersionApi.checkUpdate(currentVersion);
+        console.log('[useAppUpdate] 更新检查完成:', result.hasUpdate);
+        if (result.latestVersion) {
+          getSafeUpdateUrl(result.latestVersion.downloadUrl);
+        }
+
+        setState(prev => ({
+          ...prev,
+          checking: false,
+          hasUpdate: result.hasUpdate,
+          latestVersion: result.latestVersion || null,
+          showModal: result.hasUpdate && !!result.latestVersion,
+        }));
+
+        if (!result.hasUpdate && showNoUpdateAlert) {
+          alert('检查更新', '当前已是最新版本');
+        }
+      } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : '更新服务暂时不可用';
+        console.log('[useAppUpdate] 检查更新失败:', message);
+        setState(prev => ({ ...prev, checking: false }));
+        if (showNoUpdateAlert) {
+          alert('检查更新', '检查更新失败，请稍后重试');
+        }
+      } finally {
+        setState(prev => ({ ...prev, checking: false }));
       }
-
-      setState(prev => ({
-        ...prev,
-        checking: false,
-        hasUpdate: result.hasUpdate,
-        latestVersion: result.latestVersion || null,
-        showModal: result.hasUpdate && !!result.latestVersion,
-      }));
-
-      if (!result.hasUpdate && showNoUpdateAlert) {
-        alert('检查更新', '当前已是最新版本');
+    });
+    let tracked: Promise<void>;
+    tracked = operation.finally(() => {
+      if (appCheckInFlight === tracked) {
+        appCheckInFlight = null;
       }
-    } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : '更新服务暂时不可用';
-      console.log('[useAppUpdate] 检查更新失败:', message);
-      setState(prev => ({ ...prev, checking: false }));
-      if (showNoUpdateAlert) {
-        alert('检查更新', '检查更新失败，请稍后重试');
-      }
-    }
-  }, [currentVersion]);
+    });
+    appCheckInFlight = tracked;
+    return tracked;
+  }, [currentVersion, alert]);
 
   const hideModal = useCallback(() => {
     setState(prev => ({ ...prev, showModal: false }));
   }, []);
-
-  const downloadAndInstall = useCallback(async () => {
-    if (!state.latestVersion) return;
-
-    const { downloadUrl, version } = state.latestVersion;
-    const filePath = `${RNFS.CachesDirectoryPath}/app-v${version}.apk`;
-
-    setState(prev => ({ ...prev, downloading: true, progress: 0 }));
-
-    try {
-      const safeDownloadUrl = getSafeUpdateUrl(downloadUrl);
-      await downloadUpdateFile(
-        safeDownloadUrl,
-        filePath,
-        (progress) => setState(prev => ({ ...prev, progress })),
-      );
-      setState(prev => ({ ...prev, downloading: false, showModal: false }));
-      // 安装 APK
-      await installApk(filePath);
-    } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : '下载更新包失败，请稍后重试';
-      console.log('[useAppUpdate] 下载失败');
-      setState(prev => ({ ...prev, downloading: false }));
-      alert('下载失败', message);
-    }
-  }, [state.latestVersion, alert]);
 
   const installApk = useCallback(async (filePath: string) => {
     try {
       // 使用 Android Intent 安装 APK
       const { InstallApk } = NativeModules;
       if (InstallApk) {
-        InstallApk.install(filePath);
+        await Promise.resolve(InstallApk.install(filePath));
       } else {
         // 备用方案：使用 react-native-fs 的 Android 特定方法
         await RNFS.scanFile(filePath);
@@ -117,6 +122,43 @@ export function useAppUpdate(options: UseAppUpdateOptions = {}) {
       alert('安装失败', '请手动安装下载的 APK 文件');
     }
   }, [alert]);
+
+  const downloadAndInstall = useCallback((): Promise<void> => {
+    if (!state.latestVersion) return Promise.resolve();
+    if (appDownloadInFlight) return appDownloadInFlight;
+
+    const { downloadUrl, version } = state.latestVersion;
+    const filePath = createApkPath(version);
+    const operation = enqueueAppUpdate(async () => {
+      setState(prev => ({ ...prev, downloading: true, progress: 0 }));
+
+      try {
+        const safeDownloadUrl = getSafeUpdateUrl(downloadUrl);
+        await downloadUpdateFile(
+          safeDownloadUrl,
+          filePath,
+          (progress) => setState(prev => ({ ...prev, progress })),
+        );
+        setState(prev => ({ ...prev, showModal: false }));
+        // 安装 APK
+        await installApk(filePath);
+      } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : '下载更新包失败，请稍后重试';
+        console.log('[useAppUpdate] 下载失败');
+        alert('下载失败', message);
+      } finally {
+        setState(prev => ({ ...prev, downloading: false }));
+      }
+    });
+    let tracked: Promise<void>;
+    tracked = operation.finally(() => {
+      if (appDownloadInFlight === tracked) {
+        appDownloadInFlight = null;
+      }
+    });
+    appDownloadInFlight = tracked;
+    return tracked;
+  }, [state.latestVersion, alert, installApk]);
 
   // 只有明确传入 autoCheck: true 时才允许页面挂载触发更新网络请求。
   useEffect(() => {

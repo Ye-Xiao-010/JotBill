@@ -52,6 +52,23 @@ function encodeBase64(bytes: Uint8Array): string {
   return encoded;
 }
 
+let stagingSequence = 0;
+
+function createStagingPath(filePath: string): string {
+  stagingSequence = (stagingSequence + 1) % 1000000;
+  return `${filePath}.part-${Date.now()}-${stagingSequence}`;
+}
+
+async function cleanupStagingFile(filePath: string): Promise<void> {
+  try {
+    if (await RNFS.exists(filePath)) {
+      await RNFS.unlink(filePath);
+    }
+  } catch {
+    console.warn('[Update] 下载临时文件清理失败');
+  }
+}
+
 /** 只允许更新通道使用 HTTPS，开发环境仅额外允许回环地址的 HTTP。 */
 export function getSafeUpdateUrl(rawUrl: string): string {
   const value = rawUrl.trim();
@@ -102,6 +119,7 @@ export async function downloadUpdateFile(
     controller.abort();
     rejectTimeout();
   }, Math.max(1000, timeoutMs));
+  let stagingPath: string | null = null;
 
   try {
     let response: Response;
@@ -146,13 +164,38 @@ export async function downloadUpdateFile(
       throw new Error('更新下载内容无效');
     }
 
-    await Promise.race([
-      RNFS.writeFile(filePath, encodeBase64(new Uint8Array(body)), 'base64'),
-      timeoutPromise,
-    ]);
+    stagingPath = createStagingPath(filePath);
+    try {
+      // 写入必须等到底层 Promise settle，超时只记录状态，不能提前释放调用方的互斥。
+      await RNFS.writeFile(stagingPath, encodeBase64(new Uint8Array(body)), 'base64');
+    } catch {
+      if (didTimeout) {
+        throw new Error('更新下载超时，请稍后重试');
+      }
+      throw new Error('更新下载文件写入失败');
+    }
+
+    if (didTimeout) {
+      throw new Error('更新下载超时，请稍后重试');
+    }
+
+    // 写入完成后才提交到目标路径，避免清理目录时碰到后台写入。
+    clearTimeout(timeoutId);
+    try {
+      await RNFS.moveFile(stagingPath, filePath);
+    } catch {
+      throw new Error('更新下载文件提交失败');
+    }
+    if (await RNFS.exists(stagingPath)) {
+      throw new Error('更新下载临时文件提交不完整');
+    }
+    stagingPath = null;
     onProgress?.(100);
   } finally {
     clearTimeout(timeoutId);
+    if (stagingPath) {
+      await cleanupStagingFile(stagingPath);
+    }
   }
 }
 

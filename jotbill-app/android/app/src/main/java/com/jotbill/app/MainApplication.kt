@@ -41,9 +41,11 @@ class MainApplication : Application(), ReactApplication {
       hotBundlePathChecked = true
 
       val hotBundlePath = File(filesDir, "hot_update/index.android.bundle")
-      android.util.Log.i("HotUpdate", "检查热更新 bundle: exists=${hotBundlePath.exists()}, size=${if (hotBundlePath.exists()) hotBundlePath.length() else 0}")
+      val hotUpdateDir = hotBundlePath.parentFile
+      val verified = hotUpdateDir != null && HotUpdateModule.isVerifiedBundle(hotUpdateDir)
+      android.util.Log.i("HotUpdate", "检查热更新 bundle: verified=$verified, size=${if (hotBundlePath.exists()) hotBundlePath.length() else 0}")
 
-      if (hotBundlePath.exists() && hotBundlePath.length() > 0) {
+      if (verified) {
           val prefs = getSharedPreferences("hot_update", Context.MODE_PRIVATE)
           val crashCount = prefs.getInt("crash_count", 0)
           android.util.Log.i("HotUpdate", "当前 crash_count=$crashCount")
@@ -52,9 +54,8 @@ class MainApplication : Application(), ReactApplication {
               prefs.edit().putInt("crash_count", crashCount + 1).apply()
               android.util.Log.i("HotUpdate", "使用热更新 bundle (crash_count: ${crashCount + 1})")
               hotBundlePathCache = hotBundlePath.absolutePath
-            } else {
+          } else {
               android.util.Log.w("HotUpdate", "崩溃次数过多 ($crashCount)，尝试删除热更新并回退内置 bundle")
-              val hotUpdateDir = hotBundlePath.parentFile
               val deleted = hotUpdateDir == null ||
                   (!hotUpdateDir.exists() || (hotUpdateDir.deleteRecursively() && !hotUpdateDir.exists()))
               if (!deleted) {
@@ -66,7 +67,11 @@ class MainApplication : Application(), ReactApplication {
               hotBundlePathCache = null
           }
       } else {
-          android.util.Log.i("HotUpdate", "无热更新 bundle，使用内置")
+          if (hotUpdateDir?.exists() == true) {
+              android.util.Log.w("HotUpdate", "热更新 bundle 缺少有效 manifest 或 SHA-256，保留现场并使用内置")
+          } else {
+              android.util.Log.i("HotUpdate", "无热更新 bundle，使用内置")
+          }
           hotBundlePathCache = null
       }
       return hotBundlePathCache
