@@ -381,115 +381,117 @@ class DataModule(
 
     @ReactMethod
     fun getAccountBalanceTimeline(optionsJson: String?, promise: Promise) = launch(promise) {
-        val options = parseBalanceTimelineOptions(parseJson(optionsJson))
-        val periods = buildBalanceTimelinePeriods(options)
-        val endMillis = periods.last().endMillis
-        val allAccounts = database.accountDao().getAll()
-        val accountsById = allAccounts.associateBy { it.id }
-        allAccounts.forEach { account ->
-            if (account.kind !in setOf("asset", "liability")) {
-                throw BridgeException("DATA_CONFLICT", "Account ${account.id} has an unsupported kind")
-            }
-        }
-        val activeAccounts = allAccounts
-            .filter { it.isActive }
-            .sortedWith(compareBy<AccountEntity> { it.sortOrder }.thenBy { it.id })
-
-        val bills = database.billDao().getBalanceTimelineBills(endMillis)
-        val calibrations = database.balanceCalibrationDao().getForBalanceTimeline(endMillis)
-        val calibrationsById = calibrations.associateBy { it.id }
-        val events = ArrayList<BalanceTimelineEvent>(bills.size + calibrations.size)
-
-        bills.forEach { bill ->
-            validateBalanceTimelineBill(bill, accountsById)
-            if (bill.type == "adjustment") {
-                val calibration = calibrationsById[bill.id]
-                    ?: throw BridgeException(
-                        "DATA_CONFLICT",
-                        "Adjustment bill ${bill.id} has no matching balance calibration"
-                    )
-                if (calibration.createdAt != bill.occurredAt) {
-                    throw BridgeException(
-                        "DATA_CONFLICT",
-                        "Adjustment bill ${bill.id} does not match its calibration time"
-                    )
+        database.withTransaction {
+            val options = parseBalanceTimelineOptions(parseJson(optionsJson))
+            val periods = buildBalanceTimelinePeriods(options)
+            val endMillis = periods.last().endMillis
+            val allAccounts = database.accountDao().getAll()
+            val accountsById = allAccounts.associateBy { it.id }
+            allAccounts.forEach { account ->
+                if (account.kind !in setOf("asset", "liability")) {
+                    throw BridgeException("DATA_CONFLICT", "Account ${account.id} has an unsupported kind")
                 }
-            } else {
-                events += BalanceTimelineEvent(
-                    at = bill.occurredAt,
-                    kind = 1,
-                    id = bill.id,
-                    bill = bill
-                )
             }
-        }
-        calibrations.forEach { calibration ->
-            validateBalanceTimelineCalibration(calibration, accountsById)
-            events += BalanceTimelineEvent(
-                at = calibration.createdAt,
-                kind = 0,
-                id = calibration.id,
-                calibration = calibration
-            )
-        }
-        events.sortWith(compareBy<BalanceTimelineEvent>({ it.at }, { it.kind }, { it.id }))
+            val activeAccounts = allAccounts
+                .filter { it.isActive }
+                .sortedWith(compareBy<AccountEntity> { it.sortOrder }.thenBy { it.id })
 
-        val balances = activeAccounts.associate { it.id to it.initialBalanceMinor }.toMutableMap()
-        val points = JSONArray()
-        var eventIndex = 0
-        periods.forEach { period ->
-            while (eventIndex < events.size && events[eventIndex].at <= period.endMillis) {
-                val event = events[eventIndex]
-                event.bill?.let { applyBalanceTimelineBill(it, balances) }
-                event.calibration?.let { addBalanceTimelineDelta(balances, it.accountId, it.diffMinor) }
-                eventIndex += 1
-            }
+            val bills = database.billDao().getBalanceTimelineBills(endMillis)
+            val calibrations = database.balanceCalibrationDao().getForBalanceTimeline(endMillis)
+            val calibrationsById = calibrations.associateBy { it.id }
+            val events = ArrayList<BalanceTimelineEvent>(bills.size + calibrations.size)
 
-            var totalAssets = 0L
-            var totalLiabilities = 0L
-            val accountPoints = JSONArray()
-            activeAccounts.forEach { account ->
-                if (account.createdAt <= period.endMillis) {
-                    val balance = balances[account.id]
-                        ?: throw BridgeException("DB_ERROR", "Missing balance for account ${account.id}")
-                    accountPoints.put(JSONObject().apply {
-                        put("accountId", account.id)
-                        put("kind", account.kind)
-                        put("balanceMinor", balance)
-                    })
-                    if (account.kind == "asset") {
-                        totalAssets = addBalanceTimelineAmount(totalAssets, balance, "totalAssetsMinor")
-                    } else {
-                        totalLiabilities = addBalanceTimelineAmount(
-                            totalLiabilities,
-                            absoluteBalanceTimelineAmount(balance),
-                            "totalLiabilitiesMinor"
+            bills.forEach { bill ->
+                validateBalanceTimelineBill(bill, accountsById)
+                if (bill.type == "adjustment") {
+                    val calibration = calibrationsById[bill.id]
+                        ?: throw BridgeException(
+                            "DATA_CONFLICT",
+                            "Adjustment bill ${bill.id} has no matching balance calibration"
+                        )
+                    if (calibration.createdAt != bill.occurredAt) {
+                        throw BridgeException(
+                            "DATA_CONFLICT",
+                            "Adjustment bill ${bill.id} does not match its calibration time"
                         )
                     }
+                } else {
+                    events += BalanceTimelineEvent(
+                        at = bill.occurredAt,
+                        kind = 1,
+                        id = bill.id,
+                        bill = bill
+                    )
                 }
             }
-
-            points.put(JSONObject().apply {
-                put("period", period.key)
-                put("periodEnd", BridgeDtoMapper.formatTimestamp(period.endMillis))
-                put("accounts", accountPoints)
-                put("accountCount", accountPoints.length())
-                put("totalAssetsMinor", totalAssets)
-                put("totalLiabilitiesMinor", totalLiabilities)
-                put(
-                    "netWorthMinor",
-                    subtractBalanceTimelineAmount(totalAssets, totalLiabilities, "netWorthMinor")
+            calibrations.forEach { calibration ->
+                validateBalanceTimelineCalibration(calibration, accountsById)
+                events += BalanceTimelineEvent(
+                    at = calibration.createdAt,
+                    kind = 0,
+                    id = calibration.id,
+                    calibration = calibration
                 )
-            })
-        }
+            }
+            events.sortWith(compareBy<BalanceTimelineEvent>({ it.at }, { it.kind }, { it.id }))
 
-        JSONObject().apply {
-            put("startDate", options.startDate.toString())
-            put("endDate", options.endDate.toString())
-            put("period", options.period)
-            put("accountScope", "active_current_accounts")
-            put("points", points)
-        }.toString()
+            val balances = activeAccounts.associate { it.id to it.initialBalanceMinor }.toMutableMap()
+            val points = JSONArray()
+            var eventIndex = 0
+            periods.forEach { period ->
+                while (eventIndex < events.size && events[eventIndex].at <= period.endMillis) {
+                    val event = events[eventIndex]
+                    event.bill?.let { applyBalanceTimelineBill(it, balances) }
+                    event.calibration?.let { addBalanceTimelineDelta(balances, it.accountId, it.diffMinor) }
+                    eventIndex += 1
+                }
+
+                var totalAssets = 0L
+                var totalLiabilities = 0L
+                val accountPoints = JSONArray()
+                activeAccounts.forEach { account ->
+                    if (account.createdAt <= period.endMillis) {
+                        val balance = balances[account.id]
+                            ?: throw BridgeException("DB_ERROR", "Missing balance for account ${account.id}")
+                        accountPoints.put(JSONObject().apply {
+                            put("accountId", account.id)
+                            put("kind", account.kind)
+                            put("balanceMinor", balance)
+                        })
+                        if (account.kind == "asset") {
+                            totalAssets = addBalanceTimelineAmount(totalAssets, balance, "totalAssetsMinor")
+                        } else {
+                            totalLiabilities = addBalanceTimelineAmount(
+                                totalLiabilities,
+                                absoluteBalanceTimelineAmount(balance),
+                                "totalLiabilitiesMinor"
+                            )
+                        }
+                    }
+                }
+
+                points.put(JSONObject().apply {
+                    put("period", period.key)
+                    put("periodEnd", BridgeDtoMapper.formatTimestamp(period.endMillis))
+                    put("accounts", accountPoints)
+                    put("accountCount", accountPoints.length())
+                    put("totalAssetsMinor", totalAssets)
+                    put("totalLiabilitiesMinor", totalLiabilities)
+                    put(
+                        "netWorthMinor",
+                        subtractBalanceTimelineAmount(totalAssets, totalLiabilities, "netWorthMinor")
+                    )
+                })
+            }
+
+            JSONObject().apply {
+                put("startDate", options.startDate.toString())
+                put("endDate", options.endDate.toString())
+                put("period", options.period)
+                put("accountScope", "active_current_accounts")
+                put("points", points)
+            }.toString()
+        }
     }
 
     @ReactMethod
