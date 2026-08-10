@@ -32,7 +32,21 @@ export function useAssetsData() {
     gcTime: GC_TIME.DEFAULT,
   });
 
+  // 资产趋势必须使用 Native 账户余额时间线，不能用收支差反推净资产。
+  const assetTimelineQuery = useQuery({
+    queryKey: ['asset-balance-timeline', currentYear, currentMonth],
+    queryFn: () =>
+      nativeData.getAccountBalanceTimeline({
+        startDate: formatDate(trendStart),
+        endDate: formatDate(trendEnd),
+        period: 'month',
+      }),
+    staleTime: CACHE_TIME.STATISTICS,
+    gcTime: GC_TIME.DEFAULT,
+  });
+
   // 获取近12月统计（趋势折线图用）
+  // 收支统计仍用于资产页的分类构成展示。
   const trendQuery = useQuery({
     queryKey: ['asset-trend', currentYear, currentMonth],
     queryFn: async () => {
@@ -52,15 +66,26 @@ export function useAssetsData() {
   const totalIncome = totalQuery.data?.totalIncome ?? 0;
   const totalExpense = totalQuery.data?.totalExpense ?? 0;
 
-  // 当前 Native 契约没有账户余额历史，不能用收支聚合推算资产曲线。
-  const assetTrendData: Array<{ month: string; value: number }> = [];
+  // Native 返回分单位，转换为展示金额只在这里进行一次。
+  const assetTrendData = (assetTimelineQuery.data?.points ?? []).map((point) => ({
+    month: point.period,
+    value: point.netWorthMinor / 100,
+  }));
 
   // 收入/支出分类构成（用于饼图）
   const incomeCategoryStats = trendQuery.data?.incomeCategoryStats ?? [];
   const expenseCategoryStats = trendQuery.data?.expenseCategoryStats ?? [];
 
-  const isError = totalQuery.isError || netWorthQuery.isError || trendQuery.isError;
-  const error = totalQuery.error ?? netWorthQuery.error ?? trendQuery.error;
+  const isError =
+    totalQuery.isError ||
+    netWorthQuery.isError ||
+    assetTimelineQuery.isError ||
+    trendQuery.isError;
+  const error =
+    totalQuery.error ??
+    netWorthQuery.error ??
+    assetTimelineQuery.error ??
+    trendQuery.error;
 
   // 趋势图日期范围描述
   const trendDateRange = `${trendStart.getFullYear()}.${trendStart.getMonth() + 1} - ${
@@ -74,18 +99,27 @@ export function useAssetsData() {
     totalIncome,
     totalExpense,
     assetTrendData,
-    assetTrendUnavailable: true,
+    assetTrendUnavailable: false,
     trendDateRange,
     incomeCategoryStats,
     expenseCategoryStats,
-    isLoading: totalQuery.isLoading || netWorthQuery.isLoading || trendQuery.isLoading,
-    isFetching: totalQuery.isFetching || netWorthQuery.isFetching || trendQuery.isFetching,
+    isLoading:
+      totalQuery.isLoading ||
+      netWorthQuery.isLoading ||
+      assetTimelineQuery.isLoading ||
+      trendQuery.isLoading,
+    isFetching:
+      totalQuery.isFetching ||
+      netWorthQuery.isFetching ||
+      assetTimelineQuery.isFetching ||
+      trendQuery.isFetching,
     isError,
     error,
     refetch: async () => {
       await Promise.all([
         totalQuery.refetch(),
         netWorthQuery.refetch(),
+        assetTimelineQuery.refetch(),
         trendQuery.refetch(),
       ]);
     },
