@@ -12,8 +12,8 @@ import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 
 /**
- * Keeps the database passphrase encrypted by a key held in Android Keystore.
- * The raw SQLCipher passphrase is never persisted in preferences.
+ * 使用 Android Keystore 保护数据库口令；SharedPreferences 只保存加密后的密文。
+ * 原始 SQLCipher 口令不会写入偏好设置。
  */
 class KeyStoreSecretStore(context: Context) {
     private val preferences = context.applicationContext.getSharedPreferences(
@@ -21,73 +21,89 @@ class KeyStoreSecretStore(context: Context) {
         Context.MODE_PRIVATE
     )
 
-    fun getOrCreateDatabasePassphrase(): ByteArray {
+    fun getOrCreateDatabasePassphrase(): ByteArray = synchronized(SECRET_LOCK) {
         val stored = preferences.getString(DATABASE_PASSPHRASE_KEY, null)
+        val existingKey = getExistingKeyOrNull()
         if (stored != null) {
-            return decrypt(Base64.decode(stored, Base64.NO_WRAP))
+            val key = existingKey ?: error("Android Keystore database key is unavailable")
+            val passphrase = decrypt(Base64.decode(stored, Base64.NO_WRAP), key)
+            require(passphrase.size == PASSPHRASE_SIZE_BYTES) {
+                "Stored database passphrase has invalid length"
+            }
+            return@synchronized passphrase
         }
 
+        // 已有 Keystore 密钥却没有对应密文时，必须失败，不能生成新口令破坏原数据库的可用性。
+        check(existingKey == null) { "Stored database passphrase is unavailable" }
+
         val passphrase = ByteArray(PASSPHRASE_SIZE_BYTES).also(SecureRandom()::nextBytes)
-        val encrypted = encrypt(passphrase)
+        val encrypted = encrypt(passphrase, getOrCreateKey())
         check(
             preferences.edit()
                 .putString(DATABASE_PASSPHRASE_KEY, Base64.encodeToString(encrypted, Base64.NO_WRAP))
                 .commit()
         ) { "Unable to persist the encrypted database passphrase" }
-        return passphrase
+        passphrase
     }
 
     /** 使用 Android Keystore 加密需要持久化的敏感字符串。 */
-    fun encryptSecret(value: String): String {
-        return Base64.encodeToString(
-            encrypt(value.toByteArray(Charsets.UTF_8)),
+    fun encryptSecret(value: String): String = synchronized(SECRET_LOCK) {
+        Base64.encodeToString(
+            encrypt(value.toByteArray(Charsets.UTF_8), getOrCreateKey()),
             Base64.NO_WRAP
         )
     }
 
     /** 解密由 encryptSecret 保存的敏感字符串。 */
-    fun decryptSecret(value: String): String {
-        return String(
-            decrypt(Base64.decode(value, Base64.NO_WRAP)),
+    fun decryptSecret(value: String): String = synchronized(SECRET_LOCK) {
+        val key = getExistingKeyOrNull() ?: error("Android Keystore database key is unavailable")
+        String(
+            decrypt(Base64.decode(value, Base64.NO_WRAP), key),
             Charsets.UTF_8
         )
     }
 
-    private fun encrypt(plainText: ByteArray): ByteArray {
+    private fun encrypt(plainText: ByteArray, key: SecretKey): ByteArray {
         val cipher = Cipher.getInstance(TRANSFORMATION)
-        cipher.init(Cipher.ENCRYPT_MODE, getOrCreateKey())
+        cipher.init(Cipher.ENCRYPT_MODE, key)
         val iv = cipher.iv
         val encrypted = cipher.doFinal(plainText)
         return iv + encrypted
     }
 
-    private fun decrypt(payload: ByteArray): ByteArray {
+    private fun decrypt(payload: ByteArray, key: SecretKey): ByteArray {
         require(payload.size > GCM_IV_SIZE_BYTES) { "Stored database passphrase is invalid" }
         val iv = payload.copyOfRange(0, GCM_IV_SIZE_BYTES)
         val encrypted = payload.copyOfRange(GCM_IV_SIZE_BYTES, payload.size)
         val cipher = Cipher.getInstance(TRANSFORMATION)
-        cipher.init(Cipher.DECRYPT_MODE, getOrCreateKey(), GCMParameterSpec(GCM_TAG_SIZE_BITS, iv))
+        cipher.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(GCM_TAG_SIZE_BITS, iv))
         return cipher.doFinal(encrypted)
     }
 
     private fun getOrCreateKey(): SecretKey {
+        getExistingKeyOrNull()?.let { return it }
+
+        val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, ANDROID_KEYSTORE)
+        generator.init(
+            KeyGenParameterSpec.Builder(
+                KEY_ALIAS,
+                KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT
+            )
+                .setKeySize(KEY_SIZE_BITS)
+                .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+                .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+                .setUserAuthenticationRequired(false)
+                .build()
+        )
+        // 直接使用生成结果，避免依赖生成前加载的 KeyStore 快照读取新密钥。
+        return generator.generateKey()
+    }
+
+    private fun getExistingKeyOrNull(): SecretKey? {
         val keyStore = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
         if (!keyStore.containsAlias(KEY_ALIAS)) {
-            val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, ANDROID_KEYSTORE)
-            generator.init(
-                KeyGenParameterSpec.Builder(
-                    KEY_ALIAS,
-                    KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT
-                )
-                    .setKeySize(KEY_SIZE_BITS)
-                    .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
-                    .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
-                    .setUserAuthenticationRequired(false)
-                    .build()
-            )
-            generator.generateKey()
+            return null
         }
-
         return (keyStore.getEntry(KEY_ALIAS, null) as? KeyStore.SecretKeyEntry)?.secretKey
             ?: error("Android Keystore database key is unavailable")
     }
@@ -102,5 +118,6 @@ class KeyStoreSecretStore(context: Context) {
         const val PASSPHRASE_SIZE_BYTES = 32
         const val GCM_IV_SIZE_BYTES = 12
         const val GCM_TAG_SIZE_BITS = 128
+        val SECRET_LOCK = Any()
     }
 }
