@@ -10,6 +10,7 @@ import com.jotbill.app.data.JotBillDatabaseProvider
 import com.jotbill.app.data.LedgerRepository
 import com.jotbill.app.data.seed.DefaultDataInitializer
 import com.jotbill.app.data.entity.AccountEntity
+import com.jotbill.app.data.entity.BalanceCalibrationEntity
 import com.jotbill.app.data.entity.BillEntity
 import com.jotbill.app.data.entity.BudgetEntity
 import com.jotbill.app.data.entity.CategoryEntity
@@ -17,6 +18,7 @@ import com.jotbill.app.data.entity.FinancialGoalEntity
 import com.jotbill.app.data.entity.PendingTransactionEntity
 import com.jotbill.app.data.entity.RuleEntity
 import com.jotbill.app.data.model.CategoryStatRow
+import com.jotbill.app.data.model.BalanceTimelineBillRow
 import com.jotbill.app.data.model.PlatformStatRow
 import com.jotbill.app.data.model.TrendRow
 import kotlinx.coroutines.CancellationException
@@ -27,8 +29,10 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
+import java.time.DateTimeException
 import java.time.LocalDate
 import java.time.ZoneId
+import java.time.YearMonth
 import java.util.UUID
 
 /**
@@ -372,6 +376,119 @@ class DataModule(
         JSONArray().also { array ->
             database.balanceCalibrationDao().getByAccount(id)
                 .forEach { array.put(BridgeDtoMapper.calibration(it)) }
+        }.toString()
+    }
+
+    @ReactMethod
+    fun getAccountBalanceTimeline(optionsJson: String?, promise: Promise) = launch(promise) {
+        val options = parseBalanceTimelineOptions(parseJson(optionsJson))
+        val periods = buildBalanceTimelinePeriods(options)
+        val endMillis = periods.last().endMillis
+        val allAccounts = database.accountDao().getAll()
+        val accountsById = allAccounts.associateBy { it.id }
+        allAccounts.forEach { account ->
+            if (account.kind !in setOf("asset", "liability")) {
+                throw BridgeException("DATA_CONFLICT", "Account ${account.id} has an unsupported kind")
+            }
+        }
+        val activeAccounts = allAccounts
+            .filter { it.isActive }
+            .sortedWith(compareBy<AccountEntity> { it.sortOrder }.thenBy { it.id })
+
+        val bills = database.billDao().getBalanceTimelineBills(endMillis)
+        val calibrations = database.balanceCalibrationDao().getForBalanceTimeline(endMillis)
+        val calibrationsById = calibrations.associateBy { it.id }
+        val events = ArrayList<BalanceTimelineEvent>(bills.size + calibrations.size)
+
+        bills.forEach { bill ->
+            validateBalanceTimelineBill(bill, accountsById)
+            if (bill.type == "adjustment") {
+                val calibration = calibrationsById[bill.id]
+                    ?: throw BridgeException(
+                        "DATA_CONFLICT",
+                        "Adjustment bill ${bill.id} has no matching balance calibration"
+                    )
+                if (calibration.createdAt != bill.occurredAt) {
+                    throw BridgeException(
+                        "DATA_CONFLICT",
+                        "Adjustment bill ${bill.id} does not match its calibration time"
+                    )
+                }
+            } else {
+                events += BalanceTimelineEvent(
+                    at = bill.occurredAt,
+                    kind = 1,
+                    id = bill.id,
+                    bill = bill
+                )
+            }
+        }
+        calibrations.forEach { calibration ->
+            validateBalanceTimelineCalibration(calibration, accountsById)
+            events += BalanceTimelineEvent(
+                at = calibration.createdAt,
+                kind = 0,
+                id = calibration.id,
+                calibration = calibration
+            )
+        }
+        events.sortWith(compareBy<BalanceTimelineEvent>({ it.at }, { it.kind }, { it.id }))
+
+        val balances = activeAccounts.associate { it.id to it.initialBalanceMinor }.toMutableMap()
+        val points = JSONArray()
+        var eventIndex = 0
+        periods.forEach { period ->
+            while (eventIndex < events.size && events[eventIndex].at <= period.endMillis) {
+                val event = events[eventIndex]
+                event.bill?.let { applyBalanceTimelineBill(it, balances) }
+                event.calibration?.let { addBalanceTimelineDelta(balances, it.accountId, it.diffMinor) }
+                eventIndex += 1
+            }
+
+            var totalAssets = 0L
+            var totalLiabilities = 0L
+            val accountPoints = JSONArray()
+            activeAccounts.forEach { account ->
+                if (account.createdAt <= period.endMillis) {
+                    val balance = balances[account.id]
+                        ?: throw BridgeException("DB_ERROR", "Missing balance for account ${account.id}")
+                    accountPoints.put(JSONObject().apply {
+                        put("accountId", account.id)
+                        put("kind", account.kind)
+                        put("balanceMinor", balance)
+                    })
+                    if (account.kind == "asset") {
+                        totalAssets = addBalanceTimelineAmount(totalAssets, balance, "totalAssetsMinor")
+                    } else {
+                        totalLiabilities = addBalanceTimelineAmount(
+                            totalLiabilities,
+                            absoluteBalanceTimelineAmount(balance),
+                            "totalLiabilitiesMinor"
+                        )
+                    }
+                }
+            }
+
+            points.put(JSONObject().apply {
+                put("period", period.key)
+                put("periodEnd", BridgeDtoMapper.formatTimestamp(period.endMillis))
+                put("accounts", accountPoints)
+                put("accountCount", accountPoints.length())
+                put("totalAssetsMinor", totalAssets)
+                put("totalLiabilitiesMinor", totalLiabilities)
+                put(
+                    "netWorthMinor",
+                    subtractBalanceTimelineAmount(totalAssets, totalLiabilities, "netWorthMinor")
+                )
+            })
+        }
+
+        JSONObject().apply {
+            put("startDate", options.startDate.toString())
+            put("endDate", options.endDate.toString())
+            put("period", options.period)
+            put("accountScope", "active_current_accounts")
+            put("points", points)
         }.toString()
     }
 
@@ -818,6 +935,226 @@ class DataModule(
         return JSONArray().also { array -> grouped.values.forEach(array::put) }
     }
 
+    private fun parseBalanceTimelineOptions(input: JSONObject): BalanceTimelineOptionsValue {
+        val period = BridgeDtoMapper.requiredString(input, "period")
+        if (period !in setOf("day", "month")) {
+            throw BridgeException("INVALID_ARGUMENT", "period must be day or month")
+        }
+        val startDate = parseBalanceTimelineDate(input, "startDate")
+        val endDate = parseBalanceTimelineDate(input, "endDate")
+        if (startDate.isAfter(endDate)) {
+            throw BridgeException("INVALID_ARGUMENT", "startDate must be before endDate")
+        }
+        if (period == "month" &&
+            (startDate.dayOfMonth != 1 || endDate.dayOfMonth != endDate.lengthOfMonth())
+        ) {
+            throw BridgeException(
+                "INVALID_ARGUMENT",
+                "month timeline range must start on the first day and end on the last day"
+            )
+        }
+        return BalanceTimelineOptionsValue(period, startDate, endDate)
+    }
+
+    private fun parseBalanceTimelineDate(input: JSONObject, key: String): LocalDate {
+        val value = BridgeDtoMapper.requiredString(input, key)
+        if (!value.matches(Regex("\\d{4}-\\d{2}-\\d{2}"))) {
+            throw BridgeException("INVALID_ARGUMENT", "$key must use YYYY-MM-DD")
+        }
+        return try {
+            LocalDate.parse(value)
+        } catch (error: DateTimeException) {
+            throw BridgeException("INVALID_ARGUMENT", "$key is not a valid calendar date", error)
+        }
+    }
+
+    private fun buildBalanceTimelinePeriods(
+        options: BalanceTimelineOptionsValue
+    ): List<BalanceTimelinePeriodValue> {
+        val zone = ZoneId.systemDefault()
+        val lastPeriod = if (options.period == "month") {
+            options.endDate.withDayOfMonth(1)
+        } else {
+            options.endDate
+        }
+        var cursor = if (options.period == "month") {
+            options.startDate.withDayOfMonth(1)
+        } else {
+            options.startDate
+        }
+        val periods = mutableListOf<BalanceTimelinePeriodValue>()
+        while (!cursor.isAfter(lastPeriod)) {
+            val nextPeriod = try {
+                if (options.period == "month") {
+                    cursor.plusMonths(1)
+                } else {
+                    cursor.plusDays(1)
+                }
+            } catch (error: DateTimeException) {
+                throw BridgeException("INVALID_ARGUMENT", "Timeline date is outside the supported range", error)
+            }
+            periods += BalanceTimelinePeriodValue(
+                key = if (options.period == "month") {
+                    YearMonth.from(cursor).toString()
+                } else {
+                    cursor.toString()
+                },
+                endMillis = localPeriodEndMillis(nextPeriod, zone)
+            )
+            if (periods.size > MAX_BALANCE_TIMELINE_POINTS) {
+                throw BridgeException("INVALID_ARGUMENT", "Balance timeline range is too large")
+            }
+            cursor = nextPeriod
+        }
+        return periods
+    }
+
+    private fun localPeriodEndMillis(nextPeriod: LocalDate, zone: ZoneId): Long {
+        return try {
+            Math.subtractExact(
+                nextPeriod.atStartOfDay(zone).toInstant().toEpochMilli(),
+                1L
+            )
+        } catch (error: DateTimeException) {
+            throw BridgeException("INVALID_ARGUMENT", "Timeline date is outside the supported range", error)
+        } catch (error: ArithmeticException) {
+            throw BridgeException("INVALID_ARGUMENT", "Timeline date is outside the supported range", error)
+        }
+    }
+
+    private fun validateBalanceTimelineBill(
+        bill: BalanceTimelineBillRow,
+        accountsById: Map<String, AccountEntity>
+    ) {
+        if (bill.amountMinor < 0L) {
+            throw BridgeException("DATA_CONFLICT", "Bill ${bill.id} has a negative amount")
+        }
+        validateBalanceTimelineAccountRef(bill.accountId, "accountId", bill.occurredAt, accountsById)
+        validateBalanceTimelineAccountRef(
+            bill.targetAccountId,
+            "targetAccountId",
+            bill.occurredAt,
+            accountsById
+        )
+        when (bill.type) {
+            "income", "expense", "refund", "fee", "adjustment" -> Unit
+            "transfer", "repayment" -> {
+                if (bill.targetAccountId == null) {
+                    throw BridgeException(
+                        "DATA_CONFLICT",
+                        "${bill.type} bill ${bill.id} has no target account"
+                    )
+                }
+                if (bill.accountId != null && bill.accountId == bill.targetAccountId) {
+                    throw BridgeException(
+                        "DATA_CONFLICT",
+                        "${bill.type} bill ${bill.id} cannot use the same source and target account"
+                    )
+                }
+            }
+            else -> throw BridgeException(
+                "DATA_CONFLICT",
+                "Bill ${bill.id} has an unsupported transaction type"
+            )
+        }
+        if (bill.type == "adjustment" && bill.accountId == null) {
+            throw BridgeException("DATA_CONFLICT", "Adjustment bill ${bill.id} has no account")
+        }
+    }
+
+    private fun validateBalanceTimelineAccountRef(
+        accountId: String?,
+        field: String,
+        eventAt: Long,
+        accountsById: Map<String, AccountEntity>
+    ) {
+        if (accountId == null) return
+        val account = accountsById[accountId]
+            ?: throw BridgeException("DATA_CONFLICT", "$field references a missing account")
+        if (eventAt < account.createdAt) {
+            throw BridgeException(
+                "DATA_CONFLICT",
+                "$field event occurs before account creation"
+            )
+        }
+    }
+
+    private fun validateBalanceTimelineCalibration(
+        calibration: BalanceCalibrationEntity,
+        accountsById: Map<String, AccountEntity>
+    ) {
+        val account = accountsById[calibration.accountId]
+            ?: throw BridgeException("DATA_CONFLICT", "Calibration references a missing account")
+        if (calibration.createdAt < account.createdAt) {
+            throw BridgeException("DATA_CONFLICT", "Calibration occurs before account creation")
+        }
+        val expectedAfter = try {
+            Math.addExact(calibration.beforeBalanceMinor, calibration.diffMinor)
+        } catch (error: ArithmeticException) {
+            throw BridgeException("DATA_CONFLICT", "Calibration amount is out of range", error)
+        }
+        if (expectedAfter != calibration.afterBalanceMinor) {
+            throw BridgeException("DATA_CONFLICT", "Calibration amount fields are inconsistent")
+        }
+    }
+
+    private fun applyBalanceTimelineBill(
+        bill: BalanceTimelineBillRow,
+        balances: MutableMap<String, Long>
+    ) {
+        when (bill.type) {
+            "income", "refund" -> addBalanceTimelineDelta(balances, bill.accountId, bill.amountMinor)
+            "expense", "fee" -> addBalanceTimelineDelta(
+                balances,
+                bill.accountId,
+                Math.negateExact(bill.amountMinor)
+            )
+            "transfer", "repayment" -> {
+                // 与 LedgerRepository 的实际规则一致：源账户不改，目标账户增加金额。
+                addBalanceTimelineDelta(balances, bill.targetAccountId, bill.amountMinor)
+            }
+            "adjustment" -> Unit
+        }
+    }
+
+    private fun addBalanceTimelineDelta(
+        balances: MutableMap<String, Long>,
+        accountId: String?,
+        delta: Long
+    ) {
+        if (accountId == null || !balances.containsKey(accountId)) return
+        val current = balances[accountId]
+            ?: throw BridgeException("DB_ERROR", "Missing balance for account $accountId")
+        balances[accountId] = try {
+            Math.addExact(current, delta)
+        } catch (error: ArithmeticException) {
+            throw BridgeException("DATA_CONFLICT", "Account balance is out of range", error)
+        }
+    }
+
+    private fun addBalanceTimelineAmount(current: Long, delta: Long, field: String): Long {
+        return try {
+            Math.addExact(current, delta)
+        } catch (error: ArithmeticException) {
+            throw BridgeException("DATA_CONFLICT", "$field is out of range", error)
+        }
+    }
+
+    private fun subtractBalanceTimelineAmount(current: Long, delta: Long, field: String): Long {
+        return try {
+            Math.subtractExact(current, delta)
+        } catch (error: ArithmeticException) {
+            throw BridgeException("DATA_CONFLICT", "$field is out of range", error)
+        }
+    }
+
+    private fun absoluteBalanceTimelineAmount(value: Long): Long {
+        if (value == Long.MIN_VALUE) {
+            throw BridgeException("DATA_CONFLICT", "Liability balance is out of range")
+        }
+        return if (value < 0L) -value else value
+    }
+
     private fun percentage(amount: Long, total: Long): Double =
         if (total == 0L) 0.0 else amount.toDouble() * 100.0 / total.toDouble()
 
@@ -945,6 +1282,26 @@ class DataModule(
     }
 }
 
+private data class BalanceTimelineOptionsValue(
+    val period: String,
+    val startDate: LocalDate,
+    val endDate: LocalDate
+)
+
+private data class BalanceTimelinePeriodValue(
+    val key: String,
+    val endMillis: Long
+)
+
+private data class BalanceTimelineEvent(
+    val at: Long,
+    val kind: Int,
+    val id: String,
+    val bill: BalanceTimelineBillRow? = null,
+    val calibration: BalanceCalibrationEntity? = null
+)
+
+private const val MAX_BALANCE_TIMELINE_POINTS = 3_660
 private const val MAX_SAFE_MINOR_UNIT = 9_007_199_254_740_991L
 
 internal fun dataErrorCode(message: String?): String {

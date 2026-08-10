@@ -269,6 +269,36 @@ export interface NetWorthSummary {
   updatedAt: string;
 }
 
+export interface AccountBalanceTimelineOptions {
+  startDate: string;
+  endDate: string;
+  period: 'day' | 'month';
+}
+
+export interface AccountBalanceTimelineAccount {
+  accountId: string;
+  kind: Account['kind'];
+  balanceMinor: number;
+}
+
+export interface AccountBalanceTimelinePoint {
+  period: string;
+  periodEnd: string;
+  accounts: AccountBalanceTimelineAccount[];
+  accountCount: number;
+  totalAssetsMinor: number;
+  totalLiabilitiesMinor: number;
+  netWorthMinor: number;
+}
+
+export interface AccountBalanceTimeline {
+  startDate: string;
+  endDate: string;
+  period: 'day' | 'month';
+  accountScope: 'active_current_accounts';
+  points: AccountBalanceTimelinePoint[];
+}
+
 export interface CategoryStatistic {
   categoryId: string;
   categoryName: string;
@@ -313,6 +343,7 @@ interface RawDataModule {
   calibrateAccountBalance(id: string, actualBalanceMinor: number, note?: string | null): Promise<string>;
   getNetWorth(): Promise<string>;
   getBalanceCalibrations(accountId: string): Promise<string>;
+  getAccountBalanceTimeline(optionsJson: string): Promise<string>;
   getCategories(type?: Category['type'] | null): Promise<string>;
   addCategory(inputJson: string): Promise<string>;
   updateCategory(id: string, inputJson: string): Promise<string>;
@@ -461,6 +492,15 @@ export const nativeData = {
     return parseJson(
       await getRawDataModule().getBalanceCalibrations(accountId),
       'getBalanceCalibrations',
+    );
+  },
+
+  async getAccountBalanceTimeline(
+    options: AccountBalanceTimelineOptions,
+  ): Promise<AccountBalanceTimeline> {
+    return parseJson(
+      await getRawDataModule().getAccountBalanceTimeline(JSON.stringify(options)),
+      'getAccountBalanceTimeline',
     );
   },
 

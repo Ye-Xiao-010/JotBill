@@ -13,4 +13,7 @@ interface BalanceCalibrationDao {
 
     @Query("SELECT * FROM balance_calibrations WHERE account_id = :accountId ORDER BY created_at DESC")
     suspend fun getByAccount(accountId: String): List<BalanceCalibrationEntity>
+
+    @Query("SELECT * FROM balance_calibrations WHERE created_at <= :endDate ORDER BY created_at ASC, id ASC")
+    suspend fun getForBalanceTimeline(endDate: Long): List<BalanceCalibrationEntity>
 }

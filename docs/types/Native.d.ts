@@ -337,6 +337,46 @@ export interface NetWorthSummary {
  * 账户余额统计(LiteNote AccountBalance,保留兼容)
  * @deprecated 建议使用 NetWorthSummary
  */
+/**
+ * 账户余额时间线查询参数。日期均为设备本地日历日期，范围首尾均包含。
+ * month 粒度要求 startDate 为月初、endDate 为月末，以保证每个点都是完整周期末余额。
+ */
+export interface AccountBalanceTimelineOptions {
+  startDate: string;
+  endDate: string;
+  period: 'day' | 'month';
+}
+
+export interface AccountBalanceTimelineAccount {
+  accountId: string;
+  kind: AccountKind;
+  balanceMinor: number;
+}
+
+/** 一个本地日历周期末快照；period 为 YYYY-MM-DD 或 YYYY-MM。 */
+export interface AccountBalanceTimelinePoint {
+  period: string;
+  periodEnd: string;
+  accounts: AccountBalanceTimelineAccount[];
+  accountCount: number;
+  totalAssetsMinor: number;
+  totalLiabilitiesMinor: number;
+  netWorthMinor: number;
+}
+
+/**
+ * 只纳入查询时仍启用的账户；schema 没有停用历史，因此不伪造过去的启用状态。
+ * Native 按账单 occurredAt、校准 createdAt 重放余额，并遵循现有 transfer/repayment 规则。
+ */
+export interface AccountBalanceTimeline {
+  startDate: string;
+  endDate: string;
+  period: 'day' | 'month';
+  accountScope: 'active_current_accounts';
+  points: AccountBalanceTimelinePoint[];
+}
+
+/** 账户余额兼容类型，保留旧调用方使用。 */
 export interface AccountBalance {
   totalAssets: number;
   totalLiabilities: number;
@@ -1003,6 +1043,7 @@ export interface DataModule {
   calibrateAccountBalance(id: string, actualBalanceMinor: number, note?: string): Promise<BalanceCalibration>;
   getNetWorth(): Promise<NetWorthSummary>;
   getBalanceCalibrations(accountId: string): Promise<BalanceCalibration[]>;
+  getAccountBalanceTimeline(options: AccountBalanceTimelineOptions): Promise<AccountBalanceTimeline>;
 
   // 分类
   getCategories(type?: 'income' | 'expense'): Promise<Category[]>;

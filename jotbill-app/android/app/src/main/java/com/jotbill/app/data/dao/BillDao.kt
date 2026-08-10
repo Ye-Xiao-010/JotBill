@@ -8,6 +8,7 @@ import androidx.room.Query
 import androidx.room.Update
 import com.jotbill.app.data.entity.BillEntity
 import com.jotbill.app.data.model.BillSummary
+import com.jotbill.app.data.model.BalanceTimelineBillRow
 import com.jotbill.app.data.model.CategoryStatRow
 import com.jotbill.app.data.model.PlatformStatRow
 import com.jotbill.app.data.model.TrendRow
@@ -157,6 +158,22 @@ interface BillDao {
 
     @Query("SELECT * FROM bills ORDER BY occurred_at ASC, id ASC")
     suspend fun getAllForExport(): List<BillEntity>
+
+    @Query(
+        """
+        SELECT
+          id,
+          amount_minor AS amountMinor,
+          type,
+          occurred_at AS occurredAt,
+          account_id AS accountId,
+          target_account_id AS targetAccountId
+        FROM bills
+        WHERE occurred_at <= :endDate
+        ORDER BY occurred_at ASC, id ASC
+        """
+    )
+    suspend fun getBalanceTimelineBills(endDate: Long): List<BalanceTimelineBillRow>
 
     @Query(
         """

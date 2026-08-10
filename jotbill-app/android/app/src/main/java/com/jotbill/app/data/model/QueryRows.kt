@@ -31,3 +31,12 @@ data class NetWorthRow(
     val totalAssets: Long,
     val totalLiabilities: Long
 )
+
+data class BalanceTimelineBillRow(
+    val id: String,
+    val amountMinor: Long,
+    val type: String,
+    val occurredAt: Long,
+    val accountId: String?,
+    val targetAccountId: String?
+)
