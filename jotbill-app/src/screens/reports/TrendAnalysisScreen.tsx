@@ -38,6 +38,19 @@ interface TrendDataPoint {
   value: number;
 }
 
+function selectTrendValue(
+  incomeMinor: number,
+  expenseMinor: number,
+  dataType: DataType,
+): number {
+  const amountMinor = dataType === 'expense'
+    ? expenseMinor
+    : dataType === 'income'
+      ? incomeMinor
+      : incomeMinor - expenseMinor;
+  return amountMinor / 100;
+}
+
 export default function TrendAnalysisScreen() {
   const styles = useStyles(createStyles);
   const [period, setPeriod] = useState<PeriodType>('month');
@@ -53,59 +66,98 @@ export default function TrendAnalysisScreen() {
       const today = new Date();
       let dataPoints: TrendDataPoint[] = [];
 
-      const getValue = async (startDate: string, endDate: string) => {
-        const stats = await nativeData.getBillStatistics({ startDate, endDate });
-        const amountMinor = dataType === 'expense'
-          ? stats.totalExpense
-          : dataType === 'income'
-            ? stats.totalIncome
-            : stats.balance;
-        return amountMinor / 100;
-      };
-
       switch (period) {
-        case 'week':
+        case 'week': {
+          const rangeStart = new Date(today);
+          rangeStart.setDate(today.getDate() - 6);
+          const stats = await nativeData.getBillStatistics({
+            startDate: formatDate(rangeStart),
+            endDate: formatDate(today),
+          });
+          const dailyByDate = new Map(
+            stats.dailyTrends.map((trend) => [trend.date, trend]),
+          );
+
           for (let i = 6; i >= 0; i--) {
             const date = new Date(today);
             date.setDate(today.getDate() - i);
             const dateStr = formatDate(date);
-            const value = await getValue(dateStr, dateStr);
+            const trend = dailyByDate.get(dateStr);
             dataPoints.push({
               label: `${date.getMonth() + 1}/${date.getDate()}`,
-              value,
+              value: selectTrendValue(
+                trend?.income ?? 0,
+                trend?.expense ?? 0,
+                dataType,
+              ),
             });
           }
           break;
+        }
 
-        case 'month':
-          for (let i = 3; i >= 0; i--) {
+        case 'month': {
+          const rangeStart = new Date(today);
+          rangeStart.setDate(today.getDate() - 27);
+          const stats = await nativeData.getBillStatistics({
+            startDate: formatDate(rangeStart),
+            endDate: formatDate(today),
+          });
+          const dailyByDate = new Map(
+            stats.dailyTrends.map((trend) => [trend.date, trend]),
+          );
+
+          for (let index = 0; index < 4; index++) {
+            const daysAgo = (3 - index) * 7;
             const endDate = new Date(today);
-            endDate.setDate(today.getDate() - i * 7);
-            const startDateWeek = new Date(endDate);
-            startDateWeek.setDate(endDate.getDate() - 6);
+            endDate.setDate(today.getDate() - daysAgo);
+            const startDate = new Date(endDate);
+            startDate.setDate(endDate.getDate() - 6);
 
-            const value = await getValue(formatDate(startDateWeek), formatDate(endDate));
+            let incomeMinor = 0;
+            let expenseMinor = 0;
+            for (let offset = 0; offset < 7; offset++) {
+              const date = new Date(startDate);
+              date.setDate(startDate.getDate() + offset);
+              const trend = dailyByDate.get(formatDate(date));
+              incomeMinor += trend?.income ?? 0;
+              expenseMinor += trend?.expense ?? 0;
+            }
 
             dataPoints.push({
-              label: `第${4 - i}周`,
-              value,
+              label: `第${index + 1}周`,
+              value: selectTrendValue(incomeMinor, expenseMinor, dataType),
             });
           }
           break;
+        }
 
-        case 'year':
-          for (let i = 5; i >= 0; i--) {
-            const monthDate = new Date(today.getFullYear(), today.getMonth() - i, 1);
-            const nextMonth = new Date(today.getFullYear(), today.getMonth() - i + 1, 0);
+        case 'year': {
+          const rangeStart = new Date(today.getFullYear(), today.getMonth() - 5, 1);
+          const rangeEnd = new Date(today.getFullYear(), today.getMonth() + 1, 0);
+          const stats = await nativeData.getBillStatistics({
+            startDate: formatDate(rangeStart),
+            endDate: formatDate(rangeEnd),
+          });
+          const monthlyByMonth = new Map(
+            stats.monthlyTrends.map((trend) => [trend.month, trend]),
+          );
 
-            const value = await getValue(formatDate(monthDate), formatDate(nextMonth));
+          for (let offset = 5; offset >= 0; offset--) {
+            const monthDate = new Date(today.getFullYear(), today.getMonth() - offset, 1);
+            const monthKey = `${monthDate.getFullYear()}-${String(monthDate.getMonth() + 1).padStart(2, '0')}`;
+            const trend = monthlyByMonth.get(monthKey);
 
             dataPoints.push({
               label: `${monthDate.getMonth() + 1}月`,
-              value,
+              value: selectTrendValue(
+                trend?.income ?? 0,
+                trend?.expense ?? 0,
+                dataType,
+              ),
             });
           }
           break;
+        }
       }
 
       setTrendData(dataPoints);

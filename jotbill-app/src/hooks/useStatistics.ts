@@ -85,6 +85,12 @@ function formatDate(date: Date): string {
   return `${year}-${month}-${day}`;
 }
 
+/** 将 YYYY-MM-DD 按本地日历解析，避免 JavaScript 按 UTC 解释日期字符串。 */
+function parseLocalDate(dateString: string): Date {
+  const [year, month, day] = dateString.split('-').map(Number);
+  return new Date(year, month - 1, day);
+}
+
 /**
  * 获取统计数据
  */
@@ -92,7 +98,7 @@ async function fetchStatistics(params: StatisticsParams): Promise<StatisticsData
   const { startDate, endDate } = params;
 
   // 计算上一周期的日期范围
-  const currentDate = new Date(startDate);
+  const currentDate = parseLocalDate(startDate);
   const prevRange = getPreviousDateRange(currentDate, params.period);
 
   // 并行获取当前周期和上一周期的数据
