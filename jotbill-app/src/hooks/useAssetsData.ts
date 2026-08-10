@@ -1,6 +1,6 @@
 /**
  * useAssetsData - 资产 Tab 数据 hook
- * 净资产以账户余额为准，收支统计只用于趋势和构成展示。
+ * 净资产以账户余额为准，收支统计只用于分类构成和累计收入/支出，资产趋势来自账户余额时间线。
  */
 import { useQuery } from '@tanstack/react-query';
 import { nativeData } from '../native';
@@ -45,8 +45,7 @@ export function useAssetsData() {
     gcTime: GC_TIME.DEFAULT,
   });
 
-  // 获取近12月统计（趋势折线图用）
-  // 收支统计仍用于资产页的分类构成展示。
+  // 获取近12个月的收支分类构成统计。
   const trendQuery = useQuery({
     queryKey: ['asset-trend', currentYear, currentMonth],
     queryFn: async () => {
