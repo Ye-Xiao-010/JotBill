@@ -14,6 +14,7 @@ import {
   type ReportBill,
 } from '../../hooks/useIncomeExpenseData';
 import { CalendarGrid, PeriodNavigator } from '../../components/reports';
+import { Button } from '../../components/ui';
 import BillItem from '../../components/business/BillItem';
 import type { BillData as BillItemData } from '../../components/business/BillItem';
 
@@ -44,7 +45,14 @@ export default function DailyView({
   }, [initialYear, initialMonth, initialSelectedDay]);
 
   const { dailyMap, isLoading, refetch } = useDailyGridData(year, month);
-  const { bills, isLoading: billsLoading } = useDailyBills(selectedDay);
+  const {
+    bills,
+    isLoading: billsLoading,
+    isFetching: billsFetching,
+    isError: billsError,
+    error: billsQueryError,
+    refetch: refetchBills,
+  } = useDailyBills(selectedDay);
 
   const handlePrev = () => {
     if (month === 0) {
@@ -135,6 +143,24 @@ export default function DailyView({
               style={styles.loading}
               color={styles._colors.primary}
             />
+          ) : billsError ? (
+            <View style={styles.errorState}>
+              <Text style={styles.errorTitle}>当天记录加载失败</Text>
+              <Text style={styles.errorText}>
+                {billsQueryError instanceof Error && billsQueryError.message
+                  ? billsQueryError.message
+                  : '本地账单明细读取失败，请重试。'}
+              </Text>
+              <Button
+                title="重新加载"
+                variant="outline"
+                size="small"
+                loading={billsFetching}
+                onPress={() => {
+                  void refetchBills();
+                }}
+              />
+            </View>
           ) : bills.length > 0 ? (
             bills.map((bill) => (
               <BillItem
@@ -192,6 +218,24 @@ const createStyles = (colors: ThemeColors) => ({
     },
     loading: {
       padding: spacing.xxxl,
+    },
+    errorState: {
+      alignItems: 'center',
+      paddingHorizontal: spacing.lg,
+      paddingVertical: spacing.xxl,
+    },
+    errorTitle: {
+      fontSize: 15,
+      fontWeight: '800',
+      color: colors.error,
+      textAlign: 'center',
+      marginBottom: spacing.sm,
+    },
+    errorText: {
+      fontSize: 13,
+      color: colors.textSecondary,
+      textAlign: 'center',
+      marginBottom: spacing.md,
     },
     emptyText: {
       fontSize: 14,

@@ -243,6 +243,10 @@ export function useDailyBills(date: string | null) {
   return {
     bills: query.data ?? [],
     isLoading: query.isLoading,
+    isFetching: query.isFetching,
+    isError: query.isError,
+    error: query.error,
+    refetch: query.refetch,
   };
 }
 
