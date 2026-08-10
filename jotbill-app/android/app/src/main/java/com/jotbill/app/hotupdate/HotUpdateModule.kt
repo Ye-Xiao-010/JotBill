@@ -19,9 +19,14 @@ class HotUpdateModule(reactContext: ReactApplicationContext) :
         private const val HOT_UPDATE_TEMP_DIR = "hot_update_temp"
         private const val HOT_UPDATE_PREVIOUS_DIR = "hot_update_previous"
         private const val BUNDLE_FILE = "index.android.bundle"
-    }
+        private const val KEY_SWAP_STATE = "swap_state"
+        private const val SWAP_IDLE = "idle"
+        private const val SWAP_PREPARED = "prepared"
+        private const val SWAP_CURRENT_MOVED = "current_moved"
+        private const val SWAP_CURRENT_INSTALLED = "current_installed"
 
-    private val replaceLock = Any()
+        private val fileSwapLock = Any()
+    }
 
     override fun getName(): String = NAME
 
@@ -31,6 +36,70 @@ class HotUpdateModule(reactContext: ReactApplicationContext) :
 
     private fun getHotUpdateDir(): File {
         return File(reactApplicationContext.filesDir, HOT_UPDATE_DIR)
+    }
+
+    private fun isUsableBundle(directory: File): Boolean {
+        val bundle = File(directory, BUNDLE_FILE)
+        return directory.isDirectory && bundle.isFile && bundle.length() > 0
+    }
+
+    private fun deleteDirectoryIfPresent(directory: File): Boolean {
+        if (!directory.exists()) return true
+        return directory.deleteRecursively() && !directory.exists()
+    }
+
+    private fun writeSwapState(prefs: SharedPreferences, state: String): Boolean {
+        return prefs.edit().putString(KEY_SWAP_STATE, state).commit()
+    }
+
+    /** 根据 marker 和目录状态恢复被进程中断的原子交换。 */
+    private fun recoverInterruptedSwapLocked(filesDir: File, prefs: SharedPreferences) {
+        val currentDir = File(filesDir, HOT_UPDATE_DIR)
+        val previousDir = File(filesDir, HOT_UPDATE_PREVIOUS_DIR)
+        val marker = prefs.getString(KEY_SWAP_STATE, SWAP_IDLE) ?: SWAP_IDLE
+
+        if (!previousDir.exists() && marker == SWAP_IDLE) return
+
+        if (isUsableBundle(currentDir)) {
+            if (!deleteDirectoryIfPresent(previousDir)) {
+                android.util.Log.w("HotUpdate", "新 bundle 可用，但旧备份清理失败，将保留现场重试")
+                return
+            }
+            if (!writeSwapState(prefs, SWAP_IDLE)) {
+                android.util.Log.w("HotUpdate", "热更新恢复 marker 清理失败，将在下次启动重试")
+            }
+            return
+        }
+
+        if (isUsableBundle(previousDir)) {
+            if (!deleteDirectoryIfPresent(currentDir)) {
+                android.util.Log.w("HotUpdate", "旧 bundle 可恢复，但不完整的新目录清理失败")
+                return
+            }
+            if (!previousDir.renameTo(currentDir) || !isUsableBundle(currentDir)) {
+                android.util.Log.w("HotUpdate", "热更新中断恢复失败，保留目录以避免丢失旧 bundle")
+                return
+            }
+            if (!writeSwapState(prefs, SWAP_IDLE)) {
+                android.util.Log.w("HotUpdate", "热更新恢复 marker 写入失败，将在下次启动重试")
+            }
+            return
+        }
+
+        if (marker != SWAP_IDLE || currentDir.exists() || previousDir.exists()) {
+            android.util.Log.w("HotUpdate", "热更新目录状态不完整，未删除现场")
+        }
+    }
+
+    /** 在 React Native 初始化前恢复上次未完成的目录交换。 */
+    @JvmStatic
+    fun recoverInterruptedSwap(context: Context) {
+        synchronized(fileSwapLock) {
+            recoverInterruptedSwapLocked(
+                context.filesDir,
+                context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE),
+            )
+        }
     }
 
     /**
@@ -47,6 +116,7 @@ class HotUpdateModule(reactContext: ReactApplicationContext) :
     @ReactMethod
     fun getUpdateInfo(promise: Promise) {
         try {
+            recoverInterruptedSwap(reactApplicationContext)
             val hotDir = getHotUpdateDir()
             val bundlePath = File(hotDir, BUNDLE_FILE)
             val prefs = getPrefs()
@@ -66,7 +136,7 @@ class HotUpdateModule(reactContext: ReactApplicationContext) :
     @ReactMethod
     fun applyPreparedBundle(promise: Promise) {
         try {
-            synchronized(replaceLock) {
+            synchronized(fileSwapLock) {
                 val filesDir = reactApplicationContext.filesDir
                 val preparedDir = File(filesDir, HOT_UPDATE_TEMP_DIR)
                 val currentDir = File(filesDir, HOT_UPDATE_DIR)
@@ -76,24 +146,57 @@ class HotUpdateModule(reactContext: ReactApplicationContext) :
                 if (!preparedDir.isDirectory || !preparedBundle.isFile || preparedBundle.length() <= 0) {
                     throw IllegalStateException("临时热更新 bundle 不完整")
                 }
-                if (previousDir.exists() && !previousDir.deleteRecursively()) {
-                    throw IllegalStateException("无法清理旧热更新备份")
+
+                recoverInterruptedSwapLocked(filesDir, getPrefs())
+                if (previousDir.exists()) {
+                    throw IllegalStateException("上次热更新交换尚未完成")
                 }
 
                 val hadCurrent = currentDir.exists()
+                if (!writeSwapState(getPrefs(), SWAP_PREPARED)) {
+                    throw IllegalStateException("无法记录热更新交换状态")
+                }
                 if (hadCurrent && !currentDir.renameTo(previousDir)) {
                     throw IllegalStateException("无法保留当前热更新 bundle")
                 }
+                if (!writeSwapState(getPrefs(), SWAP_CURRENT_MOVED)) {
+                    throw IllegalStateException("无法记录热更新交换进度")
+                }
 
                 if (!preparedDir.renameTo(currentDir)) {
-                    if (hadCurrent && !previousDir.renameTo(currentDir)) {
+                    val restored = !hadCurrent ||
+                        (previousDir.renameTo(currentDir) && isUsableBundle(currentDir))
+                    if (restored) {
+                        if (!writeSwapState(getPrefs(), SWAP_IDLE)) {
+                            throw IllegalStateException("热更新失败且无法记录回滚状态")
+                        }
+                    } else {
                         throw IllegalStateException("热更新失败且旧 bundle 回滚失败")
                     }
                     throw IllegalStateException("无法应用临时热更新 bundle")
                 }
 
-                if (previousDir.exists() && !previousDir.deleteRecursively()) {
-                    android.util.Log.w("HotUpdate", "旧热更新备份清理失败，将在下次更新时重试")
+                if (!isUsableBundle(currentDir)) {
+                    val removed = deleteDirectoryIfPresent(currentDir)
+                    val restored = !hadCurrent ||
+                        (previousDir.renameTo(currentDir) && isUsableBundle(currentDir))
+                    if (!removed || !restored) {
+                        throw IllegalStateException("热更新目录校验失败且旧 bundle 回滚失败")
+                    }
+                    if (!writeSwapState(getPrefs(), SWAP_IDLE)) {
+                        throw IllegalStateException("热更新目录校验失败且无法记录回滚状态")
+                    }
+                    throw IllegalStateException("热更新 bundle 校验失败")
+                }
+
+                if (!writeSwapState(getPrefs(), SWAP_CURRENT_INSTALLED)) {
+                    throw IllegalStateException("无法记录热更新安装状态")
+                }
+                if (!deleteDirectoryIfPresent(previousDir)) {
+                    throw IllegalStateException("新 bundle 已安装，但旧 bundle 备份清理失败")
+                }
+                if (!writeSwapState(getPrefs(), SWAP_IDLE)) {
+                    throw IllegalStateException("热更新已安装，但无法清理交换状态")
                 }
             }
             promise.resolve(true)
@@ -137,16 +240,21 @@ class HotUpdateModule(reactContext: ReactApplicationContext) :
     @ReactMethod
     fun clearHotUpdate(promise: Promise) {
         try {
-            val filesDir = reactApplicationContext.filesDir
-            listOf(
-                File(filesDir, HOT_UPDATE_DIR),
-                File(filesDir, HOT_UPDATE_TEMP_DIR),
-                File(filesDir, HOT_UPDATE_PREVIOUS_DIR)
-            ).forEach { directory ->
-                if (directory.exists()) directory.deleteRecursively()
+            synchronized(fileSwapLock) {
+                val filesDir = reactApplicationContext.filesDir
+                val deleted = listOf(
+                    File(filesDir, HOT_UPDATE_DIR),
+                    File(filesDir, HOT_UPDATE_TEMP_DIR),
+                    File(filesDir, HOT_UPDATE_PREVIOUS_DIR),
+                ).all { directory -> deleteDirectoryIfPresent(directory) }
+                if (!deleted) {
+                    promise.resolve(false)
+                } else if (!getPrefs().edit().clear().commit()) {
+                    promise.resolve(false)
+                } else {
+                    promise.resolve(true)
+                }
             }
-            getPrefs().edit().clear().apply()
-            promise.resolve(true)
         } catch (e: Exception) {
             promise.reject("CLEAR_ERROR", e.message)
         }

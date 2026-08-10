@@ -1,11 +1,11 @@
 /**
  * 应用更新检查 Hook
  */
-import { useEffect, useState, useCallback, useRef } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { Platform, NativeModules } from 'react-native';
 import RNFS from 'react-native-fs';
 import { appVersionApi, AppVersionInfo } from '../services/update/appVersion';
-import { getSafeUpdateUrl } from '../services/update/client';
+import { downloadUpdateFile, getSafeUpdateUrl } from '../services/update/client';
 import { useAlert } from '../providers';
 import packageJson from '../../package.json';
 
@@ -34,8 +34,6 @@ export function useAppUpdate(options: UseAppUpdateOptions = {}) {
     downloading: false,
     progress: 0,
   });
-  const downloadJobId = useRef<number | null>(null);
-
   const currentVersion = packageJson.version;
 
   const checkUpdate = useCallback(async (showNoUpdateAlert = false) => {
@@ -62,8 +60,9 @@ export function useAppUpdate(options: UseAppUpdateOptions = {}) {
       if (!result.hasUpdate && showNoUpdateAlert) {
         alert('检查更新', '当前已是最新版本');
       }
-    } catch (error) {
-      console.log('[useAppUpdate] 检查更新失败:', error);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : '更新服务暂时不可用';
+      console.log('[useAppUpdate] 检查更新失败:', message);
       setState(prev => ({ ...prev, checking: false }));
       if (showNoUpdateAlert) {
         alert('检查更新', '检查更新失败，请稍后重试');
@@ -85,36 +84,19 @@ export function useAppUpdate(options: UseAppUpdateOptions = {}) {
 
     try {
       const safeDownloadUrl = getSafeUpdateUrl(downloadUrl);
-      const downloadResult = RNFS.downloadFile({
-        fromUrl: safeDownloadUrl,
-        toFile: filePath,
-        progress: (res) => {
-          const progress = res.contentLength > 0
-            ? Math.round((res.bytesWritten / res.contentLength) * 100)
-            : 0;
-          setState(prev => ({ ...prev, progress }));
-        },
-        progressDivider: 1,
-        connectionTimeout: 10000,
-        readTimeout: 60000,
-      });
-
-      downloadJobId.current = downloadResult.jobId;
-
-      const result = await downloadResult.promise;
-      console.log('[useAppUpdate] 下载完成:', result);
-
-      if (result.statusCode === 200) {
-        setState(prev => ({ ...prev, downloading: false, showModal: false }));
-        // 安装 APK
-        await installApk(filePath);
-      } else {
-        throw new Error(`下载失败: ${result.statusCode}`);
-      }
-    } catch (error: any) {
+      await downloadUpdateFile(
+        safeDownloadUrl,
+        filePath,
+        (progress) => setState(prev => ({ ...prev, progress })),
+      );
+      setState(prev => ({ ...prev, downloading: false, showModal: false }));
+      // 安装 APK
+      await installApk(filePath);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : '下载更新包失败，请稍后重试';
       console.log('[useAppUpdate] 下载失败');
       setState(prev => ({ ...prev, downloading: false }));
-      alert('下载失败', error.message || '下载更新包失败，请稍后重试');
+      alert('下载失败', message);
     }
   }, [state.latestVersion, alert]);
 
@@ -129,8 +111,9 @@ export function useAppUpdate(options: UseAppUpdateOptions = {}) {
         await RNFS.scanFile(filePath);
         alert('下载完成', '请在通知栏或文件管理器中点击安装包进行安装');
       }
-    } catch (error) {
-      console.log('[useAppUpdate] 安装失败:', error);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : '安装失败';
+      console.log('[useAppUpdate] 安装失败:', message);
       alert('安装失败', '请手动安装下载的 APK 文件');
     }
   }, [alert]);
@@ -141,15 +124,6 @@ export function useAppUpdate(options: UseAppUpdateOptions = {}) {
       checkUpdate(false);
     }
   }, [autoCheck, checkUpdate]);
-
-  // 清理下载任务
-  useEffect(() => {
-    return () => {
-      if (downloadJobId.current) {
-        RNFS.stopDownload(downloadJobId.current);
-      }
-    };
-  }, []);
 
   return {
     ...state,

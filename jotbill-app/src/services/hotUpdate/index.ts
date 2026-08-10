@@ -6,12 +6,13 @@ import { NativeModules, Platform } from 'react-native';
 import RNFS from 'react-native-fs';
 import { unzip } from 'react-native-zip-archive';
 import { hotUpdateApi, HotUpdateBundleInfo } from '../update/hotUpdate';
-import { getSafeUpdateUrl } from '../update/client';
+import { downloadUpdateFile, getSafeUpdateUrl } from '../update/client';
 import bundleMeta from '../../../bundle-version.json';
 import packageJson from '../../../package.json';
 
 const HotUpdate = NativeModules.HotUpdate as {
   applyPreparedBundle?: () => Promise<boolean>;
+  clearHotUpdate?: () => Promise<boolean>;
   markBundleApplied?: () => void;
   reload?: () => void;
 } | undefined;
@@ -19,6 +20,17 @@ const HotUpdate = NativeModules.HotUpdate as {
 // 临时目录只用于下载和解压，正式目录由原生模块一次性替换。
 const TEMP_DIR = `${RNFS.DocumentDirectoryPath}/hot_update_temp`;
 const STAGED_BUNDLE_FILE = `${TEMP_DIR}/index.android.bundle`;
+
+// 所有会触碰临时目录或原生交换目录的操作共用一个服务层队列。
+let exclusiveTail: Promise<void> = Promise.resolve();
+let updateInFlight: Promise<boolean> | null = null;
+let clearInFlight: Promise<boolean> | null = null;
+
+function enqueueExclusive<T>(operation: () => Promise<T>): Promise<T> {
+  const queued = exclusiveTail.then(operation, operation);
+  exclusiveTail = queued.then(() => undefined, () => undefined);
+  return queued;
+}
 
 export type UpdateStatus =
   | 'idle'
@@ -90,6 +102,16 @@ async function cleanDir(dir: string): Promise<void> {
   }
 }
 
+/** 清理失败只记录警告，不改变已经完成的原生应用结果。 */
+async function bestEffortCleanDir(dir: string): Promise<void> {
+  try {
+    await cleanDir(dir);
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : '未知错误';
+    console.warn('[HotUpdate] 临时目录清理失败，保留已完成结果:', message);
+  }
+}
+
 /**
  * 检查热更新
  */
@@ -117,7 +139,49 @@ export async function checkForUpdate(): Promise<{
 /**
  * 下载并应用热更新
  */
-export async function downloadAndApplyUpdate(
+export function downloadAndApplyUpdate(
+  bundle: HotUpdateBundleInfo,
+  onProgress?: (progress: number) => void,
+): Promise<boolean> {
+  if (updateInFlight) {
+    return updateInFlight;
+  }
+
+  const operation = enqueueExclusive(() => runDownloadAndApplyUpdate(bundle, onProgress));
+  let tracked: Promise<boolean>;
+  tracked = operation.finally(() => {
+    if (updateInFlight === tracked) {
+      updateInFlight = null;
+    }
+  });
+  updateInFlight = tracked;
+  return tracked;
+}
+
+/** 清理入口也必须排在同一队列中，不能与下载、解压或原生交换并发。 */
+export function clearHotUpdate(): Promise<boolean> {
+  if (clearInFlight) {
+    return clearInFlight;
+  }
+
+  const operation = enqueueExclusive(async () => {
+    const clear = HotUpdate?.clearHotUpdate;
+    if (typeof clear !== 'function') {
+      throw new Error('当前版本不支持清理热更新');
+    }
+    return (await clear()) === true;
+  });
+  let tracked: Promise<boolean>;
+  tracked = operation.finally(() => {
+    if (clearInFlight === tracked) {
+      clearInFlight = null;
+    }
+  });
+  clearInFlight = tracked;
+  return tracked;
+}
+
+async function runDownloadAndApplyUpdate(
   bundle: HotUpdateBundleInfo,
   onProgress?: (progress: number) => void,
 ): Promise<boolean> {
@@ -155,14 +219,13 @@ export async function downloadAndApplyUpdate(
       }
     }
 
-    // 清理临时文件
-    await cleanDir(TEMP_DIR);
-
     return success;
-  } catch (error: any) {
-    console.error('[HotUpdate] 更新失败:', error.message);
-    await cleanDir(TEMP_DIR);
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : '未知错误';
+    console.error('[HotUpdate] 更新失败:', message);
     return false;
+  } finally {
+    await bestEffortCleanDir(TEMP_DIR);
   }
 }
 
@@ -178,25 +241,8 @@ async function downloadFullBundle(
   try {
     const safeDownloadUrl = getSafeUpdateUrl(bundle.downloadUrl);
 
-    // 1. 下载 zip
-    const downloadResult = RNFS.downloadFile({
-      fromUrl: safeDownloadUrl,
-      toFile: tempZipPath,
-      progress: (res) => {
-        const progress = res.contentLength > 0
-          ? Math.round((res.bytesWritten / res.contentLength) * 100)
-          : 0;
-        onProgress?.(progress);
-      },
-      progressDivider: 1,
-      connectionTimeout: 10000,
-      readTimeout: 60000,
-    });
-
-    const result = await downloadResult.promise;
-    if (result.statusCode !== 200) {
-      throw new Error(`下载失败: HTTP ${result.statusCode}`);
-    }
+    // 1. 通过拒绝重定向的更新客户端下载 zip。
+    await downloadUpdateFile(safeDownloadUrl, tempZipPath, onProgress);
 
     // 2. 校验 SHA256
     const hash = await computeSHA256(tempZipPath);
@@ -222,8 +268,9 @@ async function downloadFullBundle(
     await applyPreparedBundle();
 
     return true;
-  } catch (error: any) {
-    console.error('[HotUpdate] 完整包下载失败:', error.message);
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : '未知错误';
+    console.error('[HotUpdate] 完整包下载失败:', message);
     return false;
   }
 }

@@ -14,6 +14,7 @@ import com.jotbill.app.notification.PaymentNotificationPackage
 import com.jotbill.app.utils.InstallApkPackage
 import com.jotbill.app.utils.SentryLogger
 import com.jotbill.app.hotupdate.HotUpdatePackage
+import com.jotbill.app.hotupdate.HotUpdateModule
 import com.jotbill.app.bridge.DataPackage
 import com.jotbill.app.ai.AiPackage
 import com.jotbill.app.runtime.RuntimePackage
@@ -51,10 +52,17 @@ class MainApplication : Application(), ReactApplication {
               prefs.edit().putInt("crash_count", crashCount + 1).apply()
               android.util.Log.i("HotUpdate", "使用热更新 bundle (crash_count: ${crashCount + 1})")
               hotBundlePathCache = hotBundlePath.absolutePath
-          } else {
-              android.util.Log.w("HotUpdate", "崩溃次数过多 ($crashCount)，删除热更新，回退内置 bundle")
-              hotBundlePath.parentFile?.deleteRecursively()
-              prefs.edit().clear().apply()
+            } else {
+              android.util.Log.w("HotUpdate", "崩溃次数过多 ($crashCount)，尝试删除热更新并回退内置 bundle")
+              val hotUpdateDir = hotBundlePath.parentFile
+              val deleted = hotUpdateDir == null ||
+                  (!hotUpdateDir.exists() || (hotUpdateDir.deleteRecursively() && !hotUpdateDir.exists()))
+              if (!deleted) {
+                  android.util.Log.e("HotUpdate", "热更新目录删除失败，保留目录并回退内置 bundle")
+              }
+              if (deleted) {
+                  prefs.edit().clear().apply()
+              }
               hotBundlePathCache = null
           }
       } else {
@@ -115,6 +123,7 @@ class MainApplication : Application(), ReactApplication {
 
   override fun onCreate() {
     super.onCreate()
+    HotUpdateModule.recoverInterruptedSwap(this)
     loadReactNative(this)
     initializeSentry()
   }
