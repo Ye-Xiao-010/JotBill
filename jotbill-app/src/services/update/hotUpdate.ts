@@ -37,7 +37,7 @@ export const hotUpdateApi = {
       bundleVersion,
       platform,
     });
-    console.log('[HotUpdate] 检查结果:', JSON.stringify(result));
+    console.log('[HotUpdate] 检查完成:', result.hasUpdate, result.bundle?.bundleVersion ?? null);
     return result;
   },
 };

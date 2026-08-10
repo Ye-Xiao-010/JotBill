@@ -5,6 +5,7 @@ import { useEffect, useState, useCallback, useRef } from 'react';
 import { Platform, NativeModules } from 'react-native';
 import RNFS from 'react-native-fs';
 import { appVersionApi, AppVersionInfo } from '../services/update/appVersion';
+import { getSafeUpdateUrl } from '../services/update/client';
 import { useAlert } from '../providers';
 import packageJson from '../../package.json';
 
@@ -18,12 +19,12 @@ interface UpdateState {
 }
 
 interface UseAppUpdateOptions {
-  /** 是否在 hook 挂载时自动检查更新，默认 true */
+  /** 是否在 hook 挂载时自动检查更新，默认关闭，避免页面挂载触发联网。 */
   autoCheck?: boolean;
 }
 
 export function useAppUpdate(options: UseAppUpdateOptions = {}) {
-  const { autoCheck = true } = options;
+  const { autoCheck = false } = options;
   const { alert } = useAlert();
   const [state, setState] = useState<UpdateState>({
     checking: false,
@@ -45,7 +46,10 @@ export function useAppUpdate(options: UseAppUpdateOptions = {}) {
 
     try {
       const result = await appVersionApi.checkUpdate(currentVersion);
-      console.log('[useAppUpdate] API 返回结果:', JSON.stringify(result));
+      console.log('[useAppUpdate] 更新检查完成:', result.hasUpdate);
+      if (result.latestVersion) {
+        getSafeUpdateUrl(result.latestVersion.downloadUrl);
+      }
 
       setState(prev => ({
         ...prev,
@@ -77,20 +81,22 @@ export function useAppUpdate(options: UseAppUpdateOptions = {}) {
     const { downloadUrl, version } = state.latestVersion;
     const filePath = `${RNFS.CachesDirectoryPath}/app-v${version}.apk`;
 
-    console.log('[useAppUpdate] 开始下载:', downloadUrl);
-    console.log('[useAppUpdate] 保存路径:', filePath);
-
     setState(prev => ({ ...prev, downloading: true, progress: 0 }));
 
     try {
+      const safeDownloadUrl = getSafeUpdateUrl(downloadUrl);
       const downloadResult = RNFS.downloadFile({
-        fromUrl: downloadUrl,
+        fromUrl: safeDownloadUrl,
         toFile: filePath,
         progress: (res) => {
-          const progress = Math.round((res.bytesWritten / res.contentLength) * 100);
+          const progress = res.contentLength > 0
+            ? Math.round((res.bytesWritten / res.contentLength) * 100)
+            : 0;
           setState(prev => ({ ...prev, progress }));
         },
         progressDivider: 1,
+        connectionTimeout: 10000,
+        readTimeout: 60000,
       });
 
       downloadJobId.current = downloadResult.jobId;
@@ -101,12 +107,12 @@ export function useAppUpdate(options: UseAppUpdateOptions = {}) {
       if (result.statusCode === 200) {
         setState(prev => ({ ...prev, downloading: false, showModal: false }));
         // 安装 APK
-        installApk(filePath);
+        await installApk(filePath);
       } else {
         throw new Error(`下载失败: ${result.statusCode}`);
       }
     } catch (error: any) {
-      console.log('[useAppUpdate] 下载失败:', error);
+      console.log('[useAppUpdate] 下载失败');
       setState(prev => ({ ...prev, downloading: false }));
       alert('下载失败', error.message || '下载更新包失败，请稍后重试');
     }
@@ -129,7 +135,7 @@ export function useAppUpdate(options: UseAppUpdateOptions = {}) {
     }
   }, [alert]);
 
-  // 启动时自动检查更新（可通过 autoCheck 参数禁用）
+  // 只有明确传入 autoCheck: true 时才允许页面挂载触发更新网络请求。
   useEffect(() => {
     if (autoCheck) {
       checkUpdate(false);

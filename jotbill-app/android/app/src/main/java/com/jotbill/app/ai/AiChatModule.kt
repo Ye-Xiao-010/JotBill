@@ -20,6 +20,9 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
+import java.net.ConnectException
+import java.net.SocketTimeoutException
+import java.net.UnknownHostException
 import java.time.Instant
 import java.time.LocalDate
 import java.time.YearMonth
@@ -37,7 +40,8 @@ class AiChatModule(
     private val httpClient = OkHttpClient.Builder()
         .connectTimeout(20, TimeUnit.SECONDS)
         .writeTimeout(60, TimeUnit.SECONDS)
-        .readTimeout(0, TimeUnit.MILLISECONDS)
+        .readTimeout(60, TimeUnit.SECONDS)
+        .callTimeout(2, TimeUnit.MINUTES)
         .build()
     private val streamingClient = StreamingSseClient(httpClient)
 
@@ -188,7 +192,7 @@ class AiChatModule(
             httpClient.newCall(request).execute().use { response ->
                 val responseBody = response.body?.string().orEmpty()
                 if (!response.isSuccessful) {
-                    throw IOException("AI 服务返回 HTTP ${response.code}: ${responseBody.take(500)}")
+                    throw IOException("AI 服务返回 HTTP ${response.code}")
                 }
                 val root = JSONObject(responseBody)
                 val text = extractMessageContent(root)
@@ -895,15 +899,14 @@ class AiChatModule(
 
     private fun readableNetworkError(error: Exception): String {
         val message = error.message.orEmpty()
-        return if (
-            error is IOException &&
-            (message.contains("Unable to resolve host") ||
-                message.contains("Failed to connect") ||
-                message.contains("timeout", ignoreCase = true))
-        ) {
-            "网络连接失败，请检查网络后重试"
-        } else {
-            message.ifBlank { "AI 请求失败" }
+        return when {
+            error is SocketTimeoutException || message.contains("timeout", ignoreCase = true) ->
+                "AI 请求超时，请稍后重试"
+            error is UnknownHostException || error is ConnectException ||
+                message.contains("Unable to resolve host") || message.contains("Failed to connect") ->
+                "AI 网络连接失败，请检查网络后重试"
+            error is IOException -> "AI 网络请求失败，请稍后重试"
+            else -> message.ifBlank { "AI 请求失败" }
         }
     }
 

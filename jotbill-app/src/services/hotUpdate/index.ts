@@ -6,15 +6,19 @@ import { NativeModules, Platform } from 'react-native';
 import RNFS from 'react-native-fs';
 import { unzip } from 'react-native-zip-archive';
 import { hotUpdateApi, HotUpdateBundleInfo } from '../update/hotUpdate';
+import { getSafeUpdateUrl } from '../update/client';
 import bundleMeta from '../../../bundle-version.json';
 import packageJson from '../../../package.json';
 
-const { HotUpdate } = NativeModules;
+const HotUpdate = NativeModules.HotUpdate as {
+  applyPreparedBundle?: () => Promise<boolean>;
+  markBundleApplied?: () => void;
+  reload?: () => void;
+} | undefined;
 
-// 热更新文件存储目录
-const HOT_UPDATE_DIR = `${RNFS.DocumentDirectoryPath}/hot_update`;
-const BUNDLE_FILE = `${HOT_UPDATE_DIR}/index.android.bundle`;
+// 临时目录只用于下载和解压，正式目录由原生模块一次性替换。
 const TEMP_DIR = `${RNFS.DocumentDirectoryPath}/hot_update_temp`;
+const STAGED_BUNDLE_FILE = `${TEMP_DIR}/index.android.bundle`;
 
 export type UpdateStatus =
   | 'idle'
@@ -64,6 +68,18 @@ async function ensureDir(dir: string): Promise<void> {
   }
 }
 
+/** 由原生模块在同一文件系统内替换目录，失败时保留旧 bundle。 */
+async function applyPreparedBundle(): Promise<void> {
+  const apply = HotUpdate?.applyPreparedBundle;
+  if (typeof apply !== 'function') {
+    throw new Error('当前版本不支持热更新原子替换');
+  }
+  const applied = await apply();
+  if (applied !== true) {
+    throw new Error('热更新 bundle 替换失败');
+  }
+}
+
 /**
  * 清理目录
  */
@@ -88,7 +104,14 @@ export async function checkForUpdate(): Promise<{
   const nativeVersion = getNativeVersion();
   const bundleVersion = getCurrentBundleVersion();
 
-  return await hotUpdateApi.checkUpdate(nativeVersion, bundleVersion);
+  const result = await hotUpdateApi.checkUpdate(nativeVersion, bundleVersion);
+  if (result.bundle) {
+    getSafeUpdateUrl(result.bundle.downloadUrl);
+    if (result.bundle.patchAvailable && result.bundle.patchUrl) {
+      getSafeUpdateUrl(result.bundle.patchUrl);
+    }
+  }
+  return result;
 }
 
 /**
@@ -99,7 +122,6 @@ export async function downloadAndApplyUpdate(
   onProgress?: (progress: number) => void,
 ): Promise<boolean> {
   try {
-    await ensureDir(HOT_UPDATE_DIR);
     await cleanDir(TEMP_DIR);
     await ensureDir(TEMP_DIR);
 
@@ -154,15 +176,21 @@ async function downloadFullBundle(
   const tempZipPath = `${TEMP_DIR}/bundle.zip`;
 
   try {
+    const safeDownloadUrl = getSafeUpdateUrl(bundle.downloadUrl);
+
     // 1. 下载 zip
     const downloadResult = RNFS.downloadFile({
-      fromUrl: bundle.downloadUrl,
+      fromUrl: safeDownloadUrl,
       toFile: tempZipPath,
       progress: (res) => {
-        const progress = Math.round((res.bytesWritten / res.contentLength) * 100);
+        const progress = res.contentLength > 0
+          ? Math.round((res.bytesWritten / res.contentLength) * 100)
+          : 0;
         onProgress?.(progress);
       },
       progressDivider: 1,
+      connectionTimeout: 10000,
+      readTimeout: 60000,
     });
 
     const result = await downloadResult.promise;
@@ -177,23 +205,21 @@ async function downloadFullBundle(
     }
     console.log('[HotUpdate] SHA256 校验通过');
 
-    // 3. 清理旧的热更新目录
-    await cleanDir(HOT_UPDATE_DIR);
-    await ensureDir(HOT_UPDATE_DIR);
-
-    // 4. 解压 zip 到热更新目录
+    // 3. 解压到临时目录，不影响当前正在使用的 bundle。
     //    zip 内结构: index.android.bundle + drawable-*/xxx.png
-    const extractPath = await unzip(tempZipPath, HOT_UPDATE_DIR);
-    console.log('[HotUpdate] 解压完成:', extractPath);
+    await unzip(tempZipPath, TEMP_DIR);
+    await cleanDir(tempZipPath);
+    console.log('[HotUpdate] 临时解压完成');
 
-    // 5. 验证 bundle 文件存在
-    const bundleExists = await RNFS.exists(BUNDLE_FILE);
+    // 4. 先验证临时 bundle，再让原生层替换正式目录。
+    const bundleExists = await RNFS.exists(STAGED_BUNDLE_FILE);
     if (!bundleExists) {
       throw new Error('解压后未找到 index.android.bundle');
     }
 
-    const stat = await RNFS.stat(BUNDLE_FILE);
+    const stat = await RNFS.stat(STAGED_BUNDLE_FILE);
     console.log(`[HotUpdate] Bundle 已保存: ${(Number(stat.size) / 1024).toFixed(1)} KB`);
+    await applyPreparedBundle();
 
     return true;
   } catch (error: any) {
@@ -206,9 +232,12 @@ async function downloadFullBundle(
  * 下载并应用 diff 补丁（迭代二实现）
  */
 async function downloadAndApplyPatch(
-  _bundle: HotUpdateBundleInfo,
+  bundle: HotUpdateBundleInfo,
   _onProgress?: (progress: number) => void,
 ): Promise<boolean> {
+  if (bundle.patchUrl) {
+    getSafeUpdateUrl(bundle.patchUrl);
+  }
   // 迭代二实现：bspatch 合成
   console.log('[HotUpdate] diff 补丁暂未实现，回退完整包');
   return false;

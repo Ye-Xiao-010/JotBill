@@ -15,12 +15,12 @@ import {
 import type { HotUpdateBundleInfo } from '../services/update/hotUpdate';
 
 interface UseHotUpdateOptions {
-  /** 是否在 hook 挂载时自动检查热更新，默认 true */
+  /** 是否在 hook 挂载时自动检查热更新，默认关闭，避免页面挂载触发联网。 */
   autoCheck?: boolean;
 }
 
 export function useHotUpdate(options: UseHotUpdateOptions = {}) {
-  const { autoCheck = true } = options;
+  const { autoCheck = false } = options;
   const [state, setState] = useState<HotUpdateState>({
     status: 'idle',
     hasUpdate: false,
@@ -108,7 +108,7 @@ export function useHotUpdate(options: UseHotUpdateOptions = {}) {
     }));
   }, []);
 
-  // 启动时自动检查
+  // 只有明确传入 autoCheck: true 时才允许页面挂载触发热更新网络请求。
   useEffect(() => {
     if (autoCheck) {
       checkUpdate();

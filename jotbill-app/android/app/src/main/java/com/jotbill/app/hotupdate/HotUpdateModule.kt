@@ -16,8 +16,12 @@ class HotUpdateModule(reactContext: ReactApplicationContext) :
         private const val PREFS_NAME = "hot_update"
         private const val KEY_CRASH_COUNT = "crash_count"
         private const val HOT_UPDATE_DIR = "hot_update"
+        private const val HOT_UPDATE_TEMP_DIR = "hot_update_temp"
+        private const val HOT_UPDATE_PREVIOUS_DIR = "hot_update_previous"
         private const val BUNDLE_FILE = "index.android.bundle"
     }
+
+    private val replaceLock = Any()
 
     override fun getName(): String = NAME
 
@@ -58,6 +62,46 @@ class HotUpdateModule(reactContext: ReactApplicationContext) :
         }
     }
 
+    /** 将已校验的临时目录一次性替换为正式目录，失败时恢复旧目录。 */
+    @ReactMethod
+    fun applyPreparedBundle(promise: Promise) {
+        try {
+            synchronized(replaceLock) {
+                val filesDir = reactApplicationContext.filesDir
+                val preparedDir = File(filesDir, HOT_UPDATE_TEMP_DIR)
+                val currentDir = File(filesDir, HOT_UPDATE_DIR)
+                val previousDir = File(filesDir, HOT_UPDATE_PREVIOUS_DIR)
+                val preparedBundle = File(preparedDir, BUNDLE_FILE)
+
+                if (!preparedDir.isDirectory || !preparedBundle.isFile || preparedBundle.length() <= 0) {
+                    throw IllegalStateException("临时热更新 bundle 不完整")
+                }
+                if (previousDir.exists() && !previousDir.deleteRecursively()) {
+                    throw IllegalStateException("无法清理旧热更新备份")
+                }
+
+                val hadCurrent = currentDir.exists()
+                if (hadCurrent && !currentDir.renameTo(previousDir)) {
+                    throw IllegalStateException("无法保留当前热更新 bundle")
+                }
+
+                if (!preparedDir.renameTo(currentDir)) {
+                    if (hadCurrent && !previousDir.renameTo(currentDir)) {
+                        throw IllegalStateException("热更新失败且旧 bundle 回滚失败")
+                    }
+                    throw IllegalStateException("无法应用临时热更新 bundle")
+                }
+
+                if (previousDir.exists() && !previousDir.deleteRecursively()) {
+                    android.util.Log.w("HotUpdate", "旧热更新备份清理失败，将在下次更新时重试")
+                }
+            }
+            promise.resolve(true)
+        } catch (e: Exception) {
+            promise.reject("APPLY_ERROR", e.message, e)
+        }
+    }
+
     /**
      * 重新加载 JS Bundle
      * reload 前先把 BundleLoader 指向热更新文件，避免重新加载内置 bundle 导致死循环
@@ -93,9 +137,13 @@ class HotUpdateModule(reactContext: ReactApplicationContext) :
     @ReactMethod
     fun clearHotUpdate(promise: Promise) {
         try {
-            val hotDir = getHotUpdateDir()
-            if (hotDir.exists()) {
-                hotDir.deleteRecursively()
+            val filesDir = reactApplicationContext.filesDir
+            listOf(
+                File(filesDir, HOT_UPDATE_DIR),
+                File(filesDir, HOT_UPDATE_TEMP_DIR),
+                File(filesDir, HOT_UPDATE_PREVIOUS_DIR)
+            ).forEach { directory ->
+                if (directory.exists()) directory.deleteRecursively()
             }
             getPrefs().edit().clear().apply()
             promise.resolve(true)

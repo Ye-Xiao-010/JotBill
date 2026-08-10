@@ -32,8 +32,7 @@ export const appVersionApi = {
       currentVersion,
       platform: 'android',
     });
-    console.log('[AppVersion] 检查更新响应:', JSON.stringify(result));
-    console.log('[AppVersion] 解析结果:', JSON.stringify(result));
+    console.log('[AppVersion] 检查更新完成:', result.hasUpdate);
     return result;
   },
 

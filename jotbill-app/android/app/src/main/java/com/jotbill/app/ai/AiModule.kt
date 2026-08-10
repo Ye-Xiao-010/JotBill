@@ -56,6 +56,11 @@ class AiModule(
         val provider = requiredProvider(input)
         val model = requiredString(input, "model")
         val apiKey = requiredString(input, "apiKey")
+        val apiBaseUrl = input.optionalString("apiBaseUrl")
+            ?.let { AiEndpointResolver.validateBaseUrl(it) }
+        if (provider == "custom" && apiBaseUrl.isNullOrBlank()) {
+            throw AiException("INVALID_ARGUMENT", "自定义服务商必须填写 API 地址")
+        }
         val existing = database.aiProviderConfigDao().getAll()
         val now = System.currentTimeMillis()
         val entity = AiProviderConfigEntity(
@@ -64,7 +69,7 @@ class AiModule(
             provider = provider,
             model = model,
             apiKeyEncrypted = secretStore.encryptSecret(apiKey),
-            apiBaseUrl = input.optionalString("apiBaseUrl"),
+            apiBaseUrl = apiBaseUrl,
             isDefault = input.optBoolean("isDefault", existing.isEmpty()),
             supportsVision = input.optBoolean("supportsVision", false),
             createdAt = now,
@@ -82,16 +87,25 @@ class AiModule(
             ?: throw AiException("NOT_FOUND", "AI provider $id was not found")
         val input = JSONObject(inputJson)
         val apiKey = input.optionalString("apiKey")
+        val provider = input.optionalString("provider")?.also(::validateProvider) ?: existing.provider
+        val apiBaseUrl = if (input.has("apiBaseUrl")) {
+            input.optionalString("apiBaseUrl")?.let { AiEndpointResolver.validateBaseUrl(it) }
+        } else {
+            existing.apiBaseUrl
+        }
+        if (provider == "custom" && apiBaseUrl.isNullOrBlank()) {
+            throw AiException("INVALID_ARGUMENT", "自定义服务商必须填写 API 地址")
+        }
         val updated = existing.copy(
             name = input.optionalString("name") ?: existing.name,
-            provider = input.optionalString("provider")?.also(::validateProvider) ?: existing.provider,
+            provider = provider,
             model = input.optionalString("model") ?: existing.model,
             apiKeyEncrypted = if (apiKey.isNullOrBlank() || apiKey == MASKED_KEY) {
                 existing.apiKeyEncrypted
             } else {
                 secretStore.encryptSecret(apiKey)
             },
-            apiBaseUrl = input.updatedNullableString("apiBaseUrl", existing.apiBaseUrl),
+            apiBaseUrl = apiBaseUrl,
             isDefault = if (input.has("isDefault") && !input.isNull("isDefault")) {
                 input.getBoolean("isDefault")
             } else {
@@ -136,11 +150,10 @@ class AiModule(
     fun testAiProvider(id: String, promise: Promise) = launch(promise) {
         val config = database.aiProviderConfigDao().getAll().firstOrNull { it.id == id }
             ?: throw AiException("NOT_FOUND", "AI provider $id was not found")
-        val baseUrl = config.apiBaseUrl?.trim().takeUnless { it.isNullOrEmpty() }
-            ?: defaultBaseUrl(config.provider)
         val apiKey = config.apiKeyEncrypted?.let(secretStore::decryptSecret)
         val start = System.currentTimeMillis()
         try {
+            val baseUrl = AiEndpointResolver.baseUrl(config)
             val requestBuilder = Request.Builder().url(baseUrl).get()
             if (!apiKey.isNullOrBlank()) {
                 requestBuilder.header("Authorization", "Bearer $apiKey")
@@ -322,21 +335,8 @@ class AiModule(
         }
     }
 
-    private fun defaultBaseUrl(provider: String): String = when (provider) {
-        "qwen" -> "https://dashscope.aliyuncs.com"
-        "glm" -> "https://open.bigmodel.cn"
-        "siliconflow" -> "https://api.siliconflow.cn"
-        else -> throw AiException("INVALID_ARGUMENT", "自定义服务商必须填写 API 地址")
-    }
-
     private fun JSONObject.optionalString(key: String): String? {
         if (!has(key) || isNull(key)) return null
-        return optString(key).trim().takeIf { it.isNotEmpty() }
-    }
-
-    private fun JSONObject.updatedNullableString(key: String, current: String?): String? {
-        if (!has(key)) return current
-        if (isNull(key)) return null
         return optString(key).trim().takeIf { it.isNotEmpty() }
     }
 

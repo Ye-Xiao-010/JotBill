@@ -130,7 +130,8 @@ android {
             signingConfig signingConfigs.release
             minifyEnabled enableProguardInReleaseBuilds
             proguardFiles getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro"
-            manifestPlaceholders = [usesCleartextTraffic: "true"]
+            // 发布包禁止明文网络，AI/更新通道必须使用 HTTPS；debug 仍保留本地开发回环能力。
+            manifestPlaceholders = [usesCleartextTraffic: "false"]
             buildConfigField "String", "SENTRY_DSN", "\"${getSentryDsn("release")}\""
         }
     }
