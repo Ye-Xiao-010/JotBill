@@ -12,15 +12,18 @@ import { useStyles } from '../../hooks';
 interface AssetTrendChartProps {
   data: Array<{ month: string; value: number }>;
   dateRange?: string;
+  unavailable?: boolean;
 }
 
-export default function AssetTrendChart({ data, dateRange }: AssetTrendChartProps) {
+export default function AssetTrendChart({ data, dateRange, unavailable }: AssetTrendChartProps) {
   const styles = useStyles(createStyles);
 
   if (data.length === 0) {
     return (
       <View style={styles.emptyContainer}>
-        <Text style={styles.emptyText}>暂无资产变动数据</Text>
+        <Text style={styles.emptyText}>
+          {unavailable ? '资产历史趋势暂不可用' : '暂无资产变动数据'}
+        </Text>
       </View>
     );
   }

@@ -199,8 +199,9 @@ export function useDailyBills(date: string | null) {
     queryKey: QUERY_KEYS.dailyBills(dateKey),
     queryFn: async () => {
       if (!dateKey) return [];
-      const [response, categories] = await Promise.all([
+      const [firstPage, categories] = await Promise.all([
         nativeData.getBills({
+          page: 1,
           startDate: dateKey,
           endDate: dateKey,
           limit: 100,
@@ -209,8 +210,27 @@ export function useDailyBills(date: string | null) {
         }),
         nativeData.getCategories(),
       ]);
+      const bills: Bill[] = [...firstPage.items];
+      let response = firstPage;
+      let page = 1;
+      while (response.hasMore) {
+        if (response.items.length === 0) {
+          throw new Error('日收支明细分页返回空页但仍标记为有更多数据');
+        }
+
+        page += 1;
+        response = await nativeData.getBills({
+          page,
+          startDate: dateKey,
+          endDate: dateKey,
+          limit: 100,
+          orderBy: 'date',
+          orderDirection: 'desc',
+        });
+        bills.push(...response.items);
+      }
       const categoryMap = new Map(categories.map((category) => [category.id, category]));
-      return response.items.flatMap((bill) => {
+      return bills.flatMap((bill) => {
         const reportBill = toReportBill(bill, categoryMap);
         return reportBill ? [reportBill] : [];
       });

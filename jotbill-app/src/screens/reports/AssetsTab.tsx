@@ -20,6 +20,7 @@ export default function AssetsTab() {
     totalIncome,
     totalExpense,
     assetTrendData,
+    assetTrendUnavailable,
     trendDateRange,
     incomeCategoryStats,
     expenseCategoryStats,
@@ -81,7 +82,11 @@ export default function AssetsTab() {
       </View>
 
       {/* 资产趋势折线图 */}
-      <AssetTrendChart data={assetTrendData} dateRange={trendDateRange} />
+      <AssetTrendChart
+        data={assetTrendData}
+        dateRange={trendDateRange}
+        unavailable={assetTrendUnavailable}
+      />
 
       {/* 收支分类构成饼图 */}
       <AssetCompositionChart
