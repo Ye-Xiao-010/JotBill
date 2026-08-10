@@ -1,6 +1,6 @@
-import React, { useRef, useState } from 'react';
-import { ActivityIndicator, Alert, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
-import { useNavigation } from '@react-navigation/native';
+import React, { useEffect, useRef, useState } from 'react';
+import { ActivityIndicator, Alert, BackHandler, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { useNavigation, usePreventRemove } from '@react-navigation/native';
 import { useQueryClient } from '@tanstack/react-query';
 import { Archive, CheckCircle2, ChevronLeft, Download, FileText, Trash2, X } from 'lucide-react-native';
 import { nativeBackup } from '../../native';
@@ -54,6 +54,25 @@ export default function DataManagementScreen() {
   const clearingRef = useRef(false);
 
   const busy = exporting || creatingBackup || restoring || clearing;
+
+  usePreventRemove(restoring || restoringRef.current, () => {
+    // 恢复事务期间不派发离开动作，恢复结束后由 React Navigation 自动解除拦截。
+  });
+
+  useEffect(() => {
+    const unsubscribe = navigation.addListener('beforeRemove', (event) => {
+      if (restoringRef.current) event.preventDefault();
+    });
+    return unsubscribe;
+  }, [navigation]);
+
+  useEffect(() => {
+    const subscription = BackHandler.addEventListener(
+      'hardwareBackPress',
+      () => restoringRef.current,
+    );
+    return () => subscription.remove();
+  }, []);
 
   const exportCsv = async () => {
     exportingRef.current = true;
