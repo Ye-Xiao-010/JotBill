@@ -3,6 +3,11 @@ package com.jotbill.app.recognition
 import java.util.UUID
 
 private const val DEFAULT_SNAPSHOT_TTL_MILLIS = 30_000L
+internal const val CHECKOUT_SNAPSHOT_SLOT_PREFIX = "shopping-package:"
+
+/** 结算截图和购买意图必须共用同一购物包槽位命名。 */
+internal fun checkoutSnapshotSlotId(shoppingPackage: String): String =
+    CHECKOUT_SNAPSHOT_SLOT_PREFIX + shoppingPackage
 
 /**
  * 仅存在于内存中的结算页截图。
@@ -25,7 +30,12 @@ data class CheckoutSnapshot internal constructor(
 ) {
     internal fun copyForConsumer(): CheckoutSnapshot = copy(imageBytes = imageBytes.copyOf())
 
-    internal fun release() {
+    /**
+     * 释放 Ready.snapshot 的图片副本。
+     *
+     * consumeForAi() 返回的副本归 AI 消费方所有；消费方完成读取后必须主动调用本方法。
+     */
+    fun release() {
         imageBytes.fill(0)
     }
 }

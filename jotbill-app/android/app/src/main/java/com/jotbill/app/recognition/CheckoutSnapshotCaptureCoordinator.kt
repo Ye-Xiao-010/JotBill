@@ -86,7 +86,6 @@ internal class CheckoutSnapshotCaptureCoordinator(
 ) : CheckoutObservationListener {
     companion object {
         private const val TAG = "CheckoutSnapshotCapture"
-        private const val SLOT_PREFIX = "shopping-package:"
         private const val SCREENSHOT_ERROR_PREFIX = "SCREENSHOT_ERROR_"
     }
 
@@ -722,7 +721,7 @@ internal class CheckoutSnapshotCaptureCoordinator(
         else -> SCREENSHOT_ERROR_PREFIX + errorCode
     }
 
-    private fun slotIdFor(shoppingPackage: String): String = SLOT_PREFIX + shoppingPackage
+    private fun slotIdFor(shoppingPackage: String): String = checkoutSnapshotSlotId(shoppingPackage)
 
     private fun protectedResult(
         current: ActiveCheckout,

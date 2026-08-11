@@ -59,6 +59,77 @@ class CheckoutAccessibilityService : AccessibilityService() {
         fun setSnapshotCaptureResultListener(listener: SnapshotCaptureResultListener?) {
             activeService?.snapshotCaptureCoordinator?.setResultListener(listener)
         }
+
+        /** 设置购买意图结果消费者；Ready.snapshot 由消费者读取后负责 release。 */
+        @JvmStatic
+        fun setPurchaseIntentResultConsumer(consumer: PurchaseIntentResultCallback?) {
+            activeService?.purchaseIntentCoordinator?.setResultConsumer(consumer)
+        }
+
+        /** 通用购买意图入口，供后续无障碍点击、通知服务和 RN bridge 调用。 */
+        @JvmStatic
+        fun requestPurchaseIntent(
+            intent: PurchaseIntent,
+            pageFingerprint: String?,
+            callback: PurchaseIntentResultCallback
+        ) {
+            val coordinator = activeService?.purchaseIntentCoordinator
+            if (coordinator == null) {
+                notifyPurchaseIntentUnavailable(intent, callback)
+                return
+            }
+            coordinator.trigger(intent, pageFingerprint, callback)
+        }
+
+        @JvmStatic
+        fun requestSubmitAction(
+            pageFingerprint: String?,
+            callback: PurchaseIntentResultCallback
+        ) = requestPurchaseIntent(PurchaseIntent.SUBMIT_ACTION, pageFingerprint, callback)
+
+        @JvmStatic
+        fun requestPaymentAppHandoff(
+            pageFingerprint: String?,
+            callback: PurchaseIntentResultCallback
+        ) = requestPurchaseIntent(PurchaseIntent.PAYMENT_APP_HANDOFF, pageFingerprint, callback)
+
+        @JvmStatic
+        fun requestPaymentPageVisible(
+            pageFingerprint: String?,
+            callback: PurchaseIntentResultCallback
+        ) = requestPurchaseIntent(PurchaseIntent.PAYMENT_PAGE_VISIBLE, pageFingerprint, callback)
+
+        @JvmStatic
+        fun requestPaymentNotificationFallback(
+            pageFingerprint: String?,
+            callback: PurchaseIntentResultCallback
+        ) = requestPurchaseIntent(
+            PurchaseIntent.PAYMENT_NOTIFICATION_FALLBACK,
+            pageFingerprint,
+            callback
+        )
+
+        @JvmStatic
+        fun requestUserRetry(
+            pageFingerprint: String?,
+            callback: PurchaseIntentResultCallback
+        ) = requestPurchaseIntent(PurchaseIntent.USER_RETRY, pageFingerprint, callback)
+
+        private fun notifyPurchaseIntentUnavailable(
+            intent: PurchaseIntent,
+            callback: PurchaseIntentResultCallback
+        ) {
+            try {
+                callback.onResult(
+                    PurchaseIntentCoordinationResult.Rejected(
+                        intent = intent,
+                        gateReason = PurchaseIntentGateRejection.SERVICE_NOT_CONNECTED
+                    )
+                )
+            } catch (error: RuntimeException) {
+                Log.w(TAG, "购买意图不可用结果回调失败", error)
+            }
+        }
     }
 
     private val pageDetector = CheckoutPageDetector()
@@ -72,6 +143,8 @@ class CheckoutAccessibilityService : AccessibilityService() {
         onInvalidated = { detail -> dispatchEvent(CheckoutObservationEvent.Invalidated(detail)) }
     )
     private var snapshotCaptureCoordinator: CheckoutSnapshotCaptureCoordinator? = null
+    private var purchaseIntentCoordinator: CheckoutPurchaseIntentCoordinator? = null
+    private var checkoutSnapshotBuffer: CheckoutSnapshotBuffer? = null
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -90,8 +163,12 @@ class CheckoutAccessibilityService : AccessibilityService() {
         // 不在 XML 中限定包名，才能观察离开购物应用的事件并清理旧页面状态；代码仍会先做白名单资格判断。
         configuredInfo.packageNames = null
         serviceInfo = configuredInfo
+        purchaseIntentCoordinator?.close()
         snapshotCaptureCoordinator?.close()
-        snapshotCaptureCoordinator = CheckoutSnapshotCaptureCoordinator(this)
+        val sharedBuffer = CheckoutSnapshotBuffer()
+        checkoutSnapshotBuffer = sharedBuffer
+        snapshotCaptureCoordinator = CheckoutSnapshotCaptureCoordinator(this, sharedBuffer)
+        purchaseIntentCoordinator = CheckoutPurchaseIntentCoordinator(sharedBuffer)
         activeService = this
         setObservationListener(snapshotCaptureCoordinator)
         Log.i(TAG, "结算页无障碍观察服务已连接")
@@ -183,6 +260,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
         lastWindowPackage = null
         lastWindowClass = null
         snapshotCaptureCoordinator?.onServiceInterrupted()
+        purchaseIntentCoordinator?.onServiceInterrupted()
         stabilityCoordinator.invalidate(CheckoutInvalidationReason.SERVICE_INTERRUPTED)
         Log.w(TAG, "结算页无障碍观察服务被中断")
         super.onInterrupt()
@@ -192,8 +270,11 @@ class CheckoutAccessibilityService : AccessibilityService() {
         lastWindowPackage = null
         lastWindowClass = null
         stabilityCoordinator.dispose()
+        purchaseIntentCoordinator?.close()
         snapshotCaptureCoordinator?.close()
+        purchaseIntentCoordinator = null
         snapshotCaptureCoordinator = null
+        checkoutSnapshotBuffer = null
         if (activeService === this) {
             activeService = null
         }
@@ -214,11 +295,17 @@ class CheckoutAccessibilityService : AccessibilityService() {
     }
 
     private fun dispatchEvent(event: CheckoutObservationEvent) {
-        val listener = observationListener ?: return
+        observationListener?.let { listener ->
+            try {
+                listener.onEvent(event)
+            } catch (error: RuntimeException) {
+                Log.w(TAG, "分发结算页观察事件失败", error)
+            }
+        }
         try {
-            listener.onEvent(event)
+            purchaseIntentCoordinator?.onEvent(event)
         } catch (error: RuntimeException) {
-            Log.w(TAG, "分发结算页观察事件失败", error)
+            Log.w(TAG, "分发购买意图事件失败", error)
         }
     }
 }
