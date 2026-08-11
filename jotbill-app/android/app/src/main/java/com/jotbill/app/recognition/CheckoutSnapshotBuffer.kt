@@ -88,7 +88,7 @@ sealed class CheckoutAiTriggerResult {
 /**
  * 按槽位保存当前结算页快照的短生命周期缓冲区。
  *
- * 每个槽位保留一个当前自动候选，以及未过期的手动保护候选；30 秒后自动失效。
+ * 每个槽位最多保留一个手动保护候选和一个最新自动候选；30 秒后自动失效并清零图片。
  * 同一会话、同一指纹的自动候选不能覆盖手动候选；不同指纹的自动候选递增版本并与
  * 手动候选并存，消费前必须明确指纹，否则进入歧义回退。只有 consumeForAi 收到购买
  * 意图时才会产生请求键并消费快照，普通观察、通知重放和 RN 重渲染无法触发上传。
@@ -100,9 +100,11 @@ class CheckoutSnapshotBuffer(
 ) {
     private data class SlotState(
         val sessionId: String,
-        val candidates: MutableMap<String, CheckoutSnapshot> = mutableMapOf(),
+        var manualCandidate: CheckoutSnapshot? = null,
+        var automaticCandidate: CheckoutSnapshot? = null,
         var nextCandidateRevision: Int = 0,
-        var consumedRequestKey: CheckoutRequestKey? = null
+        var consumedRequestKey: CheckoutRequestKey? = null,
+        var hadExpiredCandidate: Boolean = false
     )
 
     private val slots = mutableMapOf<String, SlotState>()
@@ -146,7 +148,7 @@ class CheckoutSnapshotBuffer(
             existing
         }
 
-        val sameFingerprint = state.candidates[request.pageFingerprint]
+        val sameFingerprint = findCandidate(state, request.pageFingerprint)
         if (sameFingerprint != null) {
             if (
                 sameFingerprint.sourceReason == SnapshotSourceReason.MANUAL_CAPTURE &&
@@ -158,23 +160,32 @@ class CheckoutSnapshotBuffer(
                 return SnapshotStoreResult.Unchanged(sameFingerprint.copyForConsumer())
             }
 
-            state.candidates.remove(request.pageFingerprint)?.release()
+            removeCandidate(state, sameFingerprint)?.release()
         }
 
         var replacedSnapshotId: String? = sameFingerprint?.snapshotId
-        if (request.sourceReason == SnapshotSourceReason.CHECKOUT_STABLE) {
-            val previousAutomatic = state.candidates.values.firstOrNull {
-                it.sourceReason == SnapshotSourceReason.CHECKOUT_STABLE
+        when (request.sourceReason) {
+            SnapshotSourceReason.MANUAL_CAPTURE -> {
+                val previousManual = state.manualCandidate
+                if (previousManual != null) {
+                    state.manualCandidate = null
+                    previousManual.release()
+                    replacedSnapshotId = previousManual.snapshotId
+                }
             }
-            if (previousAutomatic != null) {
-                state.candidates.remove(previousAutomatic.pageFingerprint)
-                previousAutomatic.release()
-                replacedSnapshotId = previousAutomatic.snapshotId
+            SnapshotSourceReason.CHECKOUT_STABLE -> {
+                val previousAutomatic = state.automaticCandidate
+                if (previousAutomatic != null) {
+                    state.automaticCandidate = null
+                    previousAutomatic.release()
+                    replacedSnapshotId = previousAutomatic.snapshotId
+                }
             }
         }
 
         val candidateRevision = state.nextCandidateRevision + 1
         state.nextCandidateRevision = candidateRevision
+        state.hadExpiredCandidate = false
         val snapshot = CheckoutSnapshot(
             snapshotId = snapshotIdFactory(),
             sessionId = request.sessionId,
@@ -188,12 +199,15 @@ class CheckoutSnapshotBuffer(
             sourceReason = request.sourceReason,
             imageBytes = request.imageBytes.copyOf()
         )
-        state.candidates[request.pageFingerprint] = snapshot
+        when (request.sourceReason) {
+            SnapshotSourceReason.MANUAL_CAPTURE -> state.manualCandidate = snapshot
+            SnapshotSourceReason.CHECKOUT_STABLE -> state.automaticCandidate = snapshot
+        }
         return SnapshotStoreResult.Stored(
             snapshot = snapshot.copyForConsumer(),
             replacedSnapshotId = replacedSnapshotId,
             candidateRevision = candidateRevision,
-            requiresDisambiguation = state.candidates.size > 1
+            requiresDisambiguation = state.manualCandidate != null && state.automaticCandidate != null
         )
     }
 
@@ -201,8 +215,8 @@ class CheckoutSnapshotBuffer(
     fun current(slotId: String): CheckoutSnapshot? {
         val now = nowMillis()
         purgeExpired(now)
-        val candidates = slots[slotId]?.candidates ?: return null
-        return candidates.values.singleOrNull()?.copyForConsumer()
+        val candidates = slots[slotId]?.let(::candidateList) ?: return null
+        return candidates.singleOrNull()?.copyForConsumer()
     }
 
     /** 返回当前未过期候选的副本；多个候选时交给协调器或待确认界面选择。 */
@@ -211,8 +225,7 @@ class CheckoutSnapshotBuffer(
         val now = nowMillis()
         purgeExpired(now)
         return slots[slotId]
-            ?.candidates
-            ?.values
+            ?.let(::candidateList)
             ?.sortedByDescending { it.candidateRevision }
             ?.map { it.copyForConsumer() }
             ?: emptyList()
@@ -236,26 +249,30 @@ class CheckoutSnapshotBuffer(
             return CheckoutAiTriggerResult.AlreadyTriggered(it)
         }
 
-        if (state.candidates.isEmpty()) {
+        val candidates = candidateList(state)
+        if (candidates.isEmpty()) {
+            if (state.hadExpiredCandidate) {
+                state.hadExpiredCandidate = false
+                slots.remove(slotId)
+                return CheckoutAiTriggerResult.Rejected(SnapshotConsumeRejection.SNAPSHOT_EXPIRED)
+            }
             return CheckoutAiTriggerResult.Rejected(SnapshotConsumeRejection.NO_BUFFERED_SNAPSHOT)
         }
 
         val snapshot = if (pageFingerprint != null) {
-            state.candidates[pageFingerprint]
+            findCandidate(state, pageFingerprint)
                 ?: return CheckoutAiTriggerResult.Rejected(
                     SnapshotConsumeRejection.NO_MATCHING_PAGE_FINGERPRINT
                 )
         } else {
-            state.candidates.values.singleOrNull()
+            candidates.singleOrNull()
                 ?: return CheckoutAiTriggerResult.Rejected(
                     SnapshotConsumeRejection.AMBIGUOUS_CANDIDATES
                 )
         }
         if (now >= snapshot.expiresAt) {
-            state.candidates.remove(snapshot.pageFingerprint)?.release()
-            if (state.candidates.isEmpty()) {
-                slots.remove(slotId)
-            }
+            removeCandidate(state, snapshot)?.release()
+            state.hadExpiredCandidate = true
             return CheckoutAiTriggerResult.Rejected(SnapshotConsumeRejection.SNAPSHOT_EXPIRED)
         }
 
@@ -282,22 +299,56 @@ class CheckoutSnapshotBuffer(
 
     @Synchronized
     private fun purgeExpired(now: Long) {
-        slots.toList().forEach { (slotId, state) ->
-            val expiredFingerprints = state.candidates
-                .filterValues { it.expiresAt <= now }
-                .keys
-                .toList()
-            expiredFingerprints.forEach { fingerprint ->
-                state.candidates.remove(fingerprint)?.release()
+        slots.values.forEach { state ->
+            var expired = false
+            state.manualCandidate?.let { candidate ->
+                if (candidate.expiresAt <= now) {
+                    state.manualCandidate = null
+                    candidate.release()
+                    expired = true
+                }
             }
-            if (state.candidates.isEmpty() && state.consumedRequestKey == null) {
-                slots.remove(slotId)
+            state.automaticCandidate?.let { candidate ->
+                if (candidate.expiresAt <= now) {
+                    state.automaticCandidate = null
+                    candidate.release()
+                    expired = true
+                }
+            }
+            // 图片已经在上面清零；墓碑只保留到下一次消费，用于区分过期与从未缓冲。
+            if (expired) {
+                state.hadExpiredCandidate = true
             }
         }
     }
 
     private fun releaseCandidates(state: SlotState) {
-        state.candidates.values.forEach { it.release() }
-        state.candidates.clear()
+        state.manualCandidate?.release()
+        state.automaticCandidate?.release()
+        state.manualCandidate = null
+        state.automaticCandidate = null
+        state.hadExpiredCandidate = false
+    }
+
+    private fun candidateList(state: SlotState): List<CheckoutSnapshot> = listOfNotNull(
+        state.manualCandidate,
+        state.automaticCandidate
+    )
+
+    private fun findCandidate(state: SlotState, pageFingerprint: String): CheckoutSnapshot? =
+        candidateList(state).firstOrNull { it.pageFingerprint == pageFingerprint }
+
+    private fun removeCandidate(state: SlotState, snapshot: CheckoutSnapshot): CheckoutSnapshot? {
+        return when {
+            state.manualCandidate?.snapshotId == snapshot.snapshotId -> {
+                state.manualCandidate = null
+                snapshot
+            }
+            state.automaticCandidate?.snapshotId == snapshot.snapshotId -> {
+                state.automaticCandidate = null
+                snapshot
+            }
+            else -> null
+        }
     }
 }
