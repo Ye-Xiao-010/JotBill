@@ -380,7 +380,10 @@ internal class CheckoutSnapshotCaptureCoordinator(
             )
         }
         queuedAutomatic = null
-        slotId?.let(buffer::discard)
+        // 支付交接保留快照；其他失效原因清理槽位，避免旧图误用。
+        if (detail.reason != CheckoutInvalidationReason.LEFT_SUPPORTED_SHOPPING_APP) {
+            slotId?.let(buffer::discard)
+        }
         activeCheckout = null
         attemptedAutomaticCaptures.clear()
     }
