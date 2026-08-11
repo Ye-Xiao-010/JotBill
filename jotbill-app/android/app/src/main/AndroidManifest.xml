@@ -63,7 +63,7 @@
               android:value="alerting" />
       </service>
 
-      <!-- 结算页只读观察服务，不执行点击、输入或截图 -->
+      <!-- 结算页只读观察服务，不执行点击或输入；截图仅交给内存缓冲协调器 -->
       <service
           android:name=".recognition.CheckoutAccessibilityService"
           android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"

@@ -231,6 +231,25 @@ class CheckoutSnapshotBuffer(
             ?: emptyList()
     }
 
+    /** 不复制图片地检查候选，供截图入口做自动/手动去重和保护判断。 */
+    @Synchronized
+    fun hasCandidate(
+        slotId: String,
+        sessionId: String,
+        pageFingerprint: String,
+        sourceReason: SnapshotSourceReason? = null
+    ): Boolean {
+        purgeExpired(nowMillis())
+        val state = slots[slotId] ?: return false
+        if (state.sessionId != sessionId) {
+            return false
+        }
+        return candidateList(state).any { candidate ->
+            candidate.pageFingerprint == pageFingerprint &&
+                (sourceReason == null || candidate.sourceReason == sourceReason)
+        }
+    }
+
     /**
      * 消费当前快照并生成唯一请求键。该方法只接受明确的购买意图，消费后立即清空内部图片。
      */

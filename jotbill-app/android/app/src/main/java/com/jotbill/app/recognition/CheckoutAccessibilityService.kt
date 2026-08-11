@@ -21,10 +21,43 @@ class CheckoutAccessibilityService : AccessibilityService() {
         @Volatile
         private var observationListener: CheckoutObservationListener? = null
 
+        @Volatile
+        private var activeService: CheckoutAccessibilityService? = null
+
         /** 为后续截图/会话协调器设置稳定观察回调。传入 null 可解除引用。 */
         @JvmStatic
         fun setObservationListener(listener: CheckoutObservationListener?) {
             observationListener = listener
+        }
+
+        /** 供悬浮按钮或 RN bridge 请求当前稳定结算页的手动截图。 */
+        @JvmStatic
+        fun requestManualCapture(callback: SnapshotCaptureCallback) {
+            val service = activeService
+            if (service == null) {
+                callback.onResult(
+                    SnapshotCaptureResult(
+                        status = SnapshotCaptureStatus.UNAVAILABLE,
+                        sourceReason = SnapshotSourceReason.MANUAL_CAPTURE,
+                        reasonCode = SnapshotCaptureUnavailableReason.SERVICE_NOT_CONNECTED.wireValue
+                    )
+                )
+                return
+            }
+            service.snapshotCaptureCoordinator?.requestManualCapture(callback)
+                ?: callback.onResult(
+                    SnapshotCaptureResult(
+                        status = SnapshotCaptureStatus.UNAVAILABLE,
+                        sourceReason = SnapshotSourceReason.MANUAL_CAPTURE,
+                        reasonCode = SnapshotCaptureUnavailableReason.SERVICE_NOT_CONNECTED.wireValue
+                    )
+                )
+        }
+
+        /** 设置后续协调器需要的自动/手动截图状态监听。 */
+        @JvmStatic
+        fun setSnapshotCaptureResultListener(listener: SnapshotCaptureResultListener?) {
+            activeService?.snapshotCaptureCoordinator?.setResultListener(listener)
         }
     }
 
@@ -38,6 +71,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
         onStable = { page -> dispatchEvent(CheckoutObservationEvent.Stable(page)) },
         onInvalidated = { detail -> dispatchEvent(CheckoutObservationEvent.Invalidated(detail)) }
     )
+    private var snapshotCaptureCoordinator: CheckoutSnapshotCaptureCoordinator? = null
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -56,6 +90,10 @@ class CheckoutAccessibilityService : AccessibilityService() {
         // 不在 XML 中限定包名，才能观察离开购物应用的事件并清理旧页面状态；代码仍会先做白名单资格判断。
         configuredInfo.packageNames = null
         serviceInfo = configuredInfo
+        snapshotCaptureCoordinator?.close()
+        snapshotCaptureCoordinator = CheckoutSnapshotCaptureCoordinator(this)
+        activeService = this
+        setObservationListener(snapshotCaptureCoordinator)
         Log.i(TAG, "结算页无障碍观察服务已连接")
     }
 
@@ -144,6 +182,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
     override fun onInterrupt() {
         lastWindowPackage = null
         lastWindowClass = null
+        snapshotCaptureCoordinator?.onServiceInterrupted()
         stabilityCoordinator.invalidate(CheckoutInvalidationReason.SERVICE_INTERRUPTED)
         Log.w(TAG, "结算页无障碍观察服务被中断")
         super.onInterrupt()
@@ -153,6 +192,11 @@ class CheckoutAccessibilityService : AccessibilityService() {
         lastWindowPackage = null
         lastWindowClass = null
         stabilityCoordinator.dispose()
+        snapshotCaptureCoordinator?.close()
+        snapshotCaptureCoordinator = null
+        if (activeService === this) {
+            activeService = null
+        }
         setObservationListener(null)
         Log.i(TAG, "结算页无障碍观察服务已销毁")
         super.onDestroy()
