@@ -11,7 +11,8 @@ import android.view.accessibility.AccessibilityNodeInfo
 /**
  * 只读观察购物应用窗口的无障碍服务。
  *
- * 服务不点击、不输入、不截图，也不根据包名伪造平台或商户；稳定结算页只通过观察回调交给后续层。
+ * 服务不点击、不输入、不处理支付确认，也不根据包名伪造平台或商户；稳定结算页只在门禁通过后
+ * 交给本地截图和购买意图协调器。
  */
 class CheckoutAccessibilityService : AccessibilityService() {
     companion object {
@@ -183,9 +184,15 @@ class CheckoutAccessibilityService : AccessibilityService() {
         if (!pageDetector.supportsShoppingPackage(shoppingPackage)) {
             lastWindowPackage = null
             lastWindowClass = null
+            val invalidationReason = if (pageDetector.supportsPaymentPackage(shoppingPackage)) {
+                CheckoutInvalidationReason.PAYMENT_APP_HANDOFF
+            } else {
+                CheckoutInvalidationReason.LEFT_SUPPORTED_SHOPPING_APP
+            }
             stabilityCoordinator.invalidate(
-                reason = CheckoutInvalidationReason.LEFT_SUPPORTED_SHOPPING_APP,
-                shoppingPackage = shoppingPackage.ifBlank { null }
+                reason = invalidationReason,
+                shoppingPackage = shoppingPackage.ifBlank { null },
+                foregroundPackage = shoppingPackage.ifBlank { null }
             )
             return
         }
@@ -371,7 +378,8 @@ internal class CheckoutStabilityCoordinator(
     fun invalidate(
         reason: CheckoutInvalidationReason,
         shoppingPackage: String? = null,
-        pageFingerprint: String? = null
+        pageFingerprint: String? = null,
+        foregroundPackage: String? = null
     ) {
         if (disposed || !hasActiveCheckout) {
             return
@@ -384,7 +392,8 @@ internal class CheckoutStabilityCoordinator(
             reason = reason,
             shoppingPackage = activePackage ?: shoppingPackage,
             pageFingerprint = activeFingerprint ?: pageFingerprint,
-            invalidatedAt = nowMillis()
+            invalidatedAt = nowMillis(),
+            foregroundPackage = foregroundPackage
         )
         activePackage = null
         activeFingerprint = null

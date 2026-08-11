@@ -379,8 +379,8 @@ internal class CheckoutSnapshotCaptureCoordinator(
             )
         }
         queuedAutomatic = null
-        // 支付交接保留快照；其他失效原因清理槽位，避免旧图误用。
-        if (detail.reason != CheckoutInvalidationReason.LEFT_SUPPORTED_SHOPPING_APP) {
+        // 只有明确的支付交接保留快照；普通离开和其他失效原因都清理槽位，避免旧图误用。
+        if (detail.reason != CheckoutInvalidationReason.PAYMENT_APP_HANDOFF) {
             slotId?.let(buffer::discard)
         }
         activeCheckout = null

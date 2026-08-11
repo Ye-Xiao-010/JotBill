@@ -129,7 +129,11 @@ internal class CheckoutPurchaseIntentCoordinator(
                 when (event) {
                     is CheckoutObservationEvent.Stable -> updateStableContext(event.page)
                     is CheckoutObservationEvent.Invalidated -> {
-                        if (event.detail.reason == CheckoutInvalidationReason.LEFT_SUPPORTED_SHOPPING_APP) {
+                        val isPaymentHandoff =
+                            event.detail.reason == CheckoutInvalidationReason.PAYMENT_APP_HANDOFF &&
+                                event.detail.foregroundPackage
+                                    ?.let(pageDetector::supportsPaymentPackage) == true
+                        if (isPaymentHandoff) {
                             val retained = activeContext ?: handoffContext
                             activeContext = null
                             handoffContext = retained
@@ -146,7 +150,7 @@ internal class CheckoutPurchaseIntentCoordinator(
         }
 
         if (shouldTriggerHandoff) {
-            // 离开购物应用是支付交接信号；具体快照有效性仍由统一 buffer 原子判断。
+            // 只有白名单支付包名交接才触发购买意图；具体快照有效性仍由统一 buffer 原子判断。
             trigger(PurchaseIntent.PAYMENT_APP_HANDOFF, handoffFingerprint)
         }
     }

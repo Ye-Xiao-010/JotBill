@@ -11,6 +11,12 @@ internal val DEFAULT_SUPPORTED_SHOPPING_PACKAGES = setOf(
     "com.xingin.xhs"
 )
 
+/** 只有这些前台包名才可能代表从购物应用进入支付应用的交接。 */
+internal val DEFAULT_SUPPORTED_PAYMENT_PACKAGES = setOf(
+    "com.tencent.mm",
+    "com.eg.android.AlipayGphone"
+)
+
 /**
  * 无障碍采集层提交给检测器的规范化页面摘要。
  *
@@ -46,6 +52,7 @@ sealed class CheckoutPageDetection {
 
 /** 页面稳定观察对后续采集器公开的失效原因。 */
 enum class CheckoutInvalidationReason(val wireValue: String) {
+    PAYMENT_APP_HANDOFF("PAYMENT_APP_HANDOFF"),
     LEFT_SUPPORTED_SHOPPING_APP("LEFT_SUPPORTED_SHOPPING_APP"),
     NON_CHECKOUT_PAGE("NON_CHECKOUT_PAGE"),
     SENSITIVE_PAGE("SENSITIVE_PAGE"),
@@ -65,7 +72,9 @@ data class CheckoutObservationInvalidation(
     val reason: CheckoutInvalidationReason,
     val shoppingPackage: String?,
     val pageFingerprint: String?,
-    val invalidatedAt: Long
+    val invalidatedAt: Long,
+    /** 当前前台包名，与产生结算快照的 shoppingPackage 明确区分。 */
+    val foregroundPackage: String? = null
 )
 
 /** 后续截图、购买意图和会话协调器使用的单一观察事件流。 */
@@ -81,12 +90,17 @@ fun interface CheckoutObservationListener {
 
 /** 只判断是否满足创建内存快照的前置条件，不产生任何网络请求。 */
 class CheckoutPageDetector(
-    supportedShoppingPackages: Set<String> = DEFAULT_SUPPORTED_SHOPPING_PACKAGES
+    supportedShoppingPackages: Set<String> = DEFAULT_SUPPORTED_SHOPPING_PACKAGES,
+    supportedPaymentPackages: Set<String> = DEFAULT_SUPPORTED_PAYMENT_PACKAGES
 ) {
     private val supportedPackages = supportedShoppingPackages.toSet()
+    private val paymentPackages = supportedPaymentPackages.toSet()
 
     /** 包名只用于资格判断，不从包名推断平台、商户或订单字段。 */
     fun supportsShoppingPackage(shoppingPackage: String): Boolean = shoppingPackage in supportedPackages
+
+    /** 支付包名只用于判断交接目标，不据此伪造商户、平台或支付结果。 */
+    fun supportsPaymentPackage(packageName: String): Boolean = packageName in paymentPackages
 
     fun detect(observation: CheckoutPageObservation): CheckoutPageDetection {
         if (!supportsShoppingPackage(observation.shoppingPackage)) {
