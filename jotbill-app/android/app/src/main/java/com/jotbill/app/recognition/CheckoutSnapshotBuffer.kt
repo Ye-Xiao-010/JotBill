@@ -19,6 +19,7 @@ data class CheckoutSnapshot internal constructor(
     val pageFingerprint: String,
     val capturedAt: Long,
     val expiresAt: Long,
+    val candidateRevision: Int,
     val sourceReason: SnapshotSourceReason,
     internal val imageBytes: ByteArray
 ) {
@@ -37,20 +38,27 @@ data class SnapshotCaptureRequest(
     val pageRole: CheckoutPageRole,
     val pageFingerprint: String,
     val sourceReason: SnapshotSourceReason,
-    val imageBytes: ByteArray
+    val imageBytes: ByteArray,
+    /** 必须由敏感页面检查提供，手动截图不能用默认路径绕过该校验。 */
+    val isSensitivePage: Boolean
 )
 
 enum class SnapshotStoreRejection(val wireValue: String) {
     INVALID_ARGUMENT("INVALID_ARGUMENT"),
     NOT_CHECKOUT_PAGE("NOT_CHECKOUT_PAGE"),
     EMPTY_IMAGE("EMPTY_IMAGE"),
-    JOURNEY_ALREADY_TRIGGERED("JOURNEY_ALREADY_TRIGGERED")
+    SENSITIVE_PAGE("SENSITIVE_PAGE"),
+    JOURNEY_ALREADY_TRIGGERED("JOURNEY_ALREADY_TRIGGERED"),
+    MANUAL_CANDIDATE_PROTECTED("MANUAL_CANDIDATE_PROTECTED")
 }
 
 sealed class SnapshotStoreResult {
+    /** requiresDisambiguation 为 true 时，后续协调器必须选择指纹或进入待确认。 */
     data class Stored(
         val snapshot: CheckoutSnapshot,
-        val replacedSnapshotId: String?
+        val replacedSnapshotId: String?,
+        val candidateRevision: Int,
+        val requiresDisambiguation: Boolean
     ) : SnapshotStoreResult()
 
     data class Unchanged(val snapshot: CheckoutSnapshot) : SnapshotStoreResult()
@@ -60,7 +68,9 @@ sealed class SnapshotStoreResult {
 
 enum class SnapshotConsumeRejection(val wireValue: String) {
     NO_BUFFERED_SNAPSHOT("NO_BUFFERED_SNAPSHOT"),
-    SNAPSHOT_EXPIRED("SNAPSHOT_EXPIRED")
+    SNAPSHOT_EXPIRED("SNAPSHOT_EXPIRED"),
+    AMBIGUOUS_CANDIDATES("AMBIGUOUS_CANDIDATES"),
+    NO_MATCHING_PAGE_FINGERPRINT("NO_MATCHING_PAGE_FINGERPRINT")
 }
 
 sealed class CheckoutAiTriggerResult {
@@ -78,9 +88,10 @@ sealed class CheckoutAiTriggerResult {
 /**
  * 按槽位保存当前结算页快照的短生命周期缓冲区。
  *
- * 默认每个槽位只保留一张图，30 秒后自动失效。新会话或页面实质变化会覆盖旧图；
- * 同一会话的相同指纹只更新时间窗口，不重复截图。只有 consumeForAi 收到购买意图
- * 时才会产生请求键并消费快照，普通观察、通知重放和 RN 重渲染无法触发上传。
+ * 每个槽位保留一个当前自动候选，以及未过期的手动保护候选；30 秒后自动失效。
+ * 同一会话、同一指纹的自动候选不能覆盖手动候选；不同指纹的自动候选递增版本并与
+ * 手动候选并存，消费前必须明确指纹，否则进入歧义回退。只有 consumeForAi 收到购买
+ * 意图时才会产生请求键并消费快照，普通观察、通知重放和 RN 重渲染无法触发上传。
  */
 class CheckoutSnapshotBuffer(
     private val snapshotTtlMillis: Long = DEFAULT_SNAPSHOT_TTL_MILLIS,
@@ -89,8 +100,9 @@ class CheckoutSnapshotBuffer(
 ) {
     private data class SlotState(
         val sessionId: String,
-        var snapshot: CheckoutSnapshot?,
-        var consumedRequestKey: CheckoutRequestKey?
+        val candidates: MutableMap<String, CheckoutSnapshot> = mutableMapOf(),
+        var nextCandidateRevision: Int = 0,
+        var consumedRequestKey: CheckoutRequestKey? = null
     )
 
     private val slots = mutableMapOf<String, SlotState>()
@@ -115,6 +127,9 @@ class CheckoutSnapshotBuffer(
         if (!request.pageRole.canBufferSnapshot()) {
             return SnapshotStoreResult.Rejected(SnapshotStoreRejection.NOT_CHECKOUT_PAGE)
         }
+        if (request.isSensitivePage) {
+            return SnapshotStoreResult.Rejected(SnapshotStoreRejection.SENSITIVE_PAGE)
+        }
         if (request.imageBytes.isEmpty()) {
             return SnapshotStoreResult.Rejected(SnapshotStoreRejection.EMPTY_IMAGE)
         }
@@ -124,16 +139,42 @@ class CheckoutSnapshotBuffer(
             return SnapshotStoreResult.Rejected(SnapshotStoreRejection.JOURNEY_ALREADY_TRIGGERED)
         }
 
-        val current = existing?.snapshot
-        if (
-            current != null &&
-            current.sessionId == request.sessionId &&
-            current.pageFingerprint == request.pageFingerprint
-        ) {
-            return SnapshotStoreResult.Unchanged(current.copyForConsumer())
+        val state = if (existing == null || existing.sessionId != request.sessionId) {
+            existing?.let { releaseCandidates(it) }
+            SlotState(request.sessionId).also { slots[request.slotId] = it }
+        } else {
+            existing
         }
 
-        current?.release()
+        val sameFingerprint = state.candidates[request.pageFingerprint]
+        if (sameFingerprint != null) {
+            if (
+                sameFingerprint.sourceReason == SnapshotSourceReason.MANUAL_CAPTURE &&
+                request.sourceReason == SnapshotSourceReason.CHECKOUT_STABLE
+            ) {
+                return SnapshotStoreResult.Rejected(SnapshotStoreRejection.MANUAL_CANDIDATE_PROTECTED)
+            }
+            if (sameFingerprint.sourceReason == request.sourceReason) {
+                return SnapshotStoreResult.Unchanged(sameFingerprint.copyForConsumer())
+            }
+
+            state.candidates.remove(request.pageFingerprint)?.release()
+        }
+
+        var replacedSnapshotId: String? = sameFingerprint?.snapshotId
+        if (request.sourceReason == SnapshotSourceReason.CHECKOUT_STABLE) {
+            val previousAutomatic = state.candidates.values.firstOrNull {
+                it.sourceReason == SnapshotSourceReason.CHECKOUT_STABLE
+            }
+            if (previousAutomatic != null) {
+                state.candidates.remove(previousAutomatic.pageFingerprint)
+                previousAutomatic.release()
+                replacedSnapshotId = previousAutomatic.snapshotId
+            }
+        }
+
+        val candidateRevision = state.nextCandidateRevision + 1
+        state.nextCandidateRevision = candidateRevision
         val snapshot = CheckoutSnapshot(
             snapshotId = snapshotIdFactory(),
             sessionId = request.sessionId,
@@ -143,17 +184,16 @@ class CheckoutSnapshotBuffer(
             pageFingerprint = request.pageFingerprint,
             capturedAt = now,
             expiresAt = now + snapshotTtlMillis,
+            candidateRevision = candidateRevision,
             sourceReason = request.sourceReason,
             imageBytes = request.imageBytes.copyOf()
         )
-        slots[request.slotId] = SlotState(
-            sessionId = request.sessionId,
-            snapshot = snapshot,
-            consumedRequestKey = null
-        )
+        state.candidates[request.pageFingerprint] = snapshot
         return SnapshotStoreResult.Stored(
             snapshot = snapshot.copyForConsumer(),
-            replacedSnapshotId = current?.snapshotId
+            replacedSnapshotId = replacedSnapshotId,
+            candidateRevision = candidateRevision,
+            requiresDisambiguation = state.candidates.size > 1
         )
     }
 
@@ -161,7 +201,21 @@ class CheckoutSnapshotBuffer(
     fun current(slotId: String): CheckoutSnapshot? {
         val now = nowMillis()
         purgeExpired(now)
-        return slots[slotId]?.snapshot?.copyForConsumer()
+        val candidates = slots[slotId]?.candidates ?: return null
+        return candidates.values.singleOrNull()?.copyForConsumer()
+    }
+
+    /** 返回当前未过期候选的副本；多个候选时交给协调器或待确认界面选择。 */
+    @Synchronized
+    fun currentCandidates(slotId: String): List<CheckoutSnapshot> {
+        val now = nowMillis()
+        purgeExpired(now)
+        return slots[slotId]
+            ?.candidates
+            ?.values
+            ?.sortedByDescending { it.candidateRevision }
+            ?.map { it.copyForConsumer() }
+            ?: emptyList()
     }
 
     /**
@@ -170,9 +224,11 @@ class CheckoutSnapshotBuffer(
     @Synchronized
     fun consumeForAi(
         slotId: String,
-        intent: PurchaseIntent
+        intent: PurchaseIntent,
+        pageFingerprint: String? = null
     ): CheckoutAiTriggerResult {
         val now = nowMillis()
+        purgeExpired(now)
         val state = slots[slotId]
             ?: return CheckoutAiTriggerResult.Rejected(SnapshotConsumeRejection.NO_BUFFERED_SNAPSHOT)
 
@@ -180,11 +236,26 @@ class CheckoutSnapshotBuffer(
             return CheckoutAiTriggerResult.AlreadyTriggered(it)
         }
 
-        val snapshot = state.snapshot
-            ?: return CheckoutAiTriggerResult.Rejected(SnapshotConsumeRejection.NO_BUFFERED_SNAPSHOT)
+        if (state.candidates.isEmpty()) {
+            return CheckoutAiTriggerResult.Rejected(SnapshotConsumeRejection.NO_BUFFERED_SNAPSHOT)
+        }
+
+        val snapshot = if (pageFingerprint != null) {
+            state.candidates[pageFingerprint]
+                ?: return CheckoutAiTriggerResult.Rejected(
+                    SnapshotConsumeRejection.NO_MATCHING_PAGE_FINGERPRINT
+                )
+        } else {
+            state.candidates.values.singleOrNull()
+                ?: return CheckoutAiTriggerResult.Rejected(
+                    SnapshotConsumeRejection.AMBIGUOUS_CANDIDATES
+                )
+        }
         if (now >= snapshot.expiresAt) {
-            snapshot.release()
-            slots.remove(slotId)
+            state.candidates.remove(snapshot.pageFingerprint)?.release()
+            if (state.candidates.isEmpty()) {
+                slots.remove(slotId)
+            }
             return CheckoutAiTriggerResult.Rejected(SnapshotConsumeRejection.SNAPSHOT_EXPIRED)
         }
 
@@ -194,8 +265,7 @@ class CheckoutSnapshotBuffer(
             pageFingerprint = snapshot.pageFingerprint
         )
         val consumerSnapshot = snapshot.copyForConsumer()
-        snapshot.release()
-        state.snapshot = null
+        releaseCandidates(state)
         state.consumedRequestKey = requestKey
         return CheckoutAiTriggerResult.Ready(
             requestKey = requestKey,
@@ -207,17 +277,27 @@ class CheckoutSnapshotBuffer(
     /** 页面回到非结算角色或会话取消时调用，确保旧图片不能被后续事件消费。 */
     @Synchronized
     fun discard(slotId: String) {
-        slots.remove(slotId)?.snapshot?.release()
+        slots.remove(slotId)?.let { releaseCandidates(it) }
     }
 
     @Synchronized
     private fun purgeExpired(now: Long) {
-        val expiredSlots = slots.filterValues { state ->
-            state.snapshot?.expiresAt?.let { it <= now } == true
-        }.keys
-        expiredSlots.forEach { slotId ->
-            slots.remove(slotId)?.snapshot?.release()
+        slots.toList().forEach { (slotId, state) ->
+            val expiredFingerprints = state.candidates
+                .filterValues { it.expiresAt <= now }
+                .keys
+                .toList()
+            expiredFingerprints.forEach { fingerprint ->
+                state.candidates.remove(fingerprint)?.release()
+            }
+            if (state.candidates.isEmpty() && state.consumedRequestKey == null) {
+                slots.remove(slotId)
+            }
         }
     }
 
+    private fun releaseCandidates(state: SlotState) {
+        state.candidates.values.forEach { it.release() }
+        state.candidates.clear()
+    }
 }
