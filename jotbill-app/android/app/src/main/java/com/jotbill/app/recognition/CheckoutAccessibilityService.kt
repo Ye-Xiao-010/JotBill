@@ -10,6 +10,7 @@ import android.view.accessibility.AccessibilityNodeInfo
 import com.jotbill.app.ai.CheckoutAiResultCallback
 import com.jotbill.app.ai.CheckoutAiVisionClient
 import com.jotbill.app.data.JotBillDatabaseProvider
+import com.jotbill.app.overlay.CheckoutCaptureOverlayManager
 import com.jotbill.app.security.KeyStoreSecretStore
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CancellationException
@@ -70,13 +71,13 @@ class CheckoutAccessibilityService : AccessibilityService() {
         /** 设置后续协调器需要的自动/手动截图状态监听。 */
         @JvmStatic
         fun setSnapshotCaptureResultListener(listener: SnapshotCaptureResultListener?) {
-            activeService?.snapshotCaptureCoordinator?.setResultListener(listener)
+            activeService?.setSnapshotCaptureResultListener(listener)
         }
 
         /** 设置购买意图结果消费者；Ready.snapshot 由消费者读取后负责 release。 */
         @JvmStatic
         fun setPurchaseIntentResultConsumer(consumer: PurchaseIntentResultCallback?) {
-            activeService?.purchaseIntentCoordinator?.setResultConsumer(consumer)
+            activeService?.setPurchaseIntentResultConsumer(consumer)
         }
 
         /** 设置结算页 AI 结果消费者；结果不包含图片，服务销毁时会断开旧回调。 */
@@ -154,6 +155,8 @@ class CheckoutAccessibilityService : AccessibilityService() {
     private val pageDetector = CheckoutPageDetector()
     private var lastWindowPackage: String? = null
     private var lastWindowClass: String? = null
+    @Volatile
+    private var serviceConnected = false
     private val stabilityCoordinator = CheckoutStabilityCoordinator(
         handler = Handler(Looper.getMainLooper()),
         stableDelayMillis = STABLE_DELAY_MILLIS,
@@ -164,6 +167,10 @@ class CheckoutAccessibilityService : AccessibilityService() {
     private var snapshotCaptureCoordinator: CheckoutSnapshotCaptureCoordinator? = null
     private var purchaseIntentCoordinator: CheckoutPurchaseIntentCoordinator? = null
     private var checkoutSnapshotBuffer: CheckoutSnapshotBuffer? = null
+    private var checkoutCaptureOverlayManager: CheckoutCaptureOverlayManager? = null
+    private var snapshotCaptureResultListener: SnapshotCaptureResultListener? = null
+    @Volatile
+    private var purchaseIntentResultConsumer: PurchaseIntentResultCallback? = null
     private val aiLifecycleLock = Any()
     private var aiScope: CoroutineScope? = null
     private var aiVisionClient: CheckoutAiVisionClient? = null
@@ -173,6 +180,8 @@ class CheckoutAccessibilityService : AccessibilityService() {
     override fun onServiceConnected() {
         super.onServiceConnected()
 
+        // 重连时先结束旧观察旅程，避免旧指纹阻止新服务发出稳定事件。
+        stabilityCoordinator.invalidate(CheckoutInvalidationReason.SERVICE_INTERRUPTED)
         val configuredInfo = serviceInfo ?: AccessibilityServiceInfo()
         configuredInfo.eventTypes =
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or
@@ -188,21 +197,30 @@ class CheckoutAccessibilityService : AccessibilityService() {
         configuredInfo.packageNames = null
         serviceInfo = configuredInfo
         purchaseIntentCoordinator?.setReadyDispatcher(null)
+        purchaseIntentCoordinator?.setResultConsumer(null)
         shutdownAiClient()
         purchaseIntentCoordinator?.close()
         snapshotCaptureCoordinator?.close()
+        checkoutCaptureOverlayManager?.setManualCaptureRequestHandler(null)
+        checkoutCaptureOverlayManager?.close()
         val sharedBuffer = CheckoutSnapshotBuffer()
         checkoutSnapshotBuffer = sharedBuffer
         snapshotCaptureCoordinator = CheckoutSnapshotCaptureCoordinator(this, sharedBuffer)
         purchaseIntentCoordinator = CheckoutPurchaseIntentCoordinator(sharedBuffer)
+        checkoutCaptureOverlayManager = CheckoutCaptureOverlayManager(this).also { manager ->
+            manager.setManualCaptureRequestHandler { requestManualCaptureFromOverlay() }
+        }
         activeService = this
+        configureSnapshotCaptureResultListener()
+        configurePurchaseIntentResultConsumer()
         initializeAiClient()
         setObservationListener(snapshotCaptureCoordinator)
+        serviceConnected = true
         Log.i(TAG, "结算页无障碍观察服务已连接")
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        if (event == null) {
+        if (!serviceConnected || event == null) {
             return
         }
 
@@ -290,29 +308,46 @@ class CheckoutAccessibilityService : AccessibilityService() {
     }
 
     override fun onInterrupt() {
+        serviceConnected = false
         lastWindowPackage = null
         lastWindowClass = null
         purchaseIntentCoordinator?.setReadyDispatcher(null)
+        purchaseIntentCoordinator?.setResultConsumer(null)
+        checkoutCaptureOverlayManager?.setManualCaptureRequestHandler(null)
         shutdownAiClient()
         snapshotCaptureCoordinator?.onServiceInterrupted()
         purchaseIntentCoordinator?.onServiceInterrupted()
         stabilityCoordinator.invalidate(CheckoutInvalidationReason.SERVICE_INTERRUPTED)
+        checkoutCaptureOverlayManager?.onServiceInterrupted()
+        snapshotCaptureResultListener = null
+        purchaseIntentResultConsumer = null
+        if (activeService === this) {
+            activeService = null
+        }
+        setObservationListener(null)
         Log.w(TAG, "结算页无障碍观察服务被中断")
         super.onInterrupt()
     }
 
     override fun onDestroy() {
+        serviceConnected = false
         lastWindowPackage = null
         lastWindowClass = null
         purchaseIntentCoordinator?.setReadyDispatcher(null)
+        purchaseIntentCoordinator?.setResultConsumer(null)
         setAiResultCallback(null)
         shutdownAiClient()
         stabilityCoordinator.dispose()
         purchaseIntentCoordinator?.close()
         snapshotCaptureCoordinator?.close()
+        checkoutCaptureOverlayManager?.setManualCaptureRequestHandler(null)
+        checkoutCaptureOverlayManager?.close()
         purchaseIntentCoordinator = null
         snapshotCaptureCoordinator = null
         checkoutSnapshotBuffer = null
+        checkoutCaptureOverlayManager = null
+        snapshotCaptureResultListener = null
+        purchaseIntentResultConsumer = null
         if (activeService === this) {
             activeService = null
         }
@@ -427,6 +462,50 @@ class CheckoutAccessibilityService : AccessibilityService() {
         }
     }
 
+    /** 将截图结果同时交给悬浮按钮和现有监听者，避免外部注册覆盖按钮生命周期。 */
+    private fun configureSnapshotCaptureResultListener() {
+        snapshotCaptureCoordinator?.setResultListener { result ->
+            checkoutCaptureOverlayManager?.onCaptureResult(result)
+            val listener = snapshotCaptureResultListener ?: return@setResultListener
+            try {
+                listener.onResult(result)
+            } catch (error: RuntimeException) {
+                Log.w(TAG, "截图结果监听处理失败", error)
+            }
+        }
+    }
+
+    private fun setSnapshotCaptureResultListener(listener: SnapshotCaptureResultListener?) {
+        snapshotCaptureResultListener = listener
+    }
+
+    /** 保留原有购买意图回调，同时让悬浮按钮在快照交接后收起。 */
+    private fun configurePurchaseIntentResultConsumer() {
+        purchaseIntentCoordinator?.setResultConsumer { result ->
+            when (result) {
+                is PurchaseIntentCoordinationResult.AiDispatched,
+                is PurchaseIntentCoordinationResult.ReleasedWithoutConsumer ->
+                    checkoutCaptureOverlayManager?.onAiDispatched()
+                else -> Unit
+            }
+            val consumer = purchaseIntentResultConsumer ?: return@setResultConsumer
+            try {
+                consumer.onResult(result)
+            } catch (error: RuntimeException) {
+                Log.w(TAG, "购买意图结果监听处理失败", error)
+            }
+        }
+    }
+
+    private fun setPurchaseIntentResultConsumer(consumer: PurchaseIntentResultCallback?) {
+        purchaseIntentResultConsumer = consumer
+    }
+
+    /** 悬浮按钮只调用现有手动截图入口，不直接接触截图资源或 AI。 */
+    private fun requestManualCaptureFromOverlay() {
+        snapshotCaptureCoordinator?.requestManualCapture(SnapshotCaptureCallback { })
+    }
+
     /** AI 回调只传递结构化结果，运行在 IO 协程中且不携带图片。 */
     private fun notifyAiResult(result: com.jotbill.app.ai.AiVisionResult) {
         val callback = synchronized(aiLifecycleLock) { aiResultCallback }
@@ -459,6 +538,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
                 Log.w(TAG, "分发结算页观察事件失败", error)
             }
         }
+        checkoutCaptureOverlayManager?.onObservationEvent(event)
         try {
             purchaseIntentCoordinator?.onEvent(event)
         } catch (error: RuntimeException) {

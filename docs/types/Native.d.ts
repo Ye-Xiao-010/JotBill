@@ -891,10 +891,53 @@ export interface RuntimeModule {
 /**
  * 悬浮按钮接口(新增)
  */
+export type CheckoutOverlayMode = 'always_on' | 'checkout_only' | 'off';
+
+export type CheckoutOverlayStatus =
+  | 'HIDDEN'
+  | 'READY'
+  | 'CAPTURING'
+  | 'CAPTURED_WAITING_PAYMENT'
+  | 'EXPIRED_RETRY'
+  | 'SENSITIVE'
+  | 'UNAVAILABLE'
+  | 'SERVICE_NOT_CONNECTED';
+
+export interface CheckoutOverlayState {
+  status: CheckoutOverlayStatus;
+  visible: boolean;
+  enabled: boolean;
+  mode: CheckoutOverlayMode;
+  reasonCode?: string | null;
+  shoppingPackage?: string | null;
+  pageFingerprint?: string | null;
+  sessionId?: string | null;
+  snapshotId?: string | null;
+  candidateRevision?: number | null;
+  requiresDisambiguation: boolean;
+}
+
+export interface SnapshotCaptureResult {
+  status: 'STORED' | 'PROTECTED' | 'EXPIRED' | 'REJECTED' | 'UNAVAILABLE' | 'DUPLICATE' | 'CANCELLED' | 'FAILED';
+  sourceReason: SnapshotSourceReason;
+  reasonCode: string;
+  sessionId?: string | null;
+  slotId?: string | null;
+  shoppingPackage?: string | null;
+  pageFingerprint?: string | null;
+  snapshotId?: string | null;
+  candidateRevision?: number | null;
+  requiresDisambiguation: boolean;
+}
+
 export interface OverlayModule {
   setManualCaptureButtonEnabled(enabled: boolean): Promise<void>;
   setManualCaptureButtonMode(mode: 'always_on' | 'checkout_only' | 'off'): Promise<void>;
   getManualCaptureButtonMode(): Promise<'always_on' | 'checkout_only' | 'off'>;
+  getOverlayPermissionStatus(): Promise<'authorized' | 'denied'>;
+  requestOverlayPermission(): Promise<void>;
+  getManualCaptureButtonState(): Promise<CheckoutOverlayState>;
+  requestManualCapture(): Promise<SnapshotCaptureResult>;
 }
 
 /**
@@ -912,6 +955,7 @@ export interface BackupModule {
  * 事件订阅(原生 -> RN 的事件通知)
  */
 export interface RecognitionEvents {
+  onCheckoutCaptureOverlayStateChanged?: (data: CheckoutOverlayState) => void;
   onCheckoutDetected?: (data: { sessionId: string; shoppingPackage: string }) => void;
   onSnapshotCaptured?: (data: { sessionId: string; snapshotId: string; sourceReason: SnapshotSourceReason }) => void;
   onAiRecognitionCompleted?: (data: { sessionId: string; candidateId: string; success: boolean }) => void;
