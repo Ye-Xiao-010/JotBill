@@ -226,6 +226,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
 
         val shoppingPackage = event.packageName?.toString()?.trim().orEmpty()
         if (!pageDetector.supportsShoppingPackage(shoppingPackage)) {
+            val previousShoppingPackage = lastWindowPackage
             lastWindowPackage = null
             lastWindowClass = null
             val invalidationReason = if (pageDetector.supportsPaymentPackage(shoppingPackage)) {
@@ -233,6 +234,11 @@ class CheckoutAccessibilityService : AccessibilityService() {
             } else {
                 CheckoutInvalidationReason.LEFT_SUPPORTED_SHOPPING_APP
             }
+            dispatchOverlayInvalidation(
+                reason = invalidationReason,
+                shoppingPackage = previousShoppingPackage,
+                foregroundPackage = shoppingPackage.ifBlank { null }
+            )
             stabilityCoordinator.invalidate(
                 reason = invalidationReason,
                 shoppingPackage = shoppingPackage.ifBlank { null },
@@ -254,6 +260,10 @@ class CheckoutAccessibilityService : AccessibilityService() {
 
         val root = rootInActiveWindow ?: event.source
         if (root == null) {
+            dispatchOverlayInvalidation(
+                reason = CheckoutInvalidationReason.NODE_TREE_UNAVAILABLE,
+                shoppingPackage = shoppingPackage
+            )
             stabilityCoordinator.invalidate(
                 reason = CheckoutInvalidationReason.NODE_TREE_UNAVAILABLE,
                 shoppingPackage = shoppingPackage
@@ -264,6 +274,10 @@ class CheckoutAccessibilityService : AccessibilityService() {
         try {
             val rootPackage = root.packageName?.toString()?.trim().orEmpty()
             if (rootPackage.isNotBlank() && rootPackage != shoppingPackage) {
+                dispatchOverlayInvalidation(
+                    reason = CheckoutInvalidationReason.NODE_TREE_UNAVAILABLE,
+                    shoppingPackage = shoppingPackage
+                )
                 stabilityCoordinator.invalidate(
                     reason = CheckoutInvalidationReason.NODE_TREE_UNAVAILABLE,
                     shoppingPackage = shoppingPackage
@@ -285,15 +299,32 @@ class CheckoutAccessibilityService : AccessibilityService() {
                 }
 
                 is CheckoutPageDetection.Rejected -> {
+                    val reason = invalidationReason(observation, detection.reason)
                     stabilityCoordinator.invalidate(
-                        reason = invalidationReason(observation, detection.reason),
+                        reason = reason,
                         shoppingPackage = shoppingPackage,
                         pageFingerprint = observation.pageFingerprint
                     )
+                    if (reason == CheckoutInvalidationReason.NON_CHECKOUT_PAGE) {
+                        checkoutCaptureOverlayManager?.onSupportedShoppingNonCheckout(
+                            shoppingPackage = observation.shoppingPackage,
+                            pageFingerprint = observation.pageFingerprint
+                        )
+                    } else if (reason == CheckoutInvalidationReason.SENSITIVE_PAGE) {
+                        dispatchOverlayInvalidation(
+                            reason = reason,
+                            shoppingPackage = observation.shoppingPackage,
+                            pageFingerprint = observation.pageFingerprint
+                        )
+                    }
                 }
             }
         } catch (error: RuntimeException) {
             Log.w(TAG, "读取无障碍节点摘要失败", error)
+            dispatchOverlayInvalidation(
+                reason = CheckoutInvalidationReason.NODE_TREE_UNAVAILABLE,
+                shoppingPackage = shoppingPackage
+            )
             stabilityCoordinator.invalidate(
                 reason = CheckoutInvalidationReason.NODE_TREE_UNAVAILABLE,
                 shoppingPackage = shoppingPackage
@@ -528,6 +559,26 @@ class CheckoutAccessibilityService : AccessibilityService() {
         rejection == CheckoutDetectionRejection.UNSUPPORTED_SHOPPING_PACKAGE ->
             CheckoutInvalidationReason.LEFT_SUPPORTED_SHOPPING_APP
         else -> CheckoutInvalidationReason.NON_CHECKOUT_PAGE
+    }
+
+    /** 仅把前台页面失效状态交给悬浮按钮，不改变购买意图和截图 buffer 路由。 */
+    private fun dispatchOverlayInvalidation(
+        reason: CheckoutInvalidationReason,
+        shoppingPackage: String? = null,
+        pageFingerprint: String? = null,
+        foregroundPackage: String? = null
+    ) {
+        checkoutCaptureOverlayManager?.onObservationEvent(
+            CheckoutObservationEvent.Invalidated(
+                CheckoutObservationInvalidation(
+                    reason = reason,
+                    shoppingPackage = shoppingPackage,
+                    pageFingerprint = pageFingerprint,
+                    invalidatedAt = System.currentTimeMillis(),
+                    foregroundPackage = foregroundPackage
+                )
+            )
+        )
     }
 
     private fun dispatchEvent(event: CheckoutObservationEvent) {

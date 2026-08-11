@@ -20,6 +20,7 @@ import android.widget.TextView
 import com.jotbill.app.recognition.CheckoutInvalidationReason
 import com.jotbill.app.recognition.CheckoutObservationEvent
 import com.jotbill.app.recognition.CheckoutPageRole
+import com.jotbill.app.recognition.CheckoutPageDetector
 import com.jotbill.app.recognition.SnapshotCaptureRejection
 import com.jotbill.app.recognition.SnapshotCaptureResult
 import com.jotbill.app.recognition.SnapshotCaptureStatus
@@ -157,6 +158,7 @@ internal class CheckoutCaptureOverlayManager(context: Context) {
     private val mainHandler = Handler(Looper.getMainLooper())
     private val touchSlop = ViewConfiguration.get(appContext).scaledTouchSlop
     private val preferences = appContext.getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE)
+    private val pageDetector = CheckoutPageDetector()
 
     private var windowManager: WindowManager? = null
     private var overlayView: TextView? = null
@@ -165,6 +167,8 @@ internal class CheckoutCaptureOverlayManager(context: Context) {
     private var mode = CheckoutOverlayMode.parse(preferences.getString(KEY_MODE, DEFAULT_MODE))
     private var currentPackage: String? = null
     private var currentFingerprint: String? = null
+    private var currentSupportedShoppingApp = false
+    private var currentSensitivePage = false
     private var currentCheckout = false
     private var closed = false
 
@@ -202,8 +206,28 @@ internal class CheckoutCaptureOverlayManager(context: Context) {
             }
             when (event) {
                 is CheckoutObservationEvent.Stable -> handleStable(event.page.observation)
-                is CheckoutObservationEvent.Invalidated -> handleInvalidated(event.detail.reason)
+                is CheckoutObservationEvent.Invalidated -> handleInvalidated(event.detail)
             }
+        }
+    }
+
+    /** 支持购物应用的非结算页只用于 always_on 展示，点击仍受结算页门禁保护。 */
+    fun onSupportedShoppingNonCheckout(shoppingPackage: String, pageFingerprint: String?) {
+        runOnMain {
+            if (closed || !pageDetector.supportsShoppingPackage(shoppingPackage)) {
+                return@runOnMain
+            }
+            currentPackage = shoppingPackage
+            currentFingerprint = pageFingerprint
+            currentSupportedShoppingApp = true
+            currentSensitivePage = false
+            currentCheckout = false
+            updateState(
+                status = CheckoutOverlayStatus.READY,
+                visible = canShowOnCurrentPage(),
+                reasonCode = CheckoutInvalidationReason.NON_CHECKOUT_PAGE.wireValue,
+                clearSnapshotMetadata = true
+            )
         }
     }
 
@@ -270,6 +294,8 @@ internal class CheckoutCaptureOverlayManager(context: Context) {
             }
             currentPackage = null
             currentFingerprint = null
+            currentSupportedShoppingApp = false
+            currentSensitivePage = false
             currentCheckout = false
             updateState(
                 status = CheckoutOverlayStatus.HIDDEN,
@@ -321,6 +347,8 @@ internal class CheckoutCaptureOverlayManager(context: Context) {
             if (!closed) {
                 currentPackage = null
                 currentFingerprint = null
+                currentSupportedShoppingApp = false
+                currentSensitivePage = false
                 currentCheckout = false
                 updateState(
                     status = CheckoutOverlayStatus.SERVICE_NOT_CONNECTED,
@@ -341,6 +369,8 @@ internal class CheckoutCaptureOverlayManager(context: Context) {
             manualCaptureRequestHandler = null
             currentPackage = null
             currentFingerprint = null
+            currentSupportedShoppingApp = false
+            currentSensitivePage = false
             currentCheckout = false
             removeView()
             state = state.copy(
@@ -365,6 +395,8 @@ internal class CheckoutCaptureOverlayManager(context: Context) {
     private fun handleStable(observation: com.jotbill.app.recognition.CheckoutPageObservation) {
         currentPackage = observation.shoppingPackage
         currentFingerprint = observation.pageFingerprint
+        currentSupportedShoppingApp = pageDetector.supportsShoppingPackage(observation.shoppingPackage)
+        currentSensitivePage = observation.isSensitivePage
         currentCheckout = observation.pageRole == CheckoutPageRole.CHECKOUT &&
             !observation.isSensitivePage
 
@@ -396,11 +428,31 @@ internal class CheckoutCaptureOverlayManager(context: Context) {
         )
     }
 
-    private fun handleInvalidated(reason: CheckoutInvalidationReason) {
+    private fun handleInvalidated(detail: com.jotbill.app.recognition.CheckoutObservationInvalidation) {
+        if (
+            detail.reason == CheckoutInvalidationReason.NON_CHECKOUT_PAGE &&
+            detail.shoppingPackage?.let(pageDetector::supportsShoppingPackage) == true
+        ) {
+            currentPackage = detail.shoppingPackage
+            currentFingerprint = detail.pageFingerprint
+            currentSupportedShoppingApp = true
+            currentSensitivePage = false
+            currentCheckout = false
+            updateState(
+                status = CheckoutOverlayStatus.READY,
+                visible = canShowOnCurrentPage(),
+                reasonCode = detail.reason.wireValue,
+                clearSnapshotMetadata = true
+            )
+            return
+        }
+
         currentPackage = null
         currentFingerprint = null
+        currentSupportedShoppingApp = false
+        currentSensitivePage = detail.reason == CheckoutInvalidationReason.SENSITIVE_PAGE
         currentCheckout = false
-        val status = when (reason) {
+        val status = when (detail.reason) {
             CheckoutInvalidationReason.SENSITIVE_PAGE -> CheckoutOverlayStatus.SENSITIVE
             CheckoutInvalidationReason.SERVICE_INTERRUPTED,
             CheckoutInvalidationReason.SERVICE_DESTROYED -> CheckoutOverlayStatus.SERVICE_NOT_CONNECTED
@@ -409,7 +461,7 @@ internal class CheckoutCaptureOverlayManager(context: Context) {
         updateState(
             status = status,
             visible = false,
-            reasonCode = reason.wireValue,
+            reasonCode = detail.reason.wireValue,
             clearSnapshotMetadata = true
         )
     }
@@ -468,15 +520,20 @@ internal class CheckoutCaptureOverlayManager(context: Context) {
     private fun canShowOnCurrentPage(): Boolean =
         configuredEnabled &&
             mode != CheckoutOverlayMode.OFF &&
-            currentCheckout &&
+            !currentSensitivePage &&
+            (
+                currentCheckout ||
+                    (mode == CheckoutOverlayMode.ALWAYS_ON && currentSupportedShoppingApp)
+                ) &&
             hasOverlayPermission(appContext)
 
     private fun canManualCapture(): Boolean =
         canShowOnCurrentPage() &&
+            currentCheckout &&
             state.status in setOf(
                 CheckoutOverlayStatus.READY,
                 CheckoutOverlayStatus.EXPIRED_RETRY,
-                CheckoutOverlayStatus.CAPTURED_WAITING_PAYMENT
+                CheckoutOverlayStatus.UNAVAILABLE
             )
 
     private fun updateState(
