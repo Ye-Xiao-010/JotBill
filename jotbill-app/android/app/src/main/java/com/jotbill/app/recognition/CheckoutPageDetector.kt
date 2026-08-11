@@ -1,6 +1,6 @@
 package com.jotbill.app.recognition
 
-private val DEFAULT_SUPPORTED_SHOPPING_PACKAGES = setOf(
+internal val DEFAULT_SUPPORTED_SHOPPING_PACKAGES = setOf(
     "com.taobao.taobao",
     "com.tmall.wireless",
     "com.jingdong.app.mall",
@@ -23,7 +23,10 @@ data class CheckoutPageObservation(
     val pageFingerprint: String,
     val hasFinalAmountSignal: Boolean,
     val hasCheckoutActionSignal: Boolean,
-    val isSensitivePage: Boolean
+    val isSensitivePage: Boolean,
+    val windowClass: String = "",
+    val normalizedTextHash: String = "",
+    val observedAt: Long = 0L
 )
 
 enum class CheckoutDetectionRejection(val wireValue: String) {
@@ -41,14 +44,52 @@ sealed class CheckoutPageDetection {
     data class Rejected(val reason: CheckoutDetectionRejection) : CheckoutPageDetection()
 }
 
+/** 页面稳定观察对后续采集器公开的失效原因。 */
+enum class CheckoutInvalidationReason(val wireValue: String) {
+    LEFT_SUPPORTED_SHOPPING_APP("LEFT_SUPPORTED_SHOPPING_APP"),
+    NON_CHECKOUT_PAGE("NON_CHECKOUT_PAGE"),
+    SENSITIVE_PAGE("SENSITIVE_PAGE"),
+    NODE_TREE_UNAVAILABLE("NODE_TREE_UNAVAILABLE"),
+    SERVICE_INTERRUPTED("SERVICE_INTERRUPTED"),
+    SERVICE_DESTROYED("SERVICE_DESTROYED")
+}
+
+/** 经过稳定窗口确认的结算页，不包含截图、商户推断或网络请求。 */
+data class StableCheckoutPage(
+    val observation: CheckoutPageObservation,
+    val stableAt: Long
+)
+
+/** 页面离开结算候选或服务生命周期中断时发送的失效事件。 */
+data class CheckoutObservationInvalidation(
+    val reason: CheckoutInvalidationReason,
+    val shoppingPackage: String?,
+    val pageFingerprint: String?,
+    val invalidatedAt: Long
+)
+
+/** 后续截图、购买意图和会话协调器使用的单一观察事件流。 */
+sealed class CheckoutObservationEvent {
+    data class Stable(val page: StableCheckoutPage) : CheckoutObservationEvent()
+
+    data class Invalidated(val detail: CheckoutObservationInvalidation) : CheckoutObservationEvent()
+}
+
+fun interface CheckoutObservationListener {
+    fun onEvent(event: CheckoutObservationEvent)
+}
+
 /** 只判断是否满足创建内存快照的前置条件，不产生任何网络请求。 */
 class CheckoutPageDetector(
     supportedShoppingPackages: Set<String> = DEFAULT_SUPPORTED_SHOPPING_PACKAGES
 ) {
     private val supportedPackages = supportedShoppingPackages.toSet()
 
+    /** 包名只用于资格判断，不从包名推断平台、商户或订单字段。 */
+    fun supportsShoppingPackage(shoppingPackage: String): Boolean = shoppingPackage in supportedPackages
+
     fun detect(observation: CheckoutPageObservation): CheckoutPageDetection {
-        if (observation.shoppingPackage !in supportedPackages) {
+        if (!supportsShoppingPackage(observation.shoppingPackage)) {
             return CheckoutPageDetection.Rejected(
                 CheckoutDetectionRejection.UNSUPPORTED_SHOPPING_PACKAGE
             )

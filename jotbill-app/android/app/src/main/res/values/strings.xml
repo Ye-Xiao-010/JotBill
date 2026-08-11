@@ -1,3 +1,4 @@
 <resources>
     <string name="app_name">JotBill</string>
+    <string name="accessibility_service_description">只读观察支持的购物应用结算页，不执行点击、输入或截图。</string>
 </resources>
