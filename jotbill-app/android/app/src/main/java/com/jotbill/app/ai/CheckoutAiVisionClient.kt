@@ -123,6 +123,11 @@ sealed class AiVisionResult {
     ) : AiVisionResult()
 }
 
+/** 结算页视觉结果的本地消费者；结果不包含图片，回调可替换且不负责记账。 */
+fun interface CheckoutAiResultCallback {
+    fun onResult(result: AiVisionResult)
+}
+
 /**
  * 消费购买意图协调器交付的 Ready.snapshot，并通过现有 OpenAI 兼容配置发起一次视觉请求。
  *

@@ -25,7 +25,7 @@ enum class PurchaseIntentSnapshotOwnership(val wireValue: String) {
 sealed class PurchaseIntentCoordinationResult {
     abstract val intent: PurchaseIntent
 
-    /** 有消费者接收结果；Ready.snapshot 的副本由该消费者负责 release。 */
+    /** 协调器内部的消费结果；Ready 仅在交接前存在，交接后对外改报 AiDispatched。 */
     data class Accepted(
         override val intent: PurchaseIntent,
         val aiResult: CheckoutAiTriggerResult,
@@ -44,7 +44,17 @@ sealed class PurchaseIntentCoordinationResult {
         }
     }
 
-    /** 没有 AI 消费者或回调时，Ready.snapshot 已被协调器清零并释放。 */
+    /** Ready 已交给 AI 客户端；回调只收到元数据，不再拥有图片副本。 */
+    data class AiDispatched(
+        override val intent: PurchaseIntent,
+        val requestKey: CheckoutRequestKey,
+        val snapshotId: String,
+        val sessionId: String,
+        val slotId: String,
+        val pageFingerprint: String
+    ) : PurchaseIntentCoordinationResult()
+
+    /** 没有 AI 接管器或派发失败时，Ready.snapshot 已被协调器清零并释放。 */
     data class ReleasedWithoutConsumer(
         override val intent: PurchaseIntent,
         val requestKey: CheckoutRequestKey,
@@ -78,8 +88,13 @@ sealed class PurchaseIntentCoordinationResult {
 
 /** 后续 AI 调度器、通知协调器或 RN bridge 可注册的单一结果消费者。 */
 fun interface PurchaseIntentResultCallback {
-    /** Ready.snapshot 归回调方所有；回调完成读取后必须调用 snapshot.release()。 */
+    /** 回调可能收到 AiDispatched 或 ReleasedWithoutConsumer，均不携带图片所有权。 */
     fun onResult(result: PurchaseIntentCoordinationResult)
+}
+
+/** 接管 Ready 的内部入口；返回 true 才表示图片所有权已经转移给 AI 客户端。 */
+internal fun interface PurchaseIntentReadyDispatcher {
+    fun dispatch(ready: CheckoutAiTriggerResult.Ready): Boolean
 }
 
 /**
@@ -96,7 +111,7 @@ internal class CheckoutPurchaseIntentCoordinator(
         private const val TAG = "CheckoutPurchaseIntent"
         private const val DEFAULT_MAX_REQUESTS_PER_SESSION = 2
         private const val RELEASED_NO_CONSUMER = "SNAPSHOT_RELEASED_NO_CONSUMER"
-        private const val RELEASED_CONSUMER_FAILED = "SNAPSHOT_RELEASED_CONSUMER_FAILED"
+        private const val RELEASED_DISPATCH_FAILED = "SNAPSHOT_RELEASED_AI_DISPATCH_FAILED"
     }
 
     private data class SafeCheckoutContext(
@@ -113,6 +128,7 @@ internal class CheckoutPurchaseIntentCoordinator(
     private var handoffAttempted = false
     private var notificationFallbackAttempted = false
     private var resultConsumer: PurchaseIntentResultCallback? = null
+    private var readyDispatcher: PurchaseIntentReadyDispatcher? = null
     private var closed = false
     private val pageDetector = CheckoutPageDetector()
 
@@ -175,6 +191,13 @@ internal class CheckoutPurchaseIntentCoordinator(
         }
     }
 
+    /** 设置 Ready 的唯一接管者；服务未能接入 AI 时由协调器负责释放图片。 */
+    fun setReadyDispatcher(dispatcher: PurchaseIntentReadyDispatcher?) {
+        synchronized(this) {
+            readyDispatcher = dispatcher
+        }
+    }
+
     /** 服务中断只清理协调器上下文；截图协调器负责清理共享 buffer。 */
     fun onServiceInterrupted() {
         synchronized(this) {
@@ -190,6 +213,7 @@ internal class CheckoutPurchaseIntentCoordinator(
             if (!closed) {
                 clearContextsLocked()
                 resultConsumer = null
+                readyDispatcher = null
                 closed = true
             }
         }
@@ -395,19 +419,40 @@ internal class CheckoutPurchaseIntentCoordinator(
         }
 
         val ready = result.aiResult as CheckoutAiTriggerResult.Ready
-        if (consumer == null) {
-            ready.snapshot.release()
-            return releasedWithoutConsumer(result.intent, ready)
+        val dispatcher = synchronized(this) { readyDispatcher }
+        if (dispatcher != null) {
+            val dispatched = try {
+                dispatcher.dispatch(ready)
+            } catch (error: RuntimeException) {
+                Log.w(TAG, "AI Ready 派发失败", error)
+                false
+            }
+            if (dispatched) {
+                val handoff = PurchaseIntentCoordinationResult.AiDispatched(
+                    intent = result.intent,
+                    requestKey = ready.requestKey,
+                    snapshotId = ready.snapshot.snapshotId,
+                    sessionId = ready.snapshot.sessionId,
+                    slotId = ready.snapshot.slotId,
+                    pageFingerprint = ready.snapshot.pageFingerprint
+                )
+                consumer?.let { notifyConsumer(it, handoff) }
+                return handoff
+            }
         }
 
-        return try {
-            consumer.onResult(result)
-            result
-        } catch (error: RuntimeException) {
-            ready.snapshot.release()
-            Log.w(TAG, "购买意图结果消费者失败，已释放快照", error)
-            releasedWithoutConsumer(result.intent, ready, RELEASED_CONSUMER_FAILED)
-        }
+        ready.snapshot.release()
+        val released = releasedWithoutConsumer(
+            intent = result.intent,
+            ready = ready,
+            reasonCode = if (dispatcher == null) {
+                RELEASED_NO_CONSUMER
+            } else {
+                RELEASED_DISPATCH_FAILED
+            }
+        )
+        consumer?.let { notifyConsumer(it, released) }
+        return released
     }
 
     private fun notifyConsumer(

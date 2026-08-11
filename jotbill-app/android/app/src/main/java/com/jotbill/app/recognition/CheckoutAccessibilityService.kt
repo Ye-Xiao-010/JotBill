@@ -7,6 +7,18 @@ import android.os.Looper
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import com.jotbill.app.ai.CheckoutAiResultCallback
+import com.jotbill.app.ai.CheckoutAiVisionClient
+import com.jotbill.app.data.JotBillDatabaseProvider
+import com.jotbill.app.security.KeyStoreSecretStore
+import java.util.concurrent.atomic.AtomicBoolean
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 
 /**
  * 只读观察购物应用窗口的无障碍服务。
@@ -65,6 +77,12 @@ class CheckoutAccessibilityService : AccessibilityService() {
         @JvmStatic
         fun setPurchaseIntentResultConsumer(consumer: PurchaseIntentResultCallback?) {
             activeService?.purchaseIntentCoordinator?.setResultConsumer(consumer)
+        }
+
+        /** 设置结算页 AI 结果消费者；结果不包含图片，服务销毁时会断开旧回调。 */
+        @JvmStatic
+        fun setCheckoutAiResultCallback(callback: CheckoutAiResultCallback?) {
+            activeService?.setAiResultCallback(callback)
         }
 
         /** 通用购买意图入口，供后续无障碍点击、通知服务和 RN bridge 调用。 */
@@ -146,6 +164,11 @@ class CheckoutAccessibilityService : AccessibilityService() {
     private var snapshotCaptureCoordinator: CheckoutSnapshotCaptureCoordinator? = null
     private var purchaseIntentCoordinator: CheckoutPurchaseIntentCoordinator? = null
     private var checkoutSnapshotBuffer: CheckoutSnapshotBuffer? = null
+    private val aiLifecycleLock = Any()
+    private var aiScope: CoroutineScope? = null
+    private var aiVisionClient: CheckoutAiVisionClient? = null
+    private val dispatchedAiRequestKeys = mutableSetOf<String>()
+    private var aiResultCallback: CheckoutAiResultCallback? = null
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -164,6 +187,8 @@ class CheckoutAccessibilityService : AccessibilityService() {
         // 不在 XML 中限定包名，才能观察离开购物应用的事件并清理旧页面状态；代码仍会先做白名单资格判断。
         configuredInfo.packageNames = null
         serviceInfo = configuredInfo
+        purchaseIntentCoordinator?.setReadyDispatcher(null)
+        shutdownAiClient()
         purchaseIntentCoordinator?.close()
         snapshotCaptureCoordinator?.close()
         val sharedBuffer = CheckoutSnapshotBuffer()
@@ -171,6 +196,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
         snapshotCaptureCoordinator = CheckoutSnapshotCaptureCoordinator(this, sharedBuffer)
         purchaseIntentCoordinator = CheckoutPurchaseIntentCoordinator(sharedBuffer)
         activeService = this
+        initializeAiClient()
         setObservationListener(snapshotCaptureCoordinator)
         Log.i(TAG, "结算页无障碍观察服务已连接")
     }
@@ -266,6 +292,8 @@ class CheckoutAccessibilityService : AccessibilityService() {
     override fun onInterrupt() {
         lastWindowPackage = null
         lastWindowClass = null
+        purchaseIntentCoordinator?.setReadyDispatcher(null)
+        shutdownAiClient()
         snapshotCaptureCoordinator?.onServiceInterrupted()
         purchaseIntentCoordinator?.onServiceInterrupted()
         stabilityCoordinator.invalidate(CheckoutInvalidationReason.SERVICE_INTERRUPTED)
@@ -276,6 +304,9 @@ class CheckoutAccessibilityService : AccessibilityService() {
     override fun onDestroy() {
         lastWindowPackage = null
         lastWindowClass = null
+        purchaseIntentCoordinator?.setReadyDispatcher(null)
+        setAiResultCallback(null)
+        shutdownAiClient()
         stabilityCoordinator.dispose()
         purchaseIntentCoordinator?.close()
         snapshotCaptureCoordinator?.close()
@@ -288,6 +319,125 @@ class CheckoutAccessibilityService : AccessibilityService() {
         setObservationListener(null)
         Log.i(TAG, "结算页无障碍观察服务已销毁")
         super.onDestroy()
+    }
+
+    /** 服务连接时创建与当前服务绑定的 AI 客户端，失败时保留无 AI 的安全路径。 */
+    private fun initializeAiClient() {
+        val client = try {
+            CheckoutAiVisionClient(
+                database = JotBillDatabaseProvider.get(applicationContext),
+                secretStore = KeyStoreSecretStore(applicationContext)
+            )
+        } catch (error: RuntimeException) {
+            Log.w(TAG, "结算页 AI 客户端初始化失败", error)
+            null
+        }
+
+        if (client == null) {
+            purchaseIntentCoordinator?.setReadyDispatcher(null)
+            return
+        }
+
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        synchronized(aiLifecycleLock) {
+            aiVisionClient = client
+            aiScope = scope
+            dispatchedAiRequestKeys.clear()
+        }
+        purchaseIntentCoordinator?.setReadyDispatcher(
+            PurchaseIntentReadyDispatcher { ready -> dispatchReadyToAi(ready) }
+        )
+    }
+
+    /** 中断或销毁时先断开资源引用，再取消网络和未启动的 Ready 任务。 */
+    private fun shutdownAiClient() {
+        var client: CheckoutAiVisionClient? = null
+        var scope: CoroutineScope? = null
+        synchronized(aiLifecycleLock) {
+            client = aiVisionClient
+            aiVisionClient = null
+            scope = aiScope
+            aiScope = null
+            dispatchedAiRequestKeys.clear()
+        }
+        client?.close()
+        scope?.cancel()
+    }
+
+    /** 将 Ready 异步交给 AI；返回 false 时所有权仍由协调器负责释放。 */
+    private fun dispatchReadyToAi(ready: CheckoutAiTriggerResult.Ready): Boolean {
+        val requestKey = ready.requestKey.value
+        val client: CheckoutAiVisionClient
+        val scope: CoroutineScope
+        synchronized(aiLifecycleLock) {
+            client = aiVisionClient ?: return false
+            scope = aiScope ?: return false
+            if (!scope.isActive || !dispatchedAiRequestKeys.add(requestKey)) {
+                return false
+            }
+        }
+
+        val clientStarted = AtomicBoolean(false)
+        val handoffAccepted = AtomicBoolean(false)
+        val releasedBeforeClient = AtomicBoolean(false)
+        val releaseBeforeClient = {
+            if (
+                handoffAccepted.get() &&
+                !clientStarted.get() &&
+                releasedBeforeClient.compareAndSet(false, true)
+            ) {
+                ready.snapshot.release()
+            }
+        }
+        val job = try {
+            scope.launch {
+                clientStarted.set(true)
+                try {
+                    val result = client.recognize(ready)
+                    notifyAiResult(result)
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (error: Throwable) {
+                    // 客户端的正常异常路径由自身 finally 释放，这里兜底处理未进入完整路径的异常。
+                    ready.snapshot.release()
+                    Log.w(TAG, "结算页 AI 任务异常", error)
+                }
+            }
+        } catch (error: RuntimeException) {
+            synchronized(aiLifecycleLock) {
+                dispatchedAiRequestKeys.remove(requestKey)
+            }
+            return false
+        }
+        job.invokeOnCompletion { _ ->
+            // 协程在调用 recognize 前被取消，客户端尚未取得 Ready 所有权。
+            releaseBeforeClient()
+        }
+        handoffAccepted.set(true)
+        if (job.isCompleted) {
+            // 完成回调可能早于 handoff 标记执行，补做一次无竞态的释放检查。
+            releaseBeforeClient()
+        }
+        return true
+    }
+
+    private fun setAiResultCallback(callback: CheckoutAiResultCallback?) {
+        synchronized(aiLifecycleLock) {
+            aiResultCallback = callback
+        }
+    }
+
+    /** AI 回调只传递结构化结果，运行在 IO 协程中且不携带图片。 */
+    private fun notifyAiResult(result: com.jotbill.app.ai.AiVisionResult) {
+        val callback = synchronized(aiLifecycleLock) { aiResultCallback }
+        if (callback == null) {
+            return
+        }
+        try {
+            callback.onResult(result)
+        } catch (error: RuntimeException) {
+            Log.w(TAG, "结算页 AI 结果消费者失败", error)
+        }
     }
 
     private fun invalidationReason(
