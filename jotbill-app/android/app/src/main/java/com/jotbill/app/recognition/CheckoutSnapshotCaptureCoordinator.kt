@@ -272,6 +272,7 @@ internal class CheckoutSnapshotCaptureCoordinator(
                     pageFingerprint = activeCheckout?.page?.observation?.pageFingerprint,
                     invalidatedAt = nowMillis()
             )
+            )
             // 销毁时即使此前发生过支付交接，也必须释放尚未消费的保留快照。
             buffer.clear()
             closed = true
