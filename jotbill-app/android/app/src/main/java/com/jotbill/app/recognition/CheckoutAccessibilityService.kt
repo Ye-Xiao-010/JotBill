@@ -123,11 +123,14 @@ class CheckoutAccessibilityService : AccessibilityService() {
         fun requestPaymentNotificationFallback(
             pageFingerprint: String?,
             callback: PurchaseIntentResultCallback
-        ) = requestPurchaseIntent(
-            PurchaseIntent.PAYMENT_NOTIFICATION_FALLBACK,
-            pageFingerprint,
-            callback
-        )
+        ) {
+            // 旧签名缺少支付包名和金额，保留 API 形状但禁止绕过结构化通知门禁。
+            notifyPurchaseIntentRejected(
+                PurchaseIntent.PAYMENT_NOTIFICATION_FALLBACK,
+                PurchaseIntentGateRejection.INVALID_PAYMENT_NOTIFICATION,
+                callback
+            )
+        }
 
         /**
          * 通知回退只允许复用当前真实稳定结算页的指纹；服务未连接或没有稳定页时直接拒绝。
