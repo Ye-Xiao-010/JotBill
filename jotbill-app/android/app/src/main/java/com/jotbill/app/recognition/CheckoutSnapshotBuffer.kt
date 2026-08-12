@@ -40,6 +40,20 @@ data class CheckoutSnapshot internal constructor(
     }
 }
 
+/** 供持久化协调器使用的快照元数据，不携带图片字节。 */
+internal data class CheckoutSnapshotReference(
+    val snapshotId: String,
+    val sessionId: String,
+    val slotId: String,
+    val shoppingPackage: String,
+    val pageRole: CheckoutPageRole,
+    val pageFingerprint: String,
+    val capturedAt: Long,
+    val expiresAt: Long,
+    val candidateRevision: Int,
+    val sourceReason: SnapshotSourceReason
+)
+
 /** 截图工具或手动悬浮按钮向缓冲区提交的输入，不包含任何网络行为。 */
 data class SnapshotCaptureRequest(
     val slotId: String,
@@ -260,6 +274,33 @@ class CheckoutSnapshotBuffer(
             candidate.pageFingerprint == pageFingerprint &&
                 (sourceReason == null || candidate.sourceReason == sourceReason)
         }
+    }
+
+    /** 只读取与页面键对应的引用，避免为支付匹配复制或暴露图片。 */
+    @Synchronized
+    fun findReference(
+        slotId: String,
+        pageFingerprint: String? = null,
+        snapshotId: String? = null
+    ): CheckoutSnapshotReference? {
+        purgeExpired(nowMillis())
+        val state = slots[slotId] ?: return null
+        val candidate = candidateList(state).firstOrNull { snapshot ->
+            (pageFingerprint == null || snapshot.pageFingerprint == pageFingerprint) &&
+                (snapshotId == null || snapshot.snapshotId == snapshotId)
+        } ?: return null
+        return CheckoutSnapshotReference(
+            snapshotId = candidate.snapshotId,
+            sessionId = candidate.sessionId,
+            slotId = candidate.slotId,
+            shoppingPackage = candidate.shoppingPackage,
+            pageRole = candidate.pageRole,
+            pageFingerprint = candidate.pageFingerprint,
+            capturedAt = candidate.capturedAt,
+            expiresAt = candidate.expiresAt,
+            candidateRevision = candidate.candidateRevision,
+            sourceReason = candidate.sourceReason
+        )
     }
 
     /**

@@ -47,7 +47,8 @@ data class PaymentNotificationFallbackSignal(
     val amountMinor: Long,
     val occurredAt: Long,
     val merchant: String? = null,
-    val orderId: String? = null
+    val orderId: String? = null,
+    val sourceEventKey: String? = null
 ) {
     fun isValid(): Boolean =
         paymentPackage.isNotBlank() &&
@@ -55,7 +56,8 @@ data class PaymentNotificationFallbackSignal(
             amountMinor > 0L &&
             occurredAt > 0L &&
             isOptionalTextValid(merchant) &&
-            isOptionalTextValid(orderId)
+            isOptionalTextValid(orderId) &&
+            isOptionalTextValid(sourceEventKey)
 
     private fun isOptionalTextValid(value: String?): Boolean =
         value == null || (value.isNotBlank() && value.length <= 256)
@@ -136,7 +138,15 @@ enum class CheckoutJourneyState(val wireValue: String) {
             FAILED,
             EXPIRED
         )
-        WAITING_ENRICHMENT -> next in setOf(AI_PENDING, AUTO_COMMITTED, NEEDS_CONFIRMATION, FAILED, EXPIRED)
+        WAITING_ENRICHMENT -> next in setOf(
+            AI_PENDING,
+            AI_COMPLETED,
+            PAYMENT_CONFIRMED,
+            AUTO_COMMITTED,
+            NEEDS_CONFIRMATION,
+            FAILED,
+            EXPIRED
+        )
         AUTO_COMMITTED -> next == COMPLETED
         NEEDS_CONFIRMATION -> next in setOf(COMPLETED, DISMISSED, CANCELLED)
         COMPLETED, DISMISSED, CANCELLED, FAILED, EXPIRED -> false

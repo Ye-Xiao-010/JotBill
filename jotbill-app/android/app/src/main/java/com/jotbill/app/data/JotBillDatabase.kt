@@ -59,7 +59,7 @@ import com.jotbill.app.data.entity.TransactionCandidateEntity
         ChatSessionEntity::class,
         ChatMessageEntity::class
     ],
-    version = 3,
+    version = 4,
     exportSchema = true
 )
 @TypeConverters(DatabaseConverters::class)
@@ -154,5 +154,23 @@ object DatabaseMigrations {
         }
     }
 
-    val all: Array<Migration> = arrayOf(migration1To2, migration2To3)
+    private val migration3To4 = object : Migration(3, 4) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL(
+                "ALTER TABLE `transaction_candidates` ADD COLUMN `ai_order_id` TEXT"
+            )
+            db.execSQL(
+                "ALTER TABLE `transaction_candidates` ADD COLUMN `ai_occurred_at` INTEGER"
+            )
+            db.execSQL(
+                "ALTER TABLE `payment_evidence` ADD COLUMN `source_event_key` TEXT"
+            )
+            db.execSQL(
+                "CREATE UNIQUE INDEX IF NOT EXISTS `index_payment_evidence_source_event_key` " +
+                    "ON `payment_evidence` (`source_event_key`)"
+            )
+        }
+    }
+
+    val all: Array<Migration> = arrayOf(migration1To2, migration2To3, migration3To4)
 }

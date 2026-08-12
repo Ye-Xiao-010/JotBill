@@ -411,7 +411,12 @@ class PaymentNotificationService : NotificationListenerService() {
 
         // 显示悬浮窗提醒
         showPaymentOverlay(amount, packageName, paymentData)
-        requestPurchaseIntentFallback(packageName, amount, sbn.postTime)
+        requestPurchaseIntentFallback(
+            packageName = packageName,
+            amount = amount,
+            occurredAt = sbn.postTime,
+            sourceEventKey = "${sbn.key}:${sbn.id}:${sbn.postTime}"
+        )
     }
 
     /**
@@ -420,7 +425,8 @@ class PaymentNotificationService : NotificationListenerService() {
     private fun requestPurchaseIntentFallback(
         packageName: String,
         amount: Double,
-        occurredAt: Long
+        occurredAt: Long,
+        sourceEventKey: String
     ) {
         if (
             packageName != WECHAT_PACKAGE &&
@@ -442,7 +448,8 @@ class PaymentNotificationService : NotificationListenerService() {
         val signal = PaymentNotificationFallbackSignal(
             paymentPackage = packageName,
             amountMinor = amountMinor,
-            occurredAt = occurredAt
+            occurredAt = occurredAt,
+            sourceEventKey = sourceEventKey
         )
         try {
             CheckoutAccessibilityService.requestPaymentNotificationFallbackSignal(

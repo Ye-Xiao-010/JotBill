@@ -247,6 +247,9 @@ class CheckoutAccessibilityService : AccessibilityService() {
     private var aiVisionClient: CheckoutAiVisionClient? = null
     private val dispatchedAiRequestKeys = mutableSetOf<String>()
     private var aiResultCallback: CheckoutAiResultCallback? = null
+    private var paymentMatcher: CheckoutPaymentMatcher? = null
+    private var matchingScope: CoroutineScope? = null
+    private val activeAiReferences = mutableMapOf<String, CheckoutSnapshotReference>()
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -289,6 +292,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
         activeService = this
         configureSnapshotCaptureResultListener()
         configurePurchaseIntentResultConsumer()
+        initializePaymentMatcher()
         initializeAiClient()
         setObservationListener(snapshotCaptureCoordinator)
         serviceConnected = true
@@ -473,6 +477,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
         purchaseIntentCoordinator?.setReadyDispatcher(null)
         purchaseIntentCoordinator?.setResultConsumer(null)
         checkoutCaptureOverlayManager?.setManualCaptureRequestHandler(null)
+        shutdownPaymentMatcher()
         shutdownAiClient()
         snapshotCaptureCoordinator?.onServiceInterrupted()
         purchaseIntentCoordinator?.onServiceInterrupted()
@@ -499,6 +504,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
         purchaseIntentCoordinator?.setReadyDispatcher(null)
         purchaseIntentCoordinator?.setResultConsumer(null)
         setAiResultCallback(null)
+        shutdownPaymentMatcher()
         shutdownAiClient()
         stabilityCoordinator.dispose()
         purchaseIntentCoordinator?.close()
@@ -547,6 +553,36 @@ class CheckoutAccessibilityService : AccessibilityService() {
         )
     }
 
+    /** 创建独立的匹配作用域，即使 AI 配置不可用也能保存支付证据。 */
+    private fun initializePaymentMatcher() {
+        shutdownPaymentMatcher()
+        val database = try {
+            JotBillDatabaseProvider.get(applicationContext)
+        } catch (error: RuntimeException) {
+            Log.w(TAG, "支付匹配数据库初始化失败", error)
+            null
+        }
+        if (database == null) {
+            return
+        }
+        synchronized(aiLifecycleLock) {
+            paymentMatcher = CheckoutPaymentMatcher(database)
+            matchingScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+            activeAiReferences.clear()
+        }
+    }
+
+    private fun shutdownPaymentMatcher() {
+        val scope: CoroutineScope?
+        synchronized(aiLifecycleLock) {
+            scope = matchingScope
+            matchingScope = null
+            paymentMatcher = null
+            activeAiReferences.clear()
+        }
+        scope?.cancel()
+    }
+
     /** 中断或销毁时先断开资源引用，再取消网络和未启动的 Ready 任务。 */
     private fun shutdownAiClient() {
         var client: CheckoutAiVisionClient? = null
@@ -573,7 +609,10 @@ class CheckoutAccessibilityService : AccessibilityService() {
             if (!scope.isActive || !dispatchedAiRequestKeys.add(requestKey)) {
                 return false
             }
+            activeAiReferences[ready.snapshot.sessionId] = ready.snapshot.reference()
         }
+
+        val reference = ready.snapshot.reference()
 
         val clientStarted = AtomicBoolean(false)
         val handoffAccepted = AtomicBoolean(false)
@@ -585,25 +624,57 @@ class CheckoutAccessibilityService : AccessibilityService() {
                 releasedBeforeClient.compareAndSet(false, true)
             ) {
                 ready.snapshot.release()
+                synchronized(aiLifecycleLock) {
+                    if (activeAiReferences[reference.sessionId] == reference) {
+                        activeAiReferences.remove(reference.sessionId)
+                    }
+                }
             }
         }
         val job = try {
             scope.launch {
                 clientStarted.set(true)
+                var clientOwnsSnapshot = false
                 try {
+                    val matcher = synchronized(aiLifecycleLock) { paymentMatcher }
+                    if (matcher != null) {
+                        try {
+                            matcher.ensureSession(reference, ready.requestKey)
+                        } catch (error: RuntimeException) {
+                            Log.w(TAG, "AI 会话预写入失败", error)
+                        }
+                    }
+                    clientOwnsSnapshot = true
                     val result = client.recognize(ready)
+                    if (matcher != null) {
+                        try {
+                            matcher.recordAiResult(result)
+                        } catch (error: RuntimeException) {
+                            Log.w(TAG, "AI 结果匹配写入失败", error)
+                        }
+                    }
                     notifyAiResult(result)
                 } catch (error: CancellationException) {
                     throw error
                 } catch (error: Throwable) {
-                    // 客户端的正常异常路径由自身 finally 释放，这里兜底处理未进入完整路径的异常。
-                    ready.snapshot.release()
                     Log.w(TAG, "结算页 AI 任务异常", error)
+                } finally {
+                    if (!clientOwnsSnapshot) {
+                        ready.snapshot.release()
+                    }
+                    synchronized(aiLifecycleLock) {
+                        if (activeAiReferences[reference.sessionId] == reference) {
+                            activeAiReferences.remove(reference.sessionId)
+                        }
+                    }
                 }
             }
         } catch (error: RuntimeException) {
             synchronized(aiLifecycleLock) {
                 dispatchedAiRequestKeys.remove(requestKey)
+                if (activeAiReferences[reference.sessionId] == reference) {
+                    activeAiReferences.remove(reference.sessionId)
+                }
             }
             return false
         }
@@ -715,6 +786,40 @@ class CheckoutAccessibilityService : AccessibilityService() {
         }
 
         val coordinator = purchaseIntentCoordinator
+        val matcher = synchronized(aiLifecycleLock) { paymentMatcher }
+        val matchingScope = synchronized(aiLifecycleLock) { matchingScope }
+        val snapshotReference = checkoutSnapshotBuffer?.findReference(
+            slotId = checkoutSnapshotSlotId(observation.shoppingPackage),
+            pageFingerprint = observation.pageFingerprint
+        )
+        if (matcher != null && matchingScope != null) {
+            matchingScope.launch {
+                val reference = snapshotReference
+                    ?: synchronized(aiLifecycleLock) {
+                        val now = System.currentTimeMillis()
+                        activeAiReferences.values
+                            .filter {
+                                it.shoppingPackage == observation.shoppingPackage &&
+                                    it.pageFingerprint == observation.pageFingerprint &&
+                                    it.expiresAt > now
+                            }
+                            .singleOrNull()
+                    }
+                    ?: matcher.findReferenceForPayment(
+                        shoppingPackage = observation.shoppingPackage,
+                        pageFingerprint = observation.pageFingerprint
+                    )
+                if (reference == null) {
+                    Log.w(TAG, "支付通知没有唯一的结算会话可匹配")
+                    return@launch
+                }
+                try {
+                    matcher.recordPaymentEvidence(reference, signal)
+                } catch (error: RuntimeException) {
+                    Log.w(TAG, "支付证据写入失败", error)
+                }
+            }
+        }
         if (coordinator == null) {
             Companion.notifyPurchaseIntentUnavailable(
                 PurchaseIntent.PAYMENT_NOTIFICATION_FALLBACK,
