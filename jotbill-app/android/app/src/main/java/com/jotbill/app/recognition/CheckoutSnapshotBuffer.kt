@@ -369,6 +369,13 @@ class CheckoutSnapshotBuffer(
         slots.remove(slotId)?.let { releaseCandidates(it) }
     }
 
+    /** 服务中断或销毁时清理所有槽位，确保没有遗漏的图片字节继续留在内存中。 */
+    @Synchronized
+    fun clear() {
+        slots.values.forEach(::releaseCandidates)
+        slots.clear()
+    }
+
     @Synchronized
     private fun purgeExpired(now: Long) {
         slots.values.forEach { state ->

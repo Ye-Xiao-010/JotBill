@@ -271,8 +271,9 @@ internal class CheckoutSnapshotCaptureCoordinator(
                     shoppingPackage = activeCheckout?.page?.observation?.shoppingPackage,
                     pageFingerprint = activeCheckout?.page?.observation?.pageFingerprint,
                     invalidatedAt = nowMillis()
-                )
             )
+            // 销毁时即使此前发生过支付交接，也必须释放尚未消费的保留快照。
+            buffer.clear()
             closed = true
             resultListener = null
             screenshotThread.quitSafely()
@@ -381,7 +382,7 @@ internal class CheckoutSnapshotCaptureCoordinator(
         queuedAutomatic = null
         // 只有明确的支付交接保留快照；普通离开和其他失效原因都清理槽位，避免旧图误用。
         if (detail.reason != CheckoutInvalidationReason.PAYMENT_APP_HANDOFF) {
-            slotId?.let(buffer::discard)
+            buffer.clear()
         }
         activeCheckout = null
         attemptedAutomaticCaptures.clear()
