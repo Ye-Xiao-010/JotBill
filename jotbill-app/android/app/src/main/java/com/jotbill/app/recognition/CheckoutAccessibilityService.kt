@@ -93,6 +93,15 @@ class CheckoutAccessibilityService : AccessibilityService() {
             pageFingerprint: String?,
             callback: PurchaseIntentResultCallback
         ) {
+            if (intent == PurchaseIntent.PAYMENT_NOTIFICATION_FALLBACK) {
+                // 通用入口没有结构化通知元数据，禁止绕过支付包名和金额门禁。
+                notifyPurchaseIntentRejected(
+                    intent,
+                    PurchaseIntentGateRejection.INVALID_PAYMENT_NOTIFICATION,
+                    callback
+                )
+                return
+            }
             val coordinator = activeService?.purchaseIntentCoordinator
             if (coordinator == null) {
                 notifyPurchaseIntentUnavailable(intent, callback)
