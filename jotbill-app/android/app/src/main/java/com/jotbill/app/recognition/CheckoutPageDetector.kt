@@ -89,12 +89,10 @@ fun interface CheckoutObservationListener {
 }
 
 /** 只判断是否满足创建内存快照的前置条件，不产生任何网络请求。 */
-class CheckoutPageDetector(
-    supportedShoppingPackages: Set<String> = DEFAULT_SUPPORTED_SHOPPING_PACKAGES,
-    supportedPaymentPackages: Set<String> = DEFAULT_SUPPORTED_PAYMENT_PACKAGES
-) {
-    private val supportedPackages = supportedShoppingPackages.toSet()
-    private val paymentPackages = supportedPaymentPackages.toSet()
+class CheckoutPageDetector {
+    // 购物包名是阶段三固定边界，不能由调用方扩展。
+    private val supportedPackages = DEFAULT_SUPPORTED_SHOPPING_PACKAGES
+    private val paymentPackages = DEFAULT_SUPPORTED_PAYMENT_PACKAGES
 
     /** 包名只用于资格判断，不从包名推断平台、商户或订单字段。 */
     fun supportsShoppingPackage(shoppingPackage: String): Boolean = shoppingPackage in supportedPackages
@@ -108,7 +106,7 @@ class CheckoutPageDetector(
                 CheckoutDetectionRejection.UNSUPPORTED_SHOPPING_PACKAGE
             )
         }
-        if (!observation.pageRole.canBufferSnapshot()) {
+        if (observation.pageRole != CheckoutPageRole.CHECKOUT) {
             return CheckoutPageDetection.Rejected(CheckoutDetectionRejection.NOT_CHECKOUT_PAGE)
         }
         if (!observation.hasFinalAmountSignal) {
@@ -120,11 +118,16 @@ class CheckoutPageDetector(
         if (observation.isSensitivePage) {
             return CheckoutPageDetection.Rejected(CheckoutDetectionRejection.SENSITIVE_PAGE)
         }
-        if (observation.pageFingerprint.isBlank()) {
+        if (!isSha256Fingerprint(observation.pageFingerprint)) {
             return CheckoutPageDetection.Rejected(
-                CheckoutDetectionRejection.MISSING_PAGE_FINGERPRINT
+                CheckoutDetectionRejection.INVALID_PAGE_FINGERPRINT
             )
         }
         return CheckoutPageDetection.Accepted(observation)
     }
+
+    private fun isSha256Fingerprint(value: String): Boolean =
+        value.length == 64 && value.all { character ->
+            character in '0'..'9' || character in 'a'..'f' || character in 'A'..'F'
+        }
 }
