@@ -153,16 +153,31 @@ class CheckoutAccessibilityService : AccessibilityService() {
     }
 
     private val pageDetector = CheckoutPageDetector()
+    private data class StableCheckoutKey(
+        val shoppingPackage: String,
+        val pageFingerprint: String
+    )
+
     private var lastWindowPackage: String? = null
     private var lastWindowClass: String? = null
+    private var currentStableCheckout: StableCheckoutPage? = null
+    private var submitActionTriggeredKey: StableCheckoutKey? = null
     @Volatile
     private var serviceConnected = false
     private val stabilityCoordinator = CheckoutStabilityCoordinator(
         handler = Handler(Looper.getMainLooper()),
         stableDelayMillis = STABLE_DELAY_MILLIS,
         nowMillis = { System.currentTimeMillis() },
-        onStable = { page -> dispatchEvent(CheckoutObservationEvent.Stable(page)) },
-        onInvalidated = { detail -> dispatchEvent(CheckoutObservationEvent.Invalidated(detail)) }
+        onStable = { page ->
+            currentStableCheckout = page
+            submitActionTriggeredKey = null
+            dispatchEvent(CheckoutObservationEvent.Stable(page))
+        },
+        onInvalidated = { detail ->
+            currentStableCheckout = null
+            submitActionTriggeredKey = null
+            dispatchEvent(CheckoutObservationEvent.Invalidated(detail))
+        }
     )
     private var snapshotCaptureCoordinator: CheckoutSnapshotCaptureCoordinator? = null
     private var purchaseIntentCoordinator: CheckoutPurchaseIntentCoordinator? = null
@@ -187,7 +202,8 @@ class CheckoutAccessibilityService : AccessibilityService() {
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or
                 AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED or
                 AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED or
-                AccessibilityEvent.TYPE_VIEW_SCROLLED
+                AccessibilityEvent.TYPE_VIEW_SCROLLED or
+                AccessibilityEvent.TYPE_VIEW_CLICKED
         configuredInfo.feedbackType = AccessibilityServiceInfo.FEEDBACK_GENERIC
         configuredInfo.notificationTimeout = 100L
         configuredInfo.flags = configuredInfo.flags or
@@ -229,6 +245,8 @@ class CheckoutAccessibilityService : AccessibilityService() {
             val previousShoppingPackage = lastWindowPackage
             lastWindowPackage = null
             lastWindowClass = null
+            currentStableCheckout = null
+            submitActionTriggeredKey = null
             val invalidationReason = if (pageDetector.supportsPaymentPackage(shoppingPackage)) {
                 CheckoutInvalidationReason.PAYMENT_APP_HANDOFF
             } else {
@@ -258,7 +276,12 @@ class CheckoutAccessibilityService : AccessibilityService() {
             lastWindowClass = eventWindowClass
         }
 
-        val root = rootInActiveWindow ?: event.source
+        val eventSource = try {
+            event.source
+        } catch (_: RuntimeException) {
+            null
+        }
+        val root = rootInActiveWindow ?: eventSource
         if (root == null) {
             dispatchOverlayInvalidation(
                 reason = CheckoutInvalidationReason.NODE_TREE_UNAVAILABLE,
@@ -295,10 +318,26 @@ class CheckoutAccessibilityService : AccessibilityService() {
             )
             when (val detection = pageDetector.detect(observation)) {
                 is CheckoutPageDetection.Accepted -> {
+                    val stable = currentStableCheckout
+                    val sameStableCheckout = stable?.let { stablePage ->
+                        stablePage.observation.shoppingPackage == observation.shoppingPackage &&
+                            stablePage.observation.pageFingerprint == observation.pageFingerprint &&
+                            pageDetector.detect(stablePage.observation) is CheckoutPageDetection.Accepted
+                    } == true
+
+                    if (!sameStableCheckout && stable != null) {
+                        currentStableCheckout = null
+                        submitActionTriggeredKey = null
+                    }
                     stabilityCoordinator.observe(detection.observation)
+                    if (sameStableCheckout && shouldTriggerSubmitAction(observation, event, eventSource)) {
+                        triggerSubmitAction(observation.pageFingerprint)
+                    }
                 }
 
                 is CheckoutPageDetection.Rejected -> {
+                    currentStableCheckout = null
+                    submitActionTriggeredKey = null
                     val reason = invalidationReason(observation, detection.reason)
                     stabilityCoordinator.invalidate(
                         reason = reason,
@@ -330,6 +369,13 @@ class CheckoutAccessibilityService : AccessibilityService() {
                 shoppingPackage = shoppingPackage
             )
         } finally {
+            if (eventSource != null && eventSource !== root) {
+                try {
+                    eventSource.recycle()
+                } catch (_: RuntimeException) {
+                    // 系统节点已回收时无需再次处理。
+                }
+            }
             try {
                 root.recycle()
             } catch (_: RuntimeException) {
@@ -342,6 +388,8 @@ class CheckoutAccessibilityService : AccessibilityService() {
         serviceConnected = false
         lastWindowPackage = null
         lastWindowClass = null
+        currentStableCheckout = null
+        submitActionTriggeredKey = null
         purchaseIntentCoordinator?.setReadyDispatcher(null)
         purchaseIntentCoordinator?.setResultConsumer(null)
         checkoutCaptureOverlayManager?.setManualCaptureRequestHandler(null)
@@ -364,6 +412,8 @@ class CheckoutAccessibilityService : AccessibilityService() {
         serviceConnected = false
         lastWindowPackage = null
         lastWindowClass = null
+        currentStableCheckout = null
+        submitActionTriggeredKey = null
         purchaseIntentCoordinator?.setReadyDispatcher(null)
         purchaseIntentCoordinator?.setResultConsumer(null)
         setAiResultCallback(null)
@@ -547,6 +597,45 @@ class CheckoutAccessibilityService : AccessibilityService() {
             callback.onResult(result)
         } catch (error: RuntimeException) {
             Log.w(TAG, "结算页 AI 结果消费者失败", error)
+        }
+    }
+
+    /** 只有同一稳定结算指纹的第一次明确点击才会进入 SUBMIT_ACTION。 */
+    private fun shouldTriggerSubmitAction(
+        observation: CheckoutPageObservation,
+        event: AccessibilityEvent,
+        eventSource: AccessibilityNodeInfo?
+    ): Boolean {
+        if (observation.isSensitivePage || observation.pageRole != CheckoutPageRole.CHECKOUT) {
+            return false
+        }
+        if (!CheckoutSubmitActionDetector.isSubmitActionEvent(
+                event = event,
+                source = eventSource,
+                shoppingPackage = observation.shoppingPackage
+            )
+        ) {
+            return false
+        }
+
+        val key = StableCheckoutKey(
+            shoppingPackage = observation.shoppingPackage,
+            pageFingerprint = observation.pageFingerprint
+        )
+        if (submitActionTriggeredKey == key) {
+            return false
+        }
+        submitActionTriggeredKey = key
+        return true
+    }
+
+    /** 提交动作只调用已有购买意图协调器，不直接触碰截图或 AI。 */
+    private fun triggerSubmitAction(pageFingerprint: String) {
+        val coordinator = purchaseIntentCoordinator ?: return
+        try {
+            coordinator.trigger(PurchaseIntent.SUBMIT_ACTION, pageFingerprint)
+        } catch (error: RuntimeException) {
+            Log.w(TAG, "提交订单购买意图触发失败", error)
         }
     }
 
