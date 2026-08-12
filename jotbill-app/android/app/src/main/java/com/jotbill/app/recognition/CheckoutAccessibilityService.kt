@@ -129,6 +129,26 @@ class CheckoutAccessibilityService : AccessibilityService() {
             callback
         )
 
+        /**
+         * 通知回退只允许复用当前真实稳定结算页的指纹；服务未连接或没有稳定页时直接拒绝。
+         * 该入口是同进程的尽力接入，通知服务重建不会伪造页面上下文或恢复已释放的快照。
+         */
+        @JvmStatic
+        fun requestPaymentNotificationFallbackSignal(
+            signal: PaymentNotificationFallbackSignal,
+            callback: PurchaseIntentResultCallback
+        ) {
+            val service = activeService
+            if (service == null) {
+                notifyPurchaseIntentUnavailable(
+                    PurchaseIntent.PAYMENT_NOTIFICATION_FALLBACK,
+                    callback
+                )
+                return
+            }
+            service.requestPaymentNotificationFallbackForSignal(signal, callback)
+        }
+
         @JvmStatic
         fun requestUserRetry(
             pageFingerprint: String?,
@@ -139,11 +159,23 @@ class CheckoutAccessibilityService : AccessibilityService() {
             intent: PurchaseIntent,
             callback: PurchaseIntentResultCallback
         ) {
+            Companion.notifyPurchaseIntentRejected(
+                intent,
+                PurchaseIntentGateRejection.SERVICE_NOT_CONNECTED,
+                callback
+            )
+        }
+
+        private fun notifyPurchaseIntentRejected(
+            intent: PurchaseIntent,
+            reason: PurchaseIntentGateRejection,
+            callback: PurchaseIntentResultCallback
+        ) {
             try {
                 callback.onResult(
                     PurchaseIntentCoordinationResult.Rejected(
                         intent = intent,
-                        gateReason = PurchaseIntentGateRejection.SERVICE_NOT_CONNECTED
+                        gateReason = reason
                     )
                 )
             } catch (error: RuntimeException) {
@@ -160,7 +192,12 @@ class CheckoutAccessibilityService : AccessibilityService() {
 
     private var lastWindowPackage: String? = null
     private var lastWindowClass: String? = null
+    @Volatile
     private var currentStableCheckout: StableCheckoutPage? = null
+    @Volatile
+    private var handoffStableCheckout: StableCheckoutPage? = null
+    @Volatile
+    private var handoffForegroundPackage: String? = null
     private var submitActionTriggeredKey: StableCheckoutKey? = null
     @Volatile
     private var serviceConnected = false
@@ -170,16 +207,23 @@ class CheckoutAccessibilityService : AccessibilityService() {
         nowMillis = { System.currentTimeMillis() },
         onStable = { page ->
             currentStableCheckout = page
+            handoffStableCheckout = null
+            handoffForegroundPackage = null
             submitActionTriggeredKey = null
             dispatchEvent(CheckoutObservationEvent.Stable(page))
         },
         onInvalidated = { detail ->
             currentStableCheckout = null
+            if (detail.reason != CheckoutInvalidationReason.PAYMENT_APP_HANDOFF) {
+                handoffStableCheckout = null
+                handoffForegroundPackage = null
+            }
             submitActionTriggeredKey = null
             dispatchEvent(CheckoutObservationEvent.Invalidated(detail))
         }
     )
     private var snapshotCaptureCoordinator: CheckoutSnapshotCaptureCoordinator? = null
+    @Volatile
     private var purchaseIntentCoordinator: CheckoutPurchaseIntentCoordinator? = null
     private var checkoutSnapshotBuffer: CheckoutSnapshotBuffer? = null
     private var checkoutCaptureOverlayManager: CheckoutCaptureOverlayManager? = null
@@ -197,6 +241,10 @@ class CheckoutAccessibilityService : AccessibilityService() {
 
         // 重连时先结束旧观察旅程，避免旧指纹阻止新服务发出稳定事件。
         stabilityCoordinator.invalidate(CheckoutInvalidationReason.SERVICE_INTERRUPTED)
+        currentStableCheckout = null
+        handoffStableCheckout = null
+        handoffForegroundPackage = null
+        submitActionTriggeredKey = null
         val configuredInfo = serviceInfo ?: AccessibilityServiceInfo()
         configuredInfo.eventTypes =
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or
@@ -243,6 +291,18 @@ class CheckoutAccessibilityService : AccessibilityService() {
         val shoppingPackage = event.packageName?.toString()?.trim().orEmpty()
         if (!pageDetector.supportsShoppingPackage(shoppingPackage)) {
             val previousShoppingPackage = lastWindowPackage
+            if (pageDetector.supportsPaymentPackage(shoppingPackage)) {
+                if (currentStableCheckout != null) {
+                    handoffStableCheckout = currentStableCheckout
+                    handoffForegroundPackage = shoppingPackage
+                } else if (handoffForegroundPackage != shoppingPackage) {
+                    handoffStableCheckout = null
+                    handoffForegroundPackage = null
+                }
+            } else {
+                handoffStableCheckout = null
+                handoffForegroundPackage = null
+            }
             lastWindowPackage = null
             lastWindowClass = null
             currentStableCheckout = null
@@ -264,6 +324,10 @@ class CheckoutAccessibilityService : AccessibilityService() {
             )
             return
         }
+
+        // 回到购物应用即开始新的观察周期，不能让旧支付交接上下文跨旅程存活。
+        handoffStableCheckout = null
+        handoffForegroundPackage = null
 
         val eventWindowClass = event.className?.toString()?.trim().orEmpty()
         if (lastWindowPackage != shoppingPackage) {
@@ -337,6 +401,8 @@ class CheckoutAccessibilityService : AccessibilityService() {
 
                 is CheckoutPageDetection.Rejected -> {
                     currentStableCheckout = null
+                    handoffStableCheckout = null
+                    handoffForegroundPackage = null
                     submitActionTriggeredKey = null
                     val reason = invalidationReason(observation, detection.reason)
                     stabilityCoordinator.invalidate(
@@ -389,6 +455,8 @@ class CheckoutAccessibilityService : AccessibilityService() {
         lastWindowPackage = null
         lastWindowClass = null
         currentStableCheckout = null
+        handoffStableCheckout = null
+        handoffForegroundPackage = null
         submitActionTriggeredKey = null
         purchaseIntentCoordinator?.setReadyDispatcher(null)
         purchaseIntentCoordinator?.setResultConsumer(null)
@@ -413,6 +481,8 @@ class CheckoutAccessibilityService : AccessibilityService() {
         lastWindowPackage = null
         lastWindowClass = null
         currentStableCheckout = null
+        handoffStableCheckout = null
+        handoffForegroundPackage = null
         submitActionTriggeredKey = null
         purchaseIntentCoordinator?.setReadyDispatcher(null)
         purchaseIntentCoordinator?.setResultConsumer(null)
@@ -580,6 +650,81 @@ class CheckoutAccessibilityService : AccessibilityService() {
 
     private fun setPurchaseIntentResultConsumer(consumer: PurchaseIntentResultCallback?) {
         purchaseIntentResultConsumer = consumer
+    }
+
+    /**
+     * 通知服务只能提供结构化支付元数据，页面指纹必须从当前稳定观察中读取，不能由通知推测。
+     */
+    private fun requestPaymentNotificationFallbackForSignal(
+        signal: PaymentNotificationFallbackSignal,
+        callback: PurchaseIntentResultCallback
+    ) {
+        if (
+            !serviceConnected ||
+            !signal.isValid() ||
+            !pageDetector.supportsPaymentPackage(signal.paymentPackage)
+        ) {
+            Companion.notifyPurchaseIntentRejected(
+                PurchaseIntent.PAYMENT_NOTIFICATION_FALLBACK,
+                PurchaseIntentGateRejection.INVALID_PAYMENT_NOTIFICATION,
+                callback
+            )
+            return
+        }
+
+        if (
+            handoffStableCheckout != null &&
+            handoffForegroundPackage != signal.paymentPackage
+        ) {
+            Companion.notifyPurchaseIntentRejected(
+                PurchaseIntent.PAYMENT_NOTIFICATION_FALLBACK,
+                PurchaseIntentGateRejection.INVALID_PAYMENT_NOTIFICATION,
+                callback
+            )
+            return
+        }
+
+        val observation = (currentStableCheckout ?: handoffStableCheckout)?.observation
+        if (
+            observation == null ||
+            pageDetector.detect(observation) !is CheckoutPageDetection.Accepted ||
+            observation.isSensitivePage
+        ) {
+            Companion.notifyPurchaseIntentRejected(
+                PurchaseIntent.PAYMENT_NOTIFICATION_FALLBACK,
+                if (observation?.isSensitivePage == true) {
+                    PurchaseIntentGateRejection.SENSITIVE_PAGE
+                } else {
+                    PurchaseIntentGateRejection.NO_CHECKOUT_CONTEXT
+                },
+                callback
+            )
+            return
+        }
+
+        val coordinator = purchaseIntentCoordinator
+        if (coordinator == null) {
+            Companion.notifyPurchaseIntentUnavailable(
+                PurchaseIntent.PAYMENT_NOTIFICATION_FALLBACK,
+                callback
+            )
+            return
+        }
+        try {
+            coordinator.trigger(
+                intent = PurchaseIntent.PAYMENT_NOTIFICATION_FALLBACK,
+                pageFingerprint = observation.pageFingerprint,
+                callback = callback,
+                paymentNotification = signal
+            )
+        } catch (error: RuntimeException) {
+            Log.w(TAG, "支付通知回退路由失败", error)
+            Companion.notifyPurchaseIntentRejected(
+                PurchaseIntent.PAYMENT_NOTIFICATION_FALLBACK,
+                PurchaseIntentGateRejection.BUFFER_UNAVAILABLE,
+                callback
+            )
+        }
     }
 
     /** 悬浮按钮只调用现有手动截图入口，不直接接触截图资源或 AI。 */

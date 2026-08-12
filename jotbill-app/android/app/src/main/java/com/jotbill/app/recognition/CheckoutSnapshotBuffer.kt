@@ -87,7 +87,9 @@ sealed class CheckoutAiTriggerResult {
     data class Ready(
         val requestKey: CheckoutRequestKey,
         val intent: PurchaseIntent,
-        val snapshot: CheckoutSnapshot
+        val snapshot: CheckoutSnapshot,
+        /** 通知回退附带的安全元数据；普通购买意图为 null，暂不执行支付匹配。 */
+        val paymentNotification: PaymentNotificationFallbackSignal? = null
     ) : CheckoutAiTriggerResult()
 
     data class AlreadyTriggered(val requestKey: CheckoutRequestKey) : CheckoutAiTriggerResult()

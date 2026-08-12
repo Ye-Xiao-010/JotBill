@@ -12,6 +12,7 @@ enum class PurchaseIntentGateRejection(val wireValue: String) {
     REQUEST_BUDGET_EXHAUSTED("REQUEST_BUDGET_EXHAUSTED"),
     PAYMENT_HANDOFF_ALREADY_ATTEMPTED("PAYMENT_HANDOFF_ALREADY_ATTEMPTED"),
     PAYMENT_NOTIFICATION_ALREADY_ATTEMPTED("PAYMENT_NOTIFICATION_ALREADY_ATTEMPTED"),
+    INVALID_PAYMENT_NOTIFICATION("INVALID_PAYMENT_NOTIFICATION"),
     BUFFER_UNAVAILABLE("BUFFER_UNAVAILABLE")
 }
 
@@ -175,10 +176,15 @@ internal class CheckoutPurchaseIntentCoordinator(
     fun trigger(
         intent: PurchaseIntent,
         pageFingerprint: String? = null,
-        callback: PurchaseIntentResultCallback? = null
+        callback: PurchaseIntentResultCallback? = null,
+        paymentNotification: PaymentNotificationFallbackSignal? = null
     ): PurchaseIntentCoordinationResult {
         val routed = synchronized(this) {
-            routeLocked(intent, pageFingerprint?.takeIf { it.isNotBlank() })
+            routeLocked(
+                intent = intent,
+                requestedFingerprint = pageFingerprint?.takeIf { it.isNotBlank() },
+                paymentNotification = paymentNotification
+            )
         }
         val consumer = synchronized(this) { callback ?: resultConsumer }
         return deliver(routed, consumer)
@@ -262,7 +268,8 @@ internal class CheckoutPurchaseIntentCoordinator(
 
     private fun routeLocked(
         intent: PurchaseIntent,
-        requestedFingerprint: String?
+        requestedFingerprint: String?,
+        paymentNotification: PaymentNotificationFallbackSignal?
     ): PurchaseIntentCoordinationResult {
         if (closed) {
             return PurchaseIntentCoordinationResult.Rejected(
@@ -288,6 +295,19 @@ internal class CheckoutPurchaseIntentCoordinator(
             return PurchaseIntentCoordinationResult.Rejected(
                 intent = intent,
                 gateReason = PurchaseIntentGateRejection.SENSITIVE_PAGE,
+                slotId = context.slotId,
+                pageFingerprint = requestedFingerprint ?: context.pageFingerprint
+            )
+        }
+        if (
+            (paymentNotification != null && intent != PurchaseIntent.PAYMENT_NOTIFICATION_FALLBACK) ||
+            (paymentNotification != null &&
+                (!paymentNotification.isValid() ||
+                    !pageDetector.supportsPaymentPackage(paymentNotification.paymentPackage)))
+        ) {
+            return PurchaseIntentCoordinationResult.Rejected(
+                intent = intent,
+                gateReason = PurchaseIntentGateRejection.INVALID_PAYMENT_NOTIFICATION,
                 slotId = context.slotId,
                 pageFingerprint = requestedFingerprint ?: context.pageFingerprint
             )
@@ -354,11 +374,16 @@ internal class CheckoutPurchaseIntentCoordinator(
 
         return when (consumeResult) {
             is CheckoutAiTriggerResult.Ready -> {
-                attemptsBySession[consumeResult.snapshot.sessionId] =
-                    (attemptsBySession[consumeResult.snapshot.sessionId] ?: 0) + 1
+                val ready = if (intent == PurchaseIntent.PAYMENT_NOTIFICATION_FALLBACK) {
+                    consumeResult.copy(paymentNotification = paymentNotification)
+                } else {
+                    consumeResult
+                }
+                attemptsBySession[ready.snapshot.sessionId] =
+                    (attemptsBySession[ready.snapshot.sessionId] ?: 0) + 1
                 PurchaseIntentCoordinationResult.Accepted(
                     intent = intent,
-                    aiResult = consumeResult,
+                    aiResult = ready,
                     snapshotOwnership = PurchaseIntentSnapshotOwnership.CALLER_MUST_RELEASE
                 )
             }

@@ -38,6 +38,29 @@ enum class PurchaseIntent(val wireValue: String) {
     USER_RETRY("USER_RETRY")
 }
 
+/**
+ * 通知服务传给识别层的最小结构化支付信号，不包含通知原文、页面文本或图片。
+ * 金额统一使用分，避免跨服务传递 Double 时产生精度歧义。
+ */
+data class PaymentNotificationFallbackSignal(
+    val paymentPackage: String,
+    val amountMinor: Long,
+    val occurredAt: Long,
+    val merchant: String? = null,
+    val orderId: String? = null
+) {
+    fun isValid(): Boolean =
+        paymentPackage.isNotBlank() &&
+            paymentPackage.length <= 255 &&
+            amountMinor > 0L &&
+            occurredAt > 0L &&
+            isOptionalTextValid(merchant) &&
+            isOptionalTextValid(orderId)
+
+    private fun isOptionalTextValid(value: String?): Boolean =
+        value == null || (value.isNotBlank() && value.length <= 256)
+}
+
 /** 截图来源，和现有 Native.d.ts 的 SnapshotSourceReason 保持一致。 */
 enum class SnapshotSourceReason(val wireValue: String) {
     CHECKOUT_STABLE("CHECKOUT_STABLE"),
