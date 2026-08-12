@@ -300,10 +300,11 @@ internal class CheckoutPurchaseIntentCoordinator(
             )
         }
         if (
-            (paymentNotification != null && intent != PurchaseIntent.PAYMENT_NOTIFICATION_FALLBACK) ||
-            (paymentNotification != null &&
-                (!paymentNotification.isValid() ||
-                    !pageDetector.supportsPaymentPackage(paymentNotification.paymentPackage)))
+            (intent == PurchaseIntent.PAYMENT_NOTIFICATION_FALLBACK &&
+                (paymentNotification == null ||
+                    !paymentNotification.isValid() ||
+                    !pageDetector.supportsPaymentPackage(paymentNotification.paymentPackage))) ||
+            (paymentNotification != null && intent != PurchaseIntent.PAYMENT_NOTIFICATION_FALLBACK)
         ) {
             return PurchaseIntentCoordinationResult.Rejected(
                 intent = intent,
