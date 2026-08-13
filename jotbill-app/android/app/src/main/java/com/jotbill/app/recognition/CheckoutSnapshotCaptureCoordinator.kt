@@ -14,6 +14,7 @@ import android.util.Log
 import android.view.Display
 import java.io.ByteArrayOutputStream
 import java.util.UUID
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executor
 import kotlin.math.roundToInt
 
@@ -141,25 +142,46 @@ internal class CheckoutSnapshotCaptureCoordinator(
     private var closed = false
 
     override fun onEvent(event: CheckoutObservationEvent) {
-        // 服务回调和桥接调用都归并到主线程，避免页面状态与截图回调交错写入。
-        when (event) {
-            is CheckoutObservationEvent.Invalidated -> {
-                if (event.detail.reason == CheckoutInvalidationReason.PAYMENT_APP_HANDOFF) {
-                    // 购买意图协调器随后会同步处理同一事件，必须先建立旧会话的消费栅栏。
-                    preparePaymentHandoff()
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            handleEventOnMainThread(event)
+            return
+        }
+
+        val completed = CountDownLatch(1)
+        if (!mainHandler.post {
+                try {
+                    handleEventOnMainThread(event)
+                } finally {
+                    completed.countDown()
                 }
             }
-
-            is CheckoutObservationEvent.Stable -> prepareStableTransition(event.page)
+        ) {
+            // 主线程 Looper 已无法接收任务时，不在线程外修改状态，直接放弃本次事件。
+            return
         }
-        mainHandler.post {
-            if (closed) {
-                return@post
+
+        var interrupted = false
+        while (true) {
+            try {
+                completed.await()
+                break
+            } catch (_: InterruptedException) {
+                // 事件状态转换必须完成后才能返回；记录中断并在等待结束后恢复标记。
+                interrupted = true
             }
-            when (event) {
-                is CheckoutObservationEvent.Stable -> handleStable(event.page)
-                is CheckoutObservationEvent.Invalidated -> handleInvalidated(event.detail)
-            }
+        }
+        if (interrupted) {
+            Thread.currentThread().interrupt()
+        }
+    }
+
+    private fun handleEventOnMainThread(event: CheckoutObservationEvent) {
+        if (closed) {
+            return
+        }
+        when (event) {
+            is CheckoutObservationEvent.Stable -> handleStable(event.page)
+            is CheckoutObservationEvent.Invalidated -> handleInvalidated(event.detail)
         }
     }
 
@@ -827,74 +849,6 @@ internal class CheckoutSnapshotCaptureCoordinator(
                     } finally {
                         hardwareBuffer?.close()
                     }
-                }
-            }
-        }
-    }
-
-    private fun preparePaymentHandoff() {
-        if (closed) {
-            return
-        }
-        val retainedCheckout = activeCheckout ?: handoffCheckout?.activeCheckout ?: return
-        buffer.retainForPaymentHandoff(
-            slotId = retainedCheckout.slotId,
-            sessionId = retainedCheckout.sessionId,
-            pageFingerprint = retainedCheckout.page.observation.pageFingerprint
-        )
-    }
-
-    private fun prepareStableTransition(page: StableCheckoutPage) {
-        if (closed) {
-            return
-        }
-
-        val retainedCheckout = handoffCheckout?.activeCheckout
-        val current = retainedCheckout ?: activeCheckout ?: return
-        val observation = page.observation
-        val sameCheckout =
-            pageDetector.detect(observation) is CheckoutPageDetection.Accepted &&
-                current.page.observation.shoppingPackage == observation.shoppingPackage &&
-                current.page.observation.pageFingerprint == observation.pageFingerprint
-        if (sameCheckout) {
-            if (retainedCheckout != null) {
-                buffer.restoreFromPaymentHandoff(
-                    slotId = current.slotId,
-                    sessionId = current.sessionId,
-                    pageFingerprint = observation.pageFingerprint
-                )
-            }
-            return
-        }
-
-        // Stable 事件交给主线程处理前，先阻断购买意图协调器的无指纹消费窗口。
-        val detachedPending = detachPendingCapture()
-        val detachedManual = queuedManual
-        queuedManual = null
-        queuedAutomatic = null
-        buffer.discard(current.slotId)
-        if (detachedPending != null || detachedManual != null) {
-            mainHandler.post {
-                detachedPending?.let { pending ->
-                    publish(
-                        cancelledResult(
-                            current = pending.activeCheckout,
-                            sourceReason = pending.sourceReason,
-                            reason = SnapshotCaptureRejection.PAGE_CHANGED.wireValue
-                        ),
-                        pending.callback
-                    )
-                }
-                detachedManual?.let { queued ->
-                    publish(
-                        cancelledResult(
-                            current = current,
-                            sourceReason = SnapshotSourceReason.MANUAL_CAPTURE,
-                            reason = SnapshotCaptureRejection.PAGE_CHANGED.wireValue,
-                            key = queued.key
-                        ),
-                        queued.callback
-                    )
                 }
             }
         }
