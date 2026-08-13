@@ -188,6 +188,8 @@ internal class CheckoutSnapshotCaptureCoordinator(
     private var queuedManual: QueuedManualCapture? = null
     private var handoffCheckout: HandoffCheckout? = null
     private var resultListener: SnapshotCaptureResultListener? = null
+    /** fallback 可能在截图线程设置，主线程路径需要可靠观察关闭状态。 */
+    @Volatile
     private var closed = false
     private var eventGeneration = 0L
 
@@ -279,13 +281,16 @@ internal class CheckoutSnapshotCaptureCoordinator(
         }
 
         failClosedRequested.set(true)
-        emergencyClosed.set(true)
+        // 与主线程不可用 fallback 竞争关闭所有权，避免双方交叉清理协调器状态。
+        if (!emergencyClosed.compareAndSet(false, true)) {
+            return
+        }
+        closed = true
         try {
             buffer.close()
         } catch (error: RuntimeException) {
             Log.w(TAG, "关闭截图缓冲失败，继续释放协调器状态", error)
         }
-        closed = true
 
         // 先完成协调器状态清理，再通知旧回调；回调重入只能看到已关闭的状态。
         try {
@@ -336,7 +341,10 @@ internal class CheckoutSnapshotCaptureCoordinator(
         }
     }
 
-    /** 主线程不可用时只建立消费阻断并释放线程/字节，不跨线程改协调器状态。 */
+    /**
+     * 主线程不可用时建立关闭语义并摘除全部协调器状态。
+     * fallback 不发布回调；无法安全通知的回调会被记录，迟到路径只能释放资源后返回。
+     */
     private fun emergencyCloseWithoutMainThread(
         pending: PendingCapture? = null,
         imageBytes: ByteArray? = null
@@ -344,7 +352,35 @@ internal class CheckoutSnapshotCaptureCoordinator(
         imageBytes?.fill(0)
         pending?.releaseForEmergency()
         failClosedRequested.set(true)
-        emergencyClosed.set(true)
+        // 只有取得关闭所有权的一方可以清理普通协调器字段，避免覆盖主线程正常收口。
+        if (!emergencyClosed.compareAndSet(false, true)) {
+            return
+        }
+        closed = true
+
+        val pendingToRelease = pendingCapture
+        val queuedToDrop = queuedManual
+        pendingCapture = null
+        queuedManual = null
+        queuedAutomatic = null
+        activeCheckout = null
+        handoffCheckout = null
+        attemptedAutomaticCaptures.clear()
+        resultListener = null
+        pendingToRelease?.let {
+            it.releaseForEmergency()
+            it.completionPublished.compareAndSet(false, true)
+        }
+        pending?.completionPublished?.compareAndSet(false, true)
+        queuedToDrop?.completionPublished?.compareAndSet(false, true)
+        if (pendingToRelease != null || pending != null || queuedToDrop != null) {
+            Log.w(
+                TAG,
+                "主线程不可用，已丢弃未通知的截图回调: " +
+                    "pending=" + (pendingToRelease?.requestId ?: pending?.requestId) +
+                    ", queued=" + (queuedToDrop != null)
+            )
+        }
         try {
             buffer.close()
         } catch (error: RuntimeException) {
@@ -1026,6 +1062,10 @@ internal class CheckoutSnapshotCaptureCoordinator(
         pending: PendingCapture,
         failureReason: String?
     ) {
+        if (closed || emergencyClosed.get()) {
+            pending.takeImage()?.fill(0)
+            return
+        }
         val imageBytes = pending.takeImage()
         if (pendingCapture?.requestId != pending.requestId) {
             imageBytes?.fill(0)
