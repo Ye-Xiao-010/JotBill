@@ -15,6 +15,7 @@ import android.view.Display
 import java.io.ByteArrayOutputStream
 import java.util.UUID
 import java.util.concurrent.Executor
+import kotlin.math.roundToInt
 
 /** 本地截图入口的最终状态；不会代表已经发起 AI 网络请求。 */
 enum class SnapshotCaptureStatus(val wireValue: String) {
@@ -87,6 +88,9 @@ internal class CheckoutSnapshotCaptureCoordinator(
     companion object {
         private const val TAG = "CheckoutSnapshotCapture"
         private const val SCREENSHOT_ERROR_PREFIX = "SCREENSHOT_ERROR_"
+        private const val MAX_SCREENSHOT_LONG_EDGE = 1080
+        private const val JPEG_QUALITY = 85
+        private const val MAX_ENCODED_SCREENSHOT_BYTES = 5 * 1024 * 1024
     }
 
     private data class CaptureKey(
@@ -273,8 +277,8 @@ internal class CheckoutSnapshotCaptureCoordinator(
                     invalidatedAt = nowMillis()
             )
             )
-            // 销毁时即使此前发生过支付交接，也必须释放尚未消费的保留快照。
-            buffer.clear()
+            // 销毁时即使此前发生过支付交接，也必须停止过期回调并释放保留快照。
+            buffer.close()
             closed = true
             resultListener = null
             screenshotThread.quitSafely()
@@ -300,9 +304,32 @@ internal class CheckoutSnapshotCaptureCoordinator(
         }
 
         val previous = activeCheckout
-        val current = if (previous == null ||
-            previous.page.observation.shoppingPackage != observation.shoppingPackage
-        ) {
+        val startsNewSession = previous == null ||
+            previous.page.observation.shoppingPackage != observation.shoppingPackage ||
+            previous.page.observation.pageFingerprint != observation.pageFingerprint
+        val current = if (startsNewSession) {
+            pendingCapture?.let { pending ->
+                // 页面轮换后系统截图回调仍可能异步到达，只允许它走释放路径。
+                pending.cancelled = true
+            }
+            queuedManual?.let { queued ->
+                queuedManual = null
+                publish(
+                    cancelledResult(
+                        current = previous,
+                        sourceReason = SnapshotSourceReason.MANUAL_CAPTURE,
+                        reason = SnapshotCaptureRejection.PAGE_CHANGED.wireValue,
+                        key = queued.key
+                    ),
+                    queued.callback
+                )
+            }
+            queuedAutomatic = null
+            previous?.let { oldCheckout ->
+                // 新指纹代表新的订单边界；先释放旧槽位，避免旧图片或消费墓碑阻塞新会话。
+                buffer.discard(oldCheckout.slotId)
+                attemptedAutomaticCaptures.removeAll { it.sessionId == oldCheckout.sessionId }
+            }
             ActiveCheckout(
                 sessionId = sessionIdFactory(),
                 slotId = slotIdFor(observation.shoppingPackage),
@@ -660,14 +687,15 @@ internal class CheckoutSnapshotCaptureCoordinator(
         val reasonCode: String?
     )
 
-    /** 把硬件截图复制到软件 Bitmap 和压缩字节后，立即释放系统资源。 */
+    /** 把硬件截图缩放并压缩到受限 JPEG 后，立即释放系统资源。 */
     private fun encodeScreenshot(screenshot: ScreenshotResult): EncodedScreenshot {
         var hardwareBuffer: HardwareBuffer? = null
         var hardwareBitmap: Bitmap? = null
         var softwareBitmap: Bitmap? = null
+        var scaledBitmap: Bitmap? = null
         var compressedBytes: ByteArray? = null
         var transferred = false
-        val output = ByteArrayOutputStream()
+        val output = BoundedByteArrayOutputStream(MAX_ENCODED_SCREENSHOT_BYTES)
 
         try {
             val capturedBuffer = screenshot.hardwareBuffer
@@ -679,12 +707,30 @@ internal class CheckoutSnapshotCaptureCoordinator(
             val capturedSoftwareBitmap = capturedHardwareBitmap.copy(Bitmap.Config.ARGB_8888, false)
                 ?: return EncodedScreenshot(null, SnapshotCaptureUnavailableReason.ENCODE_FAILED.wireValue)
             softwareBitmap = capturedSoftwareBitmap
-            if (!capturedSoftwareBitmap.compress(Bitmap.CompressFormat.PNG, 100, output)) {
+            val longestEdge = maxOf(capturedSoftwareBitmap.width, capturedSoftwareBitmap.height)
+            val bitmapToEncode = if (longestEdge > MAX_SCREENSHOT_LONG_EDGE) {
+                val scale = MAX_SCREENSHOT_LONG_EDGE.toFloat() / longestEdge.toFloat()
+                val targetWidth = (capturedSoftwareBitmap.width * scale)
+                    .roundToInt()
+                    .coerceAtLeast(1)
+                val targetHeight = (capturedSoftwareBitmap.height * scale)
+                    .roundToInt()
+                    .coerceAtLeast(1)
+                Bitmap.createScaledBitmap(
+                    capturedSoftwareBitmap,
+                    targetWidth,
+                    targetHeight,
+                    true
+                ).also { scaledBitmap = it }
+            } else {
+                capturedSoftwareBitmap
+            }
+            if (!bitmapToEncode.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, output)) {
                 return EncodedScreenshot(null, SnapshotCaptureUnavailableReason.ENCODE_FAILED.wireValue)
             }
             val encodedBytes = output.toByteArray()
             compressedBytes = encodedBytes
-            if (encodedBytes.isEmpty()) {
+            if (encodedBytes.isEmpty() || encodedBytes.size > MAX_ENCODED_SCREENSHOT_BYTES) {
                 return EncodedScreenshot(null, SnapshotCaptureUnavailableReason.ENCODE_FAILED.wireValue)
             }
             transferred = true
@@ -695,18 +741,48 @@ internal class CheckoutSnapshotCaptureCoordinator(
             if (!transferred) {
                 compressedBytes?.fill(0)
             }
-            output.reset()
+            output.clear()
             try {
-                softwareBitmap?.recycle()
+                scaledBitmap?.recycle()
             } finally {
                 try {
-                    hardwareBitmap?.recycle()
+                    softwareBitmap?.recycle()
                 } finally {
-                    hardwareBuffer?.close()
+                    try {
+                        hardwareBitmap?.recycle()
+                    } finally {
+                        hardwareBuffer?.close()
+                    }
                 }
             }
         }
     }
+
+    /** 限制压缩输出不超过 5MB，避免超限图片在内存中完整暂存。 */
+    private class BoundedByteArrayOutputStream(
+        private val maxBytes: Int
+    ) : ByteArrayOutputStream(32 * 1024) {
+        fun clear() {
+            buf.fill(0)
+            reset()
+        }
+
+        override fun write(b: Int) {
+            if (size() >= maxBytes) {
+                throw ScreenshotTooLargeException()
+            }
+            super.write(b)
+        }
+
+        override fun write(b: ByteArray, off: Int, len: Int) {
+            if (len > maxBytes - size()) {
+                throw ScreenshotTooLargeException()
+            }
+            super.write(b, off, len)
+        }
+    }
+
+    private class ScreenshotTooLargeException : RuntimeException()
 
     private fun screenshotFailureReason(errorCode: Int): String = when (errorCode) {
         AccessibilityService.ERROR_TAKE_SCREENSHOT_SECURE_WINDOW ->

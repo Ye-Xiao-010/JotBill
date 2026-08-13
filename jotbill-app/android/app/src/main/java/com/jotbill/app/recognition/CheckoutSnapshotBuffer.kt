@@ -1,5 +1,7 @@
 package com.jotbill.app.recognition
 
+import android.os.Handler
+import android.os.Looper
 import java.util.UUID
 
 private const val DEFAULT_SNAPSHOT_TTL_MILLIS = 30_000L
@@ -122,7 +124,8 @@ sealed class CheckoutAiTriggerResult {
 class CheckoutSnapshotBuffer(
     private val snapshotTtlMillis: Long = DEFAULT_SNAPSHOT_TTL_MILLIS,
     private val nowMillis: () -> Long = { System.currentTimeMillis() },
-    private val snapshotIdFactory: () -> String = { UUID.randomUUID().toString() }
+    private val snapshotIdFactory: () -> String = { UUID.randomUUID().toString() },
+    private val expirationHandler: Handler = Handler(Looper.getMainLooper())
 ) {
     private data class SlotState(
         val sessionId: String,
@@ -134,6 +137,14 @@ class CheckoutSnapshotBuffer(
     )
 
     private val slots = mutableMapOf<String, SlotState>()
+    private var closed = false
+    private val expirationRunnable = Runnable {
+        synchronized(this) {
+            if (!closed) {
+                purgeExpired(nowMillis())
+            }
+        }
+    }
 
     init {
         require(snapshotTtlMillis > 0) { "snapshotTtlMillis 必须大于 0" }
@@ -141,6 +152,9 @@ class CheckoutSnapshotBuffer(
 
     @Synchronized
     fun store(request: SnapshotCaptureRequest): SnapshotStoreResult {
+        if (closed) {
+            return SnapshotStoreResult.Rejected(SnapshotStoreRejection.INVALID_ARGUMENT)
+        }
         val now = nowMillis()
         purgeExpired(now)
 
@@ -234,11 +248,16 @@ class CheckoutSnapshotBuffer(
             replacedSnapshotId = replacedSnapshotId,
             candidateRevision = candidateRevision,
             requiresDisambiguation = state.manualCandidate != null && state.automaticCandidate != null
-        )
+        ).also {
+            scheduleNextExpirationLocked(now)
+        }
     }
 
     @Synchronized
     fun current(slotId: String): CheckoutSnapshot? {
+        if (closed) {
+            return null
+        }
         val now = nowMillis()
         purgeExpired(now)
         val candidates = slots[slotId]?.let(::candidateList) ?: return null
@@ -248,6 +267,9 @@ class CheckoutSnapshotBuffer(
     /** 返回当前未过期候选的副本；多个候选时交给协调器或待确认界面选择。 */
     @Synchronized
     fun currentCandidates(slotId: String): List<CheckoutSnapshot> {
+        if (closed) {
+            return emptyList()
+        }
         val now = nowMillis()
         purgeExpired(now)
         return slots[slotId]
@@ -265,6 +287,9 @@ class CheckoutSnapshotBuffer(
         pageFingerprint: String,
         sourceReason: SnapshotSourceReason? = null
     ): Boolean {
+        if (closed) {
+            return false
+        }
         purgeExpired(nowMillis())
         val state = slots[slotId] ?: return false
         if (state.sessionId != sessionId) {
@@ -283,6 +308,9 @@ class CheckoutSnapshotBuffer(
         pageFingerprint: String? = null,
         snapshotId: String? = null
     ): CheckoutSnapshotReference? {
+        if (closed) {
+            return null
+        }
         purgeExpired(nowMillis())
         val state = slots[slotId] ?: return null
         val candidate = candidateList(state).firstOrNull { snapshot ->
@@ -312,6 +340,9 @@ class CheckoutSnapshotBuffer(
         intent: PurchaseIntent,
         pageFingerprint: String? = null
     ): CheckoutAiTriggerResult {
+        if (closed) {
+            return CheckoutAiTriggerResult.Rejected(SnapshotConsumeRejection.NO_BUFFERED_SNAPSHOT)
+        }
         val now = nowMillis()
         purgeExpired(now)
         val state = slots[slotId]
@@ -345,6 +376,7 @@ class CheckoutSnapshotBuffer(
         if (now >= snapshot.expiresAt) {
             removeCandidate(state, snapshot)?.release()
             state.hadExpiredCandidate = true
+            scheduleNextExpirationLocked(now)
             return CheckoutAiTriggerResult.Rejected(SnapshotConsumeRejection.SNAPSHOT_EXPIRED)
         }
 
@@ -356,6 +388,7 @@ class CheckoutSnapshotBuffer(
         val consumerSnapshot = snapshot.copyForConsumer()
         releaseCandidates(state)
         state.consumedRequestKey = requestKey
+        scheduleNextExpirationLocked(now)
         return CheckoutAiTriggerResult.Ready(
             requestKey = requestKey,
             intent = intent,
@@ -367,6 +400,7 @@ class CheckoutSnapshotBuffer(
     @Synchronized
     fun discard(slotId: String) {
         slots.remove(slotId)?.let { releaseCandidates(it) }
+        scheduleNextExpirationLocked(nowMillis())
     }
 
     /** 服务中断或销毁时清理所有槽位，确保没有遗漏的图片字节继续留在内存中。 */
@@ -374,10 +408,26 @@ class CheckoutSnapshotBuffer(
     fun clear() {
         slots.values.forEach(::releaseCandidates)
         slots.clear()
+        expirationHandler.removeCallbacks(expirationRunnable)
+    }
+
+    /** 服务销毁时停止主动过期回调并释放所有槽位图片。 */
+    @Synchronized
+    fun close() {
+        if (closed) {
+            return
+        }
+        closed = true
+        expirationHandler.removeCallbacks(expirationRunnable)
+        slots.values.forEach(::releaseCandidates)
+        slots.clear()
     }
 
     @Synchronized
     private fun purgeExpired(now: Long) {
+        if (closed) {
+            return
+        }
         slots.values.forEach { state ->
             var expired = false
             state.manualCandidate?.let { candidate ->
@@ -398,6 +448,29 @@ class CheckoutSnapshotBuffer(
             if (expired) {
                 state.hadExpiredCandidate = true
             }
+        }
+        scheduleNextExpirationLocked(now)
+    }
+
+    private fun scheduleNextExpirationLocked(now: Long) {
+        expirationHandler.removeCallbacks(expirationRunnable)
+        if (closed) {
+            return
+        }
+
+        var nextExpiration: Long? = null
+        slots.values.forEach { state ->
+            listOfNotNull(state.manualCandidate, state.automaticCandidate).forEach { candidate ->
+                if (nextExpiration == null || candidate.expiresAt < nextExpiration!!) {
+                    nextExpiration = candidate.expiresAt
+                }
+            }
+        }
+        nextExpiration?.let { expiresAt ->
+            expirationHandler.postDelayed(
+                expirationRunnable,
+                (expiresAt - now).coerceAtLeast(0L)
+            )
         }
     }
 
