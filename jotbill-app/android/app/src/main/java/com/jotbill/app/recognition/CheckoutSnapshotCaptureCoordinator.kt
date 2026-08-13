@@ -142,6 +142,16 @@ internal class CheckoutSnapshotCaptureCoordinator(
 
     override fun onEvent(event: CheckoutObservationEvent) {
         // 服务回调和桥接调用都归并到主线程，避免页面状态与截图回调交错写入。
+        when (event) {
+            is CheckoutObservationEvent.Invalidated -> {
+                if (event.detail.reason == CheckoutInvalidationReason.PAYMENT_APP_HANDOFF) {
+                    // 购买意图协调器随后会同步处理同一事件，必须先建立旧会话的消费栅栏。
+                    preparePaymentHandoff()
+                }
+            }
+
+            is CheckoutObservationEvent.Stable -> prepareStableTransition(event.page)
+        }
         mainHandler.post {
             if (closed) {
                 return@post
@@ -318,6 +328,11 @@ internal class CheckoutSnapshotCaptureCoordinator(
             handoffCheckout = null
             if (isSameCheckout) {
                 // 支付应用返回原结算页时恢复原会话和尝试状态，不重新截图或覆盖原候选。
+                buffer.restoreFromPaymentHandoff(
+                    slotId = retained.slotId,
+                    sessionId = retained.sessionId,
+                    pageFingerprint = observation.pageFingerprint
+                )
                 activeCheckout = retained.copy(page = page)
                 attemptedAutomaticCaptures.clear()
                 attemptedAutomaticCaptures += retainedHandoff.attemptedAutomaticCaptures
@@ -439,13 +454,21 @@ internal class CheckoutSnapshotCaptureCoordinator(
         // 只有明确的支付交接保留快照；普通离开和其他失效原因都清理槽位，避免旧图误用。
         if (!retainForHandoff) {
             buffer.clear()
+        } else {
+            handoffSource?.let { retainedCheckout ->
+                buffer.retainForPaymentHandoff(
+                    slotId = retainedCheckout.slotId,
+                    sessionId = retainedCheckout.sessionId,
+                    pageFingerprint = retainedCheckout.page.observation.pageFingerprint
+                )
+            }
         }
         activeCheckout = null
         attemptedAutomaticCaptures.clear()
     }
 
     private fun cancelPendingCapture(reason: String) {
-        val pending = pendingCapture ?: return
+        val pending = detachPendingCapture() ?: return
         // 先解除当前请求，再通知回调；晚到的系统回调只能命中释放分支。
         pendingCapture = null
         pending.cancelled = true
@@ -457,6 +480,14 @@ internal class CheckoutSnapshotCaptureCoordinator(
             ),
             pending.callback
         )
+    }
+
+    private fun detachPendingCapture(): PendingCapture? {
+        val pending = pendingCapture ?: return null
+        // 先解除当前请求，晚到的系统回调只能走释放路径。
+        pendingCapture = null
+        pending.cancelled = true
+        return pending
     }
 
     private fun beginCapture(
@@ -796,6 +827,74 @@ internal class CheckoutSnapshotCaptureCoordinator(
                     } finally {
                         hardwareBuffer?.close()
                     }
+                }
+            }
+        }
+    }
+
+    private fun preparePaymentHandoff() {
+        if (closed) {
+            return
+        }
+        val retainedCheckout = activeCheckout ?: handoffCheckout?.activeCheckout ?: return
+        buffer.retainForPaymentHandoff(
+            slotId = retainedCheckout.slotId,
+            sessionId = retainedCheckout.sessionId,
+            pageFingerprint = retainedCheckout.page.observation.pageFingerprint
+        )
+    }
+
+    private fun prepareStableTransition(page: StableCheckoutPage) {
+        if (closed) {
+            return
+        }
+
+        val retainedCheckout = handoffCheckout?.activeCheckout
+        val current = retainedCheckout ?: activeCheckout ?: return
+        val observation = page.observation
+        val sameCheckout =
+            pageDetector.detect(observation) is CheckoutPageDetection.Accepted &&
+                current.page.observation.shoppingPackage == observation.shoppingPackage &&
+                current.page.observation.pageFingerprint == observation.pageFingerprint
+        if (sameCheckout) {
+            if (retainedCheckout != null) {
+                buffer.restoreFromPaymentHandoff(
+                    slotId = current.slotId,
+                    sessionId = current.sessionId,
+                    pageFingerprint = observation.pageFingerprint
+                )
+            }
+            return
+        }
+
+        // Stable 事件交给主线程处理前，先阻断购买意图协调器的无指纹消费窗口。
+        val detachedPending = detachPendingCapture()
+        val detachedManual = queuedManual
+        queuedManual = null
+        queuedAutomatic = null
+        buffer.discard(current.slotId)
+        if (detachedPending != null || detachedManual != null) {
+            mainHandler.post {
+                detachedPending?.let { pending ->
+                    publish(
+                        cancelledResult(
+                            current = pending.activeCheckout,
+                            sourceReason = pending.sourceReason,
+                            reason = SnapshotCaptureRejection.PAGE_CHANGED.wireValue
+                        ),
+                        pending.callback
+                    )
+                }
+                detachedManual?.let { queued ->
+                    publish(
+                        cancelledResult(
+                            current = current,
+                            sourceReason = SnapshotSourceReason.MANUAL_CAPTURE,
+                            reason = SnapshotCaptureRejection.PAGE_CHANGED.wireValue,
+                            key = queued.key
+                        ),
+                        queued.callback
+                    )
                 }
             }
         }

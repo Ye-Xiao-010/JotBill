@@ -133,7 +133,8 @@ class CheckoutSnapshotBuffer(
         var automaticCandidate: CheckoutSnapshot? = null,
         var nextCandidateRevision: Int = 0,
         var consumedRequestKey: CheckoutRequestKey? = null,
-        val expiredPageFingerprints: MutableSet<String> = mutableSetOf()
+        val expiredPageFingerprints: MutableSet<String> = mutableSetOf(),
+        var handoffPageFingerprint: String? = null
     )
 
     private val slots = mutableMapOf<String, SlotState>()
@@ -301,6 +302,41 @@ class CheckoutSnapshotBuffer(
         }
     }
 
+    /** 支付交接期间只允许原页面指纹消费，避免无指纹请求误取旧会话快照。 */
+    @Synchronized
+    fun retainForPaymentHandoff(
+        slotId: String,
+        sessionId: String,
+        pageFingerprint: String
+    ) {
+        if (closed || slotId.isBlank() || sessionId.isBlank() || pageFingerprint.isBlank()) {
+            return
+        }
+        val state = slots[slotId] ?: return
+        if (state.sessionId == sessionId) {
+            state.handoffPageFingerprint = pageFingerprint
+        }
+    }
+
+    /** 原结算页恢复后解除交接栅栏，保留同一会话已有候选和消费标记。 */
+    @Synchronized
+    fun restoreFromPaymentHandoff(
+        slotId: String,
+        sessionId: String,
+        pageFingerprint: String
+    ) {
+        if (closed) {
+            return
+        }
+        val state = slots[slotId] ?: return
+        if (
+            state.sessionId == sessionId &&
+            state.handoffPageFingerprint == pageFingerprint
+        ) {
+            state.handoffPageFingerprint = null
+        }
+    }
+
     /** 只读取与页面键对应的引用，避免为支付匹配复制或暴露图片。 */
     @Synchronized
     fun findReference(
@@ -347,6 +383,18 @@ class CheckoutSnapshotBuffer(
         purgeExpired(now)
         val state = slots[slotId]
             ?: return CheckoutAiTriggerResult.Rejected(SnapshotConsumeRejection.NO_BUFFERED_SNAPSHOT)
+
+        state.handoffPageFingerprint?.let { retainedFingerprint ->
+            if (pageFingerprint != retainedFingerprint) {
+                return CheckoutAiTriggerResult.Rejected(
+                    if (pageFingerprint == null) {
+                        SnapshotConsumeRejection.AMBIGUOUS_CANDIDATES
+                    } else {
+                        SnapshotConsumeRejection.NO_MATCHING_PAGE_FINGERPRINT
+                    }
+                )
+            }
+        }
 
         state.consumedRequestKey?.let {
             return CheckoutAiTriggerResult.AlreadyTriggered(it)
@@ -484,6 +532,7 @@ class CheckoutSnapshotBuffer(
         state.manualCandidate = null
         state.automaticCandidate = null
         state.expiredPageFingerprints.clear()
+        state.handoffPageFingerprint = null
     }
 
     private fun candidateList(state: SlotState): List<CheckoutSnapshot> = listOfNotNull(
