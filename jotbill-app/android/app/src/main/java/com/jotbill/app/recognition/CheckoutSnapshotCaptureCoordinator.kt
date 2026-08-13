@@ -115,6 +115,11 @@ internal class CheckoutSnapshotCaptureCoordinator(
         var cancelled: Boolean = false
     )
 
+    private data class HandoffCheckout(
+        val activeCheckout: ActiveCheckout,
+        val attemptedAutomaticCaptures: Set<CaptureKey>
+    )
+
     private data class QueuedManualCapture(
         val key: CaptureKey,
         val callback: SnapshotCaptureCallback
@@ -131,6 +136,7 @@ internal class CheckoutSnapshotCaptureCoordinator(
     private var pendingCapture: PendingCapture? = null
     private var queuedAutomatic: ActiveCheckout? = null
     private var queuedManual: QueuedManualCapture? = null
+    private var handoffCheckout: HandoffCheckout? = null
     private var resultListener: SnapshotCaptureResultListener? = null
     private var closed = false
 
@@ -303,15 +309,32 @@ internal class CheckoutSnapshotCaptureCoordinator(
             return
         }
 
+        val retainedHandoff = handoffCheckout
+        if (retainedHandoff != null) {
+            val retained = retainedHandoff.activeCheckout
+            val isSameCheckout =
+                retained.page.observation.shoppingPackage == observation.shoppingPackage &&
+                    retained.page.observation.pageFingerprint == observation.pageFingerprint
+            handoffCheckout = null
+            if (isSameCheckout) {
+                // 支付应用返回原结算页时恢复原会话和尝试状态，不重新截图或覆盖原候选。
+                activeCheckout = retained.copy(page = page)
+                attemptedAutomaticCaptures.clear()
+                attemptedAutomaticCaptures += retainedHandoff.attemptedAutomaticCaptures
+                return
+            }
+
+            // 返回到不同页面时，旧交接会话和其槽位不能被新订单复用。
+            buffer.discard(retained.slotId)
+            attemptedAutomaticCaptures.clear()
+        }
+
         val previous = activeCheckout
         val startsNewSession = previous == null ||
             previous.page.observation.shoppingPackage != observation.shoppingPackage ||
             previous.page.observation.pageFingerprint != observation.pageFingerprint
         val current = if (startsNewSession) {
-            pendingCapture?.let { pending ->
-                // 页面轮换后系统截图回调仍可能异步到达，只允许它走释放路径。
-                pending.cancelled = true
-            }
+            cancelPendingCapture(SnapshotCaptureRejection.PAGE_CHANGED.wireValue)
             queuedManual?.let { queued ->
                 queuedManual = null
                 publish(
@@ -380,20 +403,25 @@ internal class CheckoutSnapshotCaptureCoordinator(
 
     private fun handleInvalidated(detail: CheckoutObservationInvalidation) {
         val current = activeCheckout
-        val slotId = current?.slotId ?: detail.shoppingPackage?.let(::slotIdFor)
-
-        pendingCapture?.let { pending ->
-            pending.cancelled = true
-            pendingCapture = null
-            publish(
-                cancelledResult(
-                    current = pending.activeCheckout,
-                    sourceReason = pending.sourceReason,
-                    reason = detail.reason.wireValue
-                ),
-                pending.callback
+        val retained = handoffCheckout
+        val handoffSource = current ?: retained?.activeCheckout
+        val retainForHandoff =
+            detail.reason == CheckoutInvalidationReason.PAYMENT_APP_HANDOFF && handoffSource != null
+        handoffCheckout = if (!retainForHandoff) {
+            null
+        } else if (retained != null) {
+            retained
+        } else {
+            val activeForHandoff = checkNotNull(handoffSource)
+            HandoffCheckout(
+                activeCheckout = activeForHandoff,
+                attemptedAutomaticCaptures = attemptedAutomaticCaptures
+                    .filter { it.sessionId == activeForHandoff.sessionId }
+                    .toSet()
             )
         }
+
+        cancelPendingCapture(detail.reason.wireValue)
 
         queuedManual?.let { queued ->
             queuedManual = null
@@ -409,11 +437,26 @@ internal class CheckoutSnapshotCaptureCoordinator(
         }
         queuedAutomatic = null
         // 只有明确的支付交接保留快照；普通离开和其他失效原因都清理槽位，避免旧图误用。
-        if (detail.reason != CheckoutInvalidationReason.PAYMENT_APP_HANDOFF) {
+        if (!retainForHandoff) {
             buffer.clear()
         }
         activeCheckout = null
         attemptedAutomaticCaptures.clear()
+    }
+
+    private fun cancelPendingCapture(reason: String) {
+        val pending = pendingCapture ?: return
+        // 先解除当前请求，再通知回调；晚到的系统回调只能命中释放分支。
+        pendingCapture = null
+        pending.cancelled = true
+        publish(
+            cancelledResult(
+                current = pending.activeCheckout,
+                sourceReason = pending.sourceReason,
+                reason = reason
+            ),
+            pending.callback
+        )
     }
 
     private fun beginCapture(

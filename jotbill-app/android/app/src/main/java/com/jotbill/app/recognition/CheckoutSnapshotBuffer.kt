@@ -133,7 +133,7 @@ class CheckoutSnapshotBuffer(
         var automaticCandidate: CheckoutSnapshot? = null,
         var nextCandidateRevision: Int = 0,
         var consumedRequestKey: CheckoutRequestKey? = null,
-        var hadExpiredCandidate: Boolean = false
+        val expiredPageFingerprints: MutableSet<String> = mutableSetOf()
     )
 
     private val slots = mutableMapOf<String, SlotState>()
@@ -225,7 +225,6 @@ class CheckoutSnapshotBuffer(
 
         val candidateRevision = state.nextCandidateRevision + 1
         state.nextCandidateRevision = candidateRevision
-        state.hadExpiredCandidate = false
         val snapshot = CheckoutSnapshot(
             snapshotId = snapshotIdFactory(),
             sessionId = request.sessionId,
@@ -243,6 +242,7 @@ class CheckoutSnapshotBuffer(
             SnapshotSourceReason.MANUAL_CAPTURE -> state.manualCandidate = snapshot
             SnapshotSourceReason.CHECKOUT_STABLE -> state.automaticCandidate = snapshot
         }
+        state.expiredPageFingerprints.remove(request.pageFingerprint)
         return SnapshotStoreResult.Stored(
             snapshot = snapshot.copyForConsumer(),
             replacedSnapshotId = replacedSnapshotId,
@@ -354,8 +354,12 @@ class CheckoutSnapshotBuffer(
 
         val candidates = candidateList(state)
         if (candidates.isEmpty()) {
-            if (state.hadExpiredCandidate) {
-                state.hadExpiredCandidate = false
+            if (
+                state.expiredPageFingerprints.isNotEmpty() &&
+                (pageFingerprint == null ||
+                    state.expiredPageFingerprints.contains(pageFingerprint))
+            ) {
+                state.expiredPageFingerprints.clear()
                 slots.remove(slotId)
                 return CheckoutAiTriggerResult.Rejected(SnapshotConsumeRejection.SNAPSHOT_EXPIRED)
             }
@@ -364,9 +368,14 @@ class CheckoutSnapshotBuffer(
 
         val snapshot = if (pageFingerprint != null) {
             findCandidate(state, pageFingerprint)
-                ?: return CheckoutAiTriggerResult.Rejected(
-                    SnapshotConsumeRejection.NO_MATCHING_PAGE_FINGERPRINT
-                )
+                ?: if (state.expiredPageFingerprints.contains(pageFingerprint)) {
+                    state.expiredPageFingerprints.remove(pageFingerprint)
+                    return CheckoutAiTriggerResult.Rejected(SnapshotConsumeRejection.SNAPSHOT_EXPIRED)
+                } else {
+                    return CheckoutAiTriggerResult.Rejected(
+                        SnapshotConsumeRejection.NO_MATCHING_PAGE_FINGERPRINT
+                    )
+                }
         } else {
             candidates.singleOrNull()
                 ?: return CheckoutAiTriggerResult.Rejected(
@@ -375,7 +384,7 @@ class CheckoutSnapshotBuffer(
         }
         if (now >= snapshot.expiresAt) {
             removeCandidate(state, snapshot)?.release()
-            state.hadExpiredCandidate = true
+            state.expiredPageFingerprints += snapshot.pageFingerprint
             scheduleNextExpirationLocked(now)
             return CheckoutAiTriggerResult.Rejected(SnapshotConsumeRejection.SNAPSHOT_EXPIRED)
         }
@@ -429,24 +438,19 @@ class CheckoutSnapshotBuffer(
             return
         }
         slots.values.forEach { state ->
-            var expired = false
             state.manualCandidate?.let { candidate ->
                 if (candidate.expiresAt <= now) {
                     state.manualCandidate = null
                     candidate.release()
-                    expired = true
+                    state.expiredPageFingerprints += candidate.pageFingerprint
                 }
             }
             state.automaticCandidate?.let { candidate ->
                 if (candidate.expiresAt <= now) {
                     state.automaticCandidate = null
                     candidate.release()
-                    expired = true
+                    state.expiredPageFingerprints += candidate.pageFingerprint
                 }
-            }
-            // 图片已经在上面清零；墓碑只保留到下一次消费，用于区分过期与从未缓冲。
-            if (expired) {
-                state.hadExpiredCandidate = true
             }
         }
         scheduleNextExpirationLocked(now)
@@ -479,7 +483,7 @@ class CheckoutSnapshotBuffer(
         state.automaticCandidate?.release()
         state.manualCandidate = null
         state.automaticCandidate = null
-        state.hadExpiredCandidate = false
+        state.expiredPageFingerprints.clear()
     }
 
     private fun candidateList(state: SlotState): List<CheckoutSnapshot> = listOfNotNull(
