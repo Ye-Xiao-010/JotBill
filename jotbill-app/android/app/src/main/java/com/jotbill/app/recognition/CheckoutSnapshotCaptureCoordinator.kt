@@ -14,8 +14,12 @@ import android.util.Log
 import android.view.Display
 import java.io.ByteArrayOutputStream
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executor
+import java.util.concurrent.RejectedExecutionException
+import java.util.concurrent.TimeUnit
 import kotlin.math.roundToInt
 
 /** 本地截图入口的最终状态；不会代表已经发起 AI 网络请求。 */
@@ -92,6 +96,10 @@ internal class CheckoutSnapshotCaptureCoordinator(
         private const val MAX_SCREENSHOT_LONG_EDGE = 1080
         private const val JPEG_QUALITY = 85
         private const val MAX_ENCODED_SCREENSHOT_BYTES = 5 * 1024 * 1024
+        private const val EVENT_DISPATCH_TIMEOUT_MILLIS = 5_000L
+        private const val MAIN_HANDLER_UNAVAILABLE = "MAIN_HANDLER_UNAVAILABLE"
+        private const val EVENT_PROCESSING_FAILED = "EVENT_PROCESSING_FAILED"
+        private const val SCREENSHOT_HANDLER_UNAVAILABLE = "SCREENSHOT_HANDLER_UNAVAILABLE"
     }
 
     private data class CaptureKey(
@@ -113,7 +121,8 @@ internal class CheckoutSnapshotCaptureCoordinator(
         val activeCheckout: ActiveCheckout,
         val sourceReason: SnapshotSourceReason,
         val callback: SnapshotCaptureCallback?,
-        var cancelled: Boolean = false
+        @Volatile var cancelled: Boolean = false,
+        val completionPublished: AtomicBoolean = AtomicBoolean(false)
     )
 
     private data class HandoffCheckout(
@@ -123,207 +132,400 @@ internal class CheckoutSnapshotCaptureCoordinator(
 
     private data class QueuedManualCapture(
         val key: CaptureKey,
-        val callback: SnapshotCaptureCallback
+        val callback: SnapshotCaptureCallback,
+        val completionPublished: AtomicBoolean = AtomicBoolean(false)
     )
+
+    private class EventDispatch {
+        val completed = CountDownLatch(1)
+        @Volatile var failure: Throwable? = null
+    }
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private val screenshotThread = HandlerThread("CheckoutScreenshot").apply { start() }
     private val screenshotHandler = Handler(screenshotThread.looper)
-    private val callbackExecutor = Executor { runnable -> screenshotHandler.post(runnable) }
+    private val callbackExecutor = Executor { runnable ->
+        val posted = try {
+            screenshotHandler.post(runnable)
+        } catch (_: RuntimeException) {
+            false
+        }
+        if (!posted) {
+            failClosedFromAnyThread(reason = SCREENSHOT_HANDLER_UNAVAILABLE)
+            throw RejectedExecutionException(SCREENSHOT_HANDLER_UNAVAILABLE)
+        }
+    }
     private val pageDetector = CheckoutPageDetector()
-    private val attemptedAutomaticCaptures = mutableSetOf<CaptureKey>()
-
-    private var activeCheckout: ActiveCheckout? = null
-    private var pendingCapture: PendingCapture? = null
-    private var queuedAutomatic: ActiveCheckout? = null
-    private var queuedManual: QueuedManualCapture? = null
-    private var handoffCheckout: HandoffCheckout? = null
-    private var resultListener: SnapshotCaptureResultListener? = null
-    private var closed = false
+    private val attemptedAutomaticCaptures = ConcurrentHashMap.newKeySet<CaptureKey>()
+    private val failClosedStarted = AtomicBoolean(false)
+    private val failClosedStateReady = CountDownLatch(1)
+    @Volatile private var activeCheckout: ActiveCheckout? = null
+    @Volatile private var pendingCapture: PendingCapture? = null
+    @Volatile private var queuedAutomatic: ActiveCheckout? = null
+    @Volatile private var queuedManual: QueuedManualCapture? = null
+    @Volatile private var handoffCheckout: HandoffCheckout? = null
+    @Volatile private var resultListener: SnapshotCaptureResultListener? = null
+    @Volatile private var closed = false
+    private var eventGeneration = 0L
 
     override fun onEvent(event: CheckoutObservationEvent) {
         if (Looper.myLooper() == Looper.getMainLooper()) {
-            handleEventOnMainThread(event)
+            runEventOnMainThread(event)?.let { error ->
+                throw eventDispatchFailure(EVENT_PROCESSING_FAILED, error)
+            }
             return
         }
 
-        val completed = CountDownLatch(1)
-        if (!mainHandler.post {
+        val dispatch = EventDispatch()
+        val posted = try {
+            mainHandler.post {
                 try {
-                    handleEventOnMainThread(event)
+                    dispatch.failure = runEventOnMainThread(event)
+                } catch (error: Throwable) {
+                    // 即使异常来自事件包装层，也必须把失败写入共享结果后再释放等待者。
+                    dispatch.failure = error
                 } finally {
-                    completed.countDown()
+                    dispatch.completed.countDown()
                 }
             }
-        ) {
-            // 主线程 Looper 已无法接收任务时，不在线程外修改状态，直接放弃本次事件。
-            return
+        } catch (error: RuntimeException) {
+            failClosedFromAnyThread(reason = MAIN_HANDLER_UNAVAILABLE)
+            throw eventDispatchFailure(MAIN_HANDLER_UNAVAILABLE, error)
+        }
+        if (!posted) {
+            failClosedFromAnyThread(reason = MAIN_HANDLER_UNAVAILABLE)
+            throw eventDispatchFailure(MAIN_HANDLER_UNAVAILABLE)
         }
 
-        var interrupted = false
-        while (true) {
-            try {
-                completed.await()
-                break
-            } catch (_: InterruptedException) {
-                // 事件状态转换必须完成后才能返回；记录中断并在等待结束后恢复标记。
-                interrupted = true
-            }
-        }
-        if (interrupted) {
+        val completed = try {
+            dispatch.completed.await(EVENT_DISPATCH_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS)
+        } catch (_: InterruptedException) {
+            failClosedFromAnyThread(reason = EVENT_PROCESSING_FAILED)
             Thread.currentThread().interrupt()
+            throw eventDispatchFailure(EVENT_PROCESSING_FAILED)
+        }
+        if (!completed) {
+            failClosedFromAnyThread(reason = EVENT_PROCESSING_FAILED)
+            throw eventDispatchFailure(EVENT_PROCESSING_FAILED)
+        }
+
+        dispatch.failure?.let { error ->
+            throw eventDispatchFailure(EVENT_PROCESSING_FAILED, error)
         }
     }
+
+    private fun runEventOnMainThread(event: CheckoutObservationEvent): Throwable? = try {
+        handleEventOnMainThread(event)
+        null
+    } catch (error: Throwable) {
+        Log.w(TAG, "结算观察事件处理失败，已关闭截图协调器", error)
+        failClosedFromAnyThread(reason = EVENT_PROCESSING_FAILED)
+        error
+    }
+
+    private fun eventDispatchFailure(reason: String, cause: Throwable? = null): IllegalStateException =
+        IllegalStateException(reason, cause)
 
     private fun handleEventOnMainThread(event: CheckoutObservationEvent) {
         if (closed) {
             return
         }
+        eventGeneration += 1
         when (event) {
             is CheckoutObservationEvent.Stable -> handleStable(event.page)
             is CheckoutObservationEvent.Invalidated -> handleInvalidated(event.detail)
         }
     }
 
+    private fun failClosedFromAnyThread(
+        pending: PendingCapture? = null,
+        imageBytes: ByteArray? = null,
+        reason: String
+    ) {
+        imageBytes?.fill(0)
+
+        // 每个失败入口都先关闭 buffer，确保重复失败入口也不会越过消费栅栏返回。
+        try {
+            buffer.close()
+        } catch (error: RuntimeException) {
+            Log.w(TAG, "关闭截图缓冲失败，继续释放协调器状态", error)
+        }
+        closed = true
+
+        if (!failClosedStarted.compareAndSet(false, true)) {
+            if (Looper.myLooper() != Looper.getMainLooper()) {
+                try {
+                    failClosedStateReady.await(EVENT_DISPATCH_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS)
+                } catch (_: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                }
+            }
+            return
+        }
+
+        // 先完成协调器状态清理，再通知旧回调；回调重入只能看到已关闭的状态。
+        try {
+            try {
+                screenshotThread.quitSafely()
+            } catch (error: RuntimeException) {
+                Log.w(TAG, "退出截图线程失败", error)
+            }
+
+            val pendingToNotify = mutableListOf<PendingCapture>()
+            val queuedToNotify = mutableListOf<QueuedManualCapture>()
+            pendingCapture?.let { current ->
+                pendingToNotify += current
+            }
+            if (pending != null && pendingToNotify.none { it.requestId == pending.requestId }) {
+                pendingToNotify += pending
+            }
+            pendingCapture = null
+            pendingToNotify.forEach { it.cancelled = true }
+
+            queuedManual?.let { queuedToNotify += it }
+            queuedManual = null
+            queuedAutomatic = null
+            activeCheckout = null
+            handoffCheckout = null
+            attemptedAutomaticCaptures.clear()
+            resultListener = null
+
+            failClosedStateReady.countDown()
+
+            pendingToNotify.forEach { cancelled ->
+                publishPendingResult(
+                    pending = cancelled,
+                    result = cancelledResult(
+                        current = cancelled.activeCheckout,
+                        sourceReason = cancelled.sourceReason,
+                        reason = reason
+                    )
+                )
+            }
+            queuedToNotify.forEach { queued ->
+                publishQueuedResult(
+                    queued = queued,
+                    result = cancelledResult(
+                        current = null,
+                        sourceReason = SnapshotSourceReason.MANUAL_CAPTURE,
+                        reason = reason,
+                        key = queued.key
+                    )
+                )
+            }
+        } finally {
+            failClosedStateReady.countDown()
+        }
+    }
+
     /** 设置自动截图结果监听器；监听器不拥有图片引用。 */
     fun setResultListener(listener: SnapshotCaptureResultListener?) {
-        mainHandler.post {
-            resultListener = listener
+        val posted = try {
+            mainHandler.post {
+                resultListener = listener
+            }
+        } catch (_: RuntimeException) {
+            false
+        }
+        if (!posted) {
+            resultListener = null
         }
     }
 
     /** 用户点击入口；手动截图不等待新的稳定窗口，但仍必须经过结算页门禁。 */
     fun requestManualCapture(callback: SnapshotCaptureCallback) {
-        mainHandler.post {
-            if (closed) {
-                publish(
-                    unavailableResult(
-                        sourceReason = SnapshotSourceReason.MANUAL_CAPTURE,
-                        reasonCode = SnapshotCaptureUnavailableReason.SERVICE_NOT_CONNECTED.wireValue
-                    ),
-                    callback
-                )
-                return@post
-            }
-
-            val current = activeCheckout
-            if (current == null) {
-                publish(
-                    rejectedResult(
-                        sourceReason = SnapshotSourceReason.MANUAL_CAPTURE,
-                        reason = SnapshotCaptureRejection.NO_ACTIVE_CHECKOUT
-                    ),
-                    callback
-                )
-                return@post
-            }
-
-            when (pageDetector.detect(current.page.observation)) {
-                is CheckoutPageDetection.Accepted -> Unit
-                is CheckoutPageDetection.Rejected -> {
+        val posted = try {
+            mainHandler.post {
+                if (closed) {
                     publish(
-                        rejectedResult(
-                            current = current,
+                        unavailableResult(
                             sourceReason = SnapshotSourceReason.MANUAL_CAPTURE,
-                            reason = if (current.page.observation.isSensitivePage) {
-                                SnapshotCaptureRejection.SENSITIVE_PAGE
-                            } else {
-                                SnapshotCaptureRejection.NOT_CHECKOUT_PAGE
-                            }
+                            reasonCode = SnapshotCaptureUnavailableReason.SERVICE_NOT_CONNECTED.wireValue
                         ),
                         callback
                     )
                     return@post
                 }
-            }
 
-            val observation = current.page.observation
-            if (observation.isSensitivePage) {
-                publish(
-                    rejectedResult(
-                        current = current,
-                        sourceReason = SnapshotSourceReason.MANUAL_CAPTURE,
-                        reason = SnapshotCaptureRejection.SENSITIVE_PAGE
-                    ),
-                    callback
-                )
-                return@post
-            }
+                val current = activeCheckout
+                if (current == null) {
+                    publish(
+                        rejectedResult(
+                            sourceReason = SnapshotSourceReason.MANUAL_CAPTURE,
+                            reason = SnapshotCaptureRejection.NO_ACTIVE_CHECKOUT
+                        ),
+                        callback
+                    )
+                    return@post
+                }
 
-            if (buffer.hasCandidate(
-                    slotId = current.slotId,
-                    sessionId = current.sessionId,
-                    pageFingerprint = observation.pageFingerprint,
-                    sourceReason = SnapshotSourceReason.MANUAL_CAPTURE
-                )
-            ) {
-                publish(
-                    duplicateResult(current, SnapshotSourceReason.MANUAL_CAPTURE),
-                    callback
-                )
-                return@post
-            }
+                when (pageDetector.detect(current.page.observation)) {
+                    is CheckoutPageDetection.Accepted -> Unit
+                    is CheckoutPageDetection.Rejected -> {
+                        publish(
+                            rejectedResult(
+                                current = current,
+                                sourceReason = SnapshotSourceReason.MANUAL_CAPTURE,
+                                reason = if (current.page.observation.isSensitivePage) {
+                                    SnapshotCaptureRejection.SENSITIVE_PAGE
+                                } else {
+                                    SnapshotCaptureRejection.NOT_CHECKOUT_PAGE
+                                }
+                            ),
+                            callback
+                        )
+                        return@post
+                    }
+                }
 
-            val inFlight = pendingCapture
-            if (inFlight != null) {
-                if (inFlight.sourceReason == SnapshotSourceReason.MANUAL_CAPTURE || queuedManual != null) {
+                val observation = current.page.observation
+                if (observation.isSensitivePage) {
                     publish(
                         rejectedResult(
                             current = current,
                             sourceReason = SnapshotSourceReason.MANUAL_CAPTURE,
-                            reason = SnapshotCaptureRejection.CAPTURE_IN_FLIGHT
+                            reason = SnapshotCaptureRejection.SENSITIVE_PAGE
                         ),
                         callback
                     )
-                } else {
-                    queuedManual = QueuedManualCapture(current.key, callback)
+                    return@post
                 }
-                return@post
-            }
 
-            beginCapture(current, SnapshotSourceReason.MANUAL_CAPTURE, callback)
+                if (buffer.hasCandidate(
+                        slotId = current.slotId,
+                        sessionId = current.sessionId,
+                        pageFingerprint = observation.pageFingerprint,
+                        sourceReason = SnapshotSourceReason.MANUAL_CAPTURE
+                    )
+                ) {
+                    publish(
+                        duplicateResult(current, SnapshotSourceReason.MANUAL_CAPTURE),
+                        callback
+                    )
+                    return@post
+                }
+
+                val inFlight = pendingCapture
+                if (inFlight != null) {
+                    if (inFlight.sourceReason == SnapshotSourceReason.MANUAL_CAPTURE || queuedManual != null) {
+                        publish(
+                            rejectedResult(
+                                current = current,
+                                sourceReason = SnapshotSourceReason.MANUAL_CAPTURE,
+                                reason = SnapshotCaptureRejection.CAPTURE_IN_FLIGHT
+                            ),
+                            callback
+                        )
+                    } else {
+                        if (!closed) {
+                            queuedManual = QueuedManualCapture(current.key, callback)
+                        } else {
+                            publish(
+                                unavailableResult(
+                                    current = current,
+                                    sourceReason = SnapshotSourceReason.MANUAL_CAPTURE,
+                                    reasonCode = MAIN_HANDLER_UNAVAILABLE
+                                ),
+                                callback
+                            )
+                        }
+                    }
+                    return@post
+                }
+
+                beginCapture(current, SnapshotSourceReason.MANUAL_CAPTURE, callback)
+            }
+        } catch (_: RuntimeException) {
+            false
+        }
+        if (!posted) {
+            failClosedFromAnyThread(reason = MAIN_HANDLER_UNAVAILABLE)
+            try {
+                callback.onResult(
+                    unavailableResult(
+                        sourceReason = SnapshotSourceReason.MANUAL_CAPTURE,
+                        reasonCode = MAIN_HANDLER_UNAVAILABLE
+                    )
+                )
+            } catch (error: RuntimeException) {
+                Log.w(TAG, "主线程不可用时手动截图回调失败", error)
+            }
         }
     }
 
     /** 服务中断时立即取消回调并清理当前购物包槽位。 */
     fun onServiceInterrupted() {
-        mainHandler.post {
-            if (!closed) {
-                handleInvalidated(
-                    CheckoutObservationInvalidation(
-                        reason = CheckoutInvalidationReason.SERVICE_INTERRUPTED,
-                        shoppingPackage = activeCheckout?.page?.observation?.shoppingPackage,
-                        pageFingerprint = activeCheckout?.page?.observation?.pageFingerprint,
-                        invalidatedAt = nowMillis()
-                    )
-                )
+        val posted = try {
+            mainHandler.post {
+                try {
+                    if (!closed) {
+                        handleInvalidated(
+                            CheckoutObservationInvalidation(
+                                reason = CheckoutInvalidationReason.SERVICE_INTERRUPTED,
+                                shoppingPackage = activeCheckout?.page?.observation?.shoppingPackage,
+                                pageFingerprint = activeCheckout?.page?.observation?.pageFingerprint,
+                                invalidatedAt = nowMillis()
+                            )
+                        )
+                    }
+                } catch (error: Throwable) {
+                    Log.w(TAG, "服务中断清理失败，已关闭截图协调器", error)
+                    failClosedFromAnyThread(reason = EVENT_PROCESSING_FAILED)
+                }
             }
+        } catch (_: RuntimeException) {
+            false
+        }
+        if (!posted) {
+            failClosedFromAnyThread(reason = MAIN_HANDLER_UNAVAILABLE)
         }
     }
 
     /** 服务销毁时关闭协调器并释放所有正在等待的图片。 */
     fun close() {
-        mainHandler.post {
-            if (closed) {
-                return@post
-            }
-            handleInvalidated(
-                CheckoutObservationInvalidation(
-                    reason = CheckoutInvalidationReason.SERVICE_DESTROYED,
-                    shoppingPackage = activeCheckout?.page?.observation?.shoppingPackage,
-                    pageFingerprint = activeCheckout?.page?.observation?.pageFingerprint,
-                    invalidatedAt = nowMillis()
-            )
-            )
-            // 销毁时即使此前发生过支付交接，也必须停止过期回调并释放保留快照。
-            buffer.close()
-            closed = true
-            resultListener = null
-            screenshotThread.quitSafely()
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            closeOnMainThread()
+            return
+        }
+
+        val posted = try {
+            mainHandler.post { closeOnMainThread() }
+        } catch (_: RuntimeException) {
+            false
+        }
+        if (!posted) {
+            failClosedFromAnyThread(reason = MAIN_HANDLER_UNAVAILABLE)
+        }
+    }
+
+    private fun closeOnMainThread() {
+        if (closed) {
+            return
+        }
+        // 关闭先建立 buffer 消费栅栏，再释放旧回调，避免回调重入消费旧快照。
+        failClosedFromAnyThread(reason = CheckoutInvalidationReason.SERVICE_DESTROYED.wireValue)
+    }
+
+    private fun publishPendingResult(
+        pending: PendingCapture,
+        result: SnapshotCaptureResult
+    ) {
+        if (pending.completionPublished.compareAndSet(false, true)) {
+            publish(result, pending.callback)
+        }
+    }
+
+    private fun publishQueuedResult(
+        queued: QueuedManualCapture,
+        result: SnapshotCaptureResult
+    ) {
+        if (queued.completionPublished.compareAndSet(false, true)) {
+            publish(result, queued.callback)
         }
     }
 
     private fun handleStable(page: StableCheckoutPage) {
+        val transitionGeneration = eventGeneration
         val observation = page.observation
         if (pageDetector.detect(observation) !is CheckoutPageDetection.Accepted) {
             handleInvalidated(
@@ -343,12 +545,18 @@ internal class CheckoutSnapshotCaptureCoordinator(
 
         val retainedHandoff = handoffCheckout
         if (retainedHandoff != null) {
+            if (closed) {
+                return
+            }
             val retained = retainedHandoff.activeCheckout
             val isSameCheckout =
                 retained.page.observation.shoppingPackage == observation.shoppingPackage &&
                     retained.page.observation.pageFingerprint == observation.pageFingerprint
             handoffCheckout = null
             if (isSameCheckout) {
+                if (closed) {
+                    return
+                }
                 // 支付应用返回原结算页时恢复原会话和尝试状态，不重新截图或覆盖原候选。
                 buffer.restoreFromPaymentHandoff(
                     slotId = retained.slotId,
@@ -358,6 +566,12 @@ internal class CheckoutSnapshotCaptureCoordinator(
                 activeCheckout = retained.copy(page = page)
                 attemptedAutomaticCaptures.clear()
                 attemptedAutomaticCaptures += retainedHandoff.attemptedAutomaticCaptures
+                if (closed) {
+                    // 关闭可能与恢复并发发生；不得让旧交接状态在失败收口后复活。
+                    activeCheckout = null
+                    handoffCheckout = null
+                    attemptedAutomaticCaptures.clear()
+                }
                 return
             }
 
@@ -370,20 +584,13 @@ internal class CheckoutSnapshotCaptureCoordinator(
         val startsNewSession = previous == null ||
             previous.page.observation.shoppingPackage != observation.shoppingPackage ||
             previous.page.observation.pageFingerprint != observation.pageFingerprint
+        var pendingToNotify: PendingCapture? = null
+        var queuedManualToNotify: QueuedManualCapture? = null
         val current = if (startsNewSession) {
-            cancelPendingCapture(SnapshotCaptureRejection.PAGE_CHANGED.wireValue)
-            queuedManual?.let { queued ->
-                queuedManual = null
-                publish(
-                    cancelledResult(
-                        current = previous,
-                        sourceReason = SnapshotSourceReason.MANUAL_CAPTURE,
-                        reason = SnapshotCaptureRejection.PAGE_CHANGED.wireValue,
-                        key = queued.key
-                    ),
-                    queued.callback
-                )
-            }
+            // 先摘除旧请求和排队项；回调必须等新会话及旧槽位清理完成后才能重入。
+            pendingToNotify = detachPendingCapture()
+            queuedManualToNotify = queuedManual
+            queuedManual = null
             queuedAutomatic = null
             previous?.let { oldCheckout ->
                 // 新指纹代表新的订单边界；先释放旧槽位，避免旧图片或消费墓碑阻塞新会话。
@@ -399,6 +606,38 @@ internal class CheckoutSnapshotCaptureCoordinator(
             previous.copy(page = page)
         }
         activeCheckout = current
+
+        pendingToNotify?.let { pending ->
+            publishPendingResult(
+                pending = pending,
+                result = cancelledResult(
+                    current = pending.activeCheckout,
+                    sourceReason = pending.sourceReason,
+                    reason = SnapshotCaptureRejection.PAGE_CHANGED.wireValue
+                )
+            )
+        }
+        queuedManualToNotify?.let { queued ->
+            publishQueuedResult(
+                queued = queued,
+                result = cancelledResult(
+                    current = previous,
+                    sourceReason = SnapshotSourceReason.MANUAL_CAPTURE,
+                    reason = SnapshotCaptureRejection.PAGE_CHANGED.wireValue,
+                    key = queued.key
+                )
+            )
+        }
+
+        // 取消回调允许同步重入；若重入已经推进事件序列，旧事件不得继续写入或排队。
+        if (closed || eventGeneration != transitionGeneration || activeCheckout?.key != current.key) {
+            if (closed) {
+                activeCheckout = null
+                handoffCheckout = null
+                queuedAutomatic = null
+            }
+            return
+        }
 
         val key = current.key
         if (key in attemptedAutomaticCaptures) {
@@ -444,7 +683,7 @@ internal class CheckoutSnapshotCaptureCoordinator(
         val handoffSource = current ?: retained?.activeCheckout
         val retainForHandoff =
             detail.reason == CheckoutInvalidationReason.PAYMENT_APP_HANDOFF && handoffSource != null
-        handoffCheckout = if (!retainForHandoff) {
+        val nextHandoff = if (!retainForHandoff) {
             null
         } else if (retained != null) {
             retained
@@ -458,20 +697,10 @@ internal class CheckoutSnapshotCaptureCoordinator(
             )
         }
 
-        cancelPendingCapture(detail.reason.wireValue)
-
-        queuedManual?.let { queued ->
-            queuedManual = null
-            publish(
-                cancelledResult(
-                    current = current,
-                    sourceReason = SnapshotSourceReason.MANUAL_CAPTURE,
-                    reason = detail.reason.wireValue,
-                    key = queued.key
-                ),
-                queued.callback
-            )
-        }
+        // 先摘除请求和排队项，再建立交接栅栏并清空旧状态，最后才允许旧回调重入。
+        val pendingToNotify = detachPendingCapture()
+        val queuedManualToNotify = queuedManual
+        queuedManual = null
         queuedAutomatic = null
         // 只有明确的支付交接保留快照；普通离开和其他失效原因都清理槽位，避免旧图误用。
         if (!retainForHandoff) {
@@ -485,23 +714,37 @@ internal class CheckoutSnapshotCaptureCoordinator(
                 )
             }
         }
+        handoffCheckout = nextHandoff
         activeCheckout = null
         attemptedAutomaticCaptures.clear()
-    }
+        if (closed) {
+            handoffCheckout = null
+            activeCheckout = null
+            queuedAutomatic = null
+            return
+        }
 
-    private fun cancelPendingCapture(reason: String) {
-        val pending = detachPendingCapture() ?: return
-        // 先解除当前请求，再通知回调；晚到的系统回调只能命中释放分支。
-        pendingCapture = null
-        pending.cancelled = true
-        publish(
-            cancelledResult(
-                current = pending.activeCheckout,
-                sourceReason = pending.sourceReason,
-                reason = reason
-            ),
-            pending.callback
-        )
+        pendingToNotify?.let { pending ->
+            publishPendingResult(
+                pending = pending,
+                result = cancelledResult(
+                    current = pending.activeCheckout,
+                    sourceReason = pending.sourceReason,
+                    reason = detail.reason.wireValue
+                )
+            )
+        }
+        queuedManualToNotify?.let { queued ->
+            publishQueuedResult(
+                queued = queued,
+                result = cancelledResult(
+                    current = current,
+                    sourceReason = SnapshotSourceReason.MANUAL_CAPTURE,
+                    reason = detail.reason.wireValue,
+                    key = queued.key
+                )
+            )
+        }
     }
 
     private fun detachPendingCapture(): PendingCapture? {
@@ -515,18 +758,36 @@ internal class CheckoutSnapshotCaptureCoordinator(
     private fun beginCapture(
         current: ActiveCheckout,
         sourceReason: SnapshotSourceReason,
-        callback: SnapshotCaptureCallback?
+        callback: SnapshotCaptureCallback?,
+        completionPublished: AtomicBoolean = AtomicBoolean(false),
+        queued: QueuedManualCapture? = null
     ) {
+        if (closed) {
+            val result = cancelledResult(
+                current = current,
+                sourceReason = sourceReason,
+                reason = MAIN_HANDLER_UNAVAILABLE,
+                key = queued?.key
+            )
+            if (queued != null) {
+                publishQueuedResult(queued, result)
+            } else {
+                publish(result, callback)
+            }
+            return
+        }
         val unavailableReason = screenshotUnavailableReason()
         if (unavailableReason != null) {
-            publish(
-                unavailableResult(
-                    current = current,
-                    sourceReason = sourceReason,
-                    reasonCode = unavailableReason.wireValue
-                ),
-                callback
+            val result = unavailableResult(
+                current = current,
+                sourceReason = sourceReason,
+                reasonCode = unavailableReason.wireValue
             )
+            if (queued != null) {
+                publishQueuedResult(queued, result)
+            } else {
+                publish(result, callback)
+            }
             drainQueuedCapture()
             return
         }
@@ -535,9 +796,25 @@ internal class CheckoutSnapshotCaptureCoordinator(
             requestId = UUID.randomUUID().toString(),
             activeCheckout = current,
             sourceReason = sourceReason,
-            callback = callback
+            callback = callback,
+            completionPublished = completionPublished
         )
         pendingCapture = pending
+
+        if (closed) {
+            pendingCapture = null
+            pending.cancelled = true
+            publishPendingResult(
+                pending = pending,
+                result = cancelledResult(
+                    current = current,
+                    sourceReason = sourceReason,
+                    reason = MAIN_HANDLER_UNAVAILABLE,
+                    key = queued?.key
+                )
+            )
+            return
+        }
 
         try {
             @Suppress("NewApi")
@@ -551,13 +828,11 @@ internal class CheckoutSnapshotCaptureCoordinator(
                     }
 
                     override fun onFailure(errorCode: Int) {
-                        mainHandler.post {
-                            finishCapture(
-                                pending = pending,
-                                imageBytes = null,
-                                failureReason = screenshotFailureReason(errorCode)
-                            )
-                        }
+                        finishCapture(
+                            pending = pending,
+                            imageBytes = null,
+                            failureReason = screenshotFailureReason(errorCode)
+                        )
                     }
                 }
             )
@@ -589,7 +864,18 @@ internal class CheckoutSnapshotCaptureCoordinator(
         failureReason: String?
     ) {
         if (Looper.myLooper() != Looper.getMainLooper()) {
-            mainHandler.post { finishCapture(pending, imageBytes, failureReason) }
+            val posted = try {
+                mainHandler.post { finishCapture(pending, imageBytes, failureReason) }
+            } catch (_: RuntimeException) {
+                false
+            }
+            if (!posted) {
+                failClosedFromAnyThread(
+                    pending = pending,
+                    imageBytes = imageBytes,
+                    reason = MAIN_HANDLER_UNAVAILABLE
+                )
+            }
             return
         }
 
@@ -601,13 +887,13 @@ internal class CheckoutSnapshotCaptureCoordinator(
 
         if (pending.cancelled || closed || activeCheckout?.key != pending.activeCheckout.key) {
             imageBytes?.fill(0)
-            publish(
-                cancelledResult(
+            publishPendingResult(
+                pending = pending,
+                result = cancelledResult(
                     current = pending.activeCheckout,
                     sourceReason = pending.sourceReason,
                     reason = SnapshotCaptureRejection.PAGE_CHANGED.wireValue
-                ),
-                pending.callback
+                )
             )
             drainQueuedCapture()
             return
@@ -629,7 +915,7 @@ internal class CheckoutSnapshotCaptureCoordinator(
                     reasonCode = failureReason ?: SnapshotCaptureUnavailableReason.ENCODE_FAILED.wireValue
                 )
             }
-            publish(result, pending.callback)
+            publishPendingResult(pending, result)
             drainQueuedCapture()
             return
         }
@@ -656,7 +942,7 @@ internal class CheckoutSnapshotCaptureCoordinator(
             // 缓冲区在成功时已复制字节；失败、拒绝和取消都在这里清零入口数组。
             capturedBytes.fill(0)
         }
-        publish(result, pending.callback)
+        publishPendingResult(pending, result)
         drainQueuedCapture()
     }
 
@@ -726,17 +1012,23 @@ internal class CheckoutSnapshotCaptureCoordinator(
             queuedManual = null
             val current = activeCheckout
             if (current == null || current.key != queued.key) {
-                publish(
-                    cancelledResult(
+                publishQueuedResult(
+                    queued = queued,
+                    result = cancelledResult(
                         current = current,
                         sourceReason = SnapshotSourceReason.MANUAL_CAPTURE,
                         reason = SnapshotCaptureRejection.PAGE_CHANGED.wireValue,
                         key = queued.key
-                    ),
-                    queued.callback
+                    )
                 )
             } else {
-                beginCapture(current, SnapshotSourceReason.MANUAL_CAPTURE, queued.callback)
+                beginCapture(
+                    current = current,
+                    sourceReason = SnapshotSourceReason.MANUAL_CAPTURE,
+                    callback = queued.callback,
+                    completionPublished = queued.completionPublished,
+                    queued = queued
+                )
             }
             return
         }
