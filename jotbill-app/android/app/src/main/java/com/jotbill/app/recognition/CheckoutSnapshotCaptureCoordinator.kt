@@ -16,7 +16,7 @@ import java.io.ByteArrayOutputStream
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.CountDownLatch
-import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicReference
 import java.util.concurrent.Executor
 import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.TimeUnit
@@ -121,9 +121,31 @@ internal class CheckoutSnapshotCaptureCoordinator(
         val activeCheckout: ActiveCheckout,
         val sourceReason: SnapshotSourceReason,
         val callback: SnapshotCaptureCallback?,
-        @Volatile var cancelled: Boolean = false,
-        val completionPublished: AtomicBoolean = AtomicBoolean(false)
-    )
+        val cancelled: AtomicBoolean = AtomicBoolean(false),
+        val completionPublished: AtomicBoolean = AtomicBoolean(false),
+        val finishStarted: AtomicBoolean = AtomicBoolean(false),
+        val imageBytes: AtomicReference<ByteArray?> = AtomicReference(null)
+    ) {
+        fun offerImage(bytes: ByteArray?): Boolean {
+            if (cancelled.get()) {
+                bytes?.fill(0)
+                return false
+            }
+            imageBytes.set(bytes)
+            if (cancelled.get()) {
+                imageBytes.getAndSet(null)?.fill(0)
+                return false
+            }
+            return true
+        }
+
+        fun takeImage(): ByteArray? = imageBytes.getAndSet(null)
+
+        fun releaseForEmergency() {
+            cancelled.set(true)
+            imageBytes.getAndSet(null)?.fill(0)
+        }
+    }
 
     private data class HandoffCheckout(
         val activeCheckout: ActiveCheckout,
@@ -136,7 +158,7 @@ internal class CheckoutSnapshotCaptureCoordinator(
         val completionPublished: AtomicBoolean = AtomicBoolean(false)
     )
 
-    private class EventDispatch {
+    private class MainThreadDispatch {
         val completed = CountDownLatch(1)
         @Volatile var failure: Throwable? = null
     }
@@ -151,21 +173,22 @@ internal class CheckoutSnapshotCaptureCoordinator(
             false
         }
         if (!posted) {
-            failClosedFromAnyThread(reason = SCREENSHOT_HANDLER_UNAVAILABLE)
+            requestFailClosedFromAnyThread(reason = SCREENSHOT_HANDLER_UNAVAILABLE)
             throw RejectedExecutionException(SCREENSHOT_HANDLER_UNAVAILABLE)
         }
     }
     private val pageDetector = CheckoutPageDetector()
-    private val attemptedAutomaticCaptures = ConcurrentHashMap.newKeySet<CaptureKey>()
-    private val failClosedStarted = AtomicBoolean(false)
-    private val failClosedStateReady = CountDownLatch(1)
-    @Volatile private var activeCheckout: ActiveCheckout? = null
-    @Volatile private var pendingCapture: PendingCapture? = null
-    @Volatile private var queuedAutomatic: ActiveCheckout? = null
-    @Volatile private var queuedManual: QueuedManualCapture? = null
-    @Volatile private var handoffCheckout: HandoffCheckout? = null
-    @Volatile private var resultListener: SnapshotCaptureResultListener? = null
-    @Volatile private var closed = false
+    private val attemptedAutomaticCaptures = mutableSetOf<CaptureKey>()
+    /** 只作为主线程不可用时的消费阻断标记，不承载协调器状态转换。 */
+    private val failClosedRequested = AtomicBoolean(false)
+    private val emergencyClosed = AtomicBoolean(false)
+    private var activeCheckout: ActiveCheckout? = null
+    private var pendingCapture: PendingCapture? = null
+    private var queuedAutomatic: ActiveCheckout? = null
+    private var queuedManual: QueuedManualCapture? = null
+    private var handoffCheckout: HandoffCheckout? = null
+    private var resultListener: SnapshotCaptureResultListener? = null
+    private var closed = false
     private var eventGeneration = 0L
 
     override fun onEvent(event: CheckoutObservationEvent) {
@@ -176,7 +199,7 @@ internal class CheckoutSnapshotCaptureCoordinator(
             return
         }
 
-        val dispatch = EventDispatch()
+        val dispatch = MainThreadDispatch()
         val posted = try {
             mainHandler.post {
                 try {
@@ -189,27 +212,30 @@ internal class CheckoutSnapshotCaptureCoordinator(
                 }
             }
         } catch (error: RuntimeException) {
-            failClosedFromAnyThread(reason = MAIN_HANDLER_UNAVAILABLE)
+            requestFailClosedFromAnyThread(reason = MAIN_HANDLER_UNAVAILABLE)
             throw eventDispatchFailure(MAIN_HANDLER_UNAVAILABLE, error)
         }
         if (!posted) {
-            failClosedFromAnyThread(reason = MAIN_HANDLER_UNAVAILABLE)
+            requestFailClosedFromAnyThread(reason = MAIN_HANDLER_UNAVAILABLE)
             throw eventDispatchFailure(MAIN_HANDLER_UNAVAILABLE)
         }
 
         val completed = try {
             dispatch.completed.await(EVENT_DISPATCH_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS)
         } catch (_: InterruptedException) {
-            failClosedFromAnyThread(reason = EVENT_PROCESSING_FAILED)
+            requestFailClosedFromAnyThread(reason = EVENT_PROCESSING_FAILED)
             Thread.currentThread().interrupt()
             throw eventDispatchFailure(EVENT_PROCESSING_FAILED)
         }
         if (!completed) {
-            failClosedFromAnyThread(reason = EVENT_PROCESSING_FAILED)
+            requestFailClosedFromAnyThread(reason = EVENT_PROCESSING_FAILED)
             throw eventDispatchFailure(EVENT_PROCESSING_FAILED)
         }
 
         dispatch.failure?.let { error ->
+            if (!emergencyClosed.get()) {
+                requestFailClosedFromAnyThread(reason = EVENT_PROCESSING_FAILED)
+            }
             throw eventDispatchFailure(EVENT_PROCESSING_FAILED, error)
         }
     }
@@ -219,7 +245,7 @@ internal class CheckoutSnapshotCaptureCoordinator(
         null
     } catch (error: Throwable) {
         Log.w(TAG, "结算观察事件处理失败，已关闭截图协调器", error)
-        failClosedFromAnyThread(reason = EVENT_PROCESSING_FAILED)
+        failClosedOnMainThread(reason = EVENT_PROCESSING_FAILED)
         error
     }
 
@@ -227,7 +253,7 @@ internal class CheckoutSnapshotCaptureCoordinator(
         IllegalStateException(reason, cause)
 
     private fun handleEventOnMainThread(event: CheckoutObservationEvent) {
-        if (closed) {
+        if (isClosedOnMainThread()) {
             return
         }
         eventGeneration += 1
@@ -237,14 +263,23 @@ internal class CheckoutSnapshotCaptureCoordinator(
         }
     }
 
-    private fun failClosedFromAnyThread(
+    private fun isClosedOnMainThread(): Boolean =
+        closed || failClosedRequested.get() || emergencyClosed.get()
+
+    /** 仅在主线程摘除状态、关闭缓冲并发布取消结果。 */
+    private fun failClosedOnMainThread(
         pending: PendingCapture? = null,
         imageBytes: ByteArray? = null,
         reason: String
     ) {
         imageBytes?.fill(0)
+        pending?.releaseForEmergency()
+        if (closed) {
+            return
+        }
 
-        // 每个失败入口都先关闭 buffer，确保重复失败入口也不会越过消费栅栏返回。
+        failClosedRequested.set(true)
+        emergencyClosed.set(true)
         try {
             buffer.close()
         } catch (error: RuntimeException) {
@@ -252,70 +287,119 @@ internal class CheckoutSnapshotCaptureCoordinator(
         }
         closed = true
 
-        if (!failClosedStarted.compareAndSet(false, true)) {
-            if (Looper.myLooper() != Looper.getMainLooper()) {
-                try {
-                    failClosedStateReady.await(EVENT_DISPATCH_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS)
-                } catch (_: InterruptedException) {
-                    Thread.currentThread().interrupt()
-                }
-            }
-            return
-        }
-
         // 先完成协调器状态清理，再通知旧回调；回调重入只能看到已关闭的状态。
         try {
-            try {
-                screenshotThread.quitSafely()
-            } catch (error: RuntimeException) {
-                Log.w(TAG, "退出截图线程失败", error)
-            }
-
-            val pendingToNotify = mutableListOf<PendingCapture>()
-            val queuedToNotify = mutableListOf<QueuedManualCapture>()
-            pendingCapture?.let { current ->
-                pendingToNotify += current
-            }
-            if (pending != null && pendingToNotify.none { it.requestId == pending.requestId }) {
-                pendingToNotify += pending
-            }
-            pendingCapture = null
-            pendingToNotify.forEach { it.cancelled = true }
-
-            queuedManual?.let { queuedToNotify += it }
-            queuedManual = null
-            queuedAutomatic = null
-            activeCheckout = null
-            handoffCheckout = null
-            attemptedAutomaticCaptures.clear()
-            resultListener = null
-
-            failClosedStateReady.countDown()
-
-            pendingToNotify.forEach { cancelled ->
-                publishPendingResult(
-                    pending = cancelled,
-                    result = cancelledResult(
-                        current = cancelled.activeCheckout,
-                        sourceReason = cancelled.sourceReason,
-                        reason = reason
-                    )
-                )
-            }
-            queuedToNotify.forEach { queued ->
-                publishQueuedResult(
-                    queued = queued,
-                    result = cancelledResult(
-                        current = null,
-                        sourceReason = SnapshotSourceReason.MANUAL_CAPTURE,
-                        reason = reason,
-                        key = queued.key
-                    )
-                )
-            }
-        } finally {
-            failClosedStateReady.countDown()
+            screenshotThread.quitSafely()
+        } catch (error: RuntimeException) {
+            Log.w(TAG, "退出截图线程失败", error)
         }
+
+        val pendingToNotify = mutableListOf<PendingCapture>()
+        val queuedToNotify = mutableListOf<QueuedManualCapture>()
+        pendingCapture?.let { current ->
+            pendingToNotify += current
+        }
+        if (pending != null && pendingToNotify.none { it.requestId == pending.requestId }) {
+            pendingToNotify += pending
+        }
+        pendingCapture = null
+        pendingToNotify.forEach { it.releaseForEmergency() }
+
+        queuedManual?.let { queuedToNotify += it }
+        queuedManual = null
+        queuedAutomatic = null
+        activeCheckout = null
+        handoffCheckout = null
+        attemptedAutomaticCaptures.clear()
+        resultListener = null
+
+        pendingToNotify.forEach { cancelled ->
+            publishPendingResult(
+                pending = cancelled,
+                result = cancelledResult(
+                    current = cancelled.activeCheckout,
+                    sourceReason = cancelled.sourceReason,
+                    reason = reason
+                )
+            )
+        }
+        queuedToNotify.forEach { queued ->
+            publishQueuedResult(
+                queued = queued,
+                result = cancelledResult(
+                    current = null,
+                    sourceReason = SnapshotSourceReason.MANUAL_CAPTURE,
+                    reason = reason,
+                    key = queued.key
+                )
+            )
+        }
+    }
+
+    /** 主线程不可用时只建立消费阻断并释放线程/字节，不跨线程改协调器状态。 */
+    private fun emergencyCloseWithoutMainThread(
+        pending: PendingCapture? = null,
+        imageBytes: ByteArray? = null
+    ) {
+        imageBytes?.fill(0)
+        pending?.releaseForEmergency()
+        failClosedRequested.set(true)
+        emergencyClosed.set(true)
+        try {
+            buffer.close()
+        } catch (error: RuntimeException) {
+            Log.w(TAG, "主线程不可用时关闭截图缓冲失败", error)
+        }
+        try {
+            screenshotThread.quitSafely()
+        } catch (error: RuntimeException) {
+            Log.w(TAG, "主线程不可用时退出截图线程失败", error)
+        }
+    }
+
+    /** 请求主线程执行完整 fail-closed；只有投递或等待失败才走最小原子 fallback。 */
+    private fun requestFailClosedFromAnyThread(
+        pending: PendingCapture? = null,
+        imageBytes: ByteArray? = null,
+        reason: String
+    ): Boolean {
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            failClosedOnMainThread(pending, imageBytes, reason)
+            return true
+        }
+
+        failClosedRequested.set(true)
+        val dispatch = MainThreadDispatch()
+        val posted = try {
+            mainHandler.post {
+                try {
+                    failClosedOnMainThread(pending, imageBytes, reason)
+                } catch (error: Throwable) {
+                    dispatch.failure = error
+                } finally {
+                    dispatch.completed.countDown()
+                }
+            }
+        } catch (_: RuntimeException) {
+            false
+        }
+        if (!posted) {
+            emergencyCloseWithoutMainThread(pending, imageBytes)
+            return false
+        }
+
+        val completed = try {
+            dispatch.completed.await(EVENT_DISPATCH_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS)
+        } catch (_: InterruptedException) {
+            emergencyCloseWithoutMainThread(pending, imageBytes)
+            Thread.currentThread().interrupt()
+            return false
+        }
+        if (!completed || dispatch.failure != null) {
+            emergencyCloseWithoutMainThread(pending, imageBytes)
+            return false
+        }
+        return emergencyClosed.get()
     }
 
     /** 设置自动截图结果监听器；监听器不拥有图片引用。 */
@@ -328,7 +412,7 @@ internal class CheckoutSnapshotCaptureCoordinator(
             false
         }
         if (!posted) {
-            resultListener = null
+            requestFailClosedFromAnyThread(reason = MAIN_HANDLER_UNAVAILABLE)
         }
     }
 
@@ -439,17 +523,8 @@ internal class CheckoutSnapshotCaptureCoordinator(
             false
         }
         if (!posted) {
-            failClosedFromAnyThread(reason = MAIN_HANDLER_UNAVAILABLE)
-            try {
-                callback.onResult(
-                    unavailableResult(
-                        sourceReason = SnapshotSourceReason.MANUAL_CAPTURE,
-                        reasonCode = MAIN_HANDLER_UNAVAILABLE
-                    )
-                )
-            } catch (error: RuntimeException) {
-                Log.w(TAG, "主线程不可用时手动截图回调失败", error)
-            }
+            requestFailClosedFromAnyThread(reason = MAIN_HANDLER_UNAVAILABLE)
+            Log.w(TAG, "主线程不可用时手动截图未能发布结果")
         }
     }
 
@@ -470,14 +545,14 @@ internal class CheckoutSnapshotCaptureCoordinator(
                     }
                 } catch (error: Throwable) {
                     Log.w(TAG, "服务中断清理失败，已关闭截图协调器", error)
-                    failClosedFromAnyThread(reason = EVENT_PROCESSING_FAILED)
+                    failClosedOnMainThread(reason = EVENT_PROCESSING_FAILED)
                 }
             }
         } catch (_: RuntimeException) {
             false
         }
         if (!posted) {
-            failClosedFromAnyThread(reason = MAIN_HANDLER_UNAVAILABLE)
+            requestFailClosedFromAnyThread(reason = MAIN_HANDLER_UNAVAILABLE)
         }
     }
 
@@ -488,13 +563,39 @@ internal class CheckoutSnapshotCaptureCoordinator(
             return
         }
 
+        val closeDispatch = MainThreadDispatch()
         val posted = try {
-            mainHandler.post { closeOnMainThread() }
+            mainHandler.post {
+                try {
+                    closeOnMainThread()
+                } catch (error: Throwable) {
+                    closeDispatch.failure = error
+                } finally {
+                    closeDispatch.completed.countDown()
+                }
+            }
         } catch (_: RuntimeException) {
             false
         }
         if (!posted) {
-            failClosedFromAnyThread(reason = MAIN_HANDLER_UNAVAILABLE)
+            emergencyCloseWithoutMainThread()
+            throw eventDispatchFailure(MAIN_HANDLER_UNAVAILABLE)
+        }
+
+        val completed = try {
+            closeDispatch.completed.await(EVENT_DISPATCH_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS)
+        } catch (_: InterruptedException) {
+            emergencyCloseWithoutMainThread()
+            Thread.currentThread().interrupt()
+            throw eventDispatchFailure(EVENT_PROCESSING_FAILED)
+        }
+        if (!completed) {
+            emergencyCloseWithoutMainThread()
+            throw eventDispatchFailure(EVENT_PROCESSING_FAILED)
+        }
+        closeDispatch.failure?.let { error ->
+            emergencyCloseWithoutMainThread()
+            throw eventDispatchFailure(EVENT_PROCESSING_FAILED, error)
         }
     }
 
@@ -503,7 +604,7 @@ internal class CheckoutSnapshotCaptureCoordinator(
             return
         }
         // 关闭先建立 buffer 消费栅栏，再释放旧回调，避免回调重入消费旧快照。
-        failClosedFromAnyThread(reason = CheckoutInvalidationReason.SERVICE_DESTROYED.wireValue)
+        failClosedOnMainThread(reason = CheckoutInvalidationReason.SERVICE_DESTROYED.wireValue)
     }
 
     private fun publishPendingResult(
@@ -751,7 +852,7 @@ internal class CheckoutSnapshotCaptureCoordinator(
         val pending = pendingCapture ?: return null
         // 先解除当前请求，晚到的系统回调只能走释放路径。
         pendingCapture = null
-        pending.cancelled = true
+        pending.releaseForEmergency()
         return pending
     }
 
@@ -803,7 +904,7 @@ internal class CheckoutSnapshotCaptureCoordinator(
 
         if (closed) {
             pendingCapture = null
-            pending.cancelled = true
+            pending.releaseForEmergency()
             publishPendingResult(
                 pending = pending,
                 result = cancelledResult(
@@ -863,30 +964,78 @@ internal class CheckoutSnapshotCaptureCoordinator(
         imageBytes: ByteArray?,
         failureReason: String?
     ) {
+        if (!pending.finishStarted.compareAndSet(false, true)) {
+            imageBytes?.fill(0)
+            return
+        }
+        if (!pending.offerImage(imageBytes)) {
+            return
+        }
+
         if (Looper.myLooper() != Looper.getMainLooper()) {
+            val dispatch = MainThreadDispatch()
             val posted = try {
-                mainHandler.post { finishCapture(pending, imageBytes, failureReason) }
+                mainHandler.post {
+                    try {
+                        finishCaptureOnMainThread(pending, failureReason)
+                    } catch (error: Throwable) {
+                        dispatch.failure = error
+                        pending.takeImage()?.fill(0)
+                        failClosedOnMainThread(
+                            pending = pending,
+                            reason = EVENT_PROCESSING_FAILED
+                        )
+                    } finally {
+                        dispatch.completed.countDown()
+                    }
+                }
             } catch (_: RuntimeException) {
                 false
             }
             if (!posted) {
-                failClosedFromAnyThread(
+                requestFailClosedFromAnyThread(
                     pending = pending,
-                    imageBytes = imageBytes,
                     reason = MAIN_HANDLER_UNAVAILABLE
+                )
+                return
+            }
+
+            val completed = try {
+                dispatch.completed.await(EVENT_DISPATCH_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS)
+            } catch (_: InterruptedException) {
+                requestFailClosedFromAnyThread(
+                    pending = pending,
+                    reason = EVENT_PROCESSING_FAILED
+                )
+                Thread.currentThread().interrupt()
+                return
+            }
+            if (!completed || dispatch.failure != null) {
+                requestFailClosedFromAnyThread(
+                    pending = pending,
+                    reason = EVENT_PROCESSING_FAILED
                 )
             }
             return
         }
 
+        finishCaptureOnMainThread(pending, failureReason)
+    }
+
+    private fun finishCaptureOnMainThread(
+        pending: PendingCapture,
+        failureReason: String?
+    ) {
+        val imageBytes = pending.takeImage()
         if (pendingCapture?.requestId != pending.requestId) {
             imageBytes?.fill(0)
             return
         }
         pendingCapture = null
 
-        if (pending.cancelled || closed || activeCheckout?.key != pending.activeCheckout.key) {
+        if (pending.cancelled.get() || closed || activeCheckout?.key != pending.activeCheckout.key) {
             imageBytes?.fill(0)
+            pending.cancelled.set(true)
             publishPendingResult(
                 pending = pending,
                 result = cancelledResult(
