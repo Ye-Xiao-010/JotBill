@@ -110,7 +110,8 @@ internal class CheckoutSnapshotCaptureCoordinator(
     private data class ActiveCheckout(
         val sessionId: String,
         val slotId: String,
-        val page: StableCheckoutPage
+        val page: StableCheckoutPage,
+        val captureTarget: SnapshotCaptureTarget
     ) {
         val key: CaptureKey
             get() = CaptureKey(sessionId, page.observation.pageFingerprint)
@@ -187,6 +188,7 @@ internal class CheckoutSnapshotCaptureCoordinator(
     private var queuedAutomatic: ActiveCheckout? = null
     private var queuedManual: QueuedManualCapture? = null
     private var handoffCheckout: HandoffCheckout? = null
+    private var userRetryContext: UserRetryCaptureContext? = null
     private var resultListener: SnapshotCaptureResultListener? = null
     /** fallback 可能在截图线程设置，主线程路径需要可靠观察关闭状态。 */
     @Volatile
@@ -315,6 +317,7 @@ internal class CheckoutSnapshotCaptureCoordinator(
         queuedAutomatic = null
         activeCheckout = null
         handoffCheckout = null
+        userRetryContext = null
         attemptedAutomaticCaptures.clear()
         resultListener = null
 
@@ -365,6 +368,7 @@ internal class CheckoutSnapshotCaptureCoordinator(
         queuedAutomatic = null
         activeCheckout = null
         handoffCheckout = null
+        userRetryContext = null
         attemptedAutomaticCaptures.clear()
         resultListener = null
         pendingToRelease?.let {
@@ -452,6 +456,67 @@ internal class CheckoutSnapshotCaptureCoordinator(
         }
     }
 
+    /** 设置服务最近一次确认的手动截图上下文；节点树不可读时只保留脱敏元数据并禁止捕获。 */
+    fun setUserRetryContext(context: UserRetryCaptureContext?) {
+        val posted = try {
+            mainHandler.post {
+                if (closed) {
+                    return@post
+                }
+                val previous = userRetryContext
+                userRetryContext = context
+                val current = activeCheckout
+                if (current?.captureTarget == SnapshotCaptureTarget.USER_RETRY) {
+                    val sameContext = context?.let {
+                        it.sessionId == current.sessionId &&
+                            it.shoppingPackage == current.page.observation.shoppingPackage &&
+                            it.pageFingerprint == current.page.observation.pageFingerprint
+                    } == true
+                    if (!sameContext || context?.isComplete() != true) {
+                        activeCheckout = null
+                        buffer.discard(current.slotId)
+                    } else if (context != null) {
+                        activeCheckout = current.copy(
+                            page = StableCheckoutPage(
+                                observation = context.observation,
+                                stableAt = nowMillis()
+                            )
+                        )
+                    }
+                }
+
+                if (context?.hasSafeDisplayContext() == true &&
+                    context.isComplete() &&
+                    (activeCheckout == null || activeCheckout?.captureTarget == SnapshotCaptureTarget.USER_RETRY)
+                ) {
+                    val sessionId = context.sessionId ?: sessionIdFactory()
+                    val previousKey = previous?.let {
+                        it.shoppingPackage to it.pageFingerprint
+                    }
+                    val nextKey = context.shoppingPackage to context.pageFingerprint
+                    if (previousKey != nextKey) {
+                        buffer.discard(checkoutSnapshotSlotId(context.shoppingPackage))
+                    }
+                    activeCheckout = ActiveCheckout(
+                        sessionId = sessionId,
+                        slotId = checkoutSnapshotSlotId(context.shoppingPackage),
+                        page = StableCheckoutPage(
+                            observation = context.observation,
+                            stableAt = nowMillis()
+                        ),
+                        captureTarget = SnapshotCaptureTarget.USER_RETRY
+                    )
+                    userRetryContext = context.copy(sessionId = sessionId)
+                }
+            }
+        } catch (_: RuntimeException) {
+            false
+        }
+        if (!posted) {
+            requestFailClosedFromAnyThread(reason = MAIN_HANDLER_UNAVAILABLE)
+        }
+    }
+
     /** 用户点击入口；手动截图不等待新的稳定窗口，但仍必须经过结算页门禁。 */
     fun requestManualCapture(callback: SnapshotCaptureCallback) {
         val posted = try {
@@ -479,23 +544,38 @@ internal class CheckoutSnapshotCaptureCoordinator(
                     return@post
                 }
 
-                when (pageDetector.detect(current.page.observation)) {
-                    is CheckoutPageDetection.Accepted -> Unit
-                    is CheckoutPageDetection.Rejected -> {
-                        publish(
-                            rejectedResult(
-                                current = current,
-                                sourceReason = SnapshotSourceReason.MANUAL_CAPTURE,
-                                reason = if (current.page.observation.isSensitivePage) {
-                                    SnapshotCaptureRejection.SENSITIVE_PAGE
-                                } else {
-                                    SnapshotCaptureRejection.NOT_CHECKOUT_PAGE
-                                }
-                            ),
-                            callback
-                        )
-                        return@post
+                if (current.captureTarget == SnapshotCaptureTarget.CHECKOUT) {
+                    when (pageDetector.detect(current.page.observation)) {
+                        is CheckoutPageDetection.Accepted -> Unit
+                        is CheckoutPageDetection.Rejected -> {
+                            publish(
+                                rejectedResult(
+                                    current = current,
+                                    sourceReason = SnapshotSourceReason.MANUAL_CAPTURE,
+                                    reason = if (current.page.observation.isSensitivePage) {
+                                        SnapshotCaptureRejection.SENSITIVE_PAGE
+                                    } else {
+                                        SnapshotCaptureRejection.NOT_CHECKOUT_PAGE
+                                    }
+                                ),
+                                callback
+                            )
+                            return@post
+                        }
                     }
+                } else if (userRetryContext?.isComplete() != true ||
+                    userRetryContext?.sessionId != current.sessionId ||
+                    userRetryContext?.pageFingerprint != current.page.observation.pageFingerprint
+                ) {
+                    publish(
+                        rejectedResult(
+                            current = current,
+                            sourceReason = SnapshotSourceReason.MANUAL_CAPTURE,
+                            reason = SnapshotCaptureRejection.NOT_CHECKOUT_PAGE
+                        ),
+                        callback
+                    )
+                    return@post
                 }
 
                 val observation = current.page.observation
@@ -664,6 +744,8 @@ internal class CheckoutSnapshotCaptureCoordinator(
     private fun handleStable(page: StableCheckoutPage) {
         val transitionGeneration = eventGeneration
         val observation = page.observation
+        // 真实结算事件优先于普通页手动重试上下文，避免两个目标共享一次点击。
+        userRetryContext = null
         if (pageDetector.detect(observation) !is CheckoutPageDetection.Accepted) {
             handleInvalidated(
                 CheckoutObservationInvalidation(
@@ -737,7 +819,8 @@ internal class CheckoutSnapshotCaptureCoordinator(
             ActiveCheckout(
                 sessionId = sessionIdFactory(),
                 slotId = slotIdFor(observation.shoppingPackage),
-                page = page
+                page = page,
+                captureTarget = SnapshotCaptureTarget.CHECKOUT
             )
         } else {
             previous.copy(page = page)
@@ -839,6 +922,7 @@ internal class CheckoutSnapshotCaptureCoordinator(
         val queuedManualToNotify = queuedManual
         queuedManual = null
         queuedAutomatic = null
+        userRetryContext = null
         // 只有明确的支付交接保留快照；普通离开和其他失效原因都清理槽位，避免旧图误用。
         if (!retainForHandoff) {
             buffer.clear()
@@ -1117,7 +1201,8 @@ internal class CheckoutSnapshotCaptureCoordinator(
             pageFingerprint = pending.activeCheckout.page.observation.pageFingerprint,
             sourceReason = pending.sourceReason,
             imageBytes = capturedBytes,
-            isSensitivePage = pending.activeCheckout.page.observation.isSensitivePage
+            isSensitivePage = pending.activeCheckout.page.observation.isSensitivePage,
+            captureTarget = pending.activeCheckout.captureTarget
         )
 
         val result = try {

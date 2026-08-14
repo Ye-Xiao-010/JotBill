@@ -239,6 +239,8 @@ class CheckoutAccessibilityService : AccessibilityService() {
     private var purchaseIntentCoordinator: CheckoutPurchaseIntentCoordinator? = null
     private var checkoutSnapshotBuffer: CheckoutSnapshotBuffer? = null
     private var checkoutCaptureOverlayManager: CheckoutCaptureOverlayManager? = null
+    @Volatile
+    private var userRetryCaptureContext: UserRetryCaptureContext? = null
     private var snapshotCaptureResultListener: SnapshotCaptureResultListener? = null
     @Volatile
     private var purchaseIntentResultConsumer: PurchaseIntentResultCallback? = null
@@ -260,6 +262,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
         handoffStableCheckout = null
         handoffForegroundPackage = null
         submitActionTriggeredKey = null
+        userRetryCaptureContext = null
         val configuredInfo = serviceInfo ?: AccessibilityServiceInfo()
         configuredInfo.eventTypes =
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or
@@ -306,6 +309,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
 
         val shoppingPackage = event.packageName?.toString()?.trim().orEmpty()
         if (!pageDetector.supportsShoppingPackage(shoppingPackage)) {
+            clearUserRetryCaptureContext()
             val previousShoppingPackage = lastWindowPackage
             if (pageDetector.supportsPaymentPackage(shoppingPackage)) {
                 if (currentStableCheckout != null) {
@@ -363,6 +367,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
         }
         val root = rootInActiveWindow ?: eventSource
         if (root == null) {
+            clearUserRetryCaptureContext()
             dispatchOverlayInvalidation(
                 reason = CheckoutInvalidationReason.NODE_TREE_UNAVAILABLE,
                 shoppingPackage = shoppingPackage
@@ -377,6 +382,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
         try {
             val rootPackage = root.packageName?.toString()?.trim().orEmpty()
             if (rootPackage.isNotBlank() && rootPackage != shoppingPackage) {
+                clearUserRetryCaptureContext()
                 dispatchOverlayInvalidation(
                     reason = CheckoutInvalidationReason.NODE_TREE_UNAVAILABLE,
                     shoppingPackage = shoppingPackage
@@ -398,6 +404,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
             )
             when (val detection = pageDetector.detect(observation)) {
                 is CheckoutPageDetection.Accepted -> {
+                    clearUserRetryCaptureContext()
                     val stable = currentStableCheckout
                     val sameStableCheckout = stable?.let { stablePage ->
                         stablePage.observation.shoppingPackage == observation.shoppingPackage &&
@@ -421,6 +428,12 @@ class CheckoutAccessibilityService : AccessibilityService() {
                     handoffForegroundPackage = null
                     submitActionTriggeredKey = null
                     val reason = invalidationReason(observation, detection.reason)
+                    val userRetryCaptureAvailable = if (reason == CheckoutInvalidationReason.NON_CHECKOUT_PAGE) {
+                        setUserRetryCaptureContext(observation)
+                    } else {
+                        clearUserRetryCaptureContext()
+                        false
+                    }
                     stabilityCoordinator.invalidate(
                         reason = reason,
                         shoppingPackage = shoppingPackage,
@@ -429,7 +442,8 @@ class CheckoutAccessibilityService : AccessibilityService() {
                     if (reason == CheckoutInvalidationReason.NON_CHECKOUT_PAGE) {
                         checkoutCaptureOverlayManager?.onSupportedShoppingNonCheckout(
                             shoppingPackage = observation.shoppingPackage,
-                            pageFingerprint = observation.pageFingerprint
+                            pageFingerprint = observation.pageFingerprint,
+                            userRetryCaptureAvailable = userRetryCaptureAvailable
                         )
                     } else if (reason == CheckoutInvalidationReason.SENSITIVE_PAGE) {
                         dispatchOverlayInvalidation(
@@ -450,6 +464,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
                 reason = CheckoutInvalidationReason.NODE_TREE_UNAVAILABLE,
                 shoppingPackage = shoppingPackage
             )
+            clearUserRetryCaptureContext()
         } finally {
             if (eventSource != null && eventSource !== root) {
                 try {
@@ -474,6 +489,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
         handoffStableCheckout = null
         handoffForegroundPackage = null
         submitActionTriggeredKey = null
+        clearUserRetryCaptureContext()
         purchaseIntentCoordinator?.setReadyDispatcher(null)
         purchaseIntentCoordinator?.setResultConsumer(null)
         checkoutCaptureOverlayManager?.setManualCaptureRequestHandler(null)
@@ -501,6 +517,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
         handoffStableCheckout = null
         handoffForegroundPackage = null
         submitActionTriggeredKey = null
+        clearUserRetryCaptureContext()
         purchaseIntentCoordinator?.setReadyDispatcher(null)
         purchaseIntentCoordinator?.setResultConsumer(null)
         setAiResultCallback(null)
@@ -846,7 +863,67 @@ class CheckoutAccessibilityService : AccessibilityService() {
 
     /** 悬浮按钮只调用现有手动截图入口，不直接接触截图资源或 AI。 */
     private fun requestManualCaptureFromOverlay() {
-        snapshotCaptureCoordinator?.requestManualCapture(SnapshotCaptureCallback { })
+        val context = userRetryCaptureContext
+        snapshotCaptureCoordinator?.requestManualCapture(SnapshotCaptureCallback { result ->
+            if (context != null) {
+                triggerUserRetryAfterOverlayCapture(context, result)
+            }
+        })
+    }
+
+    /** 普通页只能由悬浮按钮成功截图触发内部重试，并在触发后清理上下文防止重复 AI。 */
+    private fun triggerUserRetryAfterOverlayCapture(
+        context: UserRetryCaptureContext,
+        result: SnapshotCaptureResult
+    ) {
+        if (
+            result.sourceReason != SnapshotSourceReason.MANUAL_CAPTURE ||
+            result.status !in setOf(SnapshotCaptureStatus.STORED, SnapshotCaptureStatus.DUPLICATE) ||
+            userRetryCaptureContext != context ||
+            result.sessionId.isNullOrBlank() ||
+            result.shoppingPackage != context.shoppingPackage ||
+            result.pageFingerprint != context.pageFingerprint
+        ) {
+            return
+        }
+
+        val completedContext = context.withSessionId(checkNotNull(result.sessionId))
+        userRetryCaptureContext = null
+        try {
+            purchaseIntentCoordinator?.setUserRetryContext(completedContext)
+            purchaseIntentCoordinator?.triggerUserRetry(completedContext)
+        } catch (error: RuntimeException) {
+            Log.w(TAG, "用户主动截图重试触发失败", error)
+        } finally {
+            snapshotCaptureCoordinator?.setUserRetryContext(null)
+            purchaseIntentCoordinator?.setUserRetryContext(null)
+        }
+    }
+
+    /** 可信上下文失效时，同时禁止截图协调器和意图协调器继续使用。 */
+    private fun clearUserRetryCaptureContext() {
+        userRetryCaptureContext = null
+        snapshotCaptureCoordinator?.setUserRetryContext(null)
+        purchaseIntentCoordinator?.setUserRetryContext(null)
+    }
+
+    /** 仅以本次成功读取节点树的白名单普通页建立用户主动截图上下文。 */
+    private fun setUserRetryCaptureContext(observation: CheckoutPageObservation): Boolean {
+        val context = UserRetryCaptureContext(observation = observation)
+        if (!context.isComplete() || !pageDetector.supportsShoppingPackage(context.shoppingPackage)) {
+            clearUserRetryCaptureContext()
+            return false
+        }
+        val retainedContext = userRetryCaptureContext?.takeIf {
+            it.shoppingPackage == context.shoppingPackage &&
+                it.pageFingerprint == context.pageFingerprint &&
+                it.pageRole == context.pageRole &&
+                it.isSensitivePage == context.isSensitivePage
+        } ?: context
+        userRetryCaptureContext = retainedContext
+        snapshotCaptureCoordinator?.setUserRetryContext(retainedContext)
+        purchaseIntentCoordinator?.setUserRetryContext(retainedContext)
+        return true
     }
 
     /** AI 回调只传递结构化结果，运行在 IO 协程中且不携带图片。 */

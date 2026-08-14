@@ -19,6 +19,11 @@ enum class CheckoutPageRole(val storageValue: String) {
 
     fun canBufferSnapshot(): Boolean = this == CHECKOUT
 
+    /** 用户主动重试只能引用购物应用普通页，支付交接和支付结果页永远不在此范围内。 */
+    internal fun canBufferUserRetrySnapshot(): Boolean = this != CHECKOUT &&
+        this != PAYMENT_HANDOFF &&
+        this != PAYMENT_RESULT
+
     companion object {
         fun fromStorageValue(value: String?): CheckoutPageRole = when (value) {
             "BROWSING" -> SHOPPING_HOME
@@ -68,6 +73,50 @@ enum class SnapshotSourceReason(val wireValue: String) {
     CHECKOUT_STABLE("CHECKOUT_STABLE"),
     MANUAL_CAPTURE("MANUAL_CAPTURE")
 }
+
+/** 仅供内部截图协调器区分真实结算截图和用户主动重试截图。 */
+internal enum class SnapshotCaptureTarget {
+    CHECKOUT,
+    USER_RETRY
+}
+
+/** 节点树确认后可用于手动截图的最小安全上下文，不包含原始页面文本。 */
+internal data class UserRetryCaptureContext(
+    val observation: CheckoutPageObservation,
+    val sessionId: String? = null,
+    val isNodeTreeAvailable: Boolean = true
+) {
+    val shoppingPackage: String
+        get() = observation.shoppingPackage
+
+    val pageRole: CheckoutPageRole
+        get() = observation.pageRole
+
+    val pageFingerprint: String
+        get() = observation.pageFingerprint
+
+    val isSensitivePage: Boolean
+        get() = observation.isSensitivePage
+
+    fun hasSafeDisplayContext(): Boolean =
+        shoppingPackage.isNotBlank() &&
+            pageFingerprint.isSha256PageFingerprint() &&
+            !isSensitivePage &&
+            pageRole.canBufferUserRetrySnapshot()
+
+    fun isComplete(): Boolean =
+        hasSafeDisplayContext() &&
+            isNodeTreeAvailable
+
+    fun withSessionId(value: String): UserRetryCaptureContext = copy(sessionId = value)
+}
+
+internal fun String?.isSha256PageFingerprint(): Boolean =
+    !isNullOrBlank() &&
+        length == 64 &&
+        all { character ->
+            character in '0'..'9' || character in 'a'..'f' || character in 'A'..'F'
+        }
 
 /**
  * 结算旅程状态机。

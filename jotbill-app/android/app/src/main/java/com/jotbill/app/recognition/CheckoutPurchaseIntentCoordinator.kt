@@ -125,6 +125,7 @@ internal class CheckoutPurchaseIntentCoordinator(
 
     private var activeContext: SafeCheckoutContext? = null
     private var handoffContext: SafeCheckoutContext? = null
+    private var userRetryContext: SafeCheckoutContext? = null
     private val attemptsBySession = mutableMapOf<String, Int>()
     private var handoffAttempted = false
     private var notificationFallbackAttempted = false
@@ -183,7 +184,39 @@ internal class CheckoutPurchaseIntentCoordinator(
             routeLocked(
                 intent = intent,
                 requestedFingerprint = pageFingerprint?.takeIf { it.isNotBlank() },
-                paymentNotification = paymentNotification
+                paymentNotification = paymentNotification,
+                explicitUserRetryContext = null
+            )
+        }
+        val consumer = synchronized(this) { callback ?: resultConsumer }
+        return deliver(routed, consumer)
+    }
+
+    /** 仅由手动截图成功回调调用；普通页面不能通过公开 USER_RETRY 入口绕过此上下文门禁。 */
+    fun triggerUserRetry(
+        context: UserRetryCaptureContext,
+        callback: PurchaseIntentResultCallback? = null
+    ): PurchaseIntentCoordinationResult {
+        val routed = synchronized(this) {
+            val safeContext = context.toSafeCheckoutContext()
+            if (
+                !context.isComplete() ||
+                context.pageRole == CheckoutPageRole.CHECKOUT ||
+                safeContext == null ||
+                userRetryContext != safeContext
+            ) {
+                return@synchronized PurchaseIntentCoordinationResult.Rejected(
+                    intent = PurchaseIntent.USER_RETRY,
+                    gateReason = PurchaseIntentGateRejection.NO_CHECKOUT_CONTEXT,
+                    slotId = safeContext?.slotId,
+                    pageFingerprint = context.pageFingerprint
+                )
+            }
+            routeLocked(
+                intent = PurchaseIntent.USER_RETRY,
+                requestedFingerprint = context.pageFingerprint,
+                paymentNotification = null,
+                explicitUserRetryContext = safeContext
             )
         }
         val consumer = synchronized(this) { callback ?: resultConsumer }
@@ -201,6 +234,25 @@ internal class CheckoutPurchaseIntentCoordinator(
     fun setReadyDispatcher(dispatcher: PurchaseIntentReadyDispatcher?) {
         synchronized(this) {
             readyDispatcher = dispatcher
+        }
+    }
+
+    /** 更新服务最近一次确认的非敏感购物页上下文；不完整上下文只用于禁止重试。 */
+    fun setUserRetryContext(context: UserRetryCaptureContext?) {
+        synchronized(this) {
+            if (closed) {
+                return
+            }
+            userRetryContext = if (
+                context != null &&
+                context.isComplete() &&
+                !context.sessionId.isNullOrBlank() &&
+                context.pageRole.canBufferUserRetrySnapshot()
+            ) {
+                context.toSafeCheckoutContext()
+            } else {
+                null
+            }
         }
     }
 
@@ -226,6 +278,7 @@ internal class CheckoutPurchaseIntentCoordinator(
     }
 
     private fun updateStableContext(page: StableCheckoutPage) {
+        userRetryContext = null
         val observation = page.observation
         if (pageDetector.detect(observation) !is CheckoutPageDetection.Accepted) {
             clearContextsLocked()
@@ -261,6 +314,7 @@ internal class CheckoutPurchaseIntentCoordinator(
     private fun clearContextsLocked() {
         activeContext = null
         handoffContext = null
+        userRetryContext = null
         attemptsBySession.clear()
         handoffAttempted = false
         notificationFallbackAttempted = false
@@ -269,7 +323,8 @@ internal class CheckoutPurchaseIntentCoordinator(
     private fun routeLocked(
         intent: PurchaseIntent,
         requestedFingerprint: String?,
-        paymentNotification: PaymentNotificationFallbackSignal?
+        paymentNotification: PaymentNotificationFallbackSignal?,
+        explicitUserRetryContext: SafeCheckoutContext?
     ): PurchaseIntentCoordinationResult {
         if (closed) {
             return PurchaseIntentCoordinationResult.Rejected(
@@ -278,12 +333,14 @@ internal class CheckoutPurchaseIntentCoordinator(
             )
         }
 
-        val context = contextFor(intent)
+        val context = explicitUserRetryContext ?: contextFor(intent)
             ?: return PurchaseIntentCoordinationResult.Rejected(
                 intent = intent,
                 gateReason = PurchaseIntentGateRejection.NO_CHECKOUT_CONTEXT
             )
-        if (context.pageRole != CheckoutPageRole.CHECKOUT) {
+        val isInternalNonCheckoutRetry =
+            intent == PurchaseIntent.USER_RETRY && explicitUserRetryContext != null
+        if (context.pageRole != CheckoutPageRole.CHECKOUT && !isInternalNonCheckoutRetry) {
             return PurchaseIntentCoordinationResult.Rejected(
                 intent = intent,
                 gateReason = PurchaseIntentGateRejection.NOT_CHECKOUT_PAGE,
@@ -297,6 +354,19 @@ internal class CheckoutPurchaseIntentCoordinator(
                 gateReason = PurchaseIntentGateRejection.SENSITIVE_PAGE,
                 slotId = context.slotId,
                 pageFingerprint = requestedFingerprint ?: context.pageFingerprint
+            )
+        }
+        if (
+            isInternalNonCheckoutRetry &&
+            (userRetryContext != context ||
+                context.pageRole == CheckoutPageRole.CHECKOUT ||
+                requestedFingerprint != context.pageFingerprint)
+        ) {
+            return PurchaseIntentCoordinationResult.Rejected(
+                intent = intent,
+                gateReason = PurchaseIntentGateRejection.NO_CHECKOUT_CONTEXT,
+                slotId = context.slotId,
+                pageFingerprint = requestedFingerprint
             )
         }
         if (
@@ -382,6 +452,9 @@ internal class CheckoutPurchaseIntentCoordinator(
                 }
                 attemptsBySession[ready.snapshot.sessionId] =
                     (attemptsBySession[ready.snapshot.sessionId] ?: 0) + 1
+                if (isInternalNonCheckoutRetry) {
+                    userRetryContext = null
+                }
                 PurchaseIntentCoordinationResult.Accepted(
                     intent = intent,
                     aiResult = ready,
@@ -506,4 +579,17 @@ internal class CheckoutPurchaseIntentCoordinator(
             pageFingerprint = ready.snapshot.pageFingerprint,
             reasonCode = reasonCode
         )
+
+    private fun UserRetryCaptureContext.toSafeCheckoutContext(): SafeCheckoutContext? {
+        if (!isComplete() || sessionId.isNullOrBlank()) {
+            return null
+        }
+        return SafeCheckoutContext(
+            slotId = checkoutSnapshotSlotId(shoppingPackage),
+            shoppingPackage = shoppingPackage,
+            pageRole = pageRole,
+            pageFingerprint = pageFingerprint,
+            isSensitivePage = isSensitivePage
+        )
+    }
 }

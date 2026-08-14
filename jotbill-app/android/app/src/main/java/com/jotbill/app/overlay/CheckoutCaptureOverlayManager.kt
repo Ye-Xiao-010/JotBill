@@ -24,6 +24,7 @@ import com.jotbill.app.recognition.CheckoutPageDetector
 import com.jotbill.app.recognition.SnapshotCaptureRejection
 import com.jotbill.app.recognition.SnapshotCaptureResult
 import com.jotbill.app.recognition.SnapshotCaptureStatus
+import com.jotbill.app.recognition.isSha256PageFingerprint
 import kotlin.math.abs
 
 /** 手动截图按钮的显示模式；当前页面仍必须通过结算页和敏感页门禁。 */
@@ -170,6 +171,7 @@ internal class CheckoutCaptureOverlayManager(context: Context) {
     private var currentSupportedShoppingApp = false
     private var currentSensitivePage = false
     private var currentCheckout = false
+    private var currentUserRetryContext = false
     private var closed = false
 
     @Volatile
@@ -212,7 +214,11 @@ internal class CheckoutCaptureOverlayManager(context: Context) {
     }
 
     /** 支持购物应用的非结算页只用于 always_on 展示，点击仍受结算页门禁保护。 */
-    fun onSupportedShoppingNonCheckout(shoppingPackage: String, pageFingerprint: String?) {
+    fun onSupportedShoppingNonCheckout(
+        shoppingPackage: String,
+        pageFingerprint: String?,
+        userRetryCaptureAvailable: Boolean
+    ) {
         runOnMain {
             if (closed || !pageDetector.supportsShoppingPackage(shoppingPackage)) {
                 return@runOnMain
@@ -222,6 +228,7 @@ internal class CheckoutCaptureOverlayManager(context: Context) {
             currentSupportedShoppingApp = true
             currentSensitivePage = false
             currentCheckout = false
+            currentUserRetryContext = userRetryCaptureAvailable
             updateState(
                 status = CheckoutOverlayStatus.READY,
                 visible = canShowOnCurrentPage(),
@@ -297,6 +304,7 @@ internal class CheckoutCaptureOverlayManager(context: Context) {
             currentSupportedShoppingApp = false
             currentSensitivePage = false
             currentCheckout = false
+            currentUserRetryContext = false
             updateState(
                 status = CheckoutOverlayStatus.HIDDEN,
                 visible = false,
@@ -350,6 +358,7 @@ internal class CheckoutCaptureOverlayManager(context: Context) {
                 currentSupportedShoppingApp = false
                 currentSensitivePage = false
                 currentCheckout = false
+                currentUserRetryContext = false
                 updateState(
                     status = CheckoutOverlayStatus.SERVICE_NOT_CONNECTED,
                     visible = false,
@@ -372,6 +381,7 @@ internal class CheckoutCaptureOverlayManager(context: Context) {
             currentSupportedShoppingApp = false
             currentSensitivePage = false
             currentCheckout = false
+            currentUserRetryContext = false
             removeView()
             state = state.copy(
                 status = CheckoutOverlayStatus.SERVICE_NOT_CONNECTED,
@@ -399,6 +409,7 @@ internal class CheckoutCaptureOverlayManager(context: Context) {
         currentSensitivePage = observation.isSensitivePage
         currentCheckout = observation.pageRole == CheckoutPageRole.CHECKOUT &&
             !observation.isSensitivePage
+        currentUserRetryContext = false
 
         if (!currentCheckout) {
             val status = if (observation.isSensitivePage) {
@@ -438,6 +449,7 @@ internal class CheckoutCaptureOverlayManager(context: Context) {
             currentSupportedShoppingApp = true
             currentSensitivePage = false
             currentCheckout = false
+            currentUserRetryContext = false
             updateState(
                 status = CheckoutOverlayStatus.READY,
                 visible = canShowOnCurrentPage(),
@@ -452,6 +464,7 @@ internal class CheckoutCaptureOverlayManager(context: Context) {
         currentSupportedShoppingApp = false
         currentSensitivePage = detail.reason == CheckoutInvalidationReason.SENSITIVE_PAGE
         currentCheckout = false
+        currentUserRetryContext = false
         val status = when (detail.reason) {
             CheckoutInvalidationReason.SENSITIVE_PAGE -> CheckoutOverlayStatus.SENSITIVE
             CheckoutInvalidationReason.SERVICE_INTERRUPTED,
@@ -529,7 +542,16 @@ internal class CheckoutCaptureOverlayManager(context: Context) {
 
     private fun canManualCapture(): Boolean =
         canShowOnCurrentPage() &&
-            currentCheckout &&
+            (
+                currentCheckout ||
+                    (
+                        mode == CheckoutOverlayMode.ALWAYS_ON &&
+                            currentSupportedShoppingApp &&
+                            !currentSensitivePage &&
+                            currentUserRetryContext &&
+                            currentFingerprint.isSha256PageFingerprint()
+                    )
+                ) &&
             state.status in setOf(
                 CheckoutOverlayStatus.READY,
                 CheckoutOverlayStatus.EXPIRED_RETRY,

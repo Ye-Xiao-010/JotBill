@@ -57,7 +57,7 @@ internal data class CheckoutSnapshotReference(
 )
 
 /** 截图工具或手动悬浮按钮向缓冲区提交的输入，不包含任何网络行为。 */
-data class SnapshotCaptureRequest(
+internal data class SnapshotCaptureRequest(
     val slotId: String,
     val sessionId: String,
     val shoppingPackage: String,
@@ -66,7 +66,8 @@ data class SnapshotCaptureRequest(
     val sourceReason: SnapshotSourceReason,
     val imageBytes: ByteArray,
     /** 必须由敏感页面检查提供，手动截图不能用默认路径绕过该校验。 */
-    val isSensitivePage: Boolean
+    val isSensitivePage: Boolean,
+    val captureTarget: SnapshotCaptureTarget = SnapshotCaptureTarget.CHECKOUT
 )
 
 enum class SnapshotStoreRejection(val wireValue: String) {
@@ -167,7 +168,16 @@ class CheckoutSnapshotBuffer(
         ) {
             return SnapshotStoreResult.Rejected(SnapshotStoreRejection.INVALID_ARGUMENT)
         }
-        if (!request.pageRole.canBufferSnapshot()) {
+        val targetAllowed = when (request.captureTarget) {
+            SnapshotCaptureTarget.CHECKOUT ->
+                request.sourceReason == SnapshotSourceReason.CHECKOUT_STABLE &&
+                    request.pageRole.canBufferSnapshot()
+
+            SnapshotCaptureTarget.USER_RETRY ->
+                request.sourceReason == SnapshotSourceReason.MANUAL_CAPTURE &&
+                    request.pageRole.canBufferUserRetrySnapshot()
+        }
+        if (!targetAllowed) {
             return SnapshotStoreResult.Rejected(SnapshotStoreRejection.NOT_CHECKOUT_PAGE)
         }
         if (request.isSensitivePage) {
@@ -302,6 +312,26 @@ class CheckoutSnapshotBuffer(
         }
     }
 
+    /** 仅识别非结算页的手动候选，供离开结算页后的生命周期保护使用。 */
+    @Synchronized
+    fun hasNonCheckoutManualCandidate(
+        slotId: String,
+        sessionId: String,
+        pageFingerprint: String
+    ): Boolean {
+        if (closed) {
+            return false
+        }
+        purgeExpired(nowMillis())
+        val state = slots[slotId] ?: return false
+        if (state.sessionId != sessionId) {
+            return false
+        }
+        val candidate = state.manualCandidate ?: return false
+        return candidate.pageRole.canBufferUserRetrySnapshot() &&
+            candidate.pageFingerprint == pageFingerprint
+    }
+
     /** 支付交接期间只允许原页面指纹消费，避免无指纹请求误取旧会话快照。 */
     @Synchronized
     fun retainForPaymentHandoff(
@@ -429,6 +459,11 @@ class CheckoutSnapshotBuffer(
                 ?: return CheckoutAiTriggerResult.Rejected(
                     SnapshotConsumeRejection.AMBIGUOUS_CANDIDATES
                 )
+        }
+        if (snapshot.pageRole.canBufferUserRetrySnapshot() && intent != PurchaseIntent.USER_RETRY) {
+            return CheckoutAiTriggerResult.Rejected(
+                SnapshotConsumeRejection.NO_MATCHING_PAGE_FINGERPRINT
+            )
         }
         if (now >= snapshot.expiresAt) {
             removeCandidate(state, snapshot)?.release()
