@@ -56,12 +56,14 @@ internal object CheckoutSubmitActionDetector {
         var depth = 0
         return try {
             while (depth <= MAX_ANCESTOR_DEPTH) {
-                if (isSubmitNode(current)) {
+                // current 可能为空，用安全调用避免类型不匹配；为空时视为非提交节点。
+                if (current?.let { isSubmitNode(it) } == true) {
                     return true
                 }
 
                 val parent = try {
-                    current.parent
+                    // current 可能为空，用安全调用避免 nullable receiver 不安全调用。
+                    current?.parent
                 } catch (_: RuntimeException) {
                     null
                 } ?: break

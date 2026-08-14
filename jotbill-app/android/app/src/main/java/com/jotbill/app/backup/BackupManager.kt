@@ -1528,6 +1528,12 @@ internal class BackupManager(
         if (value == null) putNull(key) else put(key, value)
     }
 
+    // 合并后 aiCostValues 在 ContentValues 上调用 putNullableInt；原先仅有 JSONObject 扩展，
+    // 这里补充 ContentValues 版本以保证接收者类型匹配。
+    private fun ContentValues.putNullableInt(key: String, value: Int?) {
+        if (value == null) putNull(key) else put(key, value)
+    }
+
     private fun Cursor.string(column: String): String? {
         val index = getColumnIndexOrThrow(column)
         return if (isNull(index)) null else getString(index)

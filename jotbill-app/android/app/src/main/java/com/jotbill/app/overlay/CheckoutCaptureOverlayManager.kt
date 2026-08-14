@@ -721,10 +721,13 @@ internal class CheckoutCaptureOverlayManager(context: Context) {
         }
         view.isEnabled = canClick
         view.alpha = if (canClick) 1f else 0.72f
+        // 在 GradientDrawable.apply 块内，Drawable.getState() 会遮蔽外层 state 字段，
+        // 因此先取出 status 到局部变量，避免 state.status 解析到 IntArray 上报错。
+        val overlayStatus = state.status
         view.background = GradientDrawable().apply {
             shape = GradientDrawable.OVAL
             setColor(
-                when (state.status) {
+                when (overlayStatus) {
                     CheckoutOverlayStatus.READY,
                     CheckoutOverlayStatus.EXPIRED_RETRY -> Color.rgb(22, 101, 52)
                     CheckoutOverlayStatus.CAPTURING -> Color.rgb(71, 85, 105)

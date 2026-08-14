@@ -715,7 +715,9 @@ private fun com.jotbill.app.ai.AiVisionRequestMetadata.reference(): CheckoutSnap
         sourceReason = SnapshotSourceReason.CHECKOUT_STABLE
     )
 
-private fun CheckoutSnapshot.reference(): CheckoutSnapshotReference =
+// 合并后 CheckoutAccessibilityService 也需要通过 reference() 获取快照引用，
+// 因此从 private 提升为 internal，供同模块内的调用方使用。
+internal fun CheckoutSnapshot.reference(): CheckoutSnapshotReference =
     CheckoutSnapshotReference(
         snapshotId = snapshotId,
         sessionId = sessionId,

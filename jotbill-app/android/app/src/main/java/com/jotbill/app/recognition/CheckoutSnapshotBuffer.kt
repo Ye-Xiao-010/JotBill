@@ -153,7 +153,8 @@ class CheckoutSnapshotBuffer(
     }
 
     @Synchronized
-    fun store(request: SnapshotCaptureRequest): SnapshotStoreResult {
+    // SnapshotCaptureRequest 为 internal 类型，将 store 降为 internal 避免公开暴露内部参数类型。
+    internal fun store(request: SnapshotCaptureRequest): SnapshotStoreResult {
         if (closed) {
             return SnapshotStoreResult.Rejected(SnapshotStoreRejection.INVALID_ARGUMENT)
         }
@@ -369,7 +370,8 @@ class CheckoutSnapshotBuffer(
 
     /** 只读取与页面键对应的引用，避免为支付匹配复制或暴露图片。 */
     @Synchronized
-    fun findReference(
+    // CheckoutSnapshotReference 为 internal 类型，将 findReference 降为 internal 避免公开暴露内部返回类型。
+    internal fun findReference(
         slotId: String,
         pageFingerprint: String? = null,
         snapshotId: String? = null

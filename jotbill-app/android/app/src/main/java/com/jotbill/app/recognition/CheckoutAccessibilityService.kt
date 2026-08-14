@@ -71,13 +71,15 @@ class CheckoutAccessibilityService : AccessibilityService() {
         /** 设置后续协调器需要的自动/手动截图状态监听。 */
         @JvmStatic
         fun setSnapshotCaptureResultListener(listener: SnapshotCaptureResultListener?) {
-            activeService?.setSnapshotCaptureResultListener(listener)
+            // 调用实例方法使用不同名称，避免 @JvmStatic 与实例方法产生相同 JVM 签名冲突。
+            activeService?.setSnapshotCaptureResultListenerInternal(listener)
         }
 
         /** 设置购买意图结果消费者；Ready.snapshot 由消费者读取后负责 release。 */
         @JvmStatic
         fun setPurchaseIntentResultConsumer(consumer: PurchaseIntentResultCallback?) {
-            activeService?.setPurchaseIntentResultConsumer(consumer)
+            // 调用实例方法使用不同名称，避免 @JvmStatic 与实例方法产生相同 JVM 签名冲突。
+            activeService?.setPurchaseIntentResultConsumerInternal(consumer)
         }
 
         /** 设置结算页 AI 结果消费者；结果不包含图片，服务销毁时会断开旧回调。 */
@@ -506,7 +508,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
         }
         setObservationListener(null)
         Log.w(TAG, "结算页无障碍观察服务被中断")
-        super.onInterrupt()
+        // AccessibilityService.onInterrupt() 是抽象方法，无法调用 super.onInterrupt()。
     }
 
     override fun onDestroy() {
@@ -735,7 +737,8 @@ class CheckoutAccessibilityService : AccessibilityService() {
         }
     }
 
-    private fun setSnapshotCaptureResultListener(listener: SnapshotCaptureResultListener?) {
+    // 重命名为 Internal 后缀，避免与 Companion 中同名的 @JvmStatic 方法产生 JVM 签名冲突。
+    private fun setSnapshotCaptureResultListenerInternal(listener: SnapshotCaptureResultListener?) {
         snapshotCaptureResultListener = listener
     }
 
@@ -757,7 +760,8 @@ class CheckoutAccessibilityService : AccessibilityService() {
         }
     }
 
-    private fun setPurchaseIntentResultConsumer(consumer: PurchaseIntentResultCallback?) {
+    // 重命名为 Internal 后缀，避免与 Companion 中同名的 @JvmStatic 方法产生 JVM 签名冲突。
+    private fun setPurchaseIntentResultConsumerInternal(consumer: PurchaseIntentResultCallback?) {
         purchaseIntentResultConsumer = consumer
     }
 
