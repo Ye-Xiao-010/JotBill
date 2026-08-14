@@ -1,0 +1,698 @@
+/**
+ * 待确认中心 - Neo-Brutalism 风格
+ * 展示 AI 识别产出的待确认交易，支持确认入账、忽略和重试识别
+ */
+import React, { useCallback, useMemo } from 'react';
+import {
+  RefreshControl,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
+} from 'react-native';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import {
+  Bell,
+  Check,
+  ChevronLeft,
+  Clock3,
+  Inbox,
+  Loader2,
+  RefreshCw,
+  Sparkles,
+  X,
+} from 'lucide-react-native';
+import {
+  nativeData,
+  nativeRecognition,
+  type PendingTransaction,
+  type RecognitionStatus,
+} from '../../native';
+import { QUERY_KEYS } from '../../lib/queryClient';
+import { useAlert } from '../../providers';
+import { borderRadius, borderWidth, spacing } from '../../theme/spacing';
+import { ThemeColors } from '../../theme/colors';
+import { useStyles } from '../../hooks';
+import { SafeAreaView } from 'react-native-safe-area-context';
+
+const PENDING_QUERY_KEY = QUERY_KEYS.recognition.pending;
+const STATUS_QUERY_KEY = QUERY_KEYS.recognition.status;
+
+/** 待确认中心屏幕组件，对应阶段三任务9前端桥接。 */
+export default function ReviewScreen() {
+  const navigation = useNavigation();
+  const queryClient = useQueryClient();
+  const styles = useStyles(createStyles);
+  const { alert } = useAlert();
+
+  const pendingQuery = useQuery({
+    queryKey: PENDING_QUERY_KEY,
+    queryFn: () => nativeData.getPendingTransactions({ page: 1, limit: 50 }),
+  });
+  const statusQuery = useQuery({
+    queryKey: STATUS_QUERY_KEY,
+    queryFn: () => nativeRecognition.getRecognitionStatus(),
+  });
+
+  const invalidateAll = useCallback(() => {
+    queryClient.invalidateQueries({ queryKey: PENDING_QUERY_KEY });
+    queryClient.invalidateQueries({ queryKey: STATUS_QUERY_KEY });
+    queryClient.invalidateQueries({ queryKey: QUERY_KEYS.bills.all });
+  }, [queryClient]);
+
+  const confirmMutation = useMutation({
+    mutationFn: ({ pending }: { pending: PendingTransaction }) =>
+      nativeData.confirmPendingTransaction(pending.pendingId, {}, pending.version),
+    onSuccess: () => {
+      invalidateAll();
+    },
+    onError: (error, { pending }) => {
+      const message =
+        error instanceof Error ? error.message : '确认入账失败，请稍后重试';
+      alert('确认失败', `${pending.pendingId}：${message}`);
+    },
+  });
+
+  const ignoreMutation = useMutation({
+    mutationFn: ({ pending }: { pending: PendingTransaction }) =>
+      nativeData.ignorePendingTransaction(pending.pendingId, pending.version),
+    onSuccess: () => {
+      invalidateAll();
+    },
+    onError: (error, { pending }) => {
+      const message =
+        error instanceof Error ? error.message : '忽略失败，请稍后重试';
+      alert('忽略失败', `${pending.pendingId}：${message}`);
+    },
+  });
+
+  const retryMutation = useMutation({
+    mutationFn: ({ candidateId }: { candidateId: string }) =>
+      nativeRecognition.retryAiRecognition(candidateId),
+    onSuccess: () => {
+      invalidateAll();
+      alert('重试已触发', 'AI 识别已重新触发，结果会更新到待确认列表。');
+    },
+    onError: (error) => {
+      const message =
+        error instanceof Error ? error.message : '重试识别失败，请稍后重试';
+      alert('重试失败', message);
+    },
+  });
+
+  const refresh = useCallback(async () => {
+    await Promise.all([pendingQuery.refetch(), statusQuery.refetch()]);
+  }, [pendingQuery, statusQuery]);
+
+  // 焦点期间自动刷新，方便从无障碍服务返回时立即看到最新候选。
+  useFocusEffect(
+    useCallback(() => {
+      invalidateAll();
+    }, [invalidateAll]),
+  );
+
+  const status = statusQuery.data;
+  const pendingItems = pendingQuery.data?.items ?? [];
+
+  const handleConfirm = useCallback(
+    (pending: PendingTransaction) => {
+      confirmMutation.mutate({ pending });
+    },
+    [confirmMutation],
+  );
+
+  const handleIgnore = useCallback(
+    (pending: PendingTransaction) => {
+      ignoreMutation.mutate({ pending });
+    },
+    [ignoreMutation],
+  );
+
+  const handleRetry = useCallback(
+    (pending: PendingTransaction) => {
+      if (!pending.candidateId) {
+        alert('无法重试', '该待确认交易没有关联的候选，不能重试识别。');
+        return;
+      }
+      retryMutation.mutate({ candidateId: pending.candidateId });
+    },
+    [retryMutation, alert],
+  );
+
+  return (
+    <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
+      <View style={styles.header}>
+        <TouchableOpacity
+          onPress={() => navigation.goBack()}
+          style={styles.iconButton}
+        >
+          <ChevronLeft size={24} color={styles._colors.textPrimary} />
+        </TouchableOpacity>
+        <Text style={styles.headerTitle}>待确认中心</Text>
+        <Inbox size={21} color={styles._colors.primary} />
+      </View>
+      <ScrollView
+        style={styles.scrollView}
+        contentContainerStyle={styles.content}
+        refreshControl={
+          <RefreshControl
+            refreshing={pendingQuery.isFetching || statusQuery.isFetching}
+            onRefresh={refresh}
+          />
+        }
+      >
+        <RecognitionStatusCard status={status} colors={styles._colors} />
+        {pendingItems.length === 0 ? (
+          <EmptyState colors={styles._colors} />
+        ) : (
+          <View style={styles.list}>
+            {pendingItems.map((pending) => (
+              <PendingCard
+                key={pending.pendingId}
+                pending={pending}
+                onConfirm={handleConfirm}
+                onIgnore={handleIgnore}
+                onRetry={handleRetry}
+                isConfirming={
+                  confirmMutation.isPending &&
+                  confirmMutation.variables?.pending.pendingId === pending.pendingId
+                }
+                isIgnoring={
+                  ignoreMutation.isPending &&
+                  ignoreMutation.variables?.pending.pendingId === pending.pendingId
+                }
+                isRetrying={
+                  retryMutation.isPending &&
+                  retryMutation.variables?.candidateId === pending.candidateId
+                }
+                colors={styles._colors}
+              />
+            ))}
+          </View>
+        )}
+      </ScrollView>
+    </SafeAreaView>
+  );
+}
+
+/** 识别链路状态卡片，展示活跃会话、待确认数和 AI 是否在识别中。 */
+function RecognitionStatusCard({
+  status,
+  colors,
+}: {
+  status?: RecognitionStatus;
+  colors: ThemeColors;
+}) {
+  const styles = useStyles(createStyles);
+  const aiActive = status?.aiRequesting === true;
+  const activeSessions = status?.activeSessions ?? 0;
+  const pendingCount = status?.pendingCount ?? 0;
+
+  return (
+    <View style={styles.statusCard}>
+      <View style={styles.statusHeader}>
+        <Sparkles size={18} color={colors.primary} />
+        <Text style={styles.statusTitle}>识别链路状态</Text>
+      </View>
+      <View style={styles.statusMetrics}>
+        <View style={styles.metricItem}>
+          <Text style={styles.metricValue}>{activeSessions}</Text>
+          <Text style={styles.metricLabel}>活跃会话</Text>
+        </View>
+        <View style={styles.metricDivider} />
+        <View style={styles.metricItem}>
+          <Text style={styles.metricValue}>{pendingCount}</Text>
+          <Text style={styles.metricLabel}>待确认</Text>
+        </View>
+        <View style={styles.metricDivider} />
+        <View style={styles.metricItem}>
+          <View style={styles.metricIconRow}>
+            {aiActive ? (
+              <Loader2 size={16} color={colors.primary} />
+            ) : (
+              <Clock3 size={16} color={colors.textTertiary} />
+            )}
+            <Text
+              style={[
+                styles.metricValueSmall,
+                { color: aiActive ? colors.primary : colors.textPrimary },
+              ]}
+            >
+              {aiActive ? '识别中' : '空闲'}
+            </Text>
+          </View>
+          <Text style={styles.metricLabel}>AI 状态</Text>
+        </View>
+      </View>
+    </View>
+  );
+}
+
+/** 空状态提示，避免空白页面给用户造成困惑。 */
+function EmptyState({ colors }: { colors: ThemeColors }) {
+  const styles = useStyles(createStyles);
+  return (
+    <View style={styles.emptyCard}>
+      <Bell size={32} color={colors.textTertiary} />
+      <Text style={styles.emptyTitle}>暂无待确认交易</Text>
+      <Text style={styles.emptyText}>
+        AI 视觉识别或支付通知产生待确认交易时，会在此处显示。
+        确认入账后会写入本地账本并更新账户余额。
+      </Text>
+    </View>
+  );
+}
+
+/** 单条待确认交易卡片，展示候选字段并触发确认/忽略/重试。 */
+interface PendingCardProps {
+  pending: PendingTransaction;
+  onConfirm: (pending: PendingTransaction) => void;
+  onIgnore: (pending: PendingTransaction) => void;
+  onRetry: (pending: PendingTransaction) => void;
+  isConfirming: boolean;
+  isIgnoring: boolean;
+  isRetrying: boolean;
+  colors: ThemeColors;
+}
+
+function PendingCard({
+  pending,
+  onConfirm,
+  onIgnore,
+  onRetry,
+  isConfirming,
+  isIgnoring,
+  isRetrying,
+  colors,
+}: PendingCardProps) {
+  const styles = useStyles(createStyles);
+  const amountLabel = useMemo(
+    () => formatAmount(pending.amountMinor, pending.type),
+    [pending.amountMinor, pending.type],
+  );
+  const sourceLabel = useMemo(
+    () => SOURCE_LABELS[pending.sourceType] ?? pending.sourceType,
+    [pending.sourceType],
+  );
+  const timeLabel = useMemo(() => formatTime(pending.occurredAt), [pending.occurredAt]);
+  const hasConflict = Boolean(pending.conflictReason);
+
+  return (
+    <View style={styles.pendingCard}>
+      <View style={styles.pendingHeader}>
+        <View style={styles.pendingAmountRow}>
+          <Text style={styles.pendingAmount}>{amountLabel}</Text>
+          <View
+            style={[
+              styles.typeBadge,
+              {
+                backgroundColor:
+                  pending.type === 'income' ? colors.primaryLight : colors.warning,
+              },
+            ]}
+          >
+            <Text style={styles.typeBadgeText}>
+              {TYPE_LABELS[pending.type] ?? pending.type}
+            </Text>
+          </View>
+        </View>
+        <Text style={styles.pendingTime}>{timeLabel}</Text>
+      </View>
+
+      <View style={styles.pendingMeta}>
+        <MetaRow label="来源" value={sourceLabel} colors={colors} />
+        {pending.platform ? (
+          <MetaRow label="平台" value={pending.platform} colors={colors} />
+        ) : null}
+        {pending.merchant ? (
+          <MetaRow label="商户" value={pending.merchant} colors={colors} />
+        ) : null}
+        {pending.productDescription ? (
+          <MetaRow
+            label="商品"
+            value={pending.productDescription}
+            colors={colors}
+          />
+        ) : null}
+        {pending.orderId ? (
+          <MetaRow label="订单号" value={pending.orderId} colors={colors} />
+        ) : null}
+        {hasConflict ? (
+          <MetaRow
+            label="冲突"
+            value={pending.conflictReason ?? ''}
+            colors={colors}
+            highlight
+          />
+        ) : null}
+      </View>
+
+      <View style={styles.actionRow}>
+        <TouchableOpacity
+          style={[
+            styles.confirmButton,
+            isConfirming && styles.actionButtonDisabled,
+          ]}
+          onPress={() => onConfirm(pending)}
+          disabled={isConfirming || isIgnoring}
+          activeOpacity={0.85}
+        >
+          <Check size={16} color="#FFFFFF" />
+          <Text style={styles.confirmButtonText}>
+            {isConfirming ? '确认中…' : '确认入账'}
+          </Text>
+        </TouchableOpacity>
+        {pending.candidateId ? (
+          <TouchableOpacity
+            style={[
+              styles.retryButton,
+              isRetrying && styles.actionButtonDisabled,
+            ]}
+            onPress={() => onRetry(pending)}
+            disabled={isRetrying || isConfirming || isIgnoring}
+            activeOpacity={0.85}
+          >
+            <RefreshCw size={16} color={colors.textPrimary} />
+            <Text style={styles.retryButtonText}>
+              {isRetrying ? '重试中…' : '重试识别'}
+            </Text>
+          </TouchableOpacity>
+        ) : null}
+        <TouchableOpacity
+          style={[
+            styles.ignoreButton,
+            isIgnoring && styles.actionButtonDisabled,
+          ]}
+          onPress={() => onIgnore(pending)}
+          disabled={isIgnoring || isConfirming}
+          activeOpacity={0.85}
+        >
+          <X size={16} color={colors.textSecondary} />
+          <Text style={styles.ignoreButtonText}>
+            {isIgnoring ? '忽略中…' : '忽略'}
+          </Text>
+        </TouchableOpacity>
+      </View>
+    </View>
+  );
+}
+
+/** 单行元数据展示，避免内联样式重复。 */
+function MetaRow({
+  label,
+  value,
+  colors,
+  highlight = false,
+}: {
+  label: string;
+  value: string;
+  colors: ThemeColors;
+  highlight?: boolean;
+}) {
+  const styles = useStyles(createStyles);
+  return (
+    <View style={styles.metaRow}>
+      <Text style={styles.metaLabel}>{label}</Text>
+      <Text
+        style={[
+          styles.metaValue,
+          highlight && { color: colors.error },
+        ]}
+        numberOfLines={2}
+      >
+        {value}
+      </Text>
+    </View>
+  );
+}
+
+const TYPE_LABELS: Record<string, string> = {
+  income: '收入',
+  expense: '支出',
+  transfer: '转账',
+  refund: '退款',
+  repayment: '还款',
+  fee: '手续费',
+  adjustment: '不计收支',
+};
+
+const SOURCE_LABELS: Record<string, string> = {
+  ai_vision: 'AI 视觉识别',
+  notification: '支付通知',
+  accessibility: '无障碍节点',
+  sms: '银行短信',
+  import: '账单导入',
+  manual: '手动记账',
+  ai_chat: 'AI 对话',
+};
+
+function formatAmount(amountMinor: number, type: string): string {
+  const amount = Math.abs(amountMinor / 100).toLocaleString('zh-CN', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+  if (type === 'income') return `+¥${amount}`;
+  if (type === 'refund') return `+¥${amount}`;
+  return `-¥${amount}`;
+}
+
+function formatTime(value: string): string {
+  if (!value) return '--';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString('zh-CN', { hour12: false });
+}
+
+const createStyles = (colors: ThemeColors) => ({
+  ...StyleSheet.create({
+    container: { flex: 1, backgroundColor: colors.background },
+    header: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      paddingHorizontal: spacing.md,
+      paddingTop: spacing.xl,
+      paddingBottom: spacing.md,
+      backgroundColor: colors.surface,
+      borderBottomWidth: borderWidth.medium,
+      borderBottomColor: colors.stroke,
+    },
+    iconButton: {
+      width: 40,
+      height: 40,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    headerTitle: {
+      fontSize: 20,
+      fontWeight: '800',
+      color: colors.textPrimary,
+    },
+    scrollView: { flex: 1 },
+    content: { padding: spacing.lg, gap: spacing.md },
+    statusCard: {
+      padding: spacing.lg,
+      backgroundColor: colors.surface,
+      borderWidth: borderWidth.medium,
+      borderColor: colors.stroke,
+      borderRadius: borderRadius.card,
+    },
+    statusHeader: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: spacing.sm,
+      marginBottom: spacing.md,
+    },
+    statusTitle: {
+      fontSize: 15,
+      fontWeight: '800',
+      color: colors.textPrimary,
+    },
+    statusMetrics: {
+      flexDirection: 'row',
+      alignItems: 'center',
+    },
+    metricItem: {
+      flex: 1,
+      alignItems: 'center',
+    },
+    metricDivider: {
+      width: borderWidth.thin,
+      height: 32,
+      backgroundColor: colors.divider,
+    },
+    metricValue: {
+      fontSize: 22,
+      fontWeight: '900',
+      color: colors.textPrimary,
+      fontFamily: 'Courier',
+    },
+    metricValueSmall: {
+      fontSize: 15,
+      fontWeight: '800',
+    },
+    metricIconRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 4,
+    },
+    metricLabel: {
+      marginTop: 4,
+      fontSize: 12,
+      fontWeight: '600',
+      color: colors.textSecondary,
+    },
+    emptyCard: {
+      padding: spacing.xl,
+      alignItems: 'center',
+      backgroundColor: colors.surface,
+      borderWidth: borderWidth.thin,
+      borderColor: colors.stroke,
+      borderRadius: borderRadius.card,
+    },
+    emptyTitle: {
+      marginTop: spacing.md,
+      fontSize: 16,
+      fontWeight: '800',
+      color: colors.textPrimary,
+    },
+    emptyText: {
+      marginTop: spacing.xs,
+      fontSize: 13,
+      fontWeight: '500',
+      color: colors.textSecondary,
+      textAlign: 'center',
+      lineHeight: 20,
+    },
+    list: { gap: spacing.md },
+    pendingCard: {
+      padding: spacing.lg,
+      backgroundColor: colors.surface,
+      borderWidth: borderWidth.thin,
+      borderColor: colors.stroke,
+      borderRadius: borderRadius.card,
+    },
+    pendingHeader: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      marginBottom: spacing.sm,
+    },
+    pendingAmountRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: spacing.sm,
+    },
+    pendingAmount: {
+      fontSize: 22,
+      fontWeight: '900',
+      color: colors.textPrimary,
+      fontFamily: 'Courier',
+    },
+    pendingTime: {
+      fontSize: 12,
+      fontWeight: '600',
+      color: colors.textSecondary,
+    },
+    typeBadge: {
+      paddingHorizontal: spacing.xs,
+      paddingVertical: 2,
+      borderRadius: borderRadius.small,
+      borderWidth: borderWidth.thin,
+      borderColor: colors.stroke,
+    },
+    typeBadgeText: {
+      fontSize: 11,
+      fontWeight: '700',
+      color: colors.textPrimary,
+    },
+    pendingMeta: {
+      paddingVertical: spacing.sm,
+      borderTopWidth: StyleSheet.hairlineWidth,
+      borderTopColor: colors.divider,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: colors.divider,
+      gap: spacing.xs,
+    },
+    metaRow: {
+      flexDirection: 'row',
+      alignItems: 'flex-start',
+      gap: spacing.sm,
+    },
+    metaLabel: {
+      width: 56,
+      fontSize: 12,
+      fontWeight: '600',
+      color: colors.textSecondary,
+    },
+    metaValue: {
+      flex: 1,
+      fontSize: 13,
+      fontWeight: '600',
+      color: colors.textPrimary,
+    },
+    actionRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: spacing.sm,
+      marginTop: spacing.md,
+    },
+    confirmButton: {
+      flex: 1,
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 4,
+      paddingVertical: spacing.sm,
+      borderRadius: borderRadius.medium,
+      borderWidth: borderWidth.thin,
+      borderColor: colors.stroke,
+      backgroundColor: colors.primary,
+    },
+    confirmButtonText: {
+      fontSize: 13,
+      fontWeight: '800',
+      color: '#FFFFFF',
+    },
+    retryButton: {
+      flex: 1,
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 4,
+      paddingVertical: spacing.sm,
+      borderRadius: borderRadius.medium,
+      borderWidth: borderWidth.thin,
+      borderColor: colors.stroke,
+      backgroundColor: colors.surface,
+    },
+    retryButtonText: {
+      fontSize: 13,
+      fontWeight: '700',
+      color: colors.textPrimary,
+    },
+    ignoreButton: {
+      paddingHorizontal: spacing.md,
+      paddingVertical: spacing.sm,
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 4,
+      borderRadius: borderRadius.medium,
+      borderWidth: borderWidth.thin,
+      borderColor: colors.stroke,
+      backgroundColor: colors.surface,
+    },
+    ignoreButtonText: {
+      fontSize: 13,
+      fontWeight: '700',
+      color: colors.textSecondary,
+    },
+    actionButtonDisabled: {
+      opacity: 0.5,
+    },
+  }),
+  _colors: colors,
+});
