@@ -30,6 +30,8 @@ import AiProviderScreen from '../screens/settings/AiProviderScreen';
 import RuntimeStatusScreen from '../screens/settings/RuntimeStatusScreen';
 import DataManagementScreen from '../screens/settings/DataManagementScreen';
 import RulesScreen from '../screens/settings/RulesScreen';
+import AccessibilityPermissionScreen from '../screens/settings/AccessibilityPermissionScreen';
+import ReviewScreen from '../screens/review/ReviewScreen';
 
 import { useTheme } from '../providers';
 import { spacing, borderRadius, borderWidth } from '../theme/spacing';
@@ -395,6 +397,16 @@ export default function AppNavigator() {
         <Stack.Screen
           name="Rules"
           component={RulesScreen}
+          options={{ headerShown: false }}
+        />
+        <Stack.Screen
+          name="Review"
+          component={ReviewScreen}
+          options={{ headerShown: false }}
+        />
+        <Stack.Screen
+          name="AccessibilityPermission"
+          component={AccessibilityPermissionScreen}
           options={{ headerShown: false }}
         />
         <Stack.Screen

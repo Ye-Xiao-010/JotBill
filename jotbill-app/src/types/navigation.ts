@@ -69,6 +69,10 @@ declare global {
         accountId: number;
       };
 
+      // 识别链路（阶段三）
+      Review: undefined;
+      AccessibilityPermission: undefined;
+
       // 预算管理
       Budgets: undefined;
       CreateBudget: undefined;
