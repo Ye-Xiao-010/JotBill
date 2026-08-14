@@ -107,6 +107,8 @@ interface RawRecognitionModule {
   getPaymentEvidence(sessionId: string): Promise<string>;
   retryAiRecognition(candidateId: string): Promise<null>;
   getRecognitionStatus(): Promise<string>;
+  openAccessibilitySettings(): Promise<null>;
+  isAccessibilityEnabled(): Promise<string>;
   addListener(eventName: string): void;
   removeListeners(count: number): void;
 }
@@ -164,6 +166,16 @@ export const nativeRecognition = {
   async getRecognitionStatus(): Promise<RecognitionStatus> {
     const raw = await getRawRecognitionModule().getRecognitionStatus();
     return parseJson<RecognitionStatus>(raw, 'getRecognitionStatus');
+  },
+
+  async openAccessibilitySettings(): Promise<void> {
+    await getRawRecognitionModule().openAccessibilitySettings();
+  },
+
+  async isAccessibilityEnabled(): Promise<boolean> {
+    const raw = await getRawRecognitionModule().isAccessibilityEnabled();
+    const parsed = parseJson<{ enabled: boolean }>(raw, 'isAccessibilityEnabled');
+    return parsed.enabled === true;
   },
 };
 

@@ -1,5 +1,8 @@
 package com.jotbill.app.bridge
 
+import android.content.Context
+import android.content.Intent
+import android.provider.Settings
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
@@ -162,6 +165,31 @@ class RecognitionModule(
         }.toString()
     }
 
+    /** 打开系统无障碍设置页，引导用户开启结算页观察服务。 */
+    @ReactMethod
+    fun openAccessibilitySettings(promise: Promise) {
+        try {
+            val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            reactContext.applicationContext.startActivity(intent)
+            promise.resolve(null)
+        } catch (error: Exception) {
+            promise.reject(
+                "PERMISSION_DENIED",
+                "无法打开无障碍设置，请手动前往系统设置",
+                error
+            )
+        }
+    }
+
+    /** 查询结算页无障碍服务当前是否已开启，避免前端反复读取 RuntimeHealth。 */
+    @ReactMethod
+    fun isAccessibilityEnabled(promise: Promise) = launch(promise) {
+        val enabled = isAccessibilityServiceEnabled(reactContext)
+        JSONObject().apply { put("enabled", enabled) }.toString()
+    }
+
     /** React Native 新版事件发射器要求模块提供这两个订阅计数方法。 */
     @ReactMethod
     fun addListener(eventName: String) = Unit
@@ -208,6 +236,18 @@ class RecognitionModule(
         "INVALID_PAYMENT_NOTIFICATION", "PAYMENT_NOTIFICATION_ALREADY_ATTEMPTED" ->
             "DUPLICATE_TRANSACTION"
         else -> "UNKNOWN"
+    }
+
+    /** 读取系统已启用的无障碍服务列表，确认本应用的服务是否已被用户开启。 */
+    private fun isAccessibilityServiceEnabled(context: Context): Boolean {
+        val enabledServices = Settings.Secure.getString(
+            context.contentResolver,
+            Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
+        ) ?: return false
+        val serviceName = context.packageName +
+            "/" +
+            CheckoutAccessibilityService::class.java.name
+        return enabledServices.split(':').any { it.equals(serviceName, ignoreCase = true) }
     }
 
     private fun launch(promise: Promise, action: suspend () -> Any?) {
