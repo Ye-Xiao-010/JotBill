@@ -28,6 +28,9 @@ phase1-test/.env*
 *.keystore
 *.p12
 **/release.keystore
+
+# Git worktrees (local only)
+.worktrees/
 **/debug.keystore
 
 # Generated Android artifacts and reports
