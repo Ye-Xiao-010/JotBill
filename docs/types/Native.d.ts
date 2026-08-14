@@ -31,6 +31,33 @@ export interface NativeResponse<T> {
  * 原生错误码(对应设计文档 13.1 节)
  */
 export type NativeErrorCode =
+  | 'INVALID_ARGUMENT'     // 参数格式或取值无效
+  | 'NOT_FOUND'             // 本地记录不存在
+  | 'VERSION_CONFLICT'      // 乐观锁版本冲突
+  | 'DATA_CONFLICT'         // 唯一约束或外键约束冲突
+  | 'DB_ERROR'              // 本地数据库错误
+  | 'NOT_IMPLEMENTED'       // 当前阶段尚未开放的能力
+  | 'AI_CONFIG_ERROR'       // AI 配置错误
+  | 'AI_CONFIG_MISSING'     // 未配置可用的 AI 服务商
+  | 'AI_VISION_UNSUPPORTED' // 当前服务商不支持图片输入
+  | 'AI_ASR_ERROR'          // 语音转写失败
+  | 'RUNTIME_STATUS_ERROR'  // 运行状态读取失败
+  | 'UNSUPPORTED_FORMAT'    // 不支持的导出格式
+  | 'EXPORT_IN_PROGRESS'    // 已有导出任务等待文件位置
+  | 'EXPORT_CANCELLED'      // 用户取消导出
+  | 'EXPORT_ERROR'          // 导出失败
+  | 'CLEAR_DATA_ERROR'      // 清除本地数据失败
+  | 'BACKUP_FAILED'         // 创建备份失败
+  | 'RESTORE_PREVIEW_FAILED' // 恢复预览失败
+  | 'RESTORE_FAILED'        // 恢复执行失败
+  | 'EXPORT_FAILED'         // 备份模块导出失败
+  | 'IMPORT_FAILED'         // 文件导入失败
+  | 'BACKUP_UNSUPPORTED_FORMAT' // 备份格式或格式版本不支持
+  | 'BACKUP_VALIDATION_FAILED' // 备份文件校验失败
+  | 'BACKUP_CANCELLED'      // 用户取消备份或恢复
+  | 'BACKUP_TRANSACTION_FAILED' // 恢复事务失败并回滚
+  | 'BACKUP_IO_ERROR'       // 备份文件读写失败
+  | 'BACKUP_ENCRYPTION_ERROR' // 备份加密或解密失败
   | 'AI_TIMEOUT'          // AI 识别超时
   | 'AI_AUTH'             // API Key 无效或模型下线
   | 'AI_PARSE'            // AI 返回格式无法解析
@@ -138,13 +165,14 @@ export interface BillInput {
   amountMinor: number;
   type: TransactionType;
   occurredAt: string;
-  description?: string;
+  description?: string | null;
   categoryId?: string;
   accountId?: string;
   targetAccountId?: string;
   platform?: string;
   merchant?: string;
   productDescription?: string;
+  sourceType: TransactionSource;
   orderId?: string;
   originalTransactionId?: string;
 }
@@ -269,7 +297,8 @@ export interface Account {
 export interface AccountInput {
   name: string;
   subtype: AccountSubtype;
-  initialBalanceMinor: number;
+  kind?: AccountKind;
+  initialBalanceMinor?: number;
   currency?: string;
   icon?: string;
   color?: string;
@@ -362,7 +391,7 @@ export interface Budget {
 export interface BudgetInput {
   name: string;
   amountMinor: number;
-  period: BudgetPeriod;
+  period?: BudgetPeriod;
   categoryId?: string;
   alertAt?: number;
 }
@@ -396,8 +425,12 @@ export interface FinancialGoal {
 export interface FinancialGoalInput {
   name: string;
   targetAmountMinor: number;
-  targetDate?: string;
+  targetDate?: string | null;
 }
+
+export type FinancialGoalUpdateInput = Partial<FinancialGoalInput> & {
+  currentAmountMinor?: number;
+};
 
 // ============================================================================
 // 第七部分:识别链路类型(新增,对应设计文档第6-10节)
@@ -542,6 +575,13 @@ export interface PendingTransaction {
   version: number;
 }
 
+export interface PendingTransactionFilter {
+  page?: number;
+  limit?: number;
+}
+
+export type PendingConfirmationInput = Partial<BillInput>;
+
 /**
  * AI 识别结果(对应设计文档 8.1 节 JSON Schema)
  */
@@ -596,6 +636,10 @@ export interface RuleInput {
   actionValue?: string;
   priority?: number;
 }
+
+export type RuleUpdateInput = Partial<RuleInput> & {
+  isActive?: boolean;
+};
 
 // ============================================================================
 // 第九部分:AI 服务商配置类型(对应设计文档 FR-013)
@@ -671,8 +715,8 @@ export interface TestConnectionResult {
 /** 本地 AI 对话会话。 */
 export interface AiChatSession {
   id: string;
-  title?: string;
-  aiConfigId?: string;
+  title: string | null;
+  aiConfigId: string | null;
   isActive: boolean;
   isPinned: boolean;
   createdAt: string;
@@ -686,8 +730,12 @@ export interface AiChatMessage {
   sessionId: string;
   seqNum: number;
   role: 'system' | 'user' | 'assistant' | 'tool';
-  content?: string;
-  imageUrl?: string;
+  content: string | null;
+  toolCalls: unknown[] | null;
+  toolCallId: string | null;
+  toolName: string | null;
+  toolResult: unknown | null;
+  imageUrl: string | null;
   createdAt: string;
 }
 
@@ -720,56 +768,208 @@ export interface AiStreamChunk {
 // ============================================================================
 
 export interface RuntimeHealth {
+  databaseVersion: number;
+  billCount: number;
+  categoryCount: number;
+  accountCount: number;
+  lastLaunchAt: string;
+  checkedAt: string;
+  // 以下字段由阶段二原生实现附带返回，后续阶段再补齐真实健康检查。
+  aiProviderConfigured: boolean;
   accessibilityEnabled: boolean;
   notificationEnabled: boolean;
   overlayPermissionGranted: boolean;  // 悬浮窗权限
-  usageStatsEnabled: boolean;
-  batteryOptimizationIgnored: boolean;
-  aiProviderConfigured: boolean;
-  // 服务状态
-  accessibilityServiceRunning: boolean;
-  notificationServiceRunning: boolean;
-  // 限制
-  backgroundRestrictions: boolean;
-  // AI 状态
-  aiAvailable: boolean;
-  aiBudgetRemaining: boolean;
-  lastAiError?: NativeError;
-  checkedAt: string;
 }
 
 // ============================================================================
 // 第十一部分:备份与导入(对应设计文档 FR-100~FR-105)
 // ============================================================================
 
+export type BackupFormat = 'jotbill';
+export type ImportFormat = BackupFormat | 'csv';
+/** 来源标签仅描述输入来源，具体格式由各 DTO 的判别字段共同约束。 */
+export type BackupSource = 'local_database' | 'backup_file' | 'csv_file';
+export type BackupOperation =
+  | 'createBackup'
+  | 'restoreBackup'
+  | 'executeRestore'
+  | 'exportData'
+  | 'importData'
+  | 'clearData';
+export type RestoreStrategy = 'overwrite' | 'merge';
+export type DuplicateRecordPolicy = 'skip' | 'replace' | 'fail';
+
+/**
+ * 备份文件格式版本。版本变化必须经过兼容性检查，不能用数据库版本代替。
+ */
+export type BackupFormatVersion = number;
+
+/**
+ * 备份中包含的记录数量摘要，不包含记录内容或任何凭据。
+ */
+export interface BackupRecordSummary {
+  billCount: number;
+  accountCount: number;
+  categoryCount: number;
+  budgetCount: number;
+  financialGoalCount: number;
+  ruleCount: number;
+  balanceCalibrationCount: number;
+  auditLogCount: number;
+  appSettingCount: number;
+  aiProviderConfigCount: number;
+  aiCostRecordCount: number;
+  totalCount: number;
+}
+
+export interface CreateBackupOptions {
+  encrypt?: boolean;
+}
+
+/**
+ * 恢复请求只包含用户明确选择的覆盖/合并策略。
+ * duplicateRecordPolicy 是原生根据策略解析出的规则，写入预览和结果，不是当前 bridge 的输入字段。
+ */
+export interface RestoreOptions {
+  strategy: RestoreStrategy;
+}
+
 export interface BackupSummary {
   filePath: string;
   fileSize: number;
+  source: 'local_database';
+  format: 'jotbill';
+  formatVersion: BackupFormatVersion;
+  checksum: string;
+  recordSummary: BackupRecordSummary;
+  // 以下扁平字段保留旧契约兼容，权威计数以 recordSummary 为准。
   billCount: number;
   accountCount: number;
   categoryCount: number;
   ruleCount: number;
   createdAt: string;
-  version: number;
   encrypted: boolean;
 }
 
 export interface RestorePreview {
-  version: number;
+  filePath: string;
+  source: 'backup_file';
+  format: 'jotbill';
+  formatVersion: BackupFormatVersion;
+  checksum: string;
   billCount: number;
   accountCount: number;
   categoryCount: number;
   ruleCount: number;
   backupCreatedAt: string;
   compatible: boolean;
+  recordSummary: BackupRecordSummary;
+  existingRecordSummary: BackupRecordSummary;
+  duplicateCount: number;
+  // 原生根据恢复策略解析出的重复处理规则，不是预览调用的输入。
+  duplicateRecordPolicy: DuplicateRecordPolicy;
 }
 
-export interface ImportResult {
+interface ImportResultBase {
+  status: 'import_succeeded';
   imported: number;
   skipped: number;
   duplicates: number;
+  replaced: number;
+  failed: number;
+  duplicateRecordPolicy: DuplicateRecordPolicy;
   errors: string[];
 }
+
+export interface BackupImportResult extends ImportResultBase {
+  source: 'backup_file';
+  format: 'jotbill';
+  formatVersion: BackupFormatVersion;
+  recordSummary?: BackupRecordSummary;
+  strategy?: RestoreStrategy;
+}
+
+/** executeRestore 的专用返回类型，仍完整遵循 ImportResult 字段语义。 */
+export interface RestoreImportResult extends BackupImportResult {
+  recordSummary: BackupRecordSummary;
+  strategy: RestoreStrategy;
+}
+
+export interface CsvImportResult extends ImportResultBase {
+  source: 'csv_file';
+  format: 'csv';
+  formatVersion?: never;
+  recordSummary?: never;
+  strategy?: never;
+}
+
+/** 导入和恢复共用同一份直接返回 DTO，避免引入第二套恢复结果模型。 */
+export type ImportResult = BackupImportResult | CsvImportResult;
+
+/** 备份包装器能够消费的原生错误码边界，不接受 AI、截图等无关错误码。 */
+export type BackupErrorCode =
+  | 'INVALID_ARGUMENT'
+  | 'NOT_FOUND'
+  | 'DATA_CONFLICT'
+  | 'DB_ERROR'
+  | 'NOT_IMPLEMENTED'
+  | 'UNSUPPORTED_FORMAT'
+  | 'EXPORT_IN_PROGRESS'
+  | 'EXPORT_CANCELLED'
+  | 'EXPORT_ERROR'
+  | 'CLEAR_DATA_ERROR'
+  | 'BACKUP_FAILED'
+  | 'RESTORE_PREVIEW_FAILED'
+  | 'RESTORE_FAILED'
+  | 'EXPORT_FAILED'
+  | 'IMPORT_FAILED'
+  | 'BACKUP_UNSUPPORTED_FORMAT'
+  | 'BACKUP_VALIDATION_FAILED'
+  | 'BACKUP_CANCELLED'
+  | 'BACKUP_TRANSACTION_FAILED'
+  | 'BACKUP_IO_ERROR'
+  | 'BACKUP_ENCRYPTION_ERROR'
+  | 'PERMISSION_DENIED'
+  | 'UNKNOWN';
+
+export interface BackupError {
+  name: 'NativeBackupError';
+  operation: BackupOperation;
+  code: BackupErrorCode;
+  status: BackupFailureStatus;
+  message: string;
+  retryable: boolean;
+}
+
+export type BackupFailureStatus =
+  | 'invalid_argument'
+  | 'not_found'
+  | 'data_conflict'
+  | 'database_error'
+  | 'not_implemented'
+  | 'unsupported_format'
+  | 'in_progress'
+  | 'cancelled'
+  | 'validation_failed'
+  | 'transaction_failed'
+  | 'io_error'
+  | 'encryption_error'
+  | 'permission_denied'
+  | 'backup_failed'
+  | 'restore_preview_failed'
+  | 'restore_failed'
+  | 'export_failed'
+  | 'import_failed'
+  | 'clear_data_failed'
+  | 'unknown';
+
+export interface ExportDataResult {
+  filePath: string;
+  format?: 'csv';
+}
+
+/** 旧包装器导出的名称，保留给现有调用方使用。 */
+export type ExportResult = ExportDataResult;
 
 // ============================================================================
 // 第十二部分:Native Module 接口(对应设计文档第16节)
@@ -789,12 +989,10 @@ export interface DataModule {
   getBillStatistics(filter?: BillFilter): Promise<BillStatistics>;
 
   // 待确认
-  getPendingTransactions(filter?: BillFilter): Promise<PaginatedResponse<PendingTransaction>>;
+  getPendingTransactions(filter?: PendingTransactionFilter): Promise<PaginatedResponse<PendingTransaction>>;
   getPendingTransaction(id: string): Promise<PendingTransaction>;
-  confirmPendingTransaction(id: string, input: BillInput, version: number): Promise<Bill>;
+  confirmPendingTransaction(id: string, input: PendingConfirmationInput, version: number): Promise<Bill>;
   ignorePendingTransaction(id: string, version: number): Promise<void>;
-  mergePendingTransactions(ids: string[], target: BillInput): Promise<Bill>;
-  splitPendingTransaction(id: string, splits: BillInput[]): Promise<Bill[]>;
 
   // 账户
   getAccounts(): Promise<Account[]>;
@@ -823,13 +1021,13 @@ export interface DataModule {
   // 财务目标
   getFinancialGoals(): Promise<FinancialGoal[]>;
   addFinancialGoal(input: FinancialGoalInput): Promise<FinancialGoal>;
-  updateFinancialGoal(id: string, input: Partial<FinancialGoalInput>): Promise<FinancialGoal>;
+  updateFinancialGoal(id: string, input: FinancialGoalUpdateInput): Promise<FinancialGoal>;
   deleteFinancialGoal(id: string): Promise<void>;
 
   // 规则
   getRules(): Promise<Rule[]>;
   addRule(input: RuleInput): Promise<Rule>;
-  updateRule(id: string, input: Partial<RuleInput>): Promise<Rule>;
+  updateRule(id: string, input: RuleUpdateInput): Promise<Rule>;
   deleteRule(id: string): Promise<void>;
   applyRulesToExisting(ruleId?: string): Promise<{ affected: number }>;
 }
@@ -881,37 +1079,82 @@ export interface AiModule {
  */
 export interface RuntimeModule {
   getRuntimeHealth(): Promise<RuntimeHealth>;
-  openAccessibilitySettings(): Promise<void>;
-  openNotificationSettings(): Promise<void>;
-  openOverlaySettings(): Promise<void>;
-  openBatteryOptimizationSettings(): Promise<void>;
-  openUsageStatsSettings(): Promise<void>;
 }
 
 /**
  * 悬浮按钮接口(新增)
  */
+export type CheckoutOverlayMode = 'always_on' | 'checkout_only' | 'off';
+
+export type CheckoutOverlayStatus =
+  | 'HIDDEN'
+  | 'READY'
+  | 'CAPTURING'
+  | 'CAPTURED_WAITING_PAYMENT'
+  | 'EXPIRED_RETRY'
+  | 'SENSITIVE'
+  | 'UNAVAILABLE'
+  | 'SERVICE_NOT_CONNECTED';
+
+export interface CheckoutOverlayState {
+  status: CheckoutOverlayStatus;
+  visible: boolean;
+  enabled: boolean;
+  mode: CheckoutOverlayMode;
+  reasonCode?: string | null;
+  shoppingPackage?: string | null;
+  pageFingerprint?: string | null;
+  sessionId?: string | null;
+  snapshotId?: string | null;
+  candidateRevision?: number | null;
+  requiresDisambiguation: boolean;
+}
+
+export interface SnapshotCaptureResult {
+  status: 'STORED' | 'PROTECTED' | 'EXPIRED' | 'REJECTED' | 'UNAVAILABLE' | 'DUPLICATE' | 'CANCELLED' | 'FAILED';
+  sourceReason: SnapshotSourceReason;
+  reasonCode: string;
+  sessionId?: string | null;
+  slotId?: string | null;
+  shoppingPackage?: string | null;
+  pageFingerprint?: string | null;
+  snapshotId?: string | null;
+  candidateRevision?: number | null;
+  requiresDisambiguation: boolean;
+}
+
 export interface OverlayModule {
   setManualCaptureButtonEnabled(enabled: boolean): Promise<void>;
   setManualCaptureButtonMode(mode: 'always_on' | 'checkout_only' | 'off'): Promise<void>;
   getManualCaptureButtonMode(): Promise<'always_on' | 'checkout_only' | 'off'>;
+  getOverlayPermissionStatus(): Promise<'authorized' | 'denied'>;
+  requestOverlayPermission(): Promise<void>;
+  getManualCaptureButtonState(): Promise<CheckoutOverlayState>;
+  requestManualCapture(): Promise<SnapshotCaptureResult>;
 }
 
 /**
  * 备份与导入接口
  */
 export interface BackupModule {
-  createBackup(options?: { encrypt?: boolean }): Promise<BackupSummary>;
+  /** 创建带格式版本、来源、校验值和记录摘要的本地备份，失败通过 BackupError reject。 */
+  createBackup(options?: CreateBackupOptions): Promise<BackupSummary>;
+  /** 仅检查备份文件并返回预览，不修改当前数据库，失败通过 BackupError reject。 */
   restoreBackup(filePath: string): Promise<RestorePreview>;
-  executeRestore(filePath: string, strategy: 'overwrite' | 'merge'): Promise<ImportResult>;
-  exportData(format: 'csv' | 'xlsx' | 'json'): Promise<{ filePath: string }>;
+  /** 按覆盖或合并策略执行恢复，失败时原生事务必须回滚并通过 BackupError reject。 */
+  executeRestore(filePath: string, strategy: RestoreOptions['strategy']): Promise<RestoreImportResult>;
+  /** 保留阶段二的 CSV 导出调用。 */
+  exportData(format: 'csv'): Promise<ExportDataResult>;
+  /** 导入文件并返回明确的导入及重复记录计数，失败通过 BackupError reject。 */
   importData(filePath: string): Promise<ImportResult>;
+  clearData(): Promise<void>;
 }
 
 /**
  * 事件订阅(原生 -> RN 的事件通知)
  */
 export interface RecognitionEvents {
+  onCheckoutCaptureOverlayStateChanged?: (data: CheckoutOverlayState) => void;
   onCheckoutDetected?: (data: { sessionId: string; shoppingPackage: string }) => void;
   onSnapshotCaptured?: (data: { sessionId: string; snapshotId: string; sourceReason: SnapshotSourceReason }) => void;
   onAiRecognitionCompleted?: (data: { sessionId: string; candidateId: string; success: boolean }) => void;

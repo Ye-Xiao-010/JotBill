@@ -6,8 +6,8 @@ import {
   nativeAi,
   type AiProvider,
   type AiProviderConfig,
-} from '../../native/ai';
-import type { ApiResponse } from '../../types/api';
+} from '../native/ai';
+import type { ApiResponse } from '../types/api';
 import type {
   AIModelConfig,
   AIProvider,
@@ -18,7 +18,7 @@ import type {
   ChatSession,
   ChatMessageData,
   StreamCallbacks,
-} from '../../types/ai';
+} from '../types/ai';
 
 const NATIVE_PROVIDERS = new Set<AIProvider>([
   'qwen',

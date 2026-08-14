@@ -2,7 +2,7 @@
  * 账单详情页面 - Neo-Brutalism 风格
  * 粗描边详情卡片 + 大糖果色分类图标 + Courier 金额
  */
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useCallback } from 'react';
 import {
   View,
   Text,
@@ -11,7 +11,7 @@ import {
   TouchableOpacity,
   ActivityIndicator,
 } from 'react-native';
-import { useNavigation, useRoute } from '@react-navigation/native';
+import { useFocusEffect, useNavigation, useRoute } from '@react-navigation/native';
 import { ThemeColors } from '../../theme/colors';
 import { borderRadius, borderWidth, spacing, shadow } from '../../theme/spacing';
 import { nativeData, type Bill, type Category } from '../../native';
@@ -51,12 +51,14 @@ export default function BillDetailScreen() {
     }
   }, [billId, alert]);
 
-  useEffect(() => {
-    fetchBill();
-  }, [fetchBill]);
+  useFocusEffect(
+    useCallback(() => {
+      void fetchBill();
+    }, [fetchBill]),
+  );
 
   const handleEdit = () => {
-    if (bill) {
+    if (bill && bill.type !== 'adjustment') {
       navigation.navigate('CreateBill' as any, { bill });
     }
   };
@@ -116,8 +118,15 @@ export default function BillDetailScreen() {
     );
   }
 
+  const isAdjustment = bill.type === 'adjustment';
   const isPositive = bill.type === 'income' || bill.type === 'refund';
-  const typeLabel = bill.type === 'refund' ? '退款' : isPositive ? '收入' : '支出';
+  const typeLabel = isAdjustment
+    ? '余额校准'
+    : bill.type === 'refund'
+      ? '退款'
+      : isPositive
+        ? '收入'
+        : '支出';
   const amountColor = isPositive ? styles._colors.income : styles._colors.expense;
 
   return (
@@ -175,7 +184,7 @@ export default function BillDetailScreen() {
       </ScrollView>
 
       {/* 底部操作按钮 */}
-      <View style={styles.bottomActions}>
+      <View style={[styles.bottomActions, isAdjustment && styles.adjustmentActions]}>
         <TouchableOpacity
           style={styles.editButton}
           onPress={handleEdit}
@@ -324,6 +333,9 @@ const createStyles = (colors: ThemeColors) => ({
       backgroundColor: colors.surface,
       borderTopWidth: borderWidth.thin,
       borderTopColor: colors.stroke,
+    },
+    adjustmentActions: {
+      display: 'none',
     },
     editButton: {
       flex: 1,

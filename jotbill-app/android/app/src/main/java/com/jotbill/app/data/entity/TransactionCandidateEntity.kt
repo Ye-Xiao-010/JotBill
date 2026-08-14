@@ -31,6 +31,8 @@ data class TransactionCandidateEntity(
     @ColumnInfo(name = "evidence_amount_minor") val evidenceAmountMinor: Long?,
     @ColumnInfo(name = "evidence_merchant") val evidenceMerchant: String?,
     @ColumnInfo(name = "evidence_order_id") val evidenceOrderId: String?,
+    @ColumnInfo(name = "ai_order_id") val aiOrderId: String?,
+    @ColumnInfo(name = "ai_occurred_at") val aiOccurredAt: Long?,
     val matched: Boolean,
     @ColumnInfo(name = "conflict_reason") val conflictReason: String?,
     @ColumnInfo(name = "applied_rules") val appliedRules: String,

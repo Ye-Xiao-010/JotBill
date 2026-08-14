@@ -1,7 +1,7 @@
 /**
  * 应用版本 API 服务
  */
-import httpService from '../http';
+import { getUpdateJson } from './client';
 
 export interface AppVersionInfo {
   id: number;
@@ -28,14 +28,11 @@ export const appVersionApi = {
    */
   async checkUpdate(currentVersion: string): Promise<CheckUpdateResponse> {
     console.log('[AppVersion] 检查更新, 当前版本:', currentVersion);
-    const response = await httpService.get<CheckUpdateResponse>(
-      '/app-version/check',
-      { params: { currentVersion, platform: 'android' } }
-    );
-    console.log('[AppVersion] 检查更新响应:', JSON.stringify(response));
-    // httpService.get 已经返回 response.data，所以直接访问 .data
-    const result = (response as any).data || response;
-    console.log('[AppVersion] 解析结果:', JSON.stringify(result));
+    const result = await getUpdateJson<CheckUpdateResponse>('/app-version/check', {
+      currentVersion,
+      platform: 'android',
+    });
+    console.log('[AppVersion] 检查更新完成:', result.hasUpdate);
     return result;
   },
 
@@ -44,11 +41,9 @@ export const appVersionApi = {
    */
   async getLatest(): Promise<AppVersionInfo | null> {
     try {
-      const response = await httpService.get<AppVersionInfo>(
-        '/app-version/latest',
-        { params: { platform: 'android' } }
-      );
-      return (response as any).data || response;
+      return await getUpdateJson<AppVersionInfo>('/app-version/latest', {
+        platform: 'android',
+      });
     } catch {
       return null;
     }

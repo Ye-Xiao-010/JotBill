@@ -15,7 +15,7 @@ import { Toast } from '../../components';
 import { AddCategoryModal, ConfirmModal } from '../../components/modals';
 import { useToast, useCategories, useStyles } from '../../hooks';
 import { useAlert } from '../../providers';
-import { nativeData, type Bill, type Category } from '../../native';
+import { nativeData, type Account, type Bill, type Category } from '../../native';
 import { invalidateCache } from '../../lib/queryClient';
 import { ThemeColors } from '../../theme/colors';
 import { spacing, borderRadius, borderWidth, shadow } from '../../theme';
@@ -57,10 +57,30 @@ const CreateBillScreen: React.FC<CreateBillScreenProps> = ({ navigation, route }
     editingBill?.type === 'income' ? 'income' : initialType || 'expense'
   );
   const [selectedCategory, setSelectedCategory] = useState<Category | null>(null);
+  const [accounts, setAccounts] = useState<Account[]>([]);
+  const [selectedAccountId, setSelectedAccountId] = useState<string | undefined>(editingBill?.accountId);
   const [description, setDescription] = useState(editingBill?.description || '');
   const [loading, setLoading] = useState(false);
 
   const { categories } = useCategories(type);
+
+  useEffect(() => {
+    let mounted = true;
+    nativeData.getAccounts()
+      .then(nextAccounts => {
+        if (mounted) setAccounts(nextAccounts);
+      })
+      .catch(() => {
+        if (mounted) setAccounts([]);
+      });
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    setSelectedAccountId(editingBill?.accountId);
+  }, [editingBill?.accountId]);
 
   useEffect(() => {
     if (!editingBill?.categoryId) return;
@@ -130,6 +150,10 @@ const CreateBillScreen: React.FC<CreateBillScreenProps> = ({ navigation, route }
     return [...mergedCategories, ...customCategories];
   };
 
+  const selectableAccounts = accounts.filter(
+    account => account.isActive || account.id === editingBill?.accountId,
+  );
+
   const validateForm = () => {
     if (!amount || parseFloat(amount) <= 0) {
       showError('请输入有效的金额');
@@ -154,6 +178,7 @@ const CreateBillScreen: React.FC<CreateBillScreenProps> = ({ navigation, route }
         occurredAt: editingBill?.occurredAt || new Date().toISOString(),
         categoryId: selectedCategory!.id,
         sourceType: editingBill?.sourceType || 'manual' as const,
+        ...(selectedAccountId ? { accountId: selectedAccountId } : {}),
       };
 
       if (isEditing) {
@@ -237,6 +262,31 @@ const CreateBillScreen: React.FC<CreateBillScreenProps> = ({ navigation, route }
               />
             </View>
           </View>
+
+          {selectableAccounts.length > 0 && (
+            <View style={styles.formGroup}>
+              <Text style={styles.formLabel}>账户</Text>
+              <View style={styles.accountGrid}>
+                {selectableAccounts.map(account => (
+                  <TouchableOpacity
+                    key={account.id}
+                    style={[
+                      styles.accountOption,
+                      selectedAccountId === account.id && styles.accountOptionSelected,
+                    ]}
+                    onPress={() => setSelectedAccountId(account.id)}
+                  >
+                    <Text style={styles.accountOptionName} numberOfLines={1}>
+                      {account.name}
+                    </Text>
+                    <Text style={styles.accountOptionType}>
+                      {account.kind === 'liability' ? '负债' : '资产'}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </View>
+          )}
 
           {/* 分类选择 */}
           <View style={styles.formGroup}>
@@ -380,22 +430,47 @@ const createStyles = (colors: ThemeColors) => ({
       color: colors.textPrimary,
       padding: 0,
     },
-    descriptionInput: {
-      backgroundColor: colors.surface,
-      borderRadius: borderRadius.input,
-      borderWidth: borderWidth.thin,
-      borderColor: colors.stroke,
+      descriptionInput: {
+        backgroundColor: colors.surface,
+        borderRadius: borderRadius.input,
+        borderWidth: borderWidth.thin,
+        borderColor: colors.stroke,
       paddingHorizontal: spacing.md,
       paddingVertical: spacing.md,
       fontSize: 15,
-      fontWeight: '600',
-      color: colors.textPrimary,
-      minHeight: 80,
-    },
-    categoryGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.md },
-    categoryItem: {
-      width: '22%',
-      aspectRatio: 1,
+        fontWeight: '600',
+        color: colors.textPrimary,
+        minHeight: 80,
+      },
+      accountGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
+      accountOption: {
+        width: '48%',
+        padding: spacing.md,
+        borderRadius: borderRadius.small,
+        borderWidth: borderWidth.thin,
+        borderColor: colors.stroke,
+        backgroundColor: colors.surface,
+        gap: spacing.xs,
+      },
+      accountOptionSelected: {
+        backgroundColor: colors.accent,
+        borderWidth: borderWidth.medium,
+        borderColor: colors.stroke,
+      },
+      accountOptionName: {
+        fontSize: 14,
+        fontWeight: '800',
+        color: colors.textPrimary,
+      },
+      accountOptionType: {
+        fontSize: 12,
+        fontWeight: '600',
+        color: colors.textSecondary,
+      },
+      categoryGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.md },
+      categoryItem: {
+        width: '22%',
+        aspectRatio: 1,
       justifyContent: 'center',
       alignItems: 'center',
       borderRadius: borderRadius.small,

@@ -18,11 +18,14 @@ import {
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { ThemeColors } from '../theme/colors';
 import { spacing, borderRadius, borderWidth, shadow } from '../theme';
-import { PaymentNotificationSettings } from '../components/business';
+import {
+  ManualCaptureOverlaySettings,
+  PaymentNotificationSettings,
+} from '../components/business';
 import { paymentNotificationService } from '../services/paymentNotification';
 import { useStyles } from '../hooks';
 import { useAlert } from '../providers';
-import { aiService } from '../services/api/ai';
+import { aiService } from '../services/ai';
 import type {
   AIModelConfig,
   AIProvider,
@@ -843,6 +846,7 @@ export default function GeneralSettingsScreen({ navigation: _navigation }: Gener
     <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
       <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
         <PaymentNotificationSettings style={styles.card} />
+        <ManualCaptureOverlaySettings style={styles.card} />
 
         {/* AI 模型配置 */}
         <View style={styles.card}>

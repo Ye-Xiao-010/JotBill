@@ -6,7 +6,9 @@ import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
 import com.jotbill.app.data.JotBillDatabase
 import com.jotbill.app.data.JotBillDatabaseProvider
+import com.jotbill.app.data.entity.AiCostRecordEntity
 import com.jotbill.app.data.entity.AiProviderConfigEntity
+import com.jotbill.app.data.entity.AppSettingEntity
 import com.jotbill.app.security.KeyStoreSecretStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -18,6 +20,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONArray
 import org.json.JSONObject
+import java.time.YearMonth
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 
@@ -53,6 +56,11 @@ class AiModule(
         val provider = requiredProvider(input)
         val model = requiredString(input, "model")
         val apiKey = requiredString(input, "apiKey")
+        val apiBaseUrl = input.optionalString("apiBaseUrl")
+            ?.let { AiEndpointResolver.validateBaseUrl(it) }
+        if (provider == "custom" && apiBaseUrl.isNullOrBlank()) {
+            throw AiException("INVALID_ARGUMENT", "自定义服务商必须填写 API 地址")
+        }
         val existing = database.aiProviderConfigDao().getAll()
         val now = System.currentTimeMillis()
         val entity = AiProviderConfigEntity(
@@ -61,7 +69,7 @@ class AiModule(
             provider = provider,
             model = model,
             apiKeyEncrypted = secretStore.encryptSecret(apiKey),
-            apiBaseUrl = input.optionalString("apiBaseUrl"),
+            apiBaseUrl = apiBaseUrl,
             isDefault = input.optBoolean("isDefault", existing.isEmpty()),
             supportsVision = input.optBoolean("supportsVision", false),
             createdAt = now,
@@ -79,16 +87,25 @@ class AiModule(
             ?: throw AiException("NOT_FOUND", "AI provider $id was not found")
         val input = JSONObject(inputJson)
         val apiKey = input.optionalString("apiKey")
+        val provider = input.optionalString("provider")?.also(::validateProvider) ?: existing.provider
+        val apiBaseUrl = if (input.has("apiBaseUrl")) {
+            input.optionalString("apiBaseUrl")?.let { AiEndpointResolver.validateBaseUrl(it) }
+        } else {
+            existing.apiBaseUrl
+        }
+        if (provider == "custom" && apiBaseUrl.isNullOrBlank()) {
+            throw AiException("INVALID_ARGUMENT", "自定义服务商必须填写 API 地址")
+        }
         val updated = existing.copy(
             name = input.optionalString("name") ?: existing.name,
-            provider = input.optionalString("provider")?.also(::validateProvider) ?: existing.provider,
+            provider = provider,
             model = input.optionalString("model") ?: existing.model,
             apiKeyEncrypted = if (apiKey.isNullOrBlank() || apiKey == MASKED_KEY) {
                 existing.apiKeyEncrypted
             } else {
                 secretStore.encryptSecret(apiKey)
             },
-            apiBaseUrl = input.updatedNullableString("apiBaseUrl", existing.apiBaseUrl),
+            apiBaseUrl = apiBaseUrl,
             isDefault = if (input.has("isDefault") && !input.isNull("isDefault")) {
                 input.getBoolean("isDefault")
             } else {
@@ -133,11 +150,10 @@ class AiModule(
     fun testAiProvider(id: String, promise: Promise) = launch(promise) {
         val config = database.aiProviderConfigDao().getAll().firstOrNull { it.id == id }
             ?: throw AiException("NOT_FOUND", "AI provider $id was not found")
-        val baseUrl = config.apiBaseUrl?.trim().takeUnless { it.isNullOrEmpty() }
-            ?: defaultBaseUrl(config.provider)
         val apiKey = config.apiKeyEncrypted?.let(secretStore::decryptSecret)
         val start = System.currentTimeMillis()
         try {
+            val baseUrl = AiEndpointResolver.baseUrl(config)
             val requestBuilder = Request.Builder().url(baseUrl).get()
             if (!apiKey.isNullOrBlank()) {
                 requestBuilder.header("Authorization", "Bearer $apiKey")
@@ -157,6 +173,58 @@ class AiModule(
                 .put("latencyMs", System.currentTimeMillis() - start)
                 .toString()
         }
+    }
+
+    @ReactMethod
+    fun getAiBudget(promise: Promise) = launch(promise) {
+        val month = YearMonth.now().toString()
+        val budget = database.appSettingDao().get(AI_MONTHLY_BUDGET_KEY)
+            ?.toLongOrNull()
+            ?: DEFAULT_AI_BUDGET_MINOR
+        val spent = database.aiCostRecordDao().getMonthlyCost(month)
+        val requestCount = database.aiCostRecordDao().getMonthlySuccessCount(month)
+        JSONObject()
+            .put("monthlyBudgetMinor", budget)
+            .put("monthlySpentMinor", spent)
+            .put("remainingMinor", budget - spent)
+            .put("requestCount", requestCount)
+            .put("month", month)
+            .toString()
+    }
+
+    @ReactMethod
+    fun setAiBudget(monthlyBudgetMinor: Double, promise: Promise) = launch(promise) {
+        if (!monthlyBudgetMinor.isFinite() ||
+            monthlyBudgetMinor < 0.0 ||
+            monthlyBudgetMinor % 1.0 != 0.0 ||
+            monthlyBudgetMinor > Long.MAX_VALUE.toDouble()
+        ) {
+            throw AiException("INVALID_ARGUMENT", "monthlyBudgetMinor must be a non-negative integer")
+        }
+        database.appSettingDao().set(
+            AppSettingEntity(
+                key = AI_MONTHLY_BUDGET_KEY,
+                value = monthlyBudgetMinor.toLong().toString(),
+                updatedAt = System.currentTimeMillis()
+            )
+        )
+        null
+    }
+
+    @ReactMethod
+    fun getAiCostRecords(month: String?, promise: Promise) = launch(promise) {
+        val requestedMonth = month?.trim().takeUnless { it.isNullOrEmpty() }
+            ?: YearMonth.now().toString()
+        try {
+            YearMonth.parse(requestedMonth)
+        } catch (error: Exception) {
+            throw AiException("INVALID_ARGUMENT", "month must use YYYY-MM format")
+        }
+
+        JSONArray().also { array ->
+            database.aiCostRecordDao().getByMonth(requestedMonth)
+                .forEach { array.put(costRecordToJson(it)) }
+        }.toString()
     }
 
     @ReactMethod
@@ -236,6 +304,19 @@ class AiModule(
         put("updatedAt", java.time.Instant.ofEpochMilli(entity.updatedAt).toString())
     }
 
+    private fun costRecordToJson(entity: AiCostRecordEntity): JSONObject =
+        JSONObject().apply {
+            put("id", entity.id)
+            put("provider", entity.provider)
+            put("model", entity.model)
+            put("requestType", entity.requestType)
+            entity.tokensIn?.let { put("tokensIn", it) }
+            entity.tokensOut?.let { put("tokensOut", it) }
+            put("costMinor", entity.costMinor)
+            put("success", entity.success)
+            put("createdAt", java.time.Instant.ofEpochMilli(entity.createdAt).toString())
+        }
+
     private fun requiredString(input: JSONObject, key: String): String {
         val value = input.optString(key).trim()
         if (value.isEmpty()) throw AiException("INVALID_ARGUMENT", "缺少字段: $key")
@@ -254,21 +335,8 @@ class AiModule(
         }
     }
 
-    private fun defaultBaseUrl(provider: String): String = when (provider) {
-        "qwen" -> "https://dashscope.aliyuncs.com"
-        "glm" -> "https://open.bigmodel.cn"
-        "siliconflow" -> "https://api.siliconflow.cn"
-        else -> throw AiException("INVALID_ARGUMENT", "自定义服务商必须填写 API 地址")
-    }
-
     private fun JSONObject.optionalString(key: String): String? {
         if (!has(key) || isNull(key)) return null
-        return optString(key).trim().takeIf { it.isNotEmpty() }
-    }
-
-    private fun JSONObject.updatedNullableString(key: String, current: String?): String? {
-        if (!has(key)) return current
-        if (isNull(key)) return null
         return optString(key).trim().takeIf { it.isNotEmpty() }
     }
 
@@ -291,6 +359,8 @@ class AiModule(
 
     private companion object {
         const val MASKED_KEY = "********"
+        const val AI_MONTHLY_BUDGET_KEY = "ai_monthly_budget_minor"
+        const val DEFAULT_AI_BUDGET_MINOR = 1000L
         val SUPPORTED_PROVIDERS = setOf("qwen", "glm", "siliconflow", "custom")
     }
 }

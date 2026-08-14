@@ -10,7 +10,8 @@ import androidx.room.PrimaryKey
     tableName = "payment_evidence",
     indices = [
         Index(value = ["session_id"]),
-        Index(value = ["order_id"])
+        Index(value = ["order_id"]),
+        Index(value = ["source_event_key"], unique = true)
     ],
     foreignKeys = [
         ForeignKey(
@@ -33,5 +34,6 @@ data class PaymentEvidenceEntity(
     @ColumnInfo(name = "payment_status") val paymentStatus: String?,
     @ColumnInfo(name = "occurred_at") val occurredAt: Long?,
     @ColumnInfo(name = "raw_text_hash") val rawTextHash: String?,
+    @ColumnInfo(name = "source_event_key") val sourceEventKey: String?,
     @ColumnInfo(name = "captured_at") val capturedAt: Long
 )

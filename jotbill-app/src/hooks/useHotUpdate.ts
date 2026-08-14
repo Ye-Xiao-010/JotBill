@@ -12,15 +12,15 @@ import {
   type HotUpdateState,
   type UpdateStatus,
 } from '../services/hotUpdate';
-import type { HotUpdateBundleInfo } from '../services/api/hotUpdate';
+import type { HotUpdateBundleInfo } from '../services/update/hotUpdate';
 
 interface UseHotUpdateOptions {
-  /** 是否在 hook 挂载时自动检查热更新，默认 true */
+  /** 是否在 hook 挂载时自动检查热更新，默认关闭，避免页面挂载触发联网。 */
   autoCheck?: boolean;
 }
 
 export function useHotUpdate(options: UseHotUpdateOptions = {}) {
-  const { autoCheck = true } = options;
+  const { autoCheck = false } = options;
   const [state, setState] = useState<HotUpdateState>({
     status: 'idle',
     hasUpdate: false,
@@ -30,6 +30,7 @@ export function useHotUpdate(options: UseHotUpdateOptions = {}) {
     patchMode: null,
   });
   const isChecking = useRef(false);
+  const isApplying = useRef(false);
 
   const bundleVersion = getCurrentBundleVersion();
   const nativeVersion = getNativeVersion();
@@ -54,12 +55,13 @@ export function useHotUpdate(options: UseHotUpdateOptions = {}) {
         hasUpdate: result.hasUpdate,
         bundleInfo: result.bundle || null,
       }));
-    } catch (error: any) {
-      console.log('[useHotUpdate] 检查热更新失败:', error.message);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : '更新服务暂时不可用';
+      console.log('[useHotUpdate] 检查热更新失败:', message);
       setState(prev => ({
         ...prev,
         status: 'error',
-        error: error.message,
+        error: message,
       }));
     } finally {
       isChecking.current = false;
@@ -67,9 +69,10 @@ export function useHotUpdate(options: UseHotUpdateOptions = {}) {
   }, []);
 
   const applyUpdate = useCallback(async () => {
-    if (!state.bundleInfo) return;
+    if (!state.bundleInfo || isApplying.current) return;
 
     const bundle = state.bundleInfo;
+    isApplying.current = true;
     setState(prev => ({
       ...prev,
       status: 'downloading',
@@ -77,25 +80,37 @@ export function useHotUpdate(options: UseHotUpdateOptions = {}) {
       patchMode: bundle.patchAvailable ? 'diff' : 'full',
     }));
 
-    const success = await downloadAndApplyUpdate(
-      bundle,
-      (progress) => {
-        setState(prev => ({ ...prev, progress }));
-      },
-    );
+    try {
+      const success = await downloadAndApplyUpdate(
+        bundle,
+        (progress) => {
+          setState(prev => ({ ...prev, progress }));
+        },
+      );
 
-    if (success) {
-      setState(prev => ({
-        ...prev,
-        status: 'done',
-        progress: 100,
-      }));
-    } else {
+      if (success) {
+        setState(prev => ({
+          ...prev,
+          status: 'done',
+          progress: 100,
+        }));
+      } else {
+        setState(prev => ({
+          ...prev,
+          status: 'error',
+          error: '更新失败，请稍后重试',
+        }));
+      }
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : '更新失败，请稍后重试';
+      console.log('[useHotUpdate] 应用热更新失败:', message);
       setState(prev => ({
         ...prev,
         status: 'error',
-        error: '更新失败，请稍后重试',
+        error: message,
       }));
+    } finally {
+      isApplying.current = false;
     }
   }, [state.bundleInfo]);
 
@@ -108,7 +123,7 @@ export function useHotUpdate(options: UseHotUpdateOptions = {}) {
     }));
   }, []);
 
-  // 启动时自动检查
+  // 只有明确传入 autoCheck: true 时才允许页面挂载触发热更新网络请求。
   useEffect(() => {
     if (autoCheck) {
       checkUpdate();

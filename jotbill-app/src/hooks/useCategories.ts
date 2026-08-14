@@ -5,14 +5,13 @@
 import { useQuery } from '@tanstack/react-query';
 import { nativeData, type Category } from '../native';
 import { CACHE_TIME, QUERY_KEYS, GC_TIME } from '../lib/queryClient';
-import type { BillType } from '../types/bill';
 
 /**
  * 获取分类列表
  * @param type 分类类型（income/expense）
  * @param enabled 是否启用查询
  */
-export function useCategories(type: BillType, enabled: boolean = true) {
+export function useCategories(type: Category['type'], enabled: boolean = true) {
   const query = useQuery({
     queryKey: QUERY_KEYS.categories.byType(type),
     queryFn: (): Promise<Category[]> => nativeData.getCategories(type),

@@ -21,14 +21,61 @@ interface BillDao {
     @Update
     suspend fun update(bill: BillEntity)
 
+    @Query(
+        """
+        UPDATE bills SET
+          amount_minor = :amountMinor,
+          type = :type,
+          occurred_at = :occurredAt,
+          description = :description,
+          category_id = :categoryId,
+          account_id = :accountId,
+          target_account_id = :targetAccountId,
+          platform = :platform,
+          merchant = :merchant,
+          product_description = :productDescription,
+          source_type = :sourceType,
+          original_transaction_id = :originalTransactionId,
+          order_id = :orderId,
+          updated_at = :updatedAt,
+          version = :newVersion
+        WHERE id = :id AND version = :expectedVersion
+        """
+    )
+    suspend fun updateIfVersion(
+        id: String,
+        expectedVersion: Int,
+        amountMinor: Long,
+        type: String,
+        occurredAt: Long,
+        description: String?,
+        categoryId: String?,
+        accountId: String?,
+        targetAccountId: String?,
+        platform: String?,
+        merchant: String?,
+        productDescription: String?,
+        sourceType: String,
+        originalTransactionId: String?,
+        orderId: String?,
+        updatedAt: Long,
+        newVersion: Int
+    ): Int
+
     @Delete
     suspend fun delete(bill: BillEntity)
+
+    @Query("DELETE FROM bills WHERE id = :id")
+    suspend fun deleteById(id: String): Int
 
     @Query("SELECT * FROM bills WHERE id = :id")
     suspend fun getById(id: String): BillEntity?
 
     @Query("SELECT * FROM bills WHERE id = :id")
     fun observeById(id: String): Flow<BillEntity?>
+
+    @Query("SELECT COUNT(*) FROM bills WHERE category_id = :categoryId")
+    suspend fun countByCategoryId(categoryId: String): Int
 
     @Query(
         """

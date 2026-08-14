@@ -1,13 +1,19 @@
 import { NativeModules } from 'react-native';
 
-export interface RuntimeStatus {
+export interface RuntimeHealth {
   databaseVersion: number;
   billCount: number;
   categoryCount: number;
   accountCount: number;
   lastLaunchAt: string;
   checkedAt: string;
+  aiProviderConfigured: boolean;
+  accessibilityEnabled: boolean;
+  notificationEnabled: boolean;
+  overlayPermissionGranted: boolean;
 }
+
+export type RuntimeStatus = RuntimeHealth;
 
 interface RawRuntimeModule {
   getRuntimeHealth(): Promise<string>;
@@ -22,8 +28,8 @@ function getRawRuntimeModule(): RawRuntimeModule {
 }
 
 export const nativeRuntime = {
-  async getRuntimeHealth(): Promise<RuntimeStatus> {
-    return JSON.parse(await getRawRuntimeModule().getRuntimeHealth()) as RuntimeStatus;
+  async getRuntimeHealth(): Promise<RuntimeHealth> {
+    return JSON.parse(await getRawRuntimeModule().getRuntimeHealth()) as RuntimeHealth;
   },
 };
 

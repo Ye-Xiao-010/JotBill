@@ -13,12 +13,13 @@ import com.facebook.react.defaults.DefaultReactNativeHost
 import com.jotbill.app.notification.PaymentNotificationPackage
 import com.jotbill.app.utils.InstallApkPackage
 import com.jotbill.app.utils.SentryLogger
-import com.jotbill.app.auth.AuthTokenPackage
 import com.jotbill.app.hotupdate.HotUpdatePackage
+import com.jotbill.app.hotupdate.HotUpdateModule
 import com.jotbill.app.bridge.DataPackage
 import com.jotbill.app.ai.AiPackage
 import com.jotbill.app.runtime.RuntimePackage
 import com.jotbill.app.backup.BackupPackage
+import com.jotbill.app.overlay.OverlayPackage
 import com.facebook.react.ReactInstanceManager
 import com.facebook.react.bridge.JSBundleLoader
 import java.io.File
@@ -41,9 +42,11 @@ class MainApplication : Application(), ReactApplication {
       hotBundlePathChecked = true
 
       val hotBundlePath = File(filesDir, "hot_update/index.android.bundle")
-      android.util.Log.i("HotUpdate", "检查热更新 bundle: exists=${hotBundlePath.exists()}, size=${if (hotBundlePath.exists()) hotBundlePath.length() else 0}")
+      val hotUpdateDir = hotBundlePath.parentFile
+      val verified = hotUpdateDir != null && HotUpdateModule.isVerifiedBundle(hotUpdateDir)
+      android.util.Log.i("HotUpdate", "检查热更新 bundle: verified=$verified, size=${if (hotBundlePath.exists()) hotBundlePath.length() else 0}")
 
-      if (hotBundlePath.exists() && hotBundlePath.length() > 0) {
+      if (verified) {
           val prefs = getSharedPreferences("hot_update", Context.MODE_PRIVATE)
           val crashCount = prefs.getInt("crash_count", 0)
           android.util.Log.i("HotUpdate", "当前 crash_count=$crashCount")
@@ -53,13 +56,23 @@ class MainApplication : Application(), ReactApplication {
               android.util.Log.i("HotUpdate", "使用热更新 bundle (crash_count: ${crashCount + 1})")
               hotBundlePathCache = hotBundlePath.absolutePath
           } else {
-              android.util.Log.w("HotUpdate", "崩溃次数过多 ($crashCount)，删除热更新，回退内置 bundle")
-              hotBundlePath.parentFile?.deleteRecursively()
-              prefs.edit().clear().apply()
+              android.util.Log.w("HotUpdate", "崩溃次数过多 ($crashCount)，尝试删除热更新并回退内置 bundle")
+              val deleted = hotUpdateDir == null ||
+                  (!hotUpdateDir.exists() || (hotUpdateDir.deleteRecursively() && !hotUpdateDir.exists()))
+              if (!deleted) {
+                  android.util.Log.e("HotUpdate", "热更新目录删除失败，保留目录并回退内置 bundle")
+              }
+              if (deleted) {
+                  prefs.edit().clear().apply()
+              }
               hotBundlePathCache = null
           }
       } else {
-          android.util.Log.i("HotUpdate", "无热更新 bundle，使用内置")
+          if (hotUpdateDir?.exists() == true) {
+              android.util.Log.w("HotUpdate", "热更新 bundle 缺少有效 manifest 或 SHA-256，保留现场并使用内置")
+          } else {
+              android.util.Log.i("HotUpdate", "无热更新 bundle，使用内置")
+          }
           hotBundlePathCache = null
       }
       return hotBundlePathCache
@@ -71,12 +84,12 @@ class MainApplication : Application(), ReactApplication {
             PackageList(this).packages.apply {
               add(PaymentNotificationPackage())
               add(InstallApkPackage())
-              add(AuthTokenPackage())
               add(HotUpdatePackage())
               add(DataPackage())
               add(AiPackage())
               add(RuntimePackage())
               add(BackupPackage())
+              add(OverlayPackage())
             }
 
         override fun getJSMainModuleName(): String = "index"
@@ -117,6 +130,7 @@ class MainApplication : Application(), ReactApplication {
 
   override fun onCreate() {
     super.onCreate()
+    HotUpdateModule.recoverInterruptedSwap(this)
     loadReactNative(this)
     initializeSentry()
   }

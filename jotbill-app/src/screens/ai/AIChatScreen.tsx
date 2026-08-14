@@ -30,7 +30,7 @@ import { borderRadius, borderWidth, spacing, shadow } from '../../theme/spacing'
 import { useStyles } from '../../hooks';
 import { useRoute, useNavigation } from '@react-navigation/native';
 import { useAlert } from '../../providers';
-import { aiService } from '../../services/api/ai';
+import { aiService } from '../../services/ai';
 import { audioRecorderService } from '../../services/audio/audioRecorderService';
 import type { RecordingProgress } from '../../services/audio/audioRecorderService';
 import { nativeData, type Category } from '../../native';

@@ -62,6 +62,19 @@
               android:name="android.service.notification.default_filter_types"
               android:value="alerting" />
       </service>
+
+      <!-- 结算页只读观察服务，不执行点击或输入；截图仅交给内存缓冲协调器 -->
+      <service
+          android:name=".recognition.CheckoutAccessibilityService"
+          android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
+          android:exported="true">
+          <intent-filter>
+              <action android:name="android.accessibilityservice.AccessibilityService" />
+          </intent-filter>
+          <meta-data
+              android:name="android.accessibilityservice"
+              android:resource="@xml/checkout_accessibility_service" />
+      </service>
       
       <!-- Headless JS 服务（用于后台处理支付通知） -->
       <service

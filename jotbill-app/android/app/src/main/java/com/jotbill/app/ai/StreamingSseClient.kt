@@ -32,12 +32,9 @@ class StreamingSseClient(
             override fun onResponse(call: Call, response: Response) {
                 response.use {
                     if (!response.isSuccessful) {
-                        val detail = response.body?.string()?.take(1000).orEmpty()
                         activeCalls.remove(sessionId, call)
                         if (terminal.compareAndSet(false, true)) {
-                            callbacks.onError(
-                                IOException("AI 服务返回 HTTP ${response.code}${detail.toErrorSuffix()}")
-                            )
+                            callbacks.onError(IOException("AI 服务返回 HTTP ${response.code}"))
                         }
                         return
                     }
@@ -117,11 +114,6 @@ class StreamingSseClient(
             is String -> value.takeIf { it.isNotEmpty() }
             else -> value.toString().takeIf { it.isNotEmpty() }
         }
-    }
-
-    private fun String.toErrorSuffix(): String {
-        if (isBlank()) return ""
-        return ": ${replace(Regex("\\s+"), " ").trim()}"
     }
 
     interface Callbacks {

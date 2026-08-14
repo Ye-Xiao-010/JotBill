@@ -12,9 +12,13 @@ import android.service.notification.StatusBarNotification
 import android.util.Log
 import androidx.localbroadcastmanager.content.LocalBroadcastManager
 import com.jotbill.app.MainActivity
+import com.jotbill.app.recognition.CheckoutAccessibilityService
+import com.jotbill.app.recognition.PaymentNotificationFallbackSignal
+import com.jotbill.app.recognition.PurchaseIntentResultCallback
 import com.jotbill.app.utils.SentryLogger
 import org.json.JSONArray
 import org.json.JSONObject
+import java.math.BigDecimal
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -65,7 +69,7 @@ class PaymentNotificationService : NotificationListenerService() {
         )
 
         /** 排除关键词（用于排除收款通知） */
-        private val EXCLUDE_KEYWORDS = listOf("收款", "到账", "收到", "转入", "红包")
+        private val EXCLUDE_KEYWORDS = listOf("收款", "到账", "收到", "转入", "红包", "转账", "转出")
 
         /** 金额匹配正则表达式 */
         private val AMOUNT_PATTERNS = listOf(
@@ -407,6 +411,57 @@ class PaymentNotificationService : NotificationListenerService() {
 
         // 显示悬浮窗提醒
         showPaymentOverlay(amount, packageName, paymentData)
+        requestPurchaseIntentFallback(
+            packageName = packageName,
+            amount = amount,
+            occurredAt = sbn.postTime,
+            sourceEventKey = "${sbn.key}:${sbn.id}:${sbn.postTime}"
+        )
+    }
+
+    /**
+     * 通知回退是尽力路由：无障碍服务未连接、没有稳定结算页或快照门禁失败时安全返回。
+     */
+    private fun requestPurchaseIntentFallback(
+        packageName: String,
+        amount: Double,
+        occurredAt: Long,
+        sourceEventKey: String
+    ) {
+        if (
+            packageName != WECHAT_PACKAGE &&
+            packageName != ALIPAY_PACKAGE ||
+            !amount.isFinite() ||
+            amount <= 0.0
+        ) {
+            return
+        }
+        val amountMinor = try {
+            BigDecimal.valueOf(amount).movePointRight(2).longValueExact()
+        } catch (_: ArithmeticException) {
+            return
+        }
+        if (amountMinor <= 0L) {
+            return
+        }
+
+        val signal = PaymentNotificationFallbackSignal(
+            paymentPackage = packageName,
+            amountMinor = amountMinor,
+            occurredAt = occurredAt,
+            sourceEventKey = sourceEventKey
+        )
+        try {
+            CheckoutAccessibilityService.requestPaymentNotificationFallbackSignal(
+                signal,
+                PurchaseIntentResultCallback { result ->
+                Log.d(TAG, "支付通知回退路由结果: ${result::class.java.simpleName}")
+            }
+            )
+        } catch (error: RuntimeException) {
+            // 通知服务与无障碍服务独立重建时，回退失败不得影响原有通知处理。
+            Log.w(TAG, "支付通知回退入口不可用", error)
+        }
     }
 
 

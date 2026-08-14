@@ -80,7 +80,7 @@ class EnvironmentConfig {
     if (this.isDevelopment()) {
       console.log('🚀 Environment Configuration:');
       console.log(`📍 Environment: ${this.config.NODE_ENV}`);
-      console.log(`🌐 API Base URL: ${this.config.API_BASE_URL}`);
+      console.log(`🌐 API Base URL: ${this.config.API_BASE_URL ? '已配置' : '未配置'}`);
       console.log(`⏱️  API Timeout: ${this.config.API_TIMEOUT}ms`);
       console.log(`📝 Logs Enabled: ${this.config.ENABLE_LOGS}`);
       console.log(`🔧 Debug Mode: ${this.shouldEnableDebug()}`);
