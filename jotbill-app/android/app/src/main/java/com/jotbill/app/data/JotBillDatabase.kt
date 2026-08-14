@@ -227,6 +227,20 @@ object DatabaseMigrations {
                 "CREATE INDEX IF NOT EXISTS `index_bills_occurred_at_type` " +
                     "ON `bills` (`occurred_at`, `type`)"
             )
+            // 识别链路：扩展 transaction_candidates 和 payment_evidence 列
+            db.execSQL(
+                "ALTER TABLE `transaction_candidates` ADD COLUMN `ai_order_id` TEXT"
+            )
+            db.execSQL(
+                "ALTER TABLE `transaction_candidates` ADD COLUMN `ai_occurred_at` INTEGER"
+            )
+            db.execSQL(
+                "ALTER TABLE `payment_evidence` ADD COLUMN `source_event_key` TEXT"
+            )
+            db.execSQL(
+                "CREATE UNIQUE INDEX IF NOT EXISTS `index_payment_evidence_source_event_key` " +
+                    "ON `payment_evidence` (`source_event_key`)"
+            )
         }
     }
 
