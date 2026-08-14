@@ -463,50 +463,70 @@ internal class CheckoutSnapshotCaptureCoordinator(
                 if (closed) {
                     return@post
                 }
-                val previous = userRetryContext
-                userRetryContext = context
                 val current = activeCheckout
+                val activeUserRetry = current?.takeIf {
+                    it.captureTarget == SnapshotCaptureTarget.USER_RETRY
+                }
+                val resolvedContext = context?.let { next ->
+                    if (
+                        activeUserRetry != null &&
+                        next.isComplete() &&
+                        next.sessionId.isNullOrBlank() &&
+                        next.shoppingPackage == activeUserRetry.page.observation.shoppingPackage &&
+                        next.pageFingerprint == activeUserRetry.page.observation.pageFingerprint &&
+                        next.pageRole == activeUserRetry.page.observation.pageRole &&
+                        next.isSensitivePage == activeUserRetry.page.observation.isSensitivePage
+                    ) {
+                        next.withSessionId(activeUserRetry.sessionId)
+                    } else {
+                        next
+                    }
+                }
+                val previous = userRetryContext
+                userRetryContext = resolvedContext
                 if (current?.captureTarget == SnapshotCaptureTarget.USER_RETRY) {
-                    val sameContext = context?.let {
+                    val sameContext = resolvedContext?.let {
                         it.sessionId == current.sessionId &&
                             it.shoppingPackage == current.page.observation.shoppingPackage &&
-                            it.pageFingerprint == current.page.observation.pageFingerprint
+                            it.pageFingerprint == current.page.observation.pageFingerprint &&
+                            it.pageRole == current.page.observation.pageRole &&
+                            it.isSensitivePage == current.page.observation.isSensitivePage
                     } == true
-                    if (!sameContext || context?.isComplete() != true) {
+                    if (!sameContext || resolvedContext?.isComplete() != true) {
                         activeCheckout = null
                         buffer.discard(current.slotId)
-                    } else if (context != null) {
+                    } else if (resolvedContext != null) {
                         activeCheckout = current.copy(
                             page = StableCheckoutPage(
-                                observation = context.observation,
+                                observation = resolvedContext.observation,
                                 stableAt = nowMillis()
                             )
                         )
                     }
                 }
 
-                if (context?.hasSafeDisplayContext() == true &&
-                    context.isComplete() &&
+                if (resolvedContext?.hasSafeDisplayContext() == true &&
+                    resolvedContext.isComplete() &&
                     (activeCheckout == null || activeCheckout?.captureTarget == SnapshotCaptureTarget.USER_RETRY)
                 ) {
-                    val sessionId = context.sessionId ?: sessionIdFactory()
+                    val sessionId = resolvedContext.sessionId ?: sessionIdFactory()
                     val previousKey = previous?.let {
                         it.shoppingPackage to it.pageFingerprint
                     }
-                    val nextKey = context.shoppingPackage to context.pageFingerprint
+                    val nextKey = resolvedContext.shoppingPackage to resolvedContext.pageFingerprint
                     if (previousKey != nextKey) {
-                        buffer.discard(checkoutSnapshotSlotId(context.shoppingPackage))
+                        buffer.discard(checkoutSnapshotSlotId(resolvedContext.shoppingPackage))
                     }
                     activeCheckout = ActiveCheckout(
                         sessionId = sessionId,
-                        slotId = checkoutSnapshotSlotId(context.shoppingPackage),
+                        slotId = checkoutSnapshotSlotId(resolvedContext.shoppingPackage),
                         page = StableCheckoutPage(
-                            observation = context.observation,
+                            observation = resolvedContext.observation,
                             stableAt = nowMillis()
                         ),
                         captureTarget = SnapshotCaptureTarget.USER_RETRY
                     )
-                    userRetryContext = context.copy(sessionId = sessionId)
+                    userRetryContext = resolvedContext.copy(sessionId = sessionId)
                 }
             }
         } catch (_: RuntimeException) {

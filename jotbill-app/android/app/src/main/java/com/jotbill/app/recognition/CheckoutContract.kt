@@ -19,10 +19,12 @@ enum class CheckoutPageRole(val storageValue: String) {
 
     fun canBufferSnapshot(): Boolean = this == CHECKOUT
 
-    /** 用户主动重试只能引用购物应用普通页，支付交接和支付结果页永远不在此范围内。 */
-    internal fun canBufferUserRetrySnapshot(): Boolean = this != CHECKOUT &&
-        this != PAYMENT_HANDOFF &&
-        this != PAYMENT_RESULT
+    /** 用户主动重试只能引用已确认的购物普通页，未知、结算和支付页面均不在范围内。 */
+    internal fun canBufferUserRetrySnapshot(): Boolean = this in setOf(
+        SHOPPING_HOME,
+        PRODUCT_DETAIL,
+        CART
+    )
 
     companion object {
         fun fromStorageValue(value: String?): CheckoutPageRole = when (value) {

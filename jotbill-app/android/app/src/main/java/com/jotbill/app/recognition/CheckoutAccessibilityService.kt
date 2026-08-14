@@ -618,6 +618,9 @@ class CheckoutAccessibilityService : AccessibilityService() {
     /** 将 Ready 异步交给 AI；返回 false 时所有权仍由协调器负责释放。 */
     private fun dispatchReadyToAi(ready: CheckoutAiTriggerResult.Ready): Boolean {
         val requestKey = ready.requestKey.value
+        val isOrdinaryPageUserRetry =
+            ready.intent == PurchaseIntent.USER_RETRY &&
+                ready.snapshot.pageRole.canBufferUserRetrySnapshot()
         val client: CheckoutAiVisionClient
         val scope: CoroutineScope
         synchronized(aiLifecycleLock) {
@@ -626,7 +629,9 @@ class CheckoutAccessibilityService : AccessibilityService() {
             if (!scope.isActive || !dispatchedAiRequestKeys.add(requestKey)) {
                 return false
             }
-            activeAiReferences[ready.snapshot.sessionId] = ready.snapshot.reference()
+            if (!isOrdinaryPageUserRetry) {
+                activeAiReferences[ready.snapshot.sessionId] = ready.snapshot.reference()
+            }
         }
 
         val reference = ready.snapshot.reference()
@@ -653,7 +658,11 @@ class CheckoutAccessibilityService : AccessibilityService() {
                 clientStarted.set(true)
                 var clientOwnsSnapshot = false
                 try {
-                    val matcher = synchronized(aiLifecycleLock) { paymentMatcher }
+                    val matcher = if (isOrdinaryPageUserRetry) {
+                        null
+                    } else {
+                        synchronized(aiLifecycleLock) { paymentMatcher }
+                    }
                     if (matcher != null) {
                         try {
                             matcher.ensureSession(reference, ready.requestKey)
