@@ -321,6 +321,8 @@ class CheckoutAccessibilityService : AccessibilityService() {
                     handoffStableCheckout = null
                     handoffForegroundPackage = null
                 }
+                // 阶段四 T3：在支付应用中观察支付结果页，提取结构化证据
+                observePaymentResultIfApplicable(event, shoppingPackage)
             } else {
                 handoffStableCheckout = null
                 handoffForegroundPackage = null
@@ -763,6 +765,119 @@ class CheckoutAccessibilityService : AccessibilityService() {
     // 重命名为 Internal 后缀，避免与 Companion 中同名的 @JvmStatic 方法产生 JVM 签名冲突。
     private fun setPurchaseIntentResultConsumerInternal(consumer: PurchaseIntentResultCallback?) {
         purchaseIntentResultConsumer = consumer
+    }
+
+    /**
+     * 阶段四 T3：在支付应用中观察支付结果页，提取结构化证据。
+     *
+     * 只读取无障碍节点文本，不截图、不读密码/付款码/银行卡号。
+     * 支付成功的结果生成 PaymentResultEvidence，交给匹配器落库。
+     * 支付失败的结果不生成成功证据，只记录诊断日志。
+     */
+    private fun observePaymentResultIfApplicable(
+        event: AccessibilityEvent,
+        paymentPackage: String
+    ) {
+        val root = try {
+            rootInActiveWindow
+        } catch (_: RuntimeException) {
+            null
+        } ?: return
+
+        try {
+            val observation = AccessibilityPageSummaryCollector.collect(
+                shoppingPackage = paymentPackage,
+                windowClass = event.className?.toString()?.trim()?.takeIf { it.isNotBlank() },
+                root = root,
+                observedAt = System.currentTimeMillis()
+            )
+
+            if (observation.pageRole != CheckoutPageRole.PAYMENT_RESULT) return
+
+            // 从节点文本提取结构化证据（PaymentResultParser 内部已脱敏）
+            val pageText = collectPageText(root)
+            val evidence = PaymentResultParser.parse(
+                pageText = pageText,
+                sourcePackage = paymentPackage,
+                pageFingerprint = observation.pageFingerprint,
+                observedAt = observation.observedAt
+            ) ?: run {
+                Log.d(TAG, "支付结果页未解析到有效证据（可能为失败页或金额缺失）")
+                return
+            }
+
+            Log.i(TAG, "支付结果页解析到证据: 金额=${evidence.amountMinor}分, 状态=${evidence.paymentStatus}")
+
+            // 异步落库证据
+            val scope = synchronized(aiLifecycleLock) { matchingScope } ?: return
+            val matcher = synchronized(aiLifecycleLock) { paymentMatcher } ?: return
+            scope.launch {
+                try {
+                    recordPaymentResultEvidence(matcher, paymentPackage, observation, evidence)
+                } catch (error: Exception) {
+                    Log.w(TAG, "支付结果页证据落库失败", error)
+                }
+            }
+        } catch (error: RuntimeException) {
+            Log.w(TAG, "支付结果页观察失败", error)
+        }
+    }
+
+    /** 收集节点树可见文本，用于支付结果页证据解析。已排除密码/付款码等敏感字段。 */
+    private fun collectPageText(root: AccessibilityNodeInfo): String {
+        val builder = StringBuilder()
+        collectNodeText(root, builder, depth = 0)
+        return builder.toString()
+    }
+
+    /** 递归收集节点文本，深度限制避免过深遍历。 */
+    private fun collectNodeText(
+        node: AccessibilityNodeInfo,
+        builder: StringBuilder,
+        depth: Int
+    ) {
+        if (depth > 20) return
+        node.text?.toString()?.trim()?.takeIf { it.isNotBlank() }?.let {
+            builder.append(it).append(' ')
+        }
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            collectNodeText(child, builder, depth + 1)
+        }
+    }
+
+    /**
+     * 将支付结果页证据落库。
+     *
+     * 尝试关联活跃结算会话；无活跃会话时只记录日志，不创建独立证据
+     * （纯通知回退路径由 T6 处理）。
+     */
+    private suspend fun recordPaymentResultEvidence(
+        matcher: CheckoutPaymentMatcher,
+        paymentPackage: String,
+        observation: CheckoutPageObservation,
+        evidence: PaymentResultEvidence
+    ) {
+        // 查找关联的活跃结算会话
+        val reference = matcher.findReferenceForPayment(
+            shoppingPackage = observation.shoppingPackage,
+            pageFingerprint = observation.pageFingerprint
+        ) ?: run {
+            Log.d(TAG, "支付结果页无关联活跃会话，证据暂不落库")
+            return
+        }
+
+        // 构建回退信号并落库证据
+        val signal = PaymentNotificationFallbackSignal(
+            paymentPackage = paymentPackage,
+            amountMinor = evidence.amountMinor,
+            occurredAt = evidence.occurredAt ?: System.currentTimeMillis(),
+            merchant = evidence.merchant,
+            orderId = evidence.orderId,
+            sourceEventKey = evidence.sourceEventKey
+        )
+        val result = matcher.recordPaymentEvidence(reference, signal)
+        Log.i(TAG, "支付结果页证据落库结果: ${result::class.java.simpleName}")
     }
 
     /**

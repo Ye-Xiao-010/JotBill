@@ -94,6 +94,19 @@ internal object AccessibilityPageSummaryCollector {
         "人脸识别"
     )
 
+    /** 支付结果页关键词：支付成功/失败/已完成/已付款等，用于判定 PAYMENT_RESULT。 */
+    private val paymentResultTerms = listOf(
+        "支付成功",
+        "支付失败",
+        "交易完成",
+        "交易关闭",
+        "已付款",
+        "支付完成",
+        "付款成功",
+        "订单已支付",
+        "订单已提交"
+    )
+
     fun collect(
         shoppingPackage: String,
         windowClass: String?,
@@ -250,6 +263,11 @@ internal object AccessibilityPageSummaryCollector {
     ): CheckoutPageRole {
         if (containsAny(lowerText, paymentHandoffTerms)) {
             return CheckoutPageRole.PAYMENT_HANDOFF
+        }
+        // 支付结果页判定：必须在支付应用包名上下文中命中结果页关键词
+        // 不基于单一张图或单一关键词，且敏感页（密码/付款码）已被 paymentHandoffTerms 拦截
+        if (containsAny(lowerText, paymentResultTerms)) {
+            return CheckoutPageRole.PAYMENT_RESULT
         }
         if (!isSensitivePage && hasFinalAmountSignal && hasCheckoutActionSignal) {
             return CheckoutPageRole.CHECKOUT
