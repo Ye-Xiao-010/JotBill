@@ -40,7 +40,8 @@ internal object AccessibilityPageSummaryCollector {
     private val uuidPattern = Regex(
         """(?i)\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b"""
     )
-    private val longNumberPattern = Regex("\\b\\d{12,24}\\b")
+    /** 页面指纹不得保留支付码、卡号、验证码等连续数字的原值或哈希。 */
+    private val sensitiveNumberPattern = Regex("""(?<!\d)(?:\d[\s-]?){3,24}(?!\d)""")
     private val currencyPattern = Regex("""[¥￥$＄€£]""")
     private val groupingSeparatorPattern = Regex("""(?<=\d)[,，](?=\d)""")
     private val noisePattern = Regex(
@@ -84,7 +85,7 @@ internal object AccessibilityPageSummaryCollector {
         "安全验证",
         "身份验证"
     )
-    private val sensitiveAsciiPattern = Regex("""(?i)\b(password|pin)\b""")
+    private val sensitiveAsciiPattern = Regex("""(?i)\b(password|pin|otp)\b""")
     private val paymentHandoffTerms = listOf(
         "支付密码",
         "付款码",
@@ -104,7 +105,11 @@ internal object AccessibilityPageSummaryCollector {
         "支付完成",
         "付款成功",
         "订单已支付",
-        "订单已提交"
+        "支付取消",
+        "付款失败",
+        "订单取消",
+        "订单关闭",
+        "支付未完成"
     )
 
     fun collect(
@@ -155,7 +160,8 @@ internal object AccessibilityPageSummaryCollector {
     private fun collectNode(
         node: AccessibilityNodeInfo,
         accumulator: NodeSummaryAccumulator,
-        depth: Int
+        depth: Int,
+        sensitiveAncestor: Boolean = false
     ) {
         if (depth > MAX_DEPTH || accumulator.visitedNodes >= MAX_NODE_COUNT) {
             return
@@ -163,10 +169,20 @@ internal object AccessibilityPageSummaryCollector {
 
         accumulator.visitedNodes += 1
         val visible = depth == 0 || node.isVisibleToUser
-        if (node.isPassword) {
+        val className = node.className?.toString().orEmpty()
+        val viewId = node.viewIdResourceName.orEmpty()
+        val nodeSensitive = sensitiveAncestor ||
+            node.isPassword ||
+            className.contains("password", ignoreCase = true) ||
+            className.contains("verification", ignoreCase = true) ||
+            className.contains("secure", ignoreCase = true) ||
+            viewId.contains("password", ignoreCase = true) ||
+            viewId.contains("verification", ignoreCase = true) ||
+            viewId.contains("secure", ignoreCase = true)
+        if (nodeSensitive) {
             accumulator.sensitive = true
         }
-        if (visible) {
+        if (visible && !nodeSensitive) {
             node.text?.toString()?.let(accumulator::addText)
             node.contentDescription?.toString()?.let(accumulator::addText)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -174,19 +190,11 @@ internal object AccessibilityPageSummaryCollector {
                 node.tooltipText?.toString()?.let(accumulator::addText)
             }
 
-            node.className?.toString()?.let { className ->
+            className.takeIf { it.isNotBlank() }?.let { className ->
                 accumulator.addSemantic("node:${className.substringAfterLast('.')}")
-                if (className.contains("password", ignoreCase = true)) {
-                    accumulator.sensitive = true
-                }
             }
-            node.viewIdResourceName?.let { viewId ->
+            viewId.takeIf { it.isNotBlank() }?.let { viewId ->
                 accumulator.addSemantic("view:${viewId.substringAfterLast('/')}")
-                if (viewId.contains("password", ignoreCase = true) ||
-                    viewId.contains("verification", ignoreCase = true)
-                ) {
-                    accumulator.sensitive = true
-                }
             }
         }
 
@@ -201,7 +209,7 @@ internal object AccessibilityPageSummaryCollector {
             }
             if (child != null) {
                 try {
-                    collectNode(child, accumulator, depth + 1)
+                    collectNode(child, accumulator, depth + 1, nodeSensitive)
                 } finally {
                     child.recycle()
                 }
@@ -231,12 +239,8 @@ internal object AccessibilityPageSummaryCollector {
         token = chineseDatePattern.replace(token, " ")
         token = chineseTimePattern.replace(token, " ")
         token = relativeTimePattern.replace(token, " ")
-        token = uuidPattern.replace(token) { match ->
-            " id_${sha256(match.value).take(16)} "
-        }
-        token = longNumberPattern.replace(token) { match ->
-            " id_${sha256(match.value).take(16)} "
-        }
+        token = uuidPattern.replace(token, " id ")
+        token = sensitiveNumberPattern.replace(token, " number ")
         token = currencyPattern.replace(token, " currency ")
         token = token.replace("元", " currency ")
         token = groupingSeparatorPattern.replace(token, "")
@@ -313,10 +317,12 @@ internal object AccessibilityPageSummaryCollector {
                 sensitiveAsciiPattern.containsMatchIn(value)
             ) {
                 sensitive = true
+                return
             }
             if (value.isNotBlank()) {
                 if (tokens.size < MAX_NODE_COUNT) {
-                    tokens += value.take(MAX_TOKEN_LENGTH)
+                    tokens += sensitiveNumberPattern.replace(value, " number ")
+                        .take(MAX_TOKEN_LENGTH)
                 }
             }
         }

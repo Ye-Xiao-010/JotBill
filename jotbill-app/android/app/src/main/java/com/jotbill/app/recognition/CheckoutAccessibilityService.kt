@@ -33,9 +33,11 @@ class CheckoutAccessibilityService : AccessibilityService() {
 
         /** 结果页文本提取时的敏感字段关键词：命中节点整体丢弃，不进入解析与哈希。 */
         private val SENSITIVE_TEXT_KEYWORDS = listOf(
-            "密码", "付款码", "银行卡号", "卡号", "CVV", "cvv",
-            "有效期", "身份证", "验证码", "CVV2", "CVC"
+            "密码", "支付密码", "付款码", "银行卡号", "银行卡", "卡号", "CVV", "cvv",
+            "有效期", "身份证", "验证码", "安全码", "动态密码", "一次性密码", "CVV2", "CVC",
+            "OTP"
         )
+        private val SENSITIVE_ASCII_PATTERN = Regex("""(?i)\b(password|pin|otp)\b""")
         private const val STABLE_DELAY_MILLIS = 500L
 
         @Volatile
@@ -210,6 +212,13 @@ class CheckoutAccessibilityService : AccessibilityService() {
         val pageFingerprint: String
     )
 
+    /** 支付结果异步任务使用的不可变交接上下文，不再回读可变的页面状态。 */
+    private data class PaymentResultHandoffContext(
+        val stableCheckout: StableCheckoutPage,
+        val reference: CheckoutSnapshotReference?,
+        val handoffAt: Long
+    )
+
     private var lastWindowPackage: String? = null
     private var lastWindowClass: String? = null
     @Volatile
@@ -328,7 +337,11 @@ class CheckoutAccessibilityService : AccessibilityService() {
                     handoffForegroundPackage = null
                 }
                 // 阶段四 T3：在支付应用中观察支付结果页，提取结构化证据
-                observePaymentResultIfApplicable(event, shoppingPackage)
+                observePaymentResultIfApplicable(
+                    event = event,
+                    paymentPackage = shoppingPackage,
+                    handoffContext = capturePaymentResultHandoffContext(shoppingPackage)
+                )
             } else {
                 handoffStableCheckout = null
                 handoffForegroundPackage = null
@@ -783,7 +796,8 @@ class CheckoutAccessibilityService : AccessibilityService() {
      */
     private fun observePaymentResultIfApplicable(
         event: AccessibilityEvent,
-        paymentPackage: String
+        paymentPackage: String,
+        handoffContext: PaymentResultHandoffContext?
     ) {
         val root = try {
             rootInActiveWindow
@@ -809,14 +823,22 @@ class CheckoutAccessibilityService : AccessibilityService() {
 
             // 从节点文本提取结构化证据（collectPageText 已过滤密码/付款码等敏感字段）
             val pageText = collectPageText(root)
-            val evidence = PaymentResultParser.parse(
+            val parseResult = PaymentResultParser.parseResult(
                 pageText = pageText,
                 sourcePackage = paymentPackage,
                 pageFingerprint = observation.pageFingerprint,
                 observedAt = observation.observedAt
-            ) ?: run {
-                Log.d(TAG, "支付结果页未解析到有效证据（可能为失败页或金额缺失）")
-                return
+            )
+            val evidence = when (parseResult) {
+                is PaymentResultParseResult.Success -> parseResult.evidence
+                is PaymentResultParseResult.Failure -> {
+                    Log.i(TAG, "支付结果页未生成成功证据: reason=${parseResult.reason}")
+                    return
+                }
+                PaymentResultParseResult.NotPaymentResult -> {
+                    Log.d(TAG, "支付结果页未命中可确认的结果语义")
+                    return
+                }
             }
 
             Log.i(TAG, "支付结果页解析到证据: 金额=${evidence.amountMinor}分, 状态=${evidence.paymentStatus}")
@@ -826,17 +848,28 @@ class CheckoutAccessibilityService : AccessibilityService() {
             val matcher = synchronized(aiLifecycleLock) { paymentMatcher } ?: return
             scope.launch {
                 try {
-                    recordPaymentResultEvidence(matcher, paymentPackage, observation, evidence)
+                    recordPaymentResultEvidence(
+                        matcher = matcher,
+                        paymentPackage = paymentPackage,
+                        evidence = evidence,
+                        handoffContext = handoffContext
+                    )
                 } catch (error: Exception) {
                     Log.w(TAG, "支付结果页证据落库失败", error)
                 }
             }
         } catch (error: RuntimeException) {
             Log.w(TAG, "支付结果页观察失败", error)
+        } finally {
+            try {
+                root.recycle()
+            } catch (_: RuntimeException) {
+                // 系统节点已经回收时无需再次处理。
+            }
         }
     }
 
-    /** 收集节点树可见文本，用于支付结果页证据解析。逐节点过滤密码/付款码等敏感字段。 */
+    /** 收集节点树可见文本，用于支付结果页证据解析；数值在 parser 哈希前统一脱敏。 */
     private fun collectPageText(root: AccessibilityNodeInfo): String {
         val builder = StringBuilder()
         collectNodeText(root, builder, depth = 0)
@@ -847,18 +880,78 @@ class CheckoutAccessibilityService : AccessibilityService() {
     private fun collectNodeText(
         node: AccessibilityNodeInfo,
         builder: StringBuilder,
-        depth: Int
+        depth: Int,
+        sensitiveAncestor: Boolean = false
     ) {
         if (depth > 20) return
-        node.text?.toString()?.trim()?.takeIf { it.isNotBlank() }?.let { text ->
-            if (SENSITIVE_TEXT_KEYWORDS.none { text.contains(it) }) {
-                builder.append(text).append(' ')
+        val nodeSensitive = sensitiveAncestor || isSensitiveNode(node)
+        if (!nodeSensitive) {
+            node.text?.toString()?.trim()?.takeIf { it.isNotBlank() }?.let { text ->
+                if (
+                    SENSITIVE_TEXT_KEYWORDS.none { text.contains(it, ignoreCase = true) } &&
+                    !SENSITIVE_ASCII_PATTERN.containsMatchIn(text)
+                ) {
+                    builder.append(text).append(' ')
+                }
             }
         }
         for (i in 0 until node.childCount) {
-            val child = node.getChild(i) ?: continue
-            collectNodeText(child, builder, depth + 1)
+            val child = try {
+                node.getChild(i)
+            } catch (_: RuntimeException) {
+                null
+            } ?: continue
+            try {
+                collectNodeText(child, builder, depth + 1, nodeSensitive)
+            } finally {
+                try {
+                    child.recycle()
+                } catch (_: RuntimeException) {
+                    // 系统节点已回收时无需再次处理。
+                }
+            }
         }
+    }
+
+    private fun isSensitiveNode(node: AccessibilityNodeInfo): Boolean {
+        if (node.isPassword) return true
+        val className = node.className?.toString().orEmpty()
+        val viewId = node.viewIdResourceName.orEmpty()
+        return listOf(className, viewId).any { value ->
+            value.contains("password", ignoreCase = true) ||
+                value.contains("verification", ignoreCase = true) ||
+                value.contains("secure", ignoreCase = true) ||
+                value.contains("pin", ignoreCase = true) ||
+                value.contains("cvv", ignoreCase = true) ||
+                value.contains("card", ignoreCase = true)
+        }
+    }
+
+    /** 在支付结果事件所在主线程立即固定旧交接引用，避免后续新订单覆盖槽位后误关联。 */
+    private fun capturePaymentResultHandoffContext(
+        paymentPackage: String
+    ): PaymentResultHandoffContext? {
+        val stableCheckout = synchronized(this) {
+            if (handoffForegroundPackage == paymentPackage) handoffStableCheckout else null
+        } ?: return null
+        val observation = stableCheckout.observation
+        val slotId = checkoutSnapshotSlotId(observation.shoppingPackage)
+        val reference = checkoutSnapshotBuffer?.findReference(
+            slotId = slotId,
+            pageFingerprint = observation.pageFingerprint
+        ) ?: synchronized(aiLifecycleLock) {
+            activeAiReferences.values
+                .filter {
+                    it.shoppingPackage == observation.shoppingPackage &&
+                        it.pageFingerprint == observation.pageFingerprint
+                }
+                .singleOrNull()
+        }
+        return PaymentResultHandoffContext(
+            stableCheckout = stableCheckout,
+            reference = reference,
+            handoffAt = System.currentTimeMillis()
+        )
     }
 
     /**
@@ -875,8 +968,8 @@ class CheckoutAccessibilityService : AccessibilityService() {
     private suspend fun recordPaymentResultEvidence(
         matcher: CheckoutPaymentMatcher,
         paymentPackage: String,
-        observation: CheckoutPageObservation,
-        evidence: PaymentResultEvidence
+        evidence: PaymentResultEvidence,
+        handoffContext: PaymentResultHandoffContext?
     ) {
         val signal = PaymentNotificationFallbackSignal(
             paymentPackage = paymentPackage,
@@ -887,16 +980,18 @@ class CheckoutAccessibilityService : AccessibilityService() {
             sourceEventKey = evidence.sourceEventKey
         )
 
-        // 路径一：支付交接上下文中的稳定结算页
-        val handoffReference = synchronized(this) { handoffStableCheckout }?.let { stable ->
-            val stableObservation = stable.observation
-            matcher.findReferenceForPayment(
-                shoppingPackage = stableObservation.shoppingPackage,
-                pageFingerprint = stableObservation.pageFingerprint
-            )
-        }
-
-        if (handoffReference != null) {
+        // 路径一：使用事件发生时固定的交接引用，禁止异步任务回读新订单槽位。
+        if (handoffContext != null) {
+            val handoffReference = handoffContext.reference ?: matcher.findReferenceForPayment(
+                shoppingPackage = handoffContext.stableCheckout.observation.shoppingPackage,
+                pageFingerprint = handoffContext.stableCheckout.observation.pageFingerprint,
+                at = handoffContext.handoffAt
+            )?.takeIf { reference -> reference.capturedAt <= handoffContext.handoffAt }
+            if (handoffReference == null) {
+                matcher.recordOrphanPaymentSignal(signal, sourceType = "ACCESSIBILITY")
+                Log.i(TAG, "支付结果页交接引用已失效，证据已转待确认")
+                return
+            }
             val result = matcher.recordPaymentEvidence(
                 handoffReference, signal, sourceType = "ACCESSIBILITY"
             )
@@ -923,8 +1018,9 @@ class CheckoutAccessibilityService : AccessibilityService() {
                 )
             }
             is PaymentSessionResolution.Ambiguous -> {
-                // 并发会话无法区分：不强行合并，T6 创建并发候选由用户选择
-                Log.i(TAG, "支付结果页命中并发会话(${resolution.sessionIds.size}个)，待确认处理")
+                // 并发会话无法区分：不强行合并，保留证据交给已有待确认兜底。
+                matcher.recordOrphanPaymentSignal(signal, sourceType = "ACCESSIBILITY")
+                Log.i(TAG, "支付结果页命中并发会话(${resolution.sessionIds.size}个)，已转待确认")
             }
             PaymentSessionResolution.NoMatch -> {
                 // 无关联会话：证据不丢弃，转纯通知待确认（sessionId 为空，sourceType=accessibility）
