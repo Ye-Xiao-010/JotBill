@@ -24,6 +24,7 @@ import {
   Info,
   ChevronRight,
   Bell,
+  BellRing,
   ShieldCheck,
 } from 'lucide-react-native';
 import { ThemeColors } from '../theme/colors';
@@ -75,6 +76,7 @@ const ICON_CANDY_COLORS: Record<string, string> = {
   info: '#7DCEA0',
   review: '#FFC9DE',
   accessibility: '#B5E8DC',
+  notification: '#FFD6A5',
 };
 
 export default function SettingsScreen({ navigation }: SettingsScreenProps) {
@@ -95,6 +97,7 @@ export default function SettingsScreen({ navigation }: SettingsScreenProps) {
     info: Info,
     review: Bell,
     accessibility: ShieldCheck,
+    notification: BellRing,
   };
 
   const settingGroups: SettingGroup[] = [
@@ -112,6 +115,7 @@ export default function SettingsScreen({ navigation }: SettingsScreenProps) {
       items: [
         { id: 'review', label: '待确认中心', icon: 'review', onPress: () => navigation?.navigate('Review') },
         { id: 'accessibility', label: '无障碍权限', icon: 'accessibility', onPress: () => navigation?.navigate('AccessibilityPermission') },
+        { id: 'notification', label: '通知权限', icon: 'notification', onPress: () => navigation?.navigate('NotificationPermission') },
         { id: 'ai-providers', label: 'AI 服务商', icon: 'ai', onPress: () => navigation?.navigate('AiProviders') },
         { id: 'runtime-status', label: '运行状态', icon: 'runtime', onPress: () => navigation?.navigate('RuntimeStatus') },
         { id: 'data-management', label: '数据管理', icon: 'data', onPress: () => navigation?.navigate('DataManagement') },

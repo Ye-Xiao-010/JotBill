@@ -78,7 +78,10 @@ export const QUERY_KEYS = {
   recognition: {
     status: ['recognition', 'status'] as const,
     accessibility: ['recognition', 'accessibility'] as const,
+    notification: ['recognition', 'notification'] as const,
     pending: ['recognition', 'pending'] as const,
+    /** 按会话查询支付证据；key 追加 sessionId。 */
+    evidence: ['recognition', 'evidence'] as const,
   },
 };
 

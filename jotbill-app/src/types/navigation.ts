@@ -73,6 +73,9 @@ declare global {
       Review: undefined;
       AccessibilityPermission: undefined;
 
+      // 通知权限引导（阶段四）
+      NotificationPermission: undefined;
+
       // 预算管理
       Budgets: undefined;
       CreateBudget: undefined;

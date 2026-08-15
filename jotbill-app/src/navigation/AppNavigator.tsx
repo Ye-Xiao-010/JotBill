@@ -31,6 +31,7 @@ import RuntimeStatusScreen from '../screens/settings/RuntimeStatusScreen';
 import DataManagementScreen from '../screens/settings/DataManagementScreen';
 import RulesScreen from '../screens/settings/RulesScreen';
 import AccessibilityPermissionScreen from '../screens/settings/AccessibilityPermissionScreen';
+import NotificationPermissionScreen from '../screens/settings/NotificationPermissionScreen';
 import ReviewScreen from '../screens/review/ReviewScreen';
 
 import { useTheme } from '../providers';
@@ -407,6 +408,11 @@ export default function AppNavigator() {
         <Stack.Screen
           name="AccessibilityPermission"
           component={AccessibilityPermissionScreen}
+          options={{ headerShown: false }}
+        />
+        <Stack.Screen
+          name="NotificationPermission"
+          component={NotificationPermissionScreen}
           options={{ headerShown: false }}
         />
         <Stack.Screen

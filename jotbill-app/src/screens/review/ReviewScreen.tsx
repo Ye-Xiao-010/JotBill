@@ -28,6 +28,7 @@ import {
   nativeData,
   nativeRecognition,
   type PendingTransaction,
+  type PaymentEvidence,
   type RecognitionStatus,
 } from '../../native';
 import { QUERY_KEYS } from '../../lib/queryClient';
@@ -39,6 +40,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 const PENDING_QUERY_KEY = QUERY_KEYS.recognition.pending;
 const STATUS_QUERY_KEY = QUERY_KEYS.recognition.status;
+const EVIDENCE_QUERY_KEY = QUERY_KEYS.recognition.evidence;
 
 /** 待确认中心屏幕组件，对应阶段三任务9前端桥接。 */
 export default function ReviewScreen() {
@@ -59,6 +61,8 @@ export default function ReviewScreen() {
   const invalidateAll = useCallback(() => {
     queryClient.invalidateQueries({ queryKey: PENDING_QUERY_KEY });
     queryClient.invalidateQueries({ queryKey: STATUS_QUERY_KEY });
+    // 阶段四 T7：确认/忽略/重试后同步刷新各卡片支付证据摘要
+    queryClient.invalidateQueries({ queryKey: EVIDENCE_QUERY_KEY });
     queryClient.invalidateQueries({ queryKey: QUERY_KEYS.bills.all });
   }, [queryClient]);
 
@@ -288,6 +292,20 @@ function PendingCard({
   colors,
 }: PendingCardProps) {
   const styles = useStyles(createStyles);
+  // 阶段四 T7：按会话查询支付证据摘要；无会话的纯手动记录不查询
+  const evidenceQuery = useQuery({
+    queryKey: [...EVIDENCE_QUERY_KEY, pending.sessionId ?? 'none'],
+    queryFn: () => nativeRecognition.getPaymentEvidence(pending.sessionId!),
+    enabled: Boolean(pending.sessionId),
+    staleTime: 30_000,
+  });
+  const evidences = useMemo(
+    () =>
+      (evidenceQuery.data ?? []).filter(
+        (item) => item.paymentStatus === 'SUCCESS' || item.paymentStatus == null,
+      ),
+    [evidenceQuery.data],
+  );
   const amountLabel = useMemo(
     () => formatAmount(pending.amountMinor, pending.type),
     [pending.amountMinor, pending.type],
@@ -297,6 +315,10 @@ function PendingCard({
     [pending.sourceType],
   );
   const timeLabel = useMemo(() => formatTime(pending.occurredAt), [pending.occurredAt]);
+  const conflictLabel = useMemo(
+    () => translateConflictReason(pending.conflictReason),
+    [pending.conflictReason],
+  );
   const hasConflict = Boolean(pending.conflictReason);
 
   return (
@@ -342,12 +364,20 @@ function PendingCard({
         {hasConflict ? (
           <MetaRow
             label="冲突"
-            value={pending.conflictReason ?? ''}
+            value={conflictLabel}
             colors={colors}
             highlight
           />
         ) : null}
       </View>
+
+      {pending.sessionId ? (
+        <EvidenceSection
+          evidences={evidences}
+          loading={evidenceQuery.isLoading}
+          colors={colors}
+        />
+      ) : null}
 
       <View style={styles.actionRow}>
         <TouchableOpacity
@@ -427,6 +457,104 @@ function MetaRow({
     </View>
   );
 }
+
+/**
+ * 支付证据摘要区块（阶段四 T7）。
+ * 只展示结构化摘要（来源、金额、订单号、状态），不展示通知原文。
+ */
+function EvidenceSection({
+  evidences,
+  loading,
+  colors,
+}: {
+  evidences: PaymentEvidence[];
+  loading: boolean;
+  colors: ThemeColors;
+}) {
+  const styles = useStyles(createStyles);
+  if (loading) {
+    return (
+      <View style={styles.evidenceSection}>
+        <Text style={styles.evidenceTitle}>支付证据</Text>
+        <Text style={styles.evidenceEmpty}>正在读取…</Text>
+      </View>
+    );
+  }
+  if (evidences.length === 0) {
+    return (
+      <View style={styles.evidenceSection}>
+        <Text style={styles.evidenceTitle}>支付证据</Text>
+        <Text style={styles.evidenceEmpty}>
+          暂无支付成功证据，等待支付通知或支付结果页确认。
+        </Text>
+      </View>
+    );
+  }
+  return (
+    <View style={styles.evidenceSection}>
+      <View style={styles.evidenceHeader}>
+        <Bell size={13} color={colors.primary} />
+        <Text style={styles.evidenceTitle}>
+          支付证据（{evidences.length} 条）
+        </Text>
+      </View>
+      {evidences.map((evidence) => (
+        <View key={evidence.evidenceId} style={styles.evidenceRow}>
+          <View style={styles.evidenceBadge}>
+            <Text style={styles.evidenceBadgeText}>
+              {EVIDENCE_SOURCE_LABELS[evidence.sourceType] ??
+                String(evidence.sourceType)}
+            </Text>
+          </View>
+          <Text style={styles.evidenceAmount} numberOfLines={1}>
+            {formatAmount(evidence.amountMinor ?? 0, 'expense')}
+          </Text>
+          {evidence.orderId ? (
+            <Text style={styles.evidenceOrder} numberOfLines={1}>
+              {shortenOrderId(evidence.orderId)}
+            </Text>
+          ) : (
+            <Text style={styles.evidenceOrder}>无订单号</Text>
+          )}
+        </View>
+      ))}
+    </View>
+  );
+}
+
+/** 冲突原因代码到中文说明的映射；未知代码原样展示供排查。 */
+const CONFLICT_LABELS: Record<string, string> = {
+  PAYMENT_AMOUNT_MISSING: '支付通知缺少金额，无法核对',
+  AI_AMOUNT_MISSING: 'AI 识别缺少金额，无法核对',
+  AI_AMOUNT_LOWER_THAN_PAYMENT: '实际支付金额高于 AI 识别金额',
+  ORDER_ID_MISMATCH: 'AI 订单号与支付订单号不一致',
+  TIME_WINDOW_MISMATCH: '支付时间与结算页时间差距过大',
+  PAYMENT_PACKAGE_UNSUPPORTED: '支付平台暂不支持',
+  PAYMENT_EVIDENCE_AMBIGUOUS: '匹配到多条支付证据，需要人工选择',
+  PAYMENT_EVIDENCE_MISSING: '缺少支付成功证据',
+};
+
+/** 冲突原因可能为逗号拼接的多个代码，逐个翻译后合并展示。 */
+function translateConflictReason(reason?: string): string {
+  if (!reason) return '';
+  return reason
+    .split(',')
+    .map((code) => CONFLICT_LABELS[code.trim()] ?? code.trim())
+    .filter(Boolean)
+    .join('；');
+}
+
+/** 订单号只展示尾部 6 位，避免整串占满卡片。 */
+function shortenOrderId(orderId: string): string {
+  if (orderId.length <= 6) return orderId;
+  return `…${orderId.slice(-6)}`;
+}
+
+const EVIDENCE_SOURCE_LABELS: Record<string, string> = {
+  notification: '通知',
+  accessibility: '结果页',
+  manual: '手动',
+};
 
 const TYPE_LABELS: Record<string, string> = {
   income: '收入',
@@ -615,6 +743,62 @@ const createStyles = (colors: ThemeColors) => ({
       borderBottomWidth: StyleSheet.hairlineWidth,
       borderBottomColor: colors.divider,
       gap: spacing.xs,
+    },
+    evidenceSection: {
+      marginTop: spacing.sm,
+      padding: spacing.sm,
+      backgroundColor: colors.background,
+      borderWidth: borderWidth.thin,
+      borderColor: colors.stroke,
+      borderRadius: borderRadius.medium,
+      gap: spacing.xs,
+    },
+    evidenceHeader: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 4,
+    },
+    evidenceTitle: {
+      fontSize: 12,
+      fontWeight: '800',
+      color: colors.textSecondary,
+    },
+    evidenceEmpty: {
+      fontSize: 12,
+      fontWeight: '500',
+      color: colors.textTertiary,
+      lineHeight: 18,
+    },
+    evidenceRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: spacing.sm,
+    },
+    evidenceBadge: {
+      paddingHorizontal: 6,
+      paddingVertical: 2,
+      borderRadius: borderRadius.small,
+      borderWidth: borderWidth.thin,
+      borderColor: colors.stroke,
+      backgroundColor: colors.primaryLight,
+    },
+    evidenceBadgeText: {
+      fontSize: 10,
+      fontWeight: '700',
+      color: colors.textPrimary,
+    },
+    evidenceAmount: {
+      fontSize: 12,
+      fontWeight: '800',
+      color: colors.textPrimary,
+      fontFamily: 'Courier',
+    },
+    evidenceOrder: {
+      flex: 1,
+      fontSize: 11,
+      fontWeight: '500',
+      color: colors.textSecondary,
+      textAlign: 'right',
     },
     metaRow: {
       flexDirection: 'row',
