@@ -41,6 +41,26 @@ internal sealed class CheckoutPaymentMatchResult {
 }
 
 /**
+ * 阶段四 T4：支付证据归属会话的解析决策。
+ *
+ * 并发会话无法区分时输出 Ambiguous，不强行合并；
+ * 由待确认中心（T6）创建并发候选，由用户选择归属。
+ */
+internal sealed class PaymentSessionResolution {
+    /** 订单号或金额+时间窗口唯一匹配的会话。byOrderId 表示是否通过订单号直接命中。 */
+    data class Matched(
+        val reference: CheckoutSnapshotReference,
+        val byOrderId: Boolean
+    ) : PaymentSessionResolution()
+
+    /** 多个并发会话无法区分，进入待确认由用户选择。 */
+    data class Ambiguous(val sessionIds: List<String>) : PaymentSessionResolution()
+
+    /** 无匹配会话。 */
+    object NoMatch : PaymentSessionResolution()
+}
+
+/**
  * 将支付证据和视觉候选限制在同一个 sessionId 内关联。
  * 本类只写会话、证据和候选，不创建正式账单，也不更新账户余额。
  */
@@ -86,6 +106,93 @@ internal class CheckoutPaymentMatcher(
             shoppingPackage = shoppingPackage,
             pageRole = pageRole,
             pageFingerprint = pageFingerprint,
+            capturedAt = session.createdAt,
+            expiresAt = session.expiresAt,
+            candidateRevision = 0,
+            sourceReason = SnapshotSourceReason.CHECKOUT_STABLE
+        )
+    }
+
+    /**
+     * 阶段四 T4：按订单号优先、金额+时间窗口+会话未占用综合解析支付证据应归属的会话。
+     *
+     * 匹配规则（文档 3.5 节）：
+     * - 订单号一致时优先级最高，直接匹配；
+     * - 没有订单号时按金额+时间窗口+会话未被占用综合匹配；
+     * - 仅凭"同金额 + 五分钟内"不能自动合并两笔连续支付；
+     * - 并发会话无法区分时输出 Ambiguous，不强行合并，由待确认中心让用户选择。
+     */
+    suspend fun resolveSessionForPayment(
+        paymentPackage: String,
+        amountMinor: Long,
+        occurredAt: Long,
+        orderId: String? = null,
+        at: Long = nowMillis()
+    ): PaymentSessionResolution {
+        if (paymentPackage !in DEFAULT_SUPPORTED_PAYMENT_PACKAGES || amountMinor <= 0L) {
+            return PaymentSessionResolution.NoMatch
+        }
+
+        // 第一优先级：订单号一致直接匹配
+        if (!orderId.isNullOrBlank()) {
+            val byOrderId = database.transactionCandidateDao()
+                .findActiveByOrderId(orderId, at)
+            val sessionIds = byOrderId.map { it.sessionId }.distinct()
+            return when {
+                sessionIds.size == 1 -> {
+                    val session = database.checkoutSessionDao().getById(sessionIds.single())
+                    if (session != null && !session.isClosedOrExpired(at)) {
+                        PaymentSessionResolution.Matched(
+                            reference = referenceForSession(session),
+                            byOrderId = true
+                        )
+                    } else {
+                        PaymentSessionResolution.NoMatch
+                    }
+                }
+                sessionIds.size > 1 -> PaymentSessionResolution.Ambiguous(sessionIds)
+                else -> PaymentSessionResolution.NoMatch
+            }
+        }
+
+        // 第二优先级：金额覆盖 + 时间窗口 + 会话未被占用
+        val candidates = database.transactionCandidateDao()
+            .findUnoccupiedByAmountCovering(amountMinor, at)
+        val withinWindow = candidates.filter { candidate ->
+            val candidateTime = candidate.aiOccurredAt
+                ?: database.checkoutSessionDao().getById(candidate.sessionId)?.createdAt
+            candidateTime != null &&
+                abs(occurredAt - candidateTime) <= PAYMENT_MATCH_WINDOW_MILLIS
+        }
+        val sessionIds = withinWindow.map { it.sessionId }.distinct()
+        return when {
+            sessionIds.size == 1 -> {
+                val session = database.checkoutSessionDao().getById(sessionIds.single())
+                if (session != null && !session.isClosedOrExpired(at)) {
+                    PaymentSessionResolution.Matched(
+                        reference = referenceForSession(session),
+                        byOrderId = false
+                    )
+                } else {
+                    PaymentSessionResolution.NoMatch
+                }
+            }
+            sessionIds.size > 1 -> PaymentSessionResolution.Ambiguous(sessionIds)
+            else -> PaymentSessionResolution.NoMatch
+        }
+    }
+
+    /** 从会话实体构建快照引用，供证据落库复用。 */
+    private fun referenceForSession(session: CheckoutSessionEntity): CheckoutSnapshotReference {
+        val shoppingPackage = session.shoppingPackage.orEmpty()
+        val pageRole = CheckoutPageRole.fromStorageValue(session.pageRole)
+        return CheckoutSnapshotReference(
+            snapshotId = session.snapshotId.orEmpty(),
+            sessionId = session.id,
+            slotId = checkoutSnapshotSlotId(shoppingPackage),
+            shoppingPackage = shoppingPackage,
+            pageRole = pageRole,
+            pageFingerprint = session.pageFingerprint.orEmpty(),
             capturedAt = session.createdAt,
             expiresAt = session.expiresAt,
             candidateRevision = 0,

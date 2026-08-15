@@ -849,8 +849,10 @@ class CheckoutAccessibilityService : AccessibilityService() {
     /**
      * 将支付结果页证据落库。
      *
-     * 尝试关联活跃结算会话；无活跃会话时只记录日志，不创建独立证据
-     * （纯通知回退路径由 T6 处理）。
+     * 会话解析双路径（T4）：
+     * 1. 优先用支付交接上下文（handoffStableCheckout）——提交订单后切到支付应用的场景；
+     * 2. 否则用 resolveSessionForPayment 按订单号/金额+时间窗口综合解析；
+     * 3. 并发会话无法区分时输出 Ambiguous，不强行合并（T6 创建并发候选）。
      */
     private suspend fun recordPaymentResultEvidence(
         matcher: CheckoutPaymentMatcher,
@@ -858,16 +860,6 @@ class CheckoutAccessibilityService : AccessibilityService() {
         observation: CheckoutPageObservation,
         evidence: PaymentResultEvidence
     ) {
-        // 查找关联的活跃结算会话
-        val reference = matcher.findReferenceForPayment(
-            shoppingPackage = observation.shoppingPackage,
-            pageFingerprint = observation.pageFingerprint
-        ) ?: run {
-            Log.d(TAG, "支付结果页无关联活跃会话，证据暂不落库")
-            return
-        }
-
-        // 构建回退信号并落库证据
         val signal = PaymentNotificationFallbackSignal(
             paymentPackage = paymentPackage,
             amountMinor = evidence.amountMinor,
@@ -876,8 +868,46 @@ class CheckoutAccessibilityService : AccessibilityService() {
             orderId = evidence.orderId,
             sourceEventKey = evidence.sourceEventKey
         )
-        val result = matcher.recordPaymentEvidence(reference, signal)
-        Log.i(TAG, "支付结果页证据落库结果: ${result::class.java.simpleName}")
+
+        // 路径一：支付交接上下文中的稳定结算页
+        val handoffReference = synchronized(this) { handoffStableCheckout }?.let { stable ->
+            val stableObservation = stable.observation
+            matcher.findReferenceForPayment(
+                shoppingPackage = stableObservation.shoppingPackage,
+                pageFingerprint = stableObservation.pageFingerprint
+            )
+        }
+
+        if (handoffReference != null) {
+            val result = matcher.recordPaymentEvidence(handoffReference, signal)
+            Log.i(TAG, "支付结果页证据落库结果（交接上下文）: ${result::class.java.simpleName}")
+            return
+        }
+
+        // 路径二：订单号/金额+时间窗口综合解析
+        when (val resolution = matcher.resolveSessionForPayment(
+            paymentPackage = paymentPackage,
+            amountMinor = evidence.amountMinor,
+            occurredAt = evidence.occurredAt ?: System.currentTimeMillis(),
+            orderId = evidence.orderId
+        )) {
+            is PaymentSessionResolution.Matched -> {
+                val result = matcher.recordPaymentEvidence(resolution.reference, signal)
+                Log.i(
+                    TAG,
+                    "支付结果页证据落库结果（" +
+                        (if (resolution.byOrderId) "订单号" else "金额+时间窗口") +
+                        "）: ${result::class.java.simpleName}"
+                )
+            }
+            is PaymentSessionResolution.Ambiguous -> {
+                // 并发会话无法区分：不强行合并，T6 创建并发候选由用户选择
+                Log.i(TAG, "支付结果页命中并发会话(${resolution.sessionIds.size}个)，待确认处理")
+            }
+            PaymentSessionResolution.NoMatch -> {
+                Log.d(TAG, "支付结果页无关联活跃会话，证据暂不落库")
+            }
+        }
     }
 
     /**
