@@ -71,6 +71,13 @@ internal object PaymentResultParser {
         Regex("""金额[：:]\s*([0-9]+(?:\.[0-9]+)?)""")
     )
 
+    private val FINAL_AMOUNT_PATTERNS = listOf(
+        Regex("""(?:实付|实际支付|支付金额|付款金额|本次支付)\s*[:：]?\s*(?:¥|￥|CNY)?\s*([0-9]+(?:\.[0-9]+)?)"""),
+        Regex("""(?:订单总额|订单金额|应付|合计|总计)\s*[:：]?\s*(?:¥|￥|CNY)?\s*([0-9]+(?:\.[0-9]+)?)"""),
+        Regex("""(?:¥|￥|CNY)\s*([0-9]+(?:\.[0-9]+)?)\s*(?:实付|实际支付|支付金额|付款金额|本次支付)"""),
+        Regex("""([0-9]+(?:\.[0-9]+)?)\s*元的?\s*(?:实付|实际支付|支付金额|付款金额|本次支付)""")
+    )
+
     private val FULL_DATE_TIME_PATTERN = Regex(
         """(?<!\d)(\d{4})-(\d{1,2})-(\d{1,2})\s*(?:T\s*)?([01]?\d|2[0-3]):([0-5]\d)(?::([0-5]\d))?(?!\d)"""
     )
@@ -210,6 +217,10 @@ internal object PaymentResultParser {
 
     /** 从文本中提取金额并转换为分（Long），无法提取时返回 null。 */
     private fun extractAmountMinor(content: String): Long? {
+        for (pattern in FINAL_AMOUNT_PATTERNS) {
+            val match = pattern.find(content) ?: continue
+            return parseAmountMinor(match.groupValues[1])
+        }
         for (pattern in AMOUNT_PATTERNS) {
             for (match in pattern.findAll(content)) {
                 val amountStr = match.groupValues.getOrNull(1) ?: continue
@@ -233,6 +244,22 @@ internal object PaymentResultParser {
             }
         }
         return null
+    }
+
+    private fun parseAmountMinor(amountText: String): Long? {
+        val amount = try {
+            BigDecimal(amountText)
+        } catch (_: NumberFormatException) {
+            return null
+        }
+        if (amount.signum() <= 0 || amount.scale() > 2) return null
+        val amountMinor = amount.movePointRight(2)
+        if (amountMinor > MAX_AMOUNT_MINOR) return null
+        return try {
+            amountMinor.longValueExact().takeIf { it > 0L }
+        } catch (_: ArithmeticException) {
+            null
+        }
     }
 
     /** 用一组正则从文本中提取首个匹配的字段值。 */

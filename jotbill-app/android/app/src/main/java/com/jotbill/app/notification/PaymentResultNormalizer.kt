@@ -42,6 +42,14 @@ internal object PaymentResultNormalizer {
     /** 支持的支付应用包名白名单 */
     val SUPPORTED_PACKAGES: Set<String> = setOf(WECHAT_PACKAGE, ALIPAY_PACKAGE)
 
+    /** 优先匹配最终支付栏，避免把原价或优惠金额当成实际支付金额。 */
+    private val FINAL_AMOUNT_PATTERNS = listOf(
+        Regex("""(?:实付|实际支付|支付金额|付款金额|本次支付)\s*[:：]?\s*(?:¥|￥|CNY)?\s*([0-9]+\.?[0-9]*)"""),
+        Regex("""(?:订单总额|订单金额|应付|合计|总计)\s*[:：]?\s*(?:¥|￥|CNY)?\s*([0-9]+\.?[0-9]*)"""),
+        Regex("""(?:¥|￥|CNY)\s*([0-9]+\.?[0-9]*)\s*(?:实付|实际支付|支付金额|付款金额|本次支付)"""),
+        Regex("""([0-9]+\.?[0-9]*)\s*元的?\s*(?:实付|实际支付|支付金额|付款金额|本次支付)""")
+    )
+
     /** 非消费语义排除关键词：收款、到账、转入、红包、AA、提现等 */
     private val EXCLUDE_KEYWORDS = listOf(
         "收款", "到账", "收到", "转入", "红包", "转账", "转出",
@@ -80,6 +88,7 @@ internal object PaymentResultNormalizer {
 
     /** 交易时间匹配正则：HH:mm 或 HH:mm:ss（通知正文常见格式）。 */
     private val TIME_PATTERN = Regex("""(?<!\d)([01]?\d|2[0-3]):([0-5]\d)(?::([0-5]\d))?(?!\d)""")
+    private val SENSITIVE_NUMBER_PATTERN = Regex("""(?<![\p{L}\p{N}])\d{3,}(?:[.,]\d+)?(?![\p{L}\p{N}])""")
 
     /** 商户名匹配正则 */
     private val MERCHANT_PATTERNS = listOf(
@@ -112,11 +121,12 @@ internal object PaymentResultNormalizer {
         tickerText: String,
         postTime: Long,
         notificationKey: String?,
-        notificationId: Int
+        notificationId: Int,
+        titleBig: String = ""
     ): PaymentEvidenceInput? {
         if (sourcePackage !in SUPPORTED_PACKAGES) return null
 
-        val fullContent = listOf(title, text, bigText, subText, summaryText, tickerText)
+        val fullContent = listOf(title, titleBig, text, bigText, subText, summaryText, tickerText)
             .filter { it.isNotBlank() }
             .joinToString(" ")
 
@@ -150,7 +160,9 @@ internal object PaymentResultNormalizer {
         )
 
         // 原文哈希（不存原文）
-        val rawTextHash = sha256("raw|$sourcePackage|$fullContent")
+        val rawTextHash = sha256(
+            "raw|$sourcePackage|${sanitizeForHash(fullContent, orderId)}"
+        )
 
         return PaymentEvidenceInput(
             sourcePackage = sourcePackage,
@@ -166,17 +178,30 @@ internal object PaymentResultNormalizer {
 
     /** 从文本中提取金额并转换为分（Long），无法提取时返回 null。 */
     private fun extractAmountMinor(content: String): Long? {
+        for (pattern in FINAL_AMOUNT_PATTERNS) {
+            val match = pattern.find(content) ?: continue
+            return parseAmountMinor(match.groupValues[1])
+        }
         for (pattern in AMOUNT_PATTERNS) {
             val match = pattern.find(content) ?: continue
             val amountStr = match.groupValues.getOrNull(1) ?: continue
-            return try {
-                val amount = BigDecimal(amountStr)
-                amount.movePointRight(2).toLong()
-            } catch (_: NumberFormatException) {
-                null
-            }
+            return parseAmountMinor(amountStr)
         }
         return null
+    }
+
+    private fun parseAmountMinor(amountText: String): Long? {
+        val amount = try {
+            BigDecimal(amountText)
+        } catch (_: NumberFormatException) {
+            return null
+        }
+        if (amount.signum() <= 0 || amount.scale() > 2) return null
+        return try {
+            amount.movePointRight(2).longValueExact().takeIf { it > 0L }
+        } catch (_: ArithmeticException) {
+            null
+        }
     }
 
     /** 用一组正则从文本中提取首个匹配的字段值。 */
@@ -187,6 +212,15 @@ internal object PaymentResultNormalizer {
             if (value != null) return value
         }
         return null
+    }
+
+    /** 原文只在内存中参与解析，哈希前移除订单号和连续敏感数字。 */
+    private fun sanitizeForHash(content: String, orderId: String?): String {
+        var sanitized = content
+        orderId?.takeIf { it.isNotBlank() }?.let { value ->
+            sanitized = sanitized.replace(value, "<order-id>")
+        }
+        return SENSITIVE_NUMBER_PATTERN.replace(sanitized, "<number>")
     }
 
     /**

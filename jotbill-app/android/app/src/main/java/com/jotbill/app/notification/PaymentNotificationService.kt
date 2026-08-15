@@ -8,6 +8,7 @@ import com.jotbill.app.data.JotBillDatabaseProvider
 import com.jotbill.app.recognition.CheckoutAccessibilityService
 import com.jotbill.app.recognition.CheckoutPaymentMatcher
 import com.jotbill.app.recognition.PaymentNotificationFallbackSignal
+import com.jotbill.app.recognition.PurchaseIntentCoordinationResult
 import com.jotbill.app.recognition.PurchaseIntentResultCallback
 import com.jotbill.app.utils.SentryLogger
 import kotlinx.coroutines.CancellableContinuation
@@ -123,6 +124,7 @@ class PaymentNotificationService : NotificationListenerService() {
         val evidenceInput = PaymentResultNormalizer.normalize(
             sourcePackage = packageName,
             title = title,
+            titleBig = titleBig,
             text = text,
             bigText = bigText,
             subText = subText,
@@ -173,9 +175,11 @@ class PaymentNotificationService : NotificationListenerService() {
 
         // 通过无障碍服务触发回退，尝试关联活跃结算会话
         val result = tryFallbackSignal(signal)
+        val acceptedByAccessibility = result is PurchaseIntentCoordinationResult.Accepted ||
+            result is PurchaseIntentCoordinationResult.AiDispatched
 
         // 回退未被接受（服务不可用/超时/门禁拒绝）：证据不丢弃，落纯通知待确认
-        if (result != ACCEPTED_RESULT) {
+        if (!acceptedByAccessibility) {
             try {
                 val database = JotBillDatabaseProvider.get(applicationContext)
                 CheckoutPaymentMatcher(database).recordOrphanPaymentSignal(
@@ -190,7 +194,7 @@ class PaymentNotificationService : NotificationListenerService() {
         // 记录处理结果
         val resultInfo = mapOf(
             "package" to input.sourcePackage,
-            "fallbackResult" to result
+            "fallbackResult" to (result?.javaClass?.simpleName ?: "TIMEOUT_OR_UNAVAILABLE")
         )
         SentryLogger.addBreadcrumb(
             "支付证据处理完成",
@@ -208,23 +212,25 @@ class PaymentNotificationService : NotificationListenerService() {
      * @param signal 支付通知回退信号
      * @return 回退结果描述
      */
-    private suspend fun tryFallbackSignal(signal: PaymentNotificationFallbackSignal): String {
+    private suspend fun tryFallbackSignal(
+        signal: PaymentNotificationFallbackSignal
+    ): PurchaseIntentCoordinationResult? {
         return try {
             withTimeoutOrNull(FALLBACK_TIMEOUT_MILLIS) {
-                suspendCancellableCoroutine { cont: CancellableContinuation<String> ->
+                suspendCancellableCoroutine { cont: CancellableContinuation<PurchaseIntentCoordinationResult> ->
                     CheckoutAccessibilityService.requestPaymentNotificationFallbackSignal(
                         signal,
                         PurchaseIntentResultCallback { result ->
                             if (cont.isActive) {
-                                cont.resume(result::class.java.simpleName)
+                                cont.resume(result)
                             }
                         }
                     )
                 }
-            } ?: "TIMEOUT"
+            }
         } catch (_: RuntimeException) {
             Log.w(TAG, "支付通知回退入口不可用")
-            "UNAVAILABLE"
+            null
         }
     }
 
@@ -232,8 +238,7 @@ class PaymentNotificationService : NotificationListenerService() {
         private const val TAG = "PaymentNotificationService"
         private const val FALLBACK_TIMEOUT_MILLIS = 5_000L
 
-        /** 回退回调结果为 Accepted 时表示无障碍服务已接手证据，其余情况均需兜底落纯通知待确认。 */
-        private const val ACCEPTED_RESULT = "Accepted"
+        /** Accepted 或 AiDispatched 表示无障碍链路已接收证据，其余情况才进入纯通知待确认。 */
 
         /** 广播 Action：检测到支付通知（保留兼容，供旧模块监听） */
         const val ACTION_PAYMENT_DETECTED = "com.jotbill.app.PAYMENT_DETECTED"
