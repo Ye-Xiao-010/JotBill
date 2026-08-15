@@ -34,7 +34,7 @@ export const nativeRuntime = {
   },
 
   /**
-   * 打开系统"通知访问"设置页（审查修复新增）。
+   * 打开系统"通知访问"设置页（最小通知权限契约变更）。
    * 通知监听权限与无障碍权限不在同一设置页，需专用跳转。
    */
   async openNotificationListenerSettings(): Promise<void> {

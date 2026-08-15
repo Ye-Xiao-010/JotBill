@@ -43,8 +43,8 @@ class RuntimeModule(
      *
      * 审查修复：此前通知权限引导复用 openAccessibilitySettings，跳转到的是
      * 无障碍设置页而非通知监听权限页，用户按引导无法完成授权。
-     * 注意：该方法是审查修复必需的最小新增，docs/types/Native.d.ts 契约
-     * 待后续"契约变更"任务补充登记。
+     * 该方法是通知权限功能所需的最小契约变更，已同步登记到
+     * docs/types/Native.d.ts；不扩展 RuntimeHealth 字段。
      */
     @ReactMethod
     fun openNotificationListenerSettings(promise: Promise) {
@@ -72,7 +72,6 @@ class RuntimeModule(
                     put("checkedAt", Instant.now().toString())
                     put("aiProviderConfigured", database.aiProviderConfigDao().getDefault() != null)
                     put("accessibilityEnabled", isAccessibilityServiceEnabled())
-                    put("accessibilityServiceRunning", isAccessibilityServiceEnabled())
                     put("notificationEnabled", isNotificationListenerEnabled())
                     put("overlayPermissionGranted", isOverlayPermissionGranted())
                 }.toString()

@@ -4,6 +4,7 @@
  */
 import React, { useCallback, useMemo, useState } from 'react';
 import {
+  ActivityIndicator,
   RefreshControl,
   ScrollView,
   StyleSheet,
@@ -203,6 +204,8 @@ export default function ReviewScreen() {
             onRetry={() => pendingQuery.refetch()}
             colors={styles._colors}
           />
+        ) : pendingQuery.isLoading ? (
+          <LoadingState colors={styles._colors} />
         ) : pendingItems.length === 0 ? (
           <EmptyState colors={styles._colors} />
         ) : (
@@ -333,6 +336,18 @@ function EmptyState({ colors }: { colors: ThemeColors }) {
         AI 视觉识别或支付通知产生待确认交易时，会在此处显示。
         确认入账后会写入本地账本并更新账户余额。
       </Text>
+    </View>
+  );
+}
+
+/** 初次查询期间单独展示加载态，避免把尚未返回的数据误报为空。 */
+function LoadingState({ colors }: { colors: ThemeColors }) {
+  const styles = useStyles(createStyles);
+  return (
+    <View style={styles.emptyCard}>
+      <ActivityIndicator size="small" color={colors.primary} />
+      <Text style={styles.emptyTitle}>正在读取待确认交易</Text>
+      <Text style={styles.emptyText}>请稍候…</Text>
     </View>
   );
 }

@@ -1081,6 +1081,7 @@ export interface AiModule {
  */
 export interface RuntimeModule {
   getRuntimeHealth(): Promise<RuntimeHealth>;
+  /** 通知权限契约变更：打开通知监听专用系统设置页。 */
   openNotificationListenerSettings(): Promise<void>;
 }
 
