@@ -167,7 +167,7 @@ internal object BridgeDtoMapper {
     }
 
     /** 将结算会话实体映射为 RN 契约中的 CheckoutSession JSON。时间戳保留毫秒数值。 */
-    fun session(entity: CheckoutSessionEntity): JSONObject = JSONObject().apply {
+    fun session(entity: CheckoutSessionEntity, evidenceIds: List<String>): JSONObject = JSONObject().apply {
         put("sessionId", entity.id)
         put("status", entity.status)
         putOptional("shoppingPackage", entity.shoppingPackage)
@@ -177,7 +177,9 @@ internal object BridgeDtoMapper {
         putOptional("checkoutRequestKey", entity.checkoutRequestKey)
         putOptional("aiRequestId", entity.aiRequestId)
         putOptional("candidateId", entity.candidateId)
-        put("paymentEvidenceIds", JSONArray())
+        put("paymentEvidenceIds", JSONArray().apply {
+            evidenceIds.forEach { evidenceId -> put(evidenceId) }
+        })
         put("createdAt", entity.createdAt)
         put("updatedAt", entity.updatedAt)
         put("expiresAt", entity.expiresAt)

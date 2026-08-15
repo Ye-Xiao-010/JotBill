@@ -39,7 +39,6 @@ class RecognitionModule(
         private val TERMINAL_SESSION_STATUSES = setOf(
             "COMPLETED",
             "CANCELLED",
-            "FAILED",
             "EXPIRED"
         )
     }
@@ -63,7 +62,12 @@ class RecognitionModule(
             database.checkoutSessionDao().getByStatuses(statuses)
         }
         JSONArray().also { array ->
-            sessions.forEach { array.put(BridgeDtoMapper.session(it)) }
+            sessions.forEach { session ->
+                val evidenceIds = database.paymentEvidenceDao()
+                    .getBySession(session.id)
+                    .map { evidence -> evidence.id }
+                array.put(BridgeDtoMapper.session(session, evidenceIds))
+            }
         }.toString()
     }
 
@@ -72,7 +76,10 @@ class RecognitionModule(
     fun getCheckoutSession(sessionId: String, promise: Promise) = launch(promise) {
         val session = database.checkoutSessionDao().getById(requireId(sessionId, "session"))
             ?: throw BridgeException("NOT_FOUND", "Checkout session $sessionId was not found")
-        BridgeDtoMapper.session(session).toString()
+        val evidenceIds = database.paymentEvidenceDao()
+            .getBySession(session.id)
+            .map { evidence -> evidence.id }
+        BridgeDtoMapper.session(session, evidenceIds).toString()
     }
 
     /** 查询交易候选；不存在时返回 NOT_FOUND。 */
