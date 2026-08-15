@@ -4,7 +4,9 @@ import android.app.Notification
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import android.util.Log
+import com.jotbill.app.data.JotBillDatabaseProvider
 import com.jotbill.app.recognition.CheckoutAccessibilityService
+import com.jotbill.app.recognition.CheckoutPaymentMatcher
 import com.jotbill.app.recognition.PaymentNotificationFallbackSignal
 import com.jotbill.app.recognition.PurchaseIntentResultCallback
 import com.jotbill.app.utils.SentryLogger
@@ -157,6 +159,9 @@ class PaymentNotificationService : NotificationListenerService() {
     /**
      * 处理解析后的支付证据：尝试关联活跃会话并落库，无会话时走回退路径。
      *
+     * 回退不可用（无障碍服务未连接/超时/被拒）时，直接落纯通知待确认，
+     * 确保支付先到但无法关联会话的证据不丢失。
+     *
      * @param input 解析后的支付证据输入
      */
     private suspend fun handlePaymentEvidence(input: PaymentEvidenceInput) {
@@ -172,6 +177,19 @@ class PaymentNotificationService : NotificationListenerService() {
 
         // 通过无障碍服务触发回退，尝试关联活跃结算会话
         val result = tryFallbackSignal(signal)
+
+        // 回退未被接受（服务不可用/超时/门禁拒绝）：证据不丢弃，落纯通知待确认
+        if (result != ACCEPTED_RESULT) {
+            try {
+                val database = JotBillDatabaseProvider.get(applicationContext)
+                CheckoutPaymentMatcher(database).recordOrphanPaymentSignal(
+                    signal, sourceType = "NOTIFICATION"
+                )
+                Log.i(TAG, "支付通知回退不可用($result)，已转纯通知待确认")
+            } catch (error: RuntimeException) {
+                Log.w(TAG, "纯通知待确认写入失败", error)
+            }
+        }
 
         // 记录处理结果
         val resultInfo = mapOf(
@@ -219,6 +237,9 @@ class PaymentNotificationService : NotificationListenerService() {
     companion object {
         private const val TAG = "PaymentNotificationService"
         private const val FALLBACK_TIMEOUT_MILLIS = 5_000L
+
+        /** 回退回调结果为 Accepted 时表示无障碍服务已接手证据，其余情况均需兜底落纯通知待确认。 */
+        private const val ACCEPTED_RESULT = "Accepted"
 
         /** 广播 Action：检测到支付通知（保留兼容，供旧模块监听） */
         const val ACTION_PAYMENT_DETECTED = "com.jotbill.app.PAYMENT_DETECTED"

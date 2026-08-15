@@ -30,6 +30,12 @@ import kotlinx.coroutines.launch
 class CheckoutAccessibilityService : AccessibilityService() {
     companion object {
         private const val TAG = "CheckoutAccessibilityService"
+
+        /** 结果页文本提取时的敏感字段关键词：命中节点整体丢弃，不进入解析与哈希。 */
+        private val SENSITIVE_TEXT_KEYWORDS = listOf(
+            "密码", "付款码", "银行卡号", "卡号", "CVV", "cvv",
+            "有效期", "身份证", "验证码", "CVV2", "CVC"
+        )
         private const val STABLE_DELAY_MILLIS = 500L
 
         @Volatile
@@ -795,7 +801,13 @@ class CheckoutAccessibilityService : AccessibilityService() {
 
             if (observation.pageRole != CheckoutPageRole.PAYMENT_RESULT) return
 
-            // 从节点文本提取结构化证据（PaymentResultParser 内部已脱敏）
+            // 敏感页面（密码/付款码等）不提取任何证据
+            if (observation.isSensitivePage) {
+                Log.d(TAG, "支付结果页为敏感页面，跳过证据提取")
+                return
+            }
+
+            // 从节点文本提取结构化证据（collectPageText 已过滤密码/付款码等敏感字段）
             val pageText = collectPageText(root)
             val evidence = PaymentResultParser.parse(
                 pageText = pageText,
@@ -824,22 +836,24 @@ class CheckoutAccessibilityService : AccessibilityService() {
         }
     }
 
-    /** 收集节点树可见文本，用于支付结果页证据解析。已排除密码/付款码等敏感字段。 */
+    /** 收集节点树可见文本，用于支付结果页证据解析。逐节点过滤密码/付款码等敏感字段。 */
     private fun collectPageText(root: AccessibilityNodeInfo): String {
         val builder = StringBuilder()
         collectNodeText(root, builder, depth = 0)
         return builder.toString()
     }
 
-    /** 递归收集节点文本，深度限制避免过深遍历。 */
+    /** 递归收集节点文本，深度限制避免过深遍历；含敏感关键词的文本节点直接丢弃。 */
     private fun collectNodeText(
         node: AccessibilityNodeInfo,
         builder: StringBuilder,
         depth: Int
     ) {
         if (depth > 20) return
-        node.text?.toString()?.trim()?.takeIf { it.isNotBlank() }?.let {
-            builder.append(it).append(' ')
+        node.text?.toString()?.trim()?.takeIf { it.isNotBlank() }?.let { text ->
+            if (SENSITIVE_TEXT_KEYWORDS.none { text.contains(it) }) {
+                builder.append(text).append(' ')
+            }
         }
         for (i in 0 until node.childCount) {
             val child = node.getChild(i) ?: continue
@@ -853,7 +867,10 @@ class CheckoutAccessibilityService : AccessibilityService() {
      * 会话解析双路径（T4）：
      * 1. 优先用支付交接上下文（handoffStableCheckout）——提交订单后切到支付应用的场景；
      * 2. 否则用 resolveSessionForPayment 按订单号/金额+时间窗口综合解析；
-     * 3. 并发会话无法区分时输出 Ambiguous，不强行合并（T6 创建并发候选）。
+     * 3. 并发会话无法区分时输出 Ambiguous，不强行合并（T6 创建并发候选）；
+     * 4. 无任何匹配会话时转纯通知待确认，证据不丢弃。
+     *
+     * 证据来源固定标记为 ACCESSIBILITY（无障碍结果页），与通知（NOTIFICATION）区分。
      */
     private suspend fun recordPaymentResultEvidence(
         matcher: CheckoutPaymentMatcher,
@@ -880,7 +897,9 @@ class CheckoutAccessibilityService : AccessibilityService() {
         }
 
         if (handoffReference != null) {
-            val result = matcher.recordPaymentEvidence(handoffReference, signal)
+            val result = matcher.recordPaymentEvidence(
+                handoffReference, signal, sourceType = "ACCESSIBILITY"
+            )
             Log.i(TAG, "支付结果页证据落库结果（交接上下文）: ${formatMatchResult(result)}")
             return
         }
@@ -893,7 +912,9 @@ class CheckoutAccessibilityService : AccessibilityService() {
             orderId = evidence.orderId
         )) {
             is PaymentSessionResolution.Matched -> {
-                val result = matcher.recordPaymentEvidence(resolution.reference, signal)
+                val result = matcher.recordPaymentEvidence(
+                    resolution.reference, signal, sourceType = "ACCESSIBILITY"
+                )
                 Log.i(
                     TAG,
                     "支付结果页证据落库结果（" +
@@ -906,7 +927,9 @@ class CheckoutAccessibilityService : AccessibilityService() {
                 Log.i(TAG, "支付结果页命中并发会话(${resolution.sessionIds.size}个)，待确认处理")
             }
             PaymentSessionResolution.NoMatch -> {
-                Log.d(TAG, "支付结果页无关联活跃会话，证据暂不落库")
+                // 无关联会话：证据不丢弃，转纯通知待确认（sessionId 为空，sourceType=accessibility）
+                matcher.recordOrphanPaymentSignal(signal, sourceType = "ACCESSIBILITY")
+                Log.i(TAG, "支付结果页无关联活跃会话，已转纯通知待确认")
             }
         }
     }
@@ -996,7 +1019,13 @@ class CheckoutAccessibilityService : AccessibilityService() {
                         pageFingerprint = observation.pageFingerprint
                     )
                 if (reference == null) {
-                    Log.w(TAG, "支付通知没有唯一的结算会话可匹配")
+                    // 支付先到但无法关联任何结算会话：证据不丢弃，转纯通知待确认（sessionId 为空）
+                    try {
+                        matcher.recordOrphanPaymentSignal(signal, sourceType = "NOTIFICATION")
+                        Log.i(TAG, "支付通知无结算会话可匹配，已转纯通知待确认")
+                    } catch (error: RuntimeException) {
+                        Log.w(TAG, "纯通知待确认写入失败", error)
+                    }
                     return@launch
                 }
                 try {

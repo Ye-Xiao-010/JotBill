@@ -71,11 +71,15 @@ interface PendingTransactionDao {
     suspend fun markIgnoredIfVersion(id: String, expectedVersion: Int): Int
 
     /**
-     * 基于版本号的乐观锁删除：确认入账事务内使用，
-     * 版本一致时物理删除（Bill 与审计日志承接追溯），返回受影响行数。
+     * 基于版本号的乐观锁删除：确认入账事务内使用。
+     * 版本一致且仍为 pending 时物理删除（Bill 与审计日志承接追溯），返回受影响行数。
+     * 已忽略（ignored）的记录即使版本一致也不允许再确认入账。
      */
     @Query(
-        "DELETE FROM pending_transactions WHERE id = :id AND version = :expectedVersion"
+        """
+        DELETE FROM pending_transactions
+        WHERE id = :id AND version = :expectedVersion AND status = 'pending'
+        """
     )
     suspend fun deleteByIdIfVersion(id: String, expectedVersion: Int): Int
 }

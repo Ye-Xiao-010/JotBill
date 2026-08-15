@@ -743,6 +743,14 @@ class DataModule(
         if (amountMinor < 0) {
             throw BridgeException("INVALID_ARGUMENT", "amountMinor must not be negative")
         }
+        // 审查修复：AI 识别失败占位条目金额为 0（金额未知），不允许直接确认入账，
+        // 用户只能忽略或重试识别，防止产生 0 元账单
+        if (amountMinor == 0L && pending.conflictReason == "AI_RECOGNITION_FAILED") {
+            throw BridgeException(
+                "INVALID_ARGUMENT",
+                "Amount is unknown for this pending transaction; retry recognition instead"
+            )
+        }
         val bill = BillEntity(
             id = UUID.randomUUID().toString(),
             amountMinor = amountMinor,
@@ -770,6 +778,22 @@ class DataModule(
         // 事务内乐观锁确认：版本不一致返回 false，Bill 不写入、余额不更新
         if (!repository.confirmPendingTransaction(pending, bill)) {
             throw BridgeException("VERSION_CONFLICT", "Pending transaction $id has changed")
+        }
+        // 审查修复：确认入账后把关联会话推进到终态 COMPLETED，
+        // 否则会话永远停留在 NEEDS_CONFIRMATION，活跃会话统计与状态展示失真
+        pending.sessionId?.let { sessionId ->
+            val session = database.checkoutSessionDao().getById(sessionId)
+            if (session != null &&
+                session.status !in setOf("COMPLETED", "CANCELLED", "FAILED", "EXPIRED")
+            ) {
+                database.checkoutSessionDao().update(
+                    session.copy(
+                        status = "COMPLETED",
+                        journeyState = "COMPLETED",
+                        updatedAt = now
+                    )
+                )
+            }
         }
         events.emit("onPendingChanged", JSONObject().put("pendingId", pending.id).put("deleted", true))
         events.emit("onBillCreated", BridgeDtoMapper.bill(bill))

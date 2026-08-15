@@ -42,6 +42,18 @@ const PENDING_QUERY_KEY = QUERY_KEYS.recognition.pending;
 const STATUS_QUERY_KEY = QUERY_KEYS.recognition.status;
 const EVIDENCE_QUERY_KEY = QUERY_KEYS.recognition.evidence;
 
+/** 审查修复后需要联动刷新的账本相关缓存前缀：账单、账户余额、首页与报表。 */
+const LEDGER_CACHE_KEYS: readonly (readonly string[])[] = [
+  QUERY_KEYS.bills.all,
+  ['accounts'],
+  ['dashboard'],
+  ['statistics'],
+  ['daily-grid'],
+  ['monthly-grid'],
+  ['yearly-grid'],
+  ['asset-trend'],
+];
+
 /** 待确认中心屏幕组件，对应阶段三任务9前端桥接。 */
 export default function ReviewScreen() {
   const navigation = useNavigation();
@@ -63,7 +75,11 @@ export default function ReviewScreen() {
     queryClient.invalidateQueries({ queryKey: STATUS_QUERY_KEY });
     // 阶段四 T7：确认/忽略/重试后同步刷新各卡片支付证据摘要
     queryClient.invalidateQueries({ queryKey: EVIDENCE_QUERY_KEY });
-    queryClient.invalidateQueries({ queryKey: QUERY_KEYS.bills.all });
+    // 审查修复：确认入账会写 Bill 并更新账户余额，需联动失效账户/首页/报表缓存，
+    // 否则余额与统计仍显示旧数据
+    LEDGER_CACHE_KEYS.forEach((key) => {
+      queryClient.invalidateQueries({ queryKey: [...key] });
+    });
   }, [queryClient]);
 
   const confirmMutation = useMutation({
@@ -320,12 +336,17 @@ function PendingCard({
     [pending.conflictReason],
   );
   const hasConflict = Boolean(pending.conflictReason);
+  // 审查修复配套：AI 失败占位条目金额未知（0），禁止确认入账，只能忽略或重试识别
+  const isAiFailedPlaceholder =
+    pending.conflictReason === 'AI_RECOGNITION_FAILED' && pending.amountMinor === 0;
 
   return (
     <View style={styles.pendingCard}>
       <View style={styles.pendingHeader}>
         <View style={styles.pendingAmountRow}>
-          <Text style={styles.pendingAmount}>{amountLabel}</Text>
+          <Text style={styles.pendingAmount}>
+            {isAiFailedPlaceholder ? '金额未知' : amountLabel}
+          </Text>
           <View
             style={[
               styles.typeBadge,
@@ -383,15 +404,19 @@ function PendingCard({
         <TouchableOpacity
           style={[
             styles.confirmButton,
-            isConfirming && styles.actionButtonDisabled,
+            (isConfirming || isAiFailedPlaceholder) && styles.actionButtonDisabled,
           ]}
           onPress={() => onConfirm(pending)}
-          disabled={isConfirming || isIgnoring}
+          disabled={isConfirming || isIgnoring || isAiFailedPlaceholder}
           activeOpacity={0.85}
         >
           <Check size={16} color="#FFFFFF" />
           <Text style={styles.confirmButtonText}>
-            {isConfirming ? '确认中…' : '确认入账'}
+            {isAiFailedPlaceholder
+              ? '识别失败，请重试'
+              : isConfirming
+                ? '确认中…'
+                : '确认入账'}
           </Text>
         </TouchableOpacity>
         {pending.candidateId ? (
@@ -529,9 +554,13 @@ const CONFLICT_LABELS: Record<string, string> = {
   AI_AMOUNT_LOWER_THAN_PAYMENT: '实际支付金额高于 AI 识别金额',
   ORDER_ID_MISMATCH: 'AI 订单号与支付订单号不一致',
   TIME_WINDOW_MISMATCH: '支付时间与结算页时间差距过大',
+  TIME_MISSING: '缺少时间信息，无法自动核对',
   PAYMENT_PACKAGE_UNSUPPORTED: '支付平台暂不支持',
   PAYMENT_EVIDENCE_AMBIGUOUS: '匹配到多条支付证据，需要人工选择',
   PAYMENT_EVIDENCE_MISSING: '缺少支付成功证据',
+  ACCOUNT_UNAVAILABLE: '支付账户不存在或已停用，请手动选择账户',
+  NO_ACTIVE_SESSION: '未关联结算页，请核对后确认',
+  AI_RECOGNITION_FAILED: 'AI 识别失败，金额未知，请重试识别',
 };
 
 /** 冲突原因可能为逗号拼接的多个代码，逐个翻译后合并展示。 */

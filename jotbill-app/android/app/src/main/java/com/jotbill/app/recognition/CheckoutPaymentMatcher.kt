@@ -217,10 +217,62 @@ internal class CheckoutPaymentMatcher(
         )
     }
 
-    /** 记录支付通知；重复来源事件只保留一条证据。 */
+    /**
+     * 阶段四审查修复：记录无会话可关联的孤儿支付信号。
+     *
+     * 支付先到但没有任何结算会话可匹配时（无障碍服务未连接、无活跃结算页、
+     * 会话解析 NoMatch），不丢弃证据：直接落一条纯通知待确认交易
+     * （sessionId 为空、candidateId 为空），由用户在待确认中心处理。
+     *
+     * 幂等：待确认 ID 由 sourceEventKey 确定性生成，重复信号不产生第二条。
+     */
+    suspend fun recordOrphanPaymentSignal(
+        signal: PaymentNotificationFallbackSignal,
+        sourceType: String = "NOTIFICATION"
+    ) {
+        val now = nowMillis()
+        database.withTransaction {
+            if (!signal.isValid()) {
+                return@withTransaction
+            }
+            val sourceEventKey = sourceEventKey(signal)
+            val pendingId = stableId("pending-orphan", sourceEventKey)
+            val dao = database.pendingTransactionDao()
+            if (dao.getById(pendingId) != null) {
+                return@withTransaction
+            }
+            val pending = PendingTransactionEntity(
+                id = pendingId,
+                candidateId = null,
+                sessionId = null,
+                amountMinor = signal.amountMinor,
+                type = "expense",
+                occurredAt = signal.occurredAt,
+                platform = signal.paymentPackage,
+                merchant = signal.merchant,
+                productDescription = null,
+                orderId = signal.orderId,
+                accountId = defaultAccountIdForPayment(signal.paymentPackage),
+                categoryId = null,
+                conflictReason = "NO_ACTIVE_SESSION",
+                sourceType = if (sourceType == "ACCESSIBILITY") "accessibility" else "notification",
+                createdAt = now,
+                version = 1
+            )
+            dao.insertIfAbsent(pending)
+        }
+    }
+
+    /**
+     * 记录支付证据；重复来源事件只保留一条证据。
+     *
+     * @param sourceType 证据来源：NOTIFICATION（通知监听）或 ACCESSIBILITY（支付结果页），
+     * 供前端区分展示，不再把结果页证据误记为通知。
+     */
     suspend fun recordPaymentEvidence(
         reference: CheckoutSnapshotReference,
-        signal: PaymentNotificationFallbackSignal
+        signal: PaymentNotificationFallbackSignal,
+        sourceType: String = "NOTIFICATION"
     ): CheckoutPaymentMatchResult {
         val validationError = validatePayment(reference, signal)
         if (validationError != null) {
@@ -277,7 +329,7 @@ internal class CheckoutPaymentMatcher(
             val evidence = PaymentEvidenceEntity(
                 id = evidenceId,
                 sessionId = reference.sessionId,
-                sourceType = "NOTIFICATION",
+                sourceType = sourceType,
                 amountMinor = signal.amountMinor,
                 merchant = signal.merchant,
                 platform = signal.paymentPackage,
@@ -406,21 +458,83 @@ internal class CheckoutPaymentMatcher(
                     val successEvidences = database.paymentEvidenceDao()
                         .getBySession(reference.sessionId)
                         .filter { it.paymentStatus == "SUCCESS" }
+                    // 审查修复：AI 失败也创建占位候选，保证 retryAiRecognition 链路可用；
+                    // 否则用户无法重试识别，会话会卡死在 WAITING_PAYMENT
+                    val placeholderCandidateId = candidateIdFor(reference.sessionId)
+                    var placeholderCandidate = existingCandidate
+                    if (placeholderCandidate == null) {
+                        placeholderCandidate = TransactionCandidateEntity(
+                            id = placeholderCandidateId,
+                            sessionId = reference.sessionId,
+                            amountMinor = successEvidences.firstOrNull()?.amountMinor,
+                            platform = null,
+                            merchant = successEvidences.firstOrNull()?.merchant,
+                            productDescription = null,
+                            evidenceAmountMinor = null,
+                            evidenceMerchant = null,
+                            evidenceOrderId = null,
+                            aiOrderId = null,
+                            aiOccurredAt = null,
+                            matched = false,
+                            conflictReason = if (successEvidences.isEmpty()) {
+                                "AI_RECOGNITION_FAILED"
+                            } else {
+                                null
+                            },
+                            appliedRules = rulesJson(
+                                "sessionId" to reference.sessionId,
+                                "decision" to "AI_FAILED",
+                                "aiRequestId" to result.requestId
+                            ),
+                            createdAt = now,
+                            version = 1
+                        )
+                        database.transactionCandidateDao().insertIfAbsent(placeholderCandidate)
+                        session = session.copy(
+                            candidateId = placeholderCandidate.id,
+                            updatedAt = now
+                        )
+                        database.checkoutSessionDao().update(session)
+                    }
                     session = advanceStatus(
                         session,
                         if (successEvidences.isNotEmpty()) NEEDS_CONFIRMATION_STATUS else WAITING_PAYMENT_STATUS,
                         now
                     )
-                    // 阶段四 T6：AI 失败但支付成功且无候选 → 证据转待确认（sourceType=notification）
+                    // 阶段四 T6：AI 失败但支付成功 → 证据转待确认（sourceType=notification）
                     if (successEvidences.isNotEmpty() && existingCandidate == null) {
                         successEvidences.firstOrNull()?.let { evidence ->
                             pendingFromEvidenceOnly(session, evidence, now)
                                 ?.let { upsertPendingForSession(it) }
                         }
                     }
+                    // 审查修复：AI 失败且无支付证据 → 也生成待确认（金额取证据或 0 占位），
+                    // 让用户能在待确认中心看到失败条目并触发重试，而不是无声丢失
+                    if (successEvidences.isEmpty() && existingCandidate == null) {
+                        val pending = PendingTransactionEntity(
+                            id = stableId("pending", reference.sessionId),
+                            candidateId = placeholderCandidate.id,
+                            sessionId = reference.sessionId,
+                            amountMinor = 0L,
+                            type = "expense",
+                            occurredAt = now,
+                            platform = null,
+                            merchant = null,
+                            productDescription = null,
+                            orderId = null,
+                            accountId = null,
+                            categoryId = null,
+                            conflictReason = "AI_RECOGNITION_FAILED",
+                            sourceType = "ai_vision",
+                            createdAt = now,
+                            version = 1
+                        )
+                        upsertPendingForSession(pending)
+                    }
                     CheckoutPaymentMatchResult.Accepted(
                         sessionId = reference.sessionId,
-                        status = session.status
+                        status = session.status,
+                        candidateId = placeholderCandidate.id
                     )
                 }
 
@@ -685,6 +799,25 @@ internal class CheckoutPaymentMatcher(
         val amountMinor = requireNotNull(candidate.amountMinor) {
             "自动入账候选金额缺失：sessionId=${session.id}"
         }
+        // 审查修复：支付账户缺失/停用时不自动入账——无账户账单虽不更新余额，
+        // 但会话进入 COMPLETED 会让用户误以为已正确入账；转待确认由用户补选账户
+        val accountId = defaultAccountIdForPayment(evidence.platform)
+        if (accountId == null) {
+            val pending = pendingFromConflict(
+                session = session,
+                candidate = candidate,
+                evidence = evidence,
+                conflictReason = "ACCOUNT_UNAVAILABLE",
+                now = now
+            )
+            if (pending != null) {
+                upsertPendingForSession(pending)
+            }
+            return AutoCommitOutcome(
+                advanceStatus(session, NEEDS_CONFIRMATION_STATUS, now),
+                null
+            )
+        }
         val bill = BillEntity(
             id = billId,
             amountMinor = amountMinor,
@@ -692,7 +825,7 @@ internal class CheckoutPaymentMatcher(
             occurredAt = evidence.occurredAt ?: candidate.aiOccurredAt ?: now,
             description = candidate.productDescription,
             categoryId = null,
-            accountId = defaultAccountIdForPayment(evidence.platform),
+            accountId = accountId,
             targetAccountId = null,
             platform = candidate.platform,
             merchant = candidate.merchant,
@@ -952,7 +1085,12 @@ internal class CheckoutPaymentMatcher(
             }
         }
         val timeRule = when {
-            evidence.occurredAt == null || aiOccurredAt == null -> "TIME_PARTIAL"
+            // 审查修复：任一侧时间缺失时不能自动匹配——时间窗口是防误配的关键约束，
+            // 缺时间走待确认由用户判断，不再输出 TIME_PARTIAL 放行
+            evidence.occurredAt == null || aiOccurredAt == null -> {
+                conflicts += "TIME_MISSING"
+                "TIME_PARTIAL"
+            }
             abs(evidence.occurredAt - aiOccurredAt) <= PAYMENT_MATCH_WINDOW_MILLIS -> "TIME_WITHIN_WINDOW"
             else -> {
                 conflicts += "TIME_WINDOW_MISMATCH"

@@ -26,7 +26,7 @@ import {
   RefreshCw,
   ShieldCheck,
 } from 'lucide-react-native';
-import { nativeRecognition, nativeRuntime } from '../../native';
+import { nativeRuntime } from '../../native';
 import { QUERY_KEYS } from '../../lib/queryClient';
 import { useAlert } from '../../providers';
 import { borderRadius, borderWidth, spacing } from '../../theme/spacing';
@@ -76,11 +76,11 @@ export default function NotificationPermissionScreen() {
     }, [queryClient]),
   );
 
-  // 跳转复用现有系统设置入口，契约未提供专用通知设置跳转
+  // 审查修复：跳转系统"通知访问"专用设置页，此前复用无障碍设置跳转会打开错误页面
   const handleOpenSettings = useCallback(async () => {
     setOpening(true);
     try {
-      await nativeRecognition.openAccessibilitySettings();
+      await nativeRuntime.openNotificationListenerSettings();
     } catch (error) {
       const message =
         error instanceof Error ? error.message : '无法打开系统设置';

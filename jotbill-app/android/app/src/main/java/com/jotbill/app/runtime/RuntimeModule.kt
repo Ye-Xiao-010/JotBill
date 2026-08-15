@@ -1,6 +1,7 @@
 package com.jotbill.app.runtime
 
 import android.content.ComponentName
+import android.content.Intent
 import android.os.Build
 import android.provider.Settings
 import com.facebook.react.bridge.Promise
@@ -36,6 +37,27 @@ class RuntimeModule(
     }
 
     override fun getName(): String = "Runtime"
+
+    /**
+     * 打开系统"通知访问"设置页（通知监听权限所在页面）。
+     *
+     * 审查修复：此前通知权限引导复用 openAccessibilitySettings，跳转到的是
+     * 无障碍设置页而非通知监听权限页，用户按引导无法完成授权。
+     * 注意：该方法是审查修复必需的最小新增，docs/types/Native.d.ts 契约
+     * 待后续"契约变更"任务补充登记。
+     */
+    @ReactMethod
+    fun openNotificationListenerSettings(promise: Promise) {
+        try {
+            val intent = Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            reactContext.startActivity(intent)
+            promise.resolve(null)
+        } catch (error: Exception) {
+            promise.reject("OPEN_SETTINGS_ERROR", error.message, error)
+        }
+    }
 
     @ReactMethod
     fun getRuntimeHealth(promise: Promise) {

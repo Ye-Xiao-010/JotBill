@@ -33,10 +33,10 @@ data class PaymentResultEvidence(
  */
 internal object PaymentResultParser {
 
-    /** 支付成功关键词 */
+    /** 支付成功关键词；"订单已提交"不代表支付成功（可能是货到付款/待支付），不得列入。 */
     private val SUCCESS_KEYWORDS = listOf(
         "支付成功", "付款成功", "交易完成", "支付完成",
-        "已付款", "订单已支付", "订单已提交"
+        "已付款", "订单已支付"
     )
 
     /** 支付失败关键词 */
@@ -99,8 +99,11 @@ internal object PaymentResultParser {
         // 原文哈希（不存原文）
         val rawTextHash = sha256("result|$sourcePackage|$pageText")
 
-        // sourceEventKey：来源包名 + 页面指纹 + 时间窗口（分钟级去重）
-        val sourceEventKey = sha256("result-event|$sourcePackage|$pageFingerprint|${observedAt / 60_000}")
+        // sourceEventKey：来源包名 + 页面指纹 + 时间窗口（分钟级）+ 金额 + 订单号
+        // 金额和订单号参与组合，避免同一分钟内同指纹页面的两笔不同支付被误判为重复
+        val sourceEventKey = sha256(
+            "result-event|$sourcePackage|$pageFingerprint|${observedAt / 60_000}|$amountMinor|${orderId.orEmpty()}"
+        )
 
         return PaymentResultEvidence(
             amountMinor = amountMinor,
