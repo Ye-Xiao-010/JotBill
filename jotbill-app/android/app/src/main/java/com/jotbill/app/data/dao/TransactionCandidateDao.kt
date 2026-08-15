@@ -20,6 +20,28 @@ interface TransactionCandidateDao {
     @Update
     suspend fun update(candidate: TransactionCandidateEntity)
 
+    /** 基于候选版本和会话绑定收口用户确认/忽略结果，防止并发覆盖。 */
+    @Query(
+        """
+        UPDATE transaction_candidates
+        SET matched = :matched,
+            conflict_reason = :conflictReason,
+            applied_rules = :appliedRules,
+            version = version + 1
+        WHERE id = :id
+          AND session_id = :sessionId
+          AND version = :expectedVersion
+        """
+    )
+    suspend fun resolveIfVersion(
+        id: String,
+        sessionId: String,
+        expectedVersion: Int,
+        matched: Boolean,
+        conflictReason: String?,
+        appliedRules: String
+    ): Int
+
     @Delete
     suspend fun delete(candidate: TransactionCandidateEntity)
 

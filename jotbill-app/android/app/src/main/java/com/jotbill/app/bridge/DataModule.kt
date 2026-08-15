@@ -8,6 +8,7 @@ import com.facebook.react.bridge.ReactMethod
 import com.jotbill.app.data.JotBillDatabase
 import com.jotbill.app.data.JotBillDatabaseProvider
 import com.jotbill.app.data.LedgerRepository
+import com.jotbill.app.data.LedgerValidationException
 import com.jotbill.app.data.seed.DefaultDataInitializer
 import com.jotbill.app.data.entity.AccountEntity
 import com.jotbill.app.data.entity.BillEntity
@@ -121,6 +122,7 @@ class DataModule(
     fun addBill(inputJson: String, promise: Promise) = launch(promise) {
         val input = parseJson(inputJson)
         val now = System.currentTimeMillis()
+        input.optionalMinor("amountMinor")
         val bill = BridgeDtoMapper.parseBillInput(input, now, UUID.randomUUID().toString())
         repository.createBillWithBalanceUpdate(bill)
         events.emit("onBillCreated", BridgeDtoMapper.bill(bill))
@@ -149,7 +151,7 @@ class DataModule(
         val sourceType = input.optionalString("sourceType") ?: existing.sourceType
         BridgeDtoMapper.validateSourceType(sourceType)
         val updated = existing.copy(
-            amountMinor = input.optionalLong("amountMinor") ?: existing.amountMinor,
+            amountMinor = input.optionalMinor("amountMinor") ?: existing.amountMinor,
             type = type,
             occurredAt = if (input.hasValue("occurredAt")) {
                 BridgeDtoMapper.requiredTimestamp(input, "occurredAt")
@@ -714,7 +716,7 @@ class DataModule(
         val pending = database.pendingTransactionDao().getById(requireId(id, "pending transaction"))
             ?: throw BridgeException("NOT_FOUND", "Pending transaction $id was not found")
         // 阶段四 T6：基于 version 的乐观锁忽略；标记为 ignored 保留记录供审计，不物理删除
-        if (database.pendingTransactionDao().markIgnoredIfVersion(pending.id, version) != 1) {
+        if (!repository.ignorePendingTransaction(pending, version)) {
             throw BridgeException("VERSION_CONFLICT", "Pending transaction $id has changed")
         }
         events.emit("onPendingChanged", JSONObject().put("pendingId", pending.id).put("ignored", true))
@@ -739,18 +741,11 @@ class DataModule(
         val sourceType = input.optionalString("sourceType") ?: pending.sourceType
         BridgeDtoMapper.validateBillType(type)
         BridgeDtoMapper.validateSourceType(sourceType)
-        val amountMinor = input.optionalLong("amountMinor") ?: pending.amountMinor
-        if (amountMinor < 0) {
-            throw BridgeException("INVALID_ARGUMENT", "amountMinor must not be negative")
+        val amountMinor = input.optionalMinor("amountMinor") ?: pending.amountMinor
+        if (amountMinor !in 1L..MAX_SAFE_MINOR_UNIT) {
+            throw BridgeException("INVALID_ARGUMENT", "amountMinor must be a positive safe integer minor unit")
         }
-        // 审查修复：AI 识别失败占位条目金额为 0（金额未知），不允许直接确认入账，
-        // 用户只能忽略或重试识别，防止产生 0 元账单
-        if (amountMinor == 0L && pending.conflictReason == "AI_RECOGNITION_FAILED") {
-            throw BridgeException(
-                "INVALID_ARGUMENT",
-                "Amount is unknown for this pending transaction; retry recognition instead"
-            )
-        }
+        // 确认入账必须使用正数安全整数金额，AI 失败占位记录只能忽略或重试。
         val bill = BillEntity(
             id = UUID.randomUUID().toString(),
             amountMinor = amountMinor,
@@ -768,8 +763,8 @@ class DataModule(
             merchant = input.optionalString("merchant") ?: pending.merchant,
             productDescription = input.optionalString("productDescription") ?: pending.productDescription,
             sourceType = sourceType,
-            // 阶段四 T6：默认回填来源会话 ID，供自动入账侧判断该会话是否已手动入账（防重复）
-            originalTransactionId = input.optionalString("originalTransactionId") ?: pending.sessionId,
+            // 来源会话 ID 固定为 pending 绑定值，避免请求改写幂等边界。
+            originalTransactionId = pending.sessionId,
             orderId = input.optionalString("orderId") ?: pending.orderId,
             createdAt = now,
             updatedAt = now,
@@ -778,22 +773,6 @@ class DataModule(
         // 事务内乐观锁确认：版本不一致返回 false，Bill 不写入、余额不更新
         if (!repository.confirmPendingTransaction(pending, bill)) {
             throw BridgeException("VERSION_CONFLICT", "Pending transaction $id has changed")
-        }
-        // 审查修复：确认入账后把关联会话推进到终态 COMPLETED，
-        // 否则会话永远停留在 NEEDS_CONFIRMATION，活跃会话统计与状态展示失真
-        pending.sessionId?.let { sessionId ->
-            val session = database.checkoutSessionDao().getById(sessionId)
-            if (session != null &&
-                session.status !in setOf("COMPLETED", "CANCELLED", "FAILED", "EXPIRED")
-            ) {
-                database.checkoutSessionDao().update(
-                    session.copy(
-                        status = "COMPLETED",
-                        journeyState = "COMPLETED",
-                        updatedAt = now
-                    )
-                )
-            }
         }
         events.emit("onPendingChanged", JSONObject().put("pendingId", pending.id).put("deleted", true))
         events.emit("onBillCreated", BridgeDtoMapper.bill(bill))
@@ -965,6 +944,8 @@ class DataModule(
                 throw error
             } catch (error: BridgeException) {
                 promise.reject(error.code, error.message, error)
+            } catch (error: LedgerValidationException) {
+                promise.reject("INVALID_ARGUMENT", error.message, error)
             } catch (error: Exception) {
                 val code = dataErrorCode(error.message)
                 promise.reject(code, error.message ?: "Local data operation failed", error)

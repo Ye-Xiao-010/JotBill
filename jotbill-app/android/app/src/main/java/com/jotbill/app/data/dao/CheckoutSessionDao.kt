@@ -67,4 +67,20 @@ interface CheckoutSessionDao {
 
     @Query("UPDATE checkout_sessions SET status = :status, updated_at = :updatedAt WHERE id = :id")
     suspend fun updateStatus(id: String, status: String, updatedAt: Long)
+
+    /** 仅允许活动会话进入确认或忽略后的终态，避免覆盖已完成的并发结果。 */
+    @Query(
+        """
+        UPDATE checkout_sessions
+        SET status = :status, journey_state = :journeyState, updated_at = :updatedAt
+        WHERE id = :id
+          AND status NOT IN ('COMPLETED', 'CANCELLED', 'FAILED', 'EXPIRED')
+        """
+    )
+    suspend fun updateTerminalStateIfActive(
+        id: String,
+        status: String,
+        journeyState: String,
+        updatedAt: Long
+    ): Int
 }
