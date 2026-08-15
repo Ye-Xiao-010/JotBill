@@ -5,12 +5,21 @@ import androidx.room.Entity
 import androidx.room.Index
 import androidx.room.PrimaryKey
 
+/**
+ * 待确认交易实体。
+ *
+ * 阶段四 T6 起新增 status 列区分流转状态：
+ * - pending：等待用户在待确认中心处理（默认值）；
+ * - ignored：用户忽略，不写 Bill、不更新余额，但保留记录供审计，不物理删除。
+ * 确认入账的记录在写 Bill 成功后物理删除（由 Bill 与审计日志承接追溯）。
+ */
 @Entity(
     tableName = "pending_transactions",
     indices = [
         Index(value = ["candidate_id"]),
         Index(value = ["session_id"]),
-        Index(value = ["created_at"])
+        Index(value = ["created_at"]),
+        Index(value = ["status"])
     ]
 )
 data class PendingTransactionEntity(
@@ -29,5 +38,11 @@ data class PendingTransactionEntity(
     @ColumnInfo(name = "conflict_reason") val conflictReason: String?,
     @ColumnInfo(name = "source_type") val sourceType: String,
     @ColumnInfo(name = "created_at") val createdAt: Long,
-    val version: Int
-)
+    val version: Int,
+    @ColumnInfo(name = "status", defaultValue = "pending") val status: String = "pending"
+) {
+    companion object {
+        const val STATUS_PENDING = "pending"
+        const val STATUS_IGNORED = "ignored"
+    }
+}

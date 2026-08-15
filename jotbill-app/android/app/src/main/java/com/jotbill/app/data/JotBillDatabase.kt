@@ -39,7 +39,7 @@ import com.jotbill.app.data.entity.PendingTransactionEntity
 import com.jotbill.app.data.entity.RuleEntity
 import com.jotbill.app.data.entity.TransactionCandidateEntity
 
-const val JOT_BILL_DATABASE_VERSION = 5
+const val JOT_BILL_DATABASE_VERSION = 6
 
 @Database(
     entities = [
@@ -282,5 +282,27 @@ object DatabaseMigrations {
         }
     }
 
-    val all: Array<Migration> = arrayOf(migration1To2, migration2To3, migration3To4, migration4To5)
+    /**
+     * 阶段四 T6：待确认交易新增 status 列，区分 pending / ignored 流转状态。
+     * 忽略的记录保留供审计，不物理删除。
+     */
+    private val migration5To6 = object : Migration(5, 6) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL(
+                "ALTER TABLE `pending_transactions` ADD COLUMN `status` TEXT NOT NULL DEFAULT 'pending'"
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS `index_pending_transactions_status` " +
+                    "ON `pending_transactions` (`status`)"
+            )
+        }
+    }
+
+    val all: Array<Migration> = arrayOf(
+        migration1To2,
+        migration2To3,
+        migration3To4,
+        migration4To5,
+        migration5To6
+    )
 }

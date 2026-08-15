@@ -274,6 +274,10 @@ interface BillDao {
     @Query("SELECT * FROM bills WHERE order_id = :orderId AND amount_minor = :amountMinor LIMIT 1")
     suspend fun findByOrderAndAmount(orderId: String, amountMinor: Long): BillEntity?
 
+    /** 按来源溯源 ID（如结算 sessionId）查账单，用于判断该会话是否已手动确认入账。 */
+    @Query("SELECT * FROM bills WHERE original_transaction_id = :originalTransactionId LIMIT 1")
+    suspend fun findByOriginalTransactionId(originalTransactionId: String): BillEntity?
+
     @Query(
         """
         SELECT * FROM bills

@@ -6,6 +6,7 @@ import com.jotbill.app.data.JotBillDatabase
 import com.jotbill.app.data.LedgerRepository
 import com.jotbill.app.data.entity.BillEntity
 import com.jotbill.app.data.entity.CheckoutSessionEntity
+import com.jotbill.app.data.entity.PendingTransactionEntity
 import com.jotbill.app.data.entity.PaymentEvidenceEntity
 import com.jotbill.app.data.entity.TransactionCandidateEntity
 import java.nio.charset.StandardCharsets
@@ -303,6 +304,8 @@ internal class CheckoutPaymentMatcher(
                 .singleOrNull()
             if (candidate == null) {
                 session = advanceStatus(session, WAITING_ENRICHMENT_STATUS, now)
+                // 阶段四 T6：纯通知回退（无 AI 候选）→ 转 PendingTransaction，sourceType=notification
+                pendingFromEvidenceOnly(session, evidence, now)?.let { upsertPendingForSession(it) }
                 return@withTransaction CheckoutPaymentMatchResult.Accepted(
                     sessionId = reference.sessionId,
                     status = session.status,
@@ -327,6 +330,14 @@ internal class CheckoutPaymentMatcher(
                 // 阶段四 T5：匹配成功且无冲突，自动入账（写 Bill + 余额更新 + 会话 AUTO_COMMITTED）
                 autoCommitMatchedCandidate(session, updatedCandidate, storedEvidence, now)
             } else {
+                // 阶段四 T6：冲突候选转待确认，conflictReason 必须填充供前端展示
+                pendingFromConflict(
+                    session = session,
+                    candidate = updatedCandidate,
+                    evidence = storedEvidence,
+                    conflictReason = evaluation.conflictReason,
+                    now = now
+                )?.let { upsertPendingForSession(it) }
                 AutoCommitOutcome(advanceStatus(session, NEEDS_CONFIRMATION_STATUS, now), null)
             }
             CheckoutPaymentMatchResult.Accepted(
@@ -392,14 +403,21 @@ internal class CheckoutPaymentMatcher(
             )
             when (result) {
                 is AiVisionResult.Failed -> {
-                    val evidenceExists = database.paymentEvidenceDao()
+                    val successEvidences = database.paymentEvidenceDao()
                         .getBySession(reference.sessionId)
-                        .any { it.paymentStatus == "SUCCESS" }
+                        .filter { it.paymentStatus == "SUCCESS" }
                     session = advanceStatus(
                         session,
-                        if (evidenceExists) NEEDS_CONFIRMATION_STATUS else WAITING_PAYMENT_STATUS,
+                        if (successEvidences.isNotEmpty()) NEEDS_CONFIRMATION_STATUS else WAITING_PAYMENT_STATUS,
                         now
                     )
+                    // 阶段四 T6：AI 失败但支付成功且无候选 → 证据转待确认（sourceType=notification）
+                    if (successEvidences.isNotEmpty() && existingCandidate == null) {
+                        successEvidences.firstOrNull()?.let { evidence ->
+                            pendingFromEvidenceOnly(session, evidence, now)
+                                ?.let { upsertPendingForSession(it) }
+                        }
+                    }
                     CheckoutPaymentMatchResult.Accepted(
                         sessionId = reference.sessionId,
                         status = session.status
@@ -465,6 +483,14 @@ internal class CheckoutPaymentMatcher(
                         )
                         database.checkoutSessionDao().update(session)
                         session = advanceStatus(session, NEEDS_CONFIRMATION_STATUS, now)
+                        // 阶段四 T6：证据歧义冲突转待确认（无单一证据，字段从候选补充）
+                        pendingFromConflict(
+                            session = session,
+                            candidate = conflicted,
+                            evidence = null,
+                            conflictReason = selection.conflictReason,
+                            now = now
+                        )?.let { upsertPendingForSession(it) }
                         return@withTransaction CheckoutPaymentMatchResult.Accepted(
                             sessionId = reference.sessionId,
                             status = session.status,
@@ -495,6 +521,14 @@ internal class CheckoutPaymentMatcher(
                         // 阶段四 T5：匹配成功且无冲突，自动入账（写 Bill + 余额更新 + 会话 AUTO_COMMITTED）
                         autoCommitMatchedCandidate(session, updatedCandidate, selection.evidence, now)
                     } else {
+                        // 阶段四 T6：冲突候选转待确认，conflictReason 必须填充供前端展示
+                        pendingFromConflict(
+                            session = session,
+                            candidate = updatedCandidate,
+                            evidence = selection.evidence,
+                            conflictReason = evaluation.conflictReason,
+                            now = now
+                        )?.let { upsertPendingForSession(it) }
                         AutoCommitOutcome(advanceStatus(session, NEEDS_CONFIRMATION_STATUS, now), null)
                     }
                     CheckoutPaymentMatchResult.Accepted(
@@ -642,6 +676,12 @@ internal class CheckoutPaymentMatcher(
                 billId
             )
         }
+        // 阶段四 T6：用户已手动确认过该会话的待确认交易（Bill.originalTransactionId = sessionId）
+        // 视为该会话已入账，跳过自动写 Bill，只推进会话终态，避免同一支付重复入账
+        val manuallyCommitted = database.billDao().findByOriginalTransactionId(session.id)
+        if (manuallyCommitted != null) {
+            return AutoCommitOutcome(advanceSessionCompleted(session, now), manuallyCommitted.id)
+        }
         val amountMinor = requireNotNull(candidate.amountMinor) {
             "自动入账候选金额缺失：sessionId=${session.id}"
         }
@@ -679,7 +719,25 @@ internal class CheckoutPaymentMatcher(
                 version = candidate.version + 1
             )
         )
+        // 阶段四 T6：会话已自动入账，清理该会话仍在等待的待确认交易（忽略记录保留审计）
+        database.pendingTransactionDao().findPendingBySessionId(session.id)?.let {
+            database.pendingTransactionDao().delete(it)
+        }
         return AutoCommitOutcome(advanceStatus(session, AUTO_COMMITTED_STATUS, now), bill.id)
+    }
+
+    /**
+     * 阶段四 T6：把会话推进到旅程终态 COMPLETED（公开 SessionStatus 亦为 COMPLETED）。
+     *
+     * NEEDS_CONFIRMATION 只允许直达 COMPLETED（手动确认入账后的路径）；
+     * 其余状态经 AUTO_COMMITTED 两步推进，任一步非法时 advanceStatus 自动跳过。
+     */
+    private suspend fun advanceSessionCompleted(
+        session: CheckoutSessionEntity,
+        now: Long
+    ): CheckoutSessionEntity {
+        val stepped = advanceStatus(session, AUTO_COMMITTED_STATUS, now)
+        return advanceStatus(stepped, COMPLETED_STATUS, now)
     }
 
     /**
@@ -695,6 +753,97 @@ internal class CheckoutPaymentMatcher(
         }
         val account = database.accountDao().getById(accountId) ?: return null
         return if (account.isActive) accountId else null
+    }
+
+    /**
+     * 阶段四 T6：从支付证据构建纯通知待确认（无 AI 候选）。
+     *
+     * sourceType 固定为 notification，candidateId 为空；证据金额无效时返回 null（不生成待确认）。
+     */
+    private suspend fun pendingFromEvidenceOnly(
+        session: CheckoutSessionEntity,
+        evidence: PaymentEvidenceEntity,
+        now: Long
+    ): PendingTransactionEntity? {
+        val amountMinor = evidence.amountMinor?.takeIf { it > 0L } ?: return null
+        return PendingTransactionEntity(
+            id = stableId("pending", session.id),
+            candidateId = null,
+            sessionId = session.id,
+            amountMinor = amountMinor,
+            type = "expense",
+            occurredAt = evidence.occurredAt ?: now,
+            platform = evidence.platform,
+            merchant = evidence.merchant,
+            productDescription = null,
+            orderId = evidence.orderId,
+            accountId = defaultAccountIdForPayment(evidence.platform),
+            categoryId = null,
+            conflictReason = null,
+            sourceType = "notification",
+            createdAt = now,
+            version = 1
+        )
+    }
+
+    /**
+     * 阶段四 T6：从冲突候选构建待确认交易。
+     *
+     * 金额/时间/订单号优先取支付证据，证据缺失时用候选字段补充；
+     * conflictReason 必须填充供前端展示；sourceType 为 ai_vision（存在 AI 候选）。
+     * 候选金额缺失且证据金额缺失时返回 null（无法构成合法待确认）。
+     */
+    private suspend fun pendingFromConflict(
+        session: CheckoutSessionEntity,
+        candidate: TransactionCandidateEntity,
+        evidence: PaymentEvidenceEntity?,
+        conflictReason: String?,
+        now: Long
+    ): PendingTransactionEntity? {
+        val amountMinor = evidence?.amountMinor?.takeIf { it > 0L }
+            ?: candidate.amountMinor?.takeIf { it > 0L }
+            ?: return null
+        return PendingTransactionEntity(
+            id = stableId("pending", session.id),
+            candidateId = candidate.id,
+            sessionId = session.id,
+            amountMinor = amountMinor,
+            type = "expense",
+            occurredAt = evidence?.occurredAt ?: candidate.aiOccurredAt ?: now,
+            platform = candidate.platform ?: evidence?.platform,
+            merchant = candidate.merchant ?: evidence?.merchant,
+            productDescription = candidate.productDescription,
+            orderId = evidence?.orderId ?: candidate.aiOrderId,
+            accountId = defaultAccountIdForPayment(evidence?.platform),
+            categoryId = null,
+            conflictReason = conflictReason ?: candidate.conflictReason,
+            sourceType = "ai_vision",
+            createdAt = now,
+            version = 1
+        )
+    }
+
+    /**
+     * 阶段四 T6：按会话幂等落待确认交易。
+     *
+     * - 首次出现：插入（ID 由 sessionId 确定性生成，IGNORE 兜底并发）；
+     * - 已存在且仍为 pending：内容有实质变化时更新并递增版本（如纯通知待确认被 AI 冲突结果增强）；
+     * - 已被忽略：保留用户决策，不做任何改动。
+     */
+    private suspend fun upsertPendingForSession(pending: PendingTransactionEntity) {
+        val dao = database.pendingTransactionDao()
+        val existing = dao.getById(pending.id) ?: run {
+            dao.insertIfAbsent(pending)
+            return
+        }
+        if (existing.status != PendingTransactionEntity.STATUS_PENDING) {
+            return
+        }
+        val normalizedExisting = existing.copy(version = 1, createdAt = 0L)
+        val normalizedPending = pending.copy(version = 1, createdAt = 0L)
+        if (normalizedExisting != normalizedPending) {
+            dao.update(pending.copy(version = existing.version + 1))
+        }
     }
 
     /** 自动入账结果：推进后的会话与生成的账单 ID（幂等跳过时为 null 或已存在的 ID）。 */

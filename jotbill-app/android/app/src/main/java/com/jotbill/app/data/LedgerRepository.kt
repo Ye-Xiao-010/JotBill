@@ -126,12 +126,29 @@ class LedgerRepository(private val database: JotBillDatabase) {
         }
     }
 
-    suspend fun confirmPendingTransaction(pending: PendingTransactionEntity, bill: BillEntity) {
+    /**
+     * 确认待确认交易：复用 T5 写 Bill 事务路径（写 Bill + 按类型联动余额 + 审计）。
+     *
+     * 事务内先基于 version 做乐观锁删除待确认记录，版本不一致返回 false 且整体回滚，
+     * 不产生 Bill 也不更新余额。返回 true 表示确认入账成功。
+     *
+     * @param pending 待确认交易实体（id 与 version 用于乐观锁）
+     * @param bill 确认后写入的账单实体
+     * @return true 入账成功；false 版本冲突（记录已被并发处理）
+     */
+    suspend fun confirmPendingTransaction(
+        pending: PendingTransactionEntity,
+        bill: BillEntity
+    ): Boolean {
         val now = System.currentTimeMillis()
-        database.withTransaction {
+        return database.withTransaction {
+            if (database.pendingTransactionDao()
+                    .deleteByIdIfVersion(pending.id, pending.version) != 1
+            ) {
+                return@withTransaction false
+            }
             database.billDao().insert(bill)
             applyBalanceDelta(bill, multiplier = 1L, updatedAt = now)
-            database.pendingTransactionDao().delete(pending)
             database.auditEntryDao().insert(
                 AuditEntryEntity(
                     id = "${bill.id}:create",
@@ -145,6 +162,7 @@ class LedgerRepository(private val database: JotBillDatabase) {
                     createdAt = now
                 )
             )
+            true
         }
     }
 

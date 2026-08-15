@@ -713,11 +713,11 @@ class DataModule(
     fun ignorePendingTransaction(id: String, version: Int, promise: Promise) = launch(promise) {
         val pending = database.pendingTransactionDao().getById(requireId(id, "pending transaction"))
             ?: throw BridgeException("NOT_FOUND", "Pending transaction $id was not found")
-        if (pending.version != version) {
+        // 阶段四 T6：基于 version 的乐观锁忽略；标记为 ignored 保留记录供审计，不物理删除
+        if (database.pendingTransactionDao().markIgnoredIfVersion(pending.id, version) != 1) {
             throw BridgeException("VERSION_CONFLICT", "Pending transaction $id has changed")
         }
-        database.pendingTransactionDao().delete(pending)
-        events.emit("onPendingChanged", JSONObject().put("pendingId", pending.id).put("deleted", true))
+        events.emit("onPendingChanged", JSONObject().put("pendingId", pending.id).put("ignored", true))
         null
     }
 
@@ -760,13 +760,17 @@ class DataModule(
             merchant = input.optionalString("merchant") ?: pending.merchant,
             productDescription = input.optionalString("productDescription") ?: pending.productDescription,
             sourceType = sourceType,
-            originalTransactionId = input.optionalString("originalTransactionId"),
+            // 阶段四 T6：默认回填来源会话 ID，供自动入账侧判断该会话是否已手动入账（防重复）
+            originalTransactionId = input.optionalString("originalTransactionId") ?: pending.sessionId,
             orderId = input.optionalString("orderId") ?: pending.orderId,
             createdAt = now,
             updatedAt = now,
             version = 1
         )
-        repository.confirmPendingTransaction(pending, bill)
+        // 事务内乐观锁确认：版本不一致返回 false，Bill 不写入、余额不更新
+        if (!repository.confirmPendingTransaction(pending, bill)) {
+            throw BridgeException("VERSION_CONFLICT", "Pending transaction $id has changed")
+        }
         events.emit("onPendingChanged", JSONObject().put("pendingId", pending.id).put("deleted", true))
         events.emit("onBillCreated", BridgeDtoMapper.bill(bill))
         BridgeDtoMapper.bill(bill).toString()
