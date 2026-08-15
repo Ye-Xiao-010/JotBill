@@ -58,7 +58,9 @@ data class PaymentNotificationFallbackSignal(
     val occurredAt: Long,
     val merchant: String? = null,
     val orderId: String? = null,
-    val sourceEventKey: String? = null
+    val sourceEventKey: String? = null,
+    /** 已脱敏的结果页文本哈希；通知回退没有该字段时保持为空。 */
+    val rawTextHash: String? = null
 ) {
     fun isValid(): Boolean =
         paymentPackage.isNotBlank() &&
@@ -67,7 +69,8 @@ data class PaymentNotificationFallbackSignal(
             occurredAt > 0L &&
             isOptionalTextValid(merchant) &&
             isOptionalTextValid(orderId) &&
-            isOptionalTextValid(sourceEventKey)
+            isOptionalTextValid(sourceEventKey) &&
+            isOptionalTextValid(rawTextHash)
 
     private fun isOptionalTextValid(value: String?): Boolean =
         value == null || (value.isNotBlank() && value.length <= 256)

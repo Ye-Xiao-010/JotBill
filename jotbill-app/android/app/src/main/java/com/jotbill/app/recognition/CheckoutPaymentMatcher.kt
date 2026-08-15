@@ -230,7 +230,8 @@ internal class CheckoutPaymentMatcher(
      */
     suspend fun recordOrphanPaymentSignal(
         signal: PaymentNotificationFallbackSignal,
-        sourceType: String = "NOTIFICATION"
+        sourceType: String = "NOTIFICATION",
+        conflictReason: String = "NO_ACTIVE_SESSION"
     ) {
         val now = nowMillis()
         database.withTransaction {
@@ -258,7 +259,7 @@ internal class CheckoutPaymentMatcher(
                 orderId = signal.orderId,
                 accountId = defaultAccountIdForPayment(signal.paymentPackage),
                 categoryId = null,
-                conflictReason = "NO_ACTIVE_SESSION",
+                conflictReason = conflictReason,
                 sourceType = normalizedSourceType,
                 createdAt = now,
                 version = 1
@@ -300,6 +301,21 @@ internal class CheckoutPaymentMatcher(
                         "PAYMENT_EVIDENCE_ALREADY_BOUND"
                     )
                 }
+                val existingSession = database.checkoutSessionDao().getById(reference.sessionId)
+                    ?: return@withTransaction CheckoutPaymentMatchResult.Rejected(
+                        reference.sessionId,
+                        "PAYMENT_SESSION_MISSING"
+                    )
+                val existingCandidate = database.transactionCandidateDao()
+                    .getBySession(reference.sessionId)
+                    .singleOrNull()
+                return@withTransaction CheckoutPaymentMatchResult.Accepted(
+                    sessionId = reference.sessionId,
+                    status = existingSession.status,
+                    candidateId = existingSession.candidateId ?: existingCandidate?.id,
+                    evidenceId = existingEvidence.id,
+                    matched = existingCandidate?.matched == true
+                )
             }
             val existingSession = database.checkoutSessionDao().getById(reference.sessionId)
             if (existingSession != null && existingSession.isClosedOrExpired(now)) {
@@ -331,7 +347,7 @@ internal class CheckoutPaymentMatcher(
                 paymentMethod = null,
                 paymentStatus = "SUCCESS",
                 occurredAt = signal.occurredAt,
-                rawTextHash = stableId(
+                rawTextHash = signal.rawTextHash ?: stableId(
                     "payment-source",
                     signal.paymentPackage,
                     signal.amountMinor.toString(),
@@ -933,7 +949,7 @@ internal class CheckoutPaymentMatcher(
     /**
      * 阶段四 T6：从支付证据构建纯通知待确认（无 AI 候选）。
      *
-     * sourceType 固定为 notification，candidateId 为空；证据金额无效时返回 null（不生成待确认）。
+     * sourceType 继承证据来源，candidateId 为空；证据金额无效时返回 null（不生成待确认）。
      */
     private suspend fun pendingFromEvidenceOnly(
         session: CheckoutSessionEntity,
@@ -955,7 +971,7 @@ internal class CheckoutPaymentMatcher(
             accountId = defaultAccountIdForPayment(evidence.platform),
             categoryId = null,
             conflictReason = null,
-            sourceType = "notification",
+            sourceType = normalizePaymentEvidenceSourceType(evidence.sourceType) ?: "notification",
             createdAt = now,
             version = 1
         )
@@ -1264,7 +1280,11 @@ internal class CheckoutPaymentMatcher(
 }
 
 private fun CheckoutSessionEntity.isClosedOrExpired(now: Long): Boolean =
-    status in TERMINAL_SESSION_STATUSES || expiresAt <= now
+    expiresAt <= now ||
+        (
+            status in TERMINAL_SESSION_STATUSES &&
+                journeyState != CheckoutJourneyState.AI_FAILED.wireValue
+        )
 
 private fun AiVisionResult.requestIdOrNull(): String? = when (this) {
     is AiVisionResult.Succeeded -> requestId

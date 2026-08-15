@@ -104,7 +104,7 @@ class RecognitionModule(
     /**
      * 触发候选对应的 AI 识别重试。
      *
-     * 通过候选找到关联会话的页面指纹，再交给无障碍服务的 USER_RETRY 通路。
+     * 通过候选找到关联会话的购物包，再交给无障碍服务的 USER_RETRY 通路。
      * 服务未连接、会话已过期或页面已失效时，回调会返回 Rejected，桥接层转换为对应错误码。
      */
     @ReactMethod
@@ -117,10 +117,13 @@ class RecognitionModule(
         if (session.status in TERMINAL_SESSION_STATUSES) {
             throw BridgeException("SESSION_EXPIRED", "Session ${session.id} has reached terminal state")
         }
-        val pageFingerprint = session.pageFingerprint
+        if (session.expiresAt <= System.currentTimeMillis()) {
+            throw BridgeException("SESSION_EXPIRED", "Session ${session.id} has expired")
+        }
+        val shoppingPackage = session.shoppingPackage?.trim()?.takeIf { it.isNotEmpty() }
             ?: throw BridgeException(
                 "SESSION_EXPIRED",
-                "Session ${session.id} has no page fingerprint to retry"
+                "Session ${session.id} has no shopping package to retry"
             )
 
         val result = withTimeoutOrNull(RETRY_TIMEOUT_MILLIS) {
@@ -130,7 +133,12 @@ class RecognitionModule(
                         cont.resume(value)
                     }
                 }
-                CheckoutAccessibilityService.requestUserRetry(pageFingerprint, callback)
+                // 重试截图使用新的内存会话，再由识别服务把结果回写到原失败会话。
+                CheckoutAccessibilityService.requestUserRetryForSession(
+                    sessionId = session.id,
+                    expectedShoppingPackage = shoppingPackage,
+                    callback = callback
+                )
                 cont.invokeOnCancellation {
                     // 协程取消时不主动中断无障碍服务流程，回调可能仍会触发但结果已被丢弃。
                 }
@@ -238,7 +246,7 @@ class RecognitionModule(
         "SERVICE_NOT_CONNECTED", "COORDINATOR_CLOSED" -> "SERVICE_UNAVAILABLE"
         "NO_CHECKOUT_CONTEXT", "NOT_CHECKOUT_PAGE", "SENSITIVE_PAGE",
         "BUFFER_UNAVAILABLE", "PAYMENT_HANDOFF_ALREADY_ATTEMPTED" -> "SESSION_EXPIRED"
-        "REQUEST_BUDGET_EXCEEDED" -> "AI_BUDGET_EXCEEDED"
+        "REQUEST_BUDGET_EXHAUSTED" -> "AI_BUDGET_EXCEEDED"
         "INVALID_PAYMENT_NOTIFICATION", "PAYMENT_NOTIFICATION_ALREADY_ATTEMPTED" ->
             "DUPLICATE_TRANSACTION"
         else -> "UNKNOWN"

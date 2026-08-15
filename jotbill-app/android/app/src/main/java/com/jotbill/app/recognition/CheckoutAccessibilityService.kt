@@ -177,6 +177,29 @@ class CheckoutAccessibilityService : AccessibilityService() {
             callback: PurchaseIntentResultCallback
         ) = requestPurchaseIntent(PurchaseIntent.USER_RETRY, pageFingerprint, callback)
 
+        /** 仅允许在当前安全购物页重新截图，并把结果回写到指定失败会话。 */
+        @JvmStatic
+        fun requestUserRetryForSession(
+            sessionId: String,
+            expectedShoppingPackage: String?,
+            callback: PurchaseIntentResultCallback
+        ) {
+            val service = activeService
+            if (service == null) {
+                notifyPurchaseIntentUnavailable(PurchaseIntent.USER_RETRY, callback)
+                return
+            }
+            if (sessionId.isBlank() || expectedShoppingPackage.isNullOrBlank()) {
+                notifyPurchaseIntentRejected(
+                    PurchaseIntent.USER_RETRY,
+                    PurchaseIntentGateRejection.NO_CHECKOUT_CONTEXT,
+                    callback
+                )
+                return
+            }
+            service.requestUserRetryForSession(sessionId, expectedShoppingPackage, callback)
+        }
+
         private fun notifyPurchaseIntentUnavailable(
             intent: PurchaseIntent,
             callback: PurchaseIntentResultCallback
@@ -262,12 +285,14 @@ class CheckoutAccessibilityService : AccessibilityService() {
     @Volatile
     private var purchaseIntentResultConsumer: PurchaseIntentResultCallback? = null
     private val aiLifecycleLock = Any()
+    private val mainHandler = Handler(Looper.getMainLooper())
     private var aiScope: CoroutineScope? = null
     private var aiVisionClient: CheckoutAiVisionClient? = null
     private val dispatchedAiRequestKeys = mutableSetOf<String>()
     private var aiResultCallback: CheckoutAiResultCallback? = null
     private var paymentMatcher: CheckoutPaymentMatcher? = null
     private var matchingScope: CoroutineScope? = null
+    private val evidenceFallbackScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val activeAiReferences = mutableMapOf<String, CheckoutSnapshotReference>()
 
     override fun onServiceConnected() {
@@ -317,6 +342,105 @@ class CheckoutAccessibilityService : AccessibilityService() {
         setObservationListener(snapshotCaptureCoordinator)
         serviceConnected = true
         Log.i(TAG, "结算页无障碍观察服务已连接")
+    }
+
+    /** 在当前安全购物页重新截图，成功后才向桥接层报告新的 AI 请求。 */
+    private fun requestUserRetryForSession(
+        sessionId: String,
+        expectedShoppingPackage: String,
+        callback: PurchaseIntentResultCallback
+    ) {
+        val normalizedShoppingPackage = expectedShoppingPackage.trim().takeIf { it.isNotEmpty() }
+        val callbackDelivered = AtomicBoolean(false)
+        val guardedCallback = PurchaseIntentResultCallback { result ->
+            if (callbackDelivered.compareAndSet(false, true)) {
+                try {
+                    callback.onResult(result)
+                } catch (error: RuntimeException) {
+                    Log.w(TAG, "失败会话重试结果回调失败", error)
+                }
+            }
+        }
+        val posted = mainHandler.post {
+            val context = userRetryCaptureContext
+            if (
+                normalizedShoppingPackage == null ||
+                context == null ||
+                !context.isComplete() ||
+                context.shoppingPackage != normalizedShoppingPackage ||
+                (context.sessionId != null && context.sessionId != sessionId)
+            ) {
+                rejectUserRetry(guardedCallback, PurchaseIntentGateRejection.NO_CHECKOUT_CONTEXT)
+                return@post
+            }
+
+            val boundContext = context.withSessionId(sessionId)
+            userRetryCaptureContext = boundContext
+            snapshotCaptureCoordinator?.setUserRetryContext(boundContext)
+            purchaseIntentCoordinator?.setUserRetryContext(boundContext)
+
+            val captureCoordinator = snapshotCaptureCoordinator
+            if (captureCoordinator == null) {
+                clearUserRetryCaptureContext()
+                rejectUserRetry(guardedCallback, PurchaseIntentGateRejection.SERVICE_NOT_CONNECTED)
+                return@post
+            }
+
+            captureCoordinator.requestManualCapture { result ->
+                val captureAccepted =
+                    result.sourceReason == SnapshotSourceReason.MANUAL_CAPTURE &&
+                        result.status in setOf(
+                            SnapshotCaptureStatus.STORED,
+                            SnapshotCaptureStatus.DUPLICATE
+                        ) &&
+                        result.sessionId == sessionId &&
+                        result.shoppingPackage == normalizedShoppingPackage &&
+                        result.pageFingerprint == boundContext.pageFingerprint
+                if (!captureAccepted) {
+                    clearUserRetryCaptureContext()
+                    rejectUserRetry(guardedCallback, PurchaseIntentGateRejection.BUFFER_UNAVAILABLE)
+                    return@requestManualCapture
+                }
+
+                val completedContext = boundContext.withSessionId(sessionId)
+                userRetryCaptureContext = null
+                purchaseIntentCoordinator?.setUserRetryContext(completedContext)
+                val coordinator = purchaseIntentCoordinator
+                if (coordinator == null) {
+                    clearUserRetryCaptureContext()
+                    rejectUserRetry(guardedCallback, PurchaseIntentGateRejection.SERVICE_NOT_CONNECTED)
+                    return@requestManualCapture
+                }
+                try {
+                    coordinator.triggerUserRetry(completedContext, guardedCallback)
+                } catch (error: RuntimeException) {
+                    Log.w(TAG, "失败会话重试触发失败", error)
+                    rejectUserRetry(guardedCallback, PurchaseIntentGateRejection.BUFFER_UNAVAILABLE)
+                } finally {
+                    snapshotCaptureCoordinator?.setUserRetryContext(null)
+                    purchaseIntentCoordinator?.setUserRetryContext(null)
+                }
+            }
+        }
+        if (!posted) {
+            rejectUserRetry(guardedCallback, PurchaseIntentGateRejection.SERVICE_NOT_CONNECTED)
+        }
+    }
+
+    private fun rejectUserRetry(
+        callback: PurchaseIntentResultCallback,
+        reason: PurchaseIntentGateRejection
+    ) {
+        try {
+            callback.onResult(
+                PurchaseIntentCoordinationResult.Rejected(
+                    intent = PurchaseIntent.USER_RETRY,
+                    gateReason = reason
+                )
+            )
+        } catch (error: RuntimeException) {
+            Log.w(TAG, "失败会话重试结果回调失败", error)
+        }
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
@@ -546,6 +670,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
         setAiResultCallback(null)
         shutdownPaymentMatcher()
         shutdownAiClient()
+        evidenceFallbackScope.cancel()
         stabilityCoordinator.dispose()
         purchaseIntentCoordinator?.close()
         snapshotCaptureCoordinator?.close()
@@ -641,9 +766,6 @@ class CheckoutAccessibilityService : AccessibilityService() {
     /** 将 Ready 异步交给 AI；返回 false 时所有权仍由协调器负责释放。 */
     private fun dispatchReadyToAi(ready: CheckoutAiTriggerResult.Ready): Boolean {
         val requestKey = ready.requestKey.value
-        val isOrdinaryPageUserRetry =
-            ready.intent == PurchaseIntent.USER_RETRY &&
-                ready.snapshot.pageRole.canBufferUserRetrySnapshot()
         val client: CheckoutAiVisionClient
         val scope: CoroutineScope
         synchronized(aiLifecycleLock) {
@@ -652,9 +774,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
             if (!scope.isActive || !dispatchedAiRequestKeys.add(requestKey)) {
                 return false
             }
-            if (!isOrdinaryPageUserRetry) {
-                activeAiReferences[ready.snapshot.sessionId] = ready.snapshot.reference()
-            }
+            activeAiReferences[ready.snapshot.sessionId] = ready.snapshot.reference()
         }
 
         val reference = ready.snapshot.reference()
@@ -681,11 +801,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
                 clientStarted.set(true)
                 var clientOwnsSnapshot = false
                 try {
-                    val matcher = if (isOrdinaryPageUserRetry) {
-                        null
-                    } else {
-                        synchronized(aiLifecycleLock) { paymentMatcher }
-                    }
+                    val matcher = synchronized(aiLifecycleLock) { paymentMatcher }
                     if (matcher != null) {
                         try {
                             matcher.ensureSession(reference, ready.requestKey)
@@ -843,9 +959,18 @@ class CheckoutAccessibilityService : AccessibilityService() {
 
             Log.i(TAG, "支付结果页解析到证据: 金额=${evidence.amountMinor}分, 状态=${evidence.paymentStatus}")
 
-            // 异步落库证据
-            val scope = synchronized(aiLifecycleLock) { matchingScope } ?: return
-            val matcher = synchronized(aiLifecycleLock) { paymentMatcher } ?: return
+            // 匹配器尚未初始化时仍保留证据，避免结果页只记录日志后丢失。
+            val matcher = synchronized(aiLifecycleLock) { paymentMatcher }
+                ?: run {
+                    val database = try {
+                        JotBillDatabaseProvider.get(applicationContext)
+                    } catch (error: RuntimeException) {
+                        Log.w(TAG, "支付结果页无法初始化证据数据库", error)
+                        return
+                    }
+                    CheckoutPaymentMatcher(database)
+                }
+            val scope = synchronized(aiLifecycleLock) { matchingScope } ?: evidenceFallbackScope
             scope.launch {
                 try {
                     recordPaymentResultEvidence(
@@ -856,6 +981,23 @@ class CheckoutAccessibilityService : AccessibilityService() {
                     )
                 } catch (error: Exception) {
                     Log.w(TAG, "支付结果页证据落库失败", error)
+                    try {
+                        matcher.recordOrphanPaymentSignal(
+                            PaymentNotificationFallbackSignal(
+                                paymentPackage = paymentPackage,
+                                amountMinor = evidence.amountMinor,
+                                occurredAt = evidence.occurredAt ?: System.currentTimeMillis(),
+                                merchant = evidence.merchant,
+                                orderId = evidence.orderId,
+                                sourceEventKey = evidence.sourceEventKey,
+                                rawTextHash = evidence.rawTextHash
+                            ),
+                            sourceType = "ACCESSIBILITY",
+                            conflictReason = "EVIDENCE_PERSIST_FAILED"
+                        )
+                    } catch (fallbackError: Exception) {
+                        Log.w(TAG, "支付结果页证据兜底落库失败", fallbackError)
+                    }
                 }
             }
         } catch (error: RuntimeException) {
@@ -977,7 +1119,8 @@ class CheckoutAccessibilityService : AccessibilityService() {
             occurredAt = evidence.occurredAt ?: System.currentTimeMillis(),
             merchant = evidence.merchant,
             orderId = evidence.orderId,
-            sourceEventKey = evidence.sourceEventKey
+            sourceEventKey = evidence.sourceEventKey,
+            rawTextHash = evidence.rawTextHash
         )
 
         // 路径一：使用事件发生时固定的交接引用，禁止异步任务回读新订单槽位。
@@ -995,6 +1138,13 @@ class CheckoutAccessibilityService : AccessibilityService() {
             val result = matcher.recordPaymentEvidence(
                 handoffReference, signal, sourceType = "ACCESSIBILITY"
             )
+            if (result is CheckoutPaymentMatchResult.Rejected) {
+                matcher.recordOrphanPaymentSignal(
+                    signal,
+                    sourceType = "ACCESSIBILITY",
+                    conflictReason = result.reason
+                )
+            }
             Log.i(TAG, "支付结果页证据落库结果（交接上下文）: ${formatMatchResult(result)}")
             return
         }
@@ -1010,6 +1160,13 @@ class CheckoutAccessibilityService : AccessibilityService() {
                 val result = matcher.recordPaymentEvidence(
                     resolution.reference, signal, sourceType = "ACCESSIBILITY"
                 )
+                if (result is CheckoutPaymentMatchResult.Rejected) {
+                    matcher.recordOrphanPaymentSignal(
+                        signal,
+                        sourceType = "ACCESSIBILITY",
+                        conflictReason = result.reason
+                    )
+                }
                 Log.i(
                     TAG,
                     "支付结果页证据落库结果（" +
@@ -1019,7 +1176,11 @@ class CheckoutAccessibilityService : AccessibilityService() {
             }
             is PaymentSessionResolution.Ambiguous -> {
                 // 并发会话无法区分：不强行合并，保留证据交给已有待确认兜底。
-                matcher.recordOrphanPaymentSignal(signal, sourceType = "ACCESSIBILITY")
+                matcher.recordOrphanPaymentSignal(
+                    signal,
+                    sourceType = "ACCESSIBILITY",
+                    conflictReason = "AMBIGUOUS_SESSION_IDS:${resolution.sessionIds.joinToString(",")}"
+                )
                 Log.i(TAG, "支付结果页命中并发会话(${resolution.sessionIds.size}个)，已转待确认")
             }
             PaymentSessionResolution.NoMatch -> {
@@ -1092,13 +1253,31 @@ class CheckoutAccessibilityService : AccessibilityService() {
 
         val coordinator = purchaseIntentCoordinator
         val matcher = synchronized(aiLifecycleLock) { paymentMatcher }
+            ?: run {
+                val database = try {
+                    JotBillDatabaseProvider.get(applicationContext)
+                } catch (error: RuntimeException) {
+                    Log.w(TAG, "支付通知无法初始化证据数据库", error)
+                    null
+                }
+                database?.let(::CheckoutPaymentMatcher)
+            }
+        if (matcher == null) {
+            Companion.notifyPurchaseIntentRejected(
+                PurchaseIntent.PAYMENT_NOTIFICATION_FALLBACK,
+                PurchaseIntentGateRejection.BUFFER_UNAVAILABLE,
+                callback
+            )
+            return
+        }
         val matchingScope = synchronized(aiLifecycleLock) { matchingScope }
+            ?: evidenceFallbackScope
         val snapshotReference = checkoutSnapshotBuffer?.findReference(
             slotId = checkoutSnapshotSlotId(observation.shoppingPackage),
             pageFingerprint = observation.pageFingerprint
         )
-        if (matcher != null && matchingScope != null) {
-            matchingScope.launch {
+        matchingScope.launch {
+            try {
                 val reference = snapshotReference
                     ?: synchronized(aiLifecycleLock) {
                         val now = System.currentTimeMillis()
@@ -1116,19 +1295,29 @@ class CheckoutAccessibilityService : AccessibilityService() {
                     )
                 if (reference == null) {
                     // 支付先到但无法关联任何结算会话：证据不丢弃，转纯通知待确认（sessionId 为空）
-                    try {
-                        matcher.recordOrphanPaymentSignal(signal, sourceType = "NOTIFICATION")
-                        Log.i(TAG, "支付通知无结算会话可匹配，已转纯通知待确认")
-                    } catch (error: RuntimeException) {
-                        Log.w(TAG, "纯通知待确认写入失败", error)
-                    }
+                    matcher.recordOrphanPaymentSignal(signal, sourceType = "NOTIFICATION")
+                    Log.i(TAG, "支付通知无结算会话可匹配，已转纯通知待确认")
                     return@launch
                 }
+                val result = matcher.recordPaymentEvidence(reference, signal)
+                if (result is CheckoutPaymentMatchResult.Rejected) {
+                    matcher.recordOrphanPaymentSignal(
+                        signal,
+                        sourceType = "NOTIFICATION",
+                        conflictReason = result.reason
+                    )
+                }
+                Log.i(TAG, "支付通知证据落库结果: ${formatMatchResult(result)}")
+            } catch (error: RuntimeException) {
+                Log.w(TAG, "支付证据写入失败", error)
                 try {
-                    val result = matcher.recordPaymentEvidence(reference, signal)
-                    Log.i(TAG, "支付通知证据落库结果: ${formatMatchResult(result)}")
-                } catch (error: RuntimeException) {
-                    Log.w(TAG, "支付证据写入失败", error)
+                    matcher.recordOrphanPaymentSignal(
+                        signal,
+                        sourceType = "NOTIFICATION",
+                        conflictReason = "EVIDENCE_PERSIST_FAILED"
+                    )
+                } catch (fallbackError: RuntimeException) {
+                    Log.w(TAG, "支付通知待确认兜底写入失败", fallbackError)
                 }
             }
         }
