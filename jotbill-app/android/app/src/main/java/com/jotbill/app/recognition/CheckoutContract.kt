@@ -46,6 +46,8 @@ enum class PurchaseIntent(val wireValue: String) {
     USER_RETRY("USER_RETRY")
 }
 
+internal const val MAX_SAFE_MINOR_UNIT = 9_007_199_254_740_991L
+
 /**
  * 通知服务传给识别层的最小结构化支付信号，不包含通知原文、页面文本或图片。
  * 金额统一使用分，避免跨服务传递 Double 时产生精度歧义。
@@ -61,7 +63,7 @@ data class PaymentNotificationFallbackSignal(
     fun isValid(): Boolean =
         paymentPackage.isNotBlank() &&
             paymentPackage.length <= 255 &&
-            amountMinor > 0L &&
+            amountMinor in 1L..MAX_SAFE_MINOR_UNIT &&
             occurredAt > 0L &&
             isOptionalTextValid(merchant) &&
             isOptionalTextValid(orderId) &&
@@ -254,7 +256,7 @@ enum class CheckoutJourneyState(val wireValue: String) {
             EXPIRED
         )
         AUTO_COMMITTED -> next == COMPLETED
-        NEEDS_CONFIRMATION -> next in setOf(COMPLETED, DISMISSED, CANCELLED)
+        NEEDS_CONFIRMATION -> next in setOf(AUTO_COMMITTED, COMPLETED, DISMISSED, CANCELLED)
         COMPLETED, DISMISSED, CANCELLED, FAILED, EXPIRED -> false
     }
 

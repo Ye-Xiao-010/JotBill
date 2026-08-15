@@ -33,12 +33,13 @@ class LedgerRepository(private val database: JotBillDatabase) {
         validateSafeAmount(bill.amountMinor)
         val now = System.currentTimeMillis()
         database.withTransaction {
+            validateBillAccounts(bill, requireActiveAccounts = true)
             database.billDao().insert(bill)
             applyBalanceDelta(
                 bill,
                 multiplier = 1L,
                 updatedAt = now,
-                requireActiveAccounts = operator == "auto_commit"
+                requireActiveAccounts = true
             )
 
             database.auditEntryDao().insert(
@@ -76,6 +77,7 @@ class LedgerRepository(private val database: JotBillDatabase) {
             if (current.version != existing.version) {
                 return@withTransaction false
             }
+            validateBillAccounts(updated, requireActiveAccounts = true)
             val updatedRows = database.billDao().updateIfVersion(
                 id = updated.id,
                 expectedVersion = current.version,
@@ -414,11 +416,23 @@ class LedgerRepository(private val database: JotBillDatabase) {
 
     private suspend fun validateConfirmationBill(bill: BillEntity) {
         validateSafeAmount(bill.amountMinor, requirePositive = true)
+        validateBillAccounts(
+            bill,
+            requireActiveAccounts = true,
+            missingAccountMessage = "Confirmation requires an account"
+        )
+    }
+
+    private suspend fun validateBillAccounts(
+        bill: BillEntity,
+        requireActiveAccounts: Boolean,
+        missingAccountMessage: String = "Transaction requires an account"
+    ) {
         val accountId = bill.accountId?.takeIf { it.isNotBlank() }
-            ?: throw LedgerValidationException("Confirmation requires an account")
+            ?: throw LedgerValidationException(missingAccountMessage)
         val account = database.accountDao().getById(accountId)
             ?: throw LedgerValidationException("Account $accountId does not exist")
-        if (!account.isActive) {
+        if (requireActiveAccounts && !account.isActive) {
             throw LedgerValidationException("Account $accountId is inactive")
         }
 
@@ -480,11 +494,17 @@ class LedgerRepository(private val database: JotBillDatabase) {
             multiplier,
             "Account balance delta is out of range"
         )
-        bill.accountId?.let { accountId ->
-            val account = database.accountDao().getById(accountId)
-                ?: throw LedgerValidationException("Account $accountId does not exist")
+        val accountId = bill.accountId?.takeIf { it.isNotBlank() }
+        if (accountId == null &&
+            (requireActiveAccounts || bill.type == "transfer" || bill.type == "repayment")
+        ) {
+            throw LedgerValidationException("Transaction requires an account")
+        }
+        accountId?.let { sourceAccountId ->
+            val account = database.accountDao().getById(sourceAccountId)
+                ?: throw LedgerValidationException("Account $sourceAccountId does not exist")
             if (requireActiveAccounts && !account.isActive) {
-                throw LedgerValidationException("Account $accountId is inactive")
+                throw LedgerValidationException("Account $sourceAccountId is inactive")
             }
             database.accountDao().updateBalance(
                 id = account.id,
@@ -498,27 +518,30 @@ class LedgerRepository(private val database: JotBillDatabase) {
         }
 
         if (bill.type == "transfer" || bill.type == "repayment") {
-            bill.targetAccountId?.let { targetAccountId ->
-                val target = database.accountDao().getById(targetAccountId)
-                    ?: throw LedgerValidationException("Target account $targetAccountId does not exist")
-                if (requireActiveAccounts && !target.isActive) {
-                    throw LedgerValidationException("Target account $targetAccountId is inactive")
-                }
-                val targetDelta = checkedMultiply(
-                    bill.amountMinor,
-                    multiplier,
-                    "Target account balance delta is out of range"
-                )
-                database.accountDao().updateBalance(
-                    id = target.id,
-                    newBalance = checkedAdd(
-                        target.currentBalanceMinor,
-                        targetDelta,
-                        "Target account balance is out of range"
-                    ),
-                    updatedAt = updatedAt
-                )
+            val targetAccountId = bill.targetAccountId?.takeIf { it.isNotBlank() }
+                ?: throw LedgerValidationException("${bill.type} requires a target account")
+            if (targetAccountId == accountId) {
+                throw LedgerValidationException("Source and target accounts must differ")
             }
+            val target = database.accountDao().getById(targetAccountId)
+                ?: throw LedgerValidationException("Target account $targetAccountId does not exist")
+            if (requireActiveAccounts && !target.isActive) {
+                throw LedgerValidationException("Target account $targetAccountId is inactive")
+            }
+            val targetDelta = checkedMultiply(
+                bill.amountMinor,
+                multiplier,
+                "Target account balance delta is out of range"
+            )
+            database.accountDao().updateBalance(
+                id = target.id,
+                newBalance = checkedAdd(
+                    target.currentBalanceMinor,
+                    targetDelta,
+                    "Target account balance is out of range"
+                ),
+                updatedAt = updatedAt
+            )
         }
     }
 
@@ -560,7 +583,8 @@ object BalanceCalculator {
     fun delta(amount: Long, type: String): Long = when (type) {
         "income", "refund" -> amount
         "expense", "fee" -> Math.negateExact(amount)
-        "transfer", "repayment", "adjustment" -> 0L
+        "transfer", "repayment" -> Math.negateExact(amount)
+        "adjustment" -> 0L
         else -> error("Unsupported transaction type: $type")
     }
 }
