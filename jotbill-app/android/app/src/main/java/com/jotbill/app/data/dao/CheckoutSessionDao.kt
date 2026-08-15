@@ -29,7 +29,7 @@ interface CheckoutSessionDao {
     @Query(
         """
         SELECT * FROM checkout_sessions
-        WHERE status NOT IN ('COMPLETED', 'DISMISSED', 'CANCELLED', 'FAILED', 'EXPIRED')
+        WHERE status NOT IN ('COMPLETED', 'CANCELLED', 'FAILED', 'EXPIRED')
           AND expires_at > :at
         ORDER BY updated_at DESC
         """
@@ -40,7 +40,7 @@ interface CheckoutSessionDao {
     @Query(
         """
         SELECT COUNT(*) FROM checkout_sessions
-        WHERE status IN ('AI_REQUESTING', 'AI_PENDING')
+        WHERE status = 'AI_REQUESTING'
           AND expires_at > :at
         """
     )
@@ -55,7 +55,7 @@ interface CheckoutSessionDao {
         WHERE shopping_package = :shoppingPackage
           AND page_fingerprint = :pageFingerprint
           AND expires_at > :at
-          AND status NOT IN ('COMPLETED', 'DISMISSED', 'CANCELLED', 'FAILED', 'EXPIRED')
+          AND status NOT IN ('COMPLETED', 'CANCELLED', 'FAILED', 'EXPIRED')
         ORDER BY updated_at DESC
         """
     )

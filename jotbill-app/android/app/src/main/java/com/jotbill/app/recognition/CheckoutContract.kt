@@ -121,10 +121,55 @@ internal fun String?.isSha256PageFingerprint(): Boolean =
         }
 
 /**
+ * 公开会话状态，严格对应 Native.d.ts 中声明的 8 个值。
+ *
+ * 阶段四 T1 起，CheckoutSessionEntity.status 只允许存这 8 个值；
+ * 内部旅程状态（CheckoutJourneyState）存入独立 journey_state 列，
+ * 通过 toPublicSessionStatus() 映射后才能写入 status 列或序列化给 RN。
+ */
+enum class SessionStatus(val wireValue: String) {
+    OBSERVING("OBSERVING"),
+    SNAPSHOT_BUFFERED("SNAPSHOT_BUFFERED"),
+    AI_REQUESTING("AI_REQUESTING"),
+    WAITING_ENRICHMENT("WAITING_ENRICHMENT"),
+    COMPLETED("COMPLETED"),
+    FAILED("FAILED"),
+    CANCELLED("CANCELLED"),
+    EXPIRED("EXPIRED");
+
+    companion object {
+        /** 终态集合，用于 DAO 过滤活跃会话；与 Native.d.ts 保持一致。 */
+        val TERMINAL: Set<SessionStatus> = setOf(
+            COMPLETED,
+            FAILED,
+            CANCELLED,
+            EXPIRED
+        )
+
+        fun fromStorageValue(value: String?): SessionStatus = when (value) {
+            "OBSERVING" -> OBSERVING
+            "SNAPSHOT_BUFFERED" -> SNAPSHOT_BUFFERED
+            "AI_REQUESTING" -> AI_REQUESTING
+            "WAITING_ENRICHMENT" -> WAITING_ENRICHMENT
+            "COMPLETED" -> COMPLETED
+            "FAILED" -> FAILED
+            "CANCELLED" -> CANCELLED
+            "EXPIRED" -> EXPIRED
+            // 兼容旧数据中可能残留的 DISMISSED 值，映射为 CANCELLED
+            "DISMISSED" -> CANCELLED
+            else -> WAITING_ENRICHMENT
+        }
+    }
+}
+
+/**
  * 结算旅程状态机。
  *
  * CHECKOUT_DETECTED 和 AI_PENDING 分别兼容旧契约中的 OBSERVING 和 AI_REQUESTING；
  * AI_TRIGGER_ARMED 在持久化到旧契约时仍按 SNAPSHOT_BUFFERED 处理，因为此时尚未联网。
+ *
+ * 阶段四 T1 起，内部旅程状态只存入 CheckoutSessionEntity.journeyState 列，
+ * 不直接序列化给 RN；公开 status 列由 toPublicSessionStatus() 映射后写入。
  */
 enum class CheckoutJourneyState(val wireValue: String) {
     CHECKOUT_DETECTED("CHECKOUT_DETECTED"),
@@ -203,13 +248,31 @@ enum class CheckoutJourneyState(val wireValue: String) {
         COMPLETED, DISMISSED, CANCELLED, FAILED, EXPIRED -> false
     }
 
-    /** 转换为当前 Native.d.ts 可识别的旧状态值，未定义的状态保留语义化新值。 */
-    fun toCompatibleStorageValue(): String = when (this) {
-        CHECKOUT_DETECTED -> "OBSERVING"
-        AI_TRIGGER_ARMED -> "SNAPSHOT_BUFFERED"
-        AI_PENDING -> "AI_REQUESTING"
-        else -> wireValue
+    /**
+     * 映射到 Native.d.ts 公开 SessionStatus 的 8 个值之一。
+     * 按阶段四任务文档第 3.3 节映射表执行，不得新增第 9 个公开值。
+     */
+    fun toPublicSessionStatus(): SessionStatus = when (this) {
+        CHECKOUT_DETECTED -> SessionStatus.OBSERVING
+        SNAPSHOT_BUFFERED -> SessionStatus.SNAPSHOT_BUFFERED
+        AI_TRIGGER_ARMED -> SessionStatus.SNAPSHOT_BUFFERED
+        AI_PENDING -> SessionStatus.AI_REQUESTING
+        AI_COMPLETED -> SessionStatus.WAITING_ENRICHMENT
+        AI_FAILED -> SessionStatus.WAITING_ENRICHMENT
+        WAITING_PAYMENT -> SessionStatus.WAITING_ENRICHMENT
+        PAYMENT_CONFIRMED -> SessionStatus.WAITING_ENRICHMENT
+        WAITING_ENRICHMENT -> SessionStatus.WAITING_ENRICHMENT
+        AUTO_COMMITTED -> SessionStatus.COMPLETED
+        NEEDS_CONFIRMATION -> SessionStatus.WAITING_ENRICHMENT
+        COMPLETED -> SessionStatus.COMPLETED
+        DISMISSED -> SessionStatus.CANCELLED
+        CANCELLED -> SessionStatus.CANCELLED
+        FAILED -> SessionStatus.FAILED
+        EXPIRED -> SessionStatus.EXPIRED
     }
+
+    /** 转换为当前 Native.d.ts 可识别的公开 SessionStatus 存储值。 */
+    fun toCompatibleStorageValue(): String = toPublicSessionStatus().wireValue
 
     companion object {
         fun fromStorageValue(value: String?): CheckoutJourneyState = when (value) {

@@ -39,7 +39,7 @@ import com.jotbill.app.data.entity.PendingTransactionEntity
 import com.jotbill.app.data.entity.RuleEntity
 import com.jotbill.app.data.entity.TransactionCandidateEntity
 
-const val JOT_BILL_DATABASE_VERSION = 4
+const val JOT_BILL_DATABASE_VERSION = 5
 
 @Database(
     entities = [
@@ -244,5 +244,43 @@ object DatabaseMigrations {
         }
     }
 
-    val all: Array<Migration> = arrayOf(migration1To2, migration2To3, migration3To4)
+    /**
+     * 阶段四 T1：分离公开 SessionStatus 和内部 CheckoutJourneyState。
+     *
+     * 1. 新增 journey_state 列，先把旧 status 值（内部旅程状态）拷贝过去；
+     * 2. 再把 status 列映射为 Native.d.ts 公开的 8 个 SessionStatus 值。
+     */
+    private val migration4To5 = object : Migration(4, 5) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL(
+                "ALTER TABLE `checkout_sessions` ADD COLUMN `journey_state` TEXT"
+            )
+            // 把旧 status 值（内部旅程状态）拷贝到 journey_state
+            db.execSQL(
+                "UPDATE `checkout_sessions` SET `journey_state` = `status`"
+            )
+            // 按映射表把 status 列更新为公开 SessionStatus 值
+            db.execSQL(
+                """
+                UPDATE `checkout_sessions` SET `status` = CASE
+                    WHEN `status` IN ('CHECKOUT_DETECTED', 'OBSERVING') THEN 'OBSERVING'
+                    WHEN `status` IN ('SNAPSHOT_BUFFERED', 'AI_TRIGGER_ARMED') THEN 'SNAPSHOT_BUFFERED'
+                    WHEN `status` IN ('AI_PENDING', 'AI_REQUESTING') THEN 'AI_REQUESTING'
+                    WHEN `status` IN (
+                        'AI_COMPLETED', 'AI_FAILED', 'WAITING_PAYMENT',
+                        'PAYMENT_CONFIRMED', 'WAITING_ENRICHMENT', 'NEEDS_CONFIRMATION'
+                    ) THEN 'WAITING_ENRICHMENT'
+                    WHEN `status` IN ('AUTO_COMMITTED', 'COMPLETED') THEN 'COMPLETED'
+                    WHEN `status` = 'DISMISSED' THEN 'CANCELLED'
+                    WHEN `status` = 'CANCELLED' THEN 'CANCELLED'
+                    WHEN `status` = 'FAILED' THEN 'FAILED'
+                    WHEN `status` = 'EXPIRED' THEN 'EXPIRED'
+                    ELSE 'WAITING_ENRICHMENT'
+                END
+                """
+            )
+        }
+    }
+
+    val all: Array<Migration> = arrayOf(migration1To2, migration2To3, migration3To4, migration4To5)
 }

@@ -13,9 +13,17 @@ import androidx.room.PrimaryKey
         Index(value = ["checkout_request_key"], unique = true)
     ]
 )
+/**
+ * 结算会话实体。
+ *
+ * status 列只存 Native.d.ts 公开的 8 个 SessionStatus 值；
+ * journey_state 列存内部 CheckoutJourneyState 值，用于状态机转换判定，
+ * 不直接序列化给 RN。
+ */
 data class CheckoutSessionEntity(
     @PrimaryKey val id: String,
     val status: String,
+    @ColumnInfo(name = "journey_state") val journeyState: String?,
     @ColumnInfo(name = "shopping_package") val shoppingPackage: String?,
     @ColumnInfo(name = "page_role") val pageRole: String?,
     @ColumnInfo(name = "page_fingerprint") val pageFingerprint: String?,

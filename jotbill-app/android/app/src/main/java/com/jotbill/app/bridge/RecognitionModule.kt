@@ -38,7 +38,6 @@ class RecognitionModule(
         private const val RETRY_TIMEOUT_MILLIS = 30_000L
         private val TERMINAL_SESSION_STATUSES = setOf(
             "COMPLETED",
-            "DISMISSED",
             "CANCELLED",
             "FAILED",
             "EXPIRED"

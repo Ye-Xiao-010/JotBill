@@ -20,7 +20,6 @@ private const val WAITING_ENRICHMENT_STATUS = "WAITING_ENRICHMENT"
 private const val NEEDS_CONFIRMATION_STATUS = "NEEDS_CONFIRMATION"
 private val TERMINAL_SESSION_STATUSES = setOf(
     "COMPLETED",
-    "DISMISSED",
     "CANCELLED",
     "FAILED",
     "EXPIRED"
@@ -240,7 +239,7 @@ internal class CheckoutPaymentMatcher(
                 is AiVisionResult.Failed ->
                     (requestId != null && requestId == existingSession.aiRequestId) ||
                         (sameRequestKey && existingCandidate != null) ||
-                        (sameRequestKey && existingSession.status in setOf(
+                        (sameRequestKey && (existingSession.journeyState ?: existingSession.status) in setOf(
                             WAITING_PAYMENT_STATUS,
                             NEEDS_CONFIRMATION_STATUS
                         ))
@@ -398,9 +397,11 @@ internal class CheckoutPaymentMatcher(
         val dao = database.checkoutSessionDao()
         val existing = dao.getById(reference.sessionId)
         if (existing == null) {
+            val journeyState = CheckoutJourneyState.fromStorageValue(initialStatus)
             val created = CheckoutSessionEntity(
                 id = reference.sessionId,
-                status = initialStatus,
+                status = journeyState.toPublicSessionStatus().wireValue,
+                journeyState = journeyState.wireValue,
                 shoppingPackage = reference.shoppingPackage,
                 pageRole = reference.pageRole.storageValue,
                 pageFingerprint = reference.pageFingerprint,
@@ -451,15 +452,20 @@ internal class CheckoutPaymentMatcher(
         target: String,
         now: Long
     ): CheckoutSessionEntity {
-        if (session.status == target) {
+        val journeyValue = session.journeyState ?: session.status
+        if (journeyValue == target) {
             return session
         }
-        val currentState = CheckoutJourneyState.fromStorageValue(session.status)
+        val currentState = CheckoutJourneyState.fromStorageValue(journeyValue)
         val targetState = CheckoutJourneyState.fromStorageValue(target)
         if (!currentState.canTransitionTo(targetState)) {
             return session
         }
-        val updated = session.copy(status = target, updatedAt = now)
+        val updated = session.copy(
+            status = targetState.toPublicSessionStatus().wireValue,
+            journeyState = targetState.wireValue,
+            updatedAt = now
+        )
         database.checkoutSessionDao().update(updated)
         return updated
     }
@@ -468,7 +474,8 @@ internal class CheckoutPaymentMatcher(
         session: CheckoutSessionEntity,
         now: Long
     ): CheckoutSessionEntity {
-        val state = CheckoutJourneyState.fromStorageValue(session.status)
+        val journeyValue = session.journeyState ?: session.status
+        val state = CheckoutJourneyState.fromStorageValue(journeyValue)
         return if (
             state == CheckoutJourneyState.PAYMENT_CONFIRMED ||
             state == CheckoutJourneyState.WAITING_ENRICHMENT ||
