@@ -189,7 +189,14 @@ class CheckoutSnapshotBuffer(
         }
 
         val existing = slots[request.slotId]
-        if (existing?.sessionId == request.sessionId && existing.consumedRequestKey != null) {
+        val isUserRetryCapture =
+            request.captureTarget == SnapshotCaptureTarget.USER_RETRY &&
+                request.sourceReason == SnapshotSourceReason.MANUAL_CAPTURE
+        if (
+            existing?.sessionId == request.sessionId &&
+            existing.consumedRequestKey != null &&
+            !isUserRetryCapture
+        ) {
             return SnapshotStoreResult.Rejected(SnapshotStoreRejection.JOURNEY_ALREADY_TRIGGERED)
         }
 
@@ -213,6 +220,11 @@ class CheckoutSnapshotBuffer(
             }
 
             removeCandidate(state, sameFingerprint)?.release()
+        }
+
+        if (isUserRetryCapture) {
+            // 用户主动重试代表一次新的明确消费，解除原自动请求的去重墓碑。
+            state.consumedRequestKey = null
         }
 
         var replacedSnapshotId: String? = sameFingerprint?.snapshotId

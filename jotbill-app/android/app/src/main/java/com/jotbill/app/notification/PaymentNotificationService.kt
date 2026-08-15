@@ -132,23 +132,19 @@ class PaymentNotificationService : NotificationListenerService() {
             notificationKey = sbn.key,
             notificationId = sbn.id
         ) ?: run {
-            // 非消费通知或金额无效，记录面包屑供诊断
-            val contentPreview = listOf(title, text, bigText)
-                .filter { it.isNotBlank() }
-                .joinToString(" ")
-                .take(80)
+            // 非消费通知或金额无效，只记录非敏感的过滤结果。
             SentryLogger.addBreadcrumb(
                 "通知未通过解析（非消费或金额无效）",
                 data = mapOf(
                     "package_name" to packageName,
-                    "content_preview" to contentPreview
+                    "filter_reason" to "unsupported_or_invalid_payment"
                 ),
                 category = "notification_filter"
             )
             return
         }
 
-        Log.i(TAG, "解析到支付证据: 包名=${evidenceInput.sourcePackage}, 金额=${evidenceInput.amountMinor}分")
+        Log.i(TAG, "解析到支付证据: 包名=${evidenceInput.sourcePackage}")
 
         // 异步落库证据并触发匹配
         scope.launch {
@@ -194,8 +190,6 @@ class PaymentNotificationService : NotificationListenerService() {
         // 记录处理结果
         val resultInfo = mapOf(
             "package" to input.sourcePackage,
-            "amountMinor" to input.amountMinor,
-            "sourceEventKey" to input.sourceEventKey,
             "fallbackResult" to result
         )
         SentryLogger.addBreadcrumb(
@@ -228,9 +222,9 @@ class PaymentNotificationService : NotificationListenerService() {
                     )
                 }
             } ?: "TIMEOUT"
-        } catch (error: RuntimeException) {
-            Log.w(TAG, "支付通知回退入口不可用", error)
-            "UNAVAILABLE: ${error.message}"
+        } catch (_: RuntimeException) {
+            Log.w(TAG, "支付通知回退入口不可用")
+            "UNAVAILABLE"
         }
     }
 

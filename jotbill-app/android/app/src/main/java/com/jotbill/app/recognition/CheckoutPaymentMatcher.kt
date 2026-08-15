@@ -18,12 +18,14 @@ import org.json.JSONObject
 private const val PAYMENT_MATCH_WINDOW_MILLIS = 5 * 60 * 1000L
 internal const val CHECKOUT_PAYMENT_MATCH_WINDOW_MILLIS = PAYMENT_MATCH_WINDOW_MILLIS
 private const val PAYMENT_CONFIRMED_STATUS = "PAYMENT_CONFIRMED"
+private const val AI_PENDING_STATUS = "AI_PENDING"
 private const val WAITING_PAYMENT_STATUS = "WAITING_PAYMENT"
 private const val WAITING_ENRICHMENT_STATUS = "WAITING_ENRICHMENT"
 private const val NEEDS_CONFIRMATION_STATUS = "NEEDS_CONFIRMATION"
 private const val AUTO_COMMITTED_STATUS = "AUTO_COMMITTED"
 private const val COMPLETED_STATUS = "COMPLETED"
 private const val AUTO_COMMIT_OPERATOR = "auto_commit"
+private const val AI_RECOGNITION_FAILED_REASON = "AI_RECOGNITION_FAILED"
 private val TERMINAL_SESSION_STATUSES = setOf(
     "COMPLETED",
     "CANCELLED",
@@ -235,6 +237,8 @@ internal class CheckoutPaymentMatcher(
             if (!signal.isValid()) {
                 return@withTransaction
             }
+            val normalizedSourceType = normalizePaymentEvidenceSourceType(sourceType)
+                ?: return@withTransaction
             val sourceEventKey = sourceEventKey(signal)
             val pendingId = stableId("pending-orphan", sourceEventKey)
             val dao = database.pendingTransactionDao()
@@ -255,7 +259,7 @@ internal class CheckoutPaymentMatcher(
                 accountId = defaultAccountIdForPayment(signal.paymentPackage),
                 categoryId = null,
                 conflictReason = "NO_ACTIVE_SESSION",
-                sourceType = if (sourceType == "ACCESSIBILITY") "accessibility" else "notification",
+                sourceType = normalizedSourceType,
                 createdAt = now,
                 version = 1
             )
@@ -278,12 +282,17 @@ internal class CheckoutPaymentMatcher(
         if (validationError != null) {
             return CheckoutPaymentMatchResult.Rejected(reference.sessionId, validationError)
         }
+        val normalizedSourceType = normalizePaymentEvidenceSourceType(sourceType)
+            ?: return CheckoutPaymentMatchResult.Rejected(
+                reference.sessionId,
+                "PAYMENT_SOURCE_TYPE_INVALID"
+            )
 
         return database.withTransaction {
             val now = nowMillis()
             val sourceEventKey = sourceEventKey(signal)
-            val existingEvidence = database.paymentEvidenceDao()
-                .getBySourceEventKey(sourceEventKey)
+            val evidenceDao = database.paymentEvidenceDao()
+            val existingEvidence = evidenceDao.getBySourceEventKey(sourceEventKey)
             if (existingEvidence != null) {
                 if (existingEvidence.sessionId != reference.sessionId) {
                     return@withTransaction CheckoutPaymentMatchResult.Rejected(
@@ -291,21 +300,6 @@ internal class CheckoutPaymentMatcher(
                         "PAYMENT_EVIDENCE_ALREADY_BOUND"
                     )
                 }
-                val existingSession = database.checkoutSessionDao().getById(reference.sessionId)
-                    ?: return@withTransaction CheckoutPaymentMatchResult.Rejected(
-                        reference.sessionId,
-                        "PAYMENT_SESSION_MISSING"
-                    )
-                val existingCandidate = database.transactionCandidateDao()
-                    .getBySession(reference.sessionId)
-                    .singleOrNull()
-                return@withTransaction CheckoutPaymentMatchResult.Accepted(
-                    sessionId = reference.sessionId,
-                    status = existingSession.status,
-                    candidateId = existingSession.candidateId ?: existingCandidate?.id,
-                    evidenceId = existingEvidence.id,
-                    matched = existingCandidate?.matched == true
-                )
             }
             val existingSession = database.checkoutSessionDao().getById(reference.sessionId)
             if (existingSession != null && existingSession.isClosedOrExpired(now)) {
@@ -327,9 +321,9 @@ internal class CheckoutPaymentMatcher(
                 sourceEventKey
             )
             val evidence = PaymentEvidenceEntity(
-                id = evidenceId,
+                id = existingEvidence?.id ?: evidenceId,
                 sessionId = reference.sessionId,
-                sourceType = sourceType,
+                sourceType = normalizedSourceType,
                 amountMinor = signal.amountMinor,
                 merchant = signal.merchant,
                 platform = signal.paymentPackage,
@@ -349,7 +343,17 @@ internal class CheckoutPaymentMatcher(
                 sourceEventKey = sourceEventKey,
                 capturedAt = now
             )
-            database.paymentEvidenceDao().insertIfAbsent(evidence)
+            val storedEvidence = if (existingEvidence == null) {
+                evidenceDao.insertIfAbsent(evidence)
+                evidenceDao.getById(evidence.id) ?: evidence
+            } else {
+                if (evidence != existingEvidence) {
+                    // DAO 未提供更新方法，在同一事务内按原主键替换证据。
+                    evidenceDao.delete(existingEvidence)
+                    evidenceDao.insert(evidence)
+                }
+                evidence
+            }
 
             val candidate = database.transactionCandidateDao()
                 .getBySession(reference.sessionId)
@@ -357,17 +361,14 @@ internal class CheckoutPaymentMatcher(
             if (candidate == null) {
                 session = advanceStatus(session, WAITING_ENRICHMENT_STATUS, now)
                 // 阶段四 T6：纯通知回退（无 AI 候选）→ 转 PendingTransaction，sourceType=notification
-                pendingFromEvidenceOnly(session, evidence, now)?.let { upsertPendingForSession(it) }
+                pendingFromEvidenceOnly(session, storedEvidence, now)?.let { upsertPendingForSession(it) }
                 return@withTransaction CheckoutPaymentMatchResult.Accepted(
                     sessionId = reference.sessionId,
                     status = session.status,
-                    evidenceId = evidenceId
+                    evidenceId = storedEvidence.id
                 )
             }
 
-            val storedEvidence = existingEvidence
-                ?: database.paymentEvidenceDao().getById(evidenceId)
-                ?: evidence
             val evaluation = evaluate(candidate, storedEvidence)
             val updatedCandidate = candidateAfterPayment(candidate, storedEvidence, evaluation)
             if (updatedCandidate != candidate) {
@@ -419,10 +420,11 @@ internal class CheckoutPaymentMatcher(
                 .getBySession(reference.sessionId)
                 .singleOrNull()
             val sameRequestKey = existingSession?.checkoutRequestKey == metadata.requestKey.value
+            val retryableAiFailure = isRetryableAiFailureCandidate(existingCandidate)
             val duplicateResult = existingSession != null && when (result) {
                 is AiVisionResult.Succeeded ->
                     (requestId != null && requestId == existingSession.aiRequestId) ||
-                        (sameRequestKey && existingCandidate != null)
+                        (sameRequestKey && existingCandidate != null && !retryableAiFailure)
 
                 is AiVisionResult.Failed ->
                     (requestId != null && requestId == existingSession.aiRequestId) ||
@@ -440,7 +442,11 @@ internal class CheckoutPaymentMatcher(
                     matched = existingCandidate?.matched == true
                 )
             }
-            if (existingSession?.isClosedOrExpired(now) == true) {
+            val retryingFailedAiSession =
+                result is AiVisionResult.Succeeded &&
+                    retryableAiFailure &&
+                    existingSession?.let { it.status == "FAILED" && it.expiresAt > now } == true
+            if (existingSession?.isClosedOrExpired(now) == true && !retryingFailedAiSession) {
                 return@withTransaction CheckoutPaymentMatchResult.Rejected(
                     reference.sessionId,
                     "AI_SESSION_CLOSED"
@@ -448,7 +454,7 @@ internal class CheckoutPaymentMatcher(
             }
             var session = upsertSession(
                 reference = reference,
-                initialStatus = WAITING_PAYMENT_STATUS,
+                initialStatus = AI_PENDING_STATUS,
                 requestKey = metadata.requestKey,
                 aiRequestId = requestId,
                 now = now
@@ -477,7 +483,7 @@ internal class CheckoutPaymentMatcher(
                             aiOccurredAt = null,
                             matched = false,
                             conflictReason = if (successEvidences.isEmpty()) {
-                                "AI_RECOGNITION_FAILED"
+                                AI_RECOGNITION_FAILED_REASON
                             } else {
                                 null
                             },
@@ -496,21 +502,56 @@ internal class CheckoutPaymentMatcher(
                         )
                         database.checkoutSessionDao().update(session)
                     }
-                    session = advanceStatus(
-                        session,
-                        if (successEvidences.isNotEmpty()) NEEDS_CONFIRMATION_STATUS else WAITING_PAYMENT_STATUS,
-                        now
-                    )
+                    if (existingCandidate != null) {
+                        database.transactionCandidateDao().update(
+                            placeholderCandidate.copy(
+                                conflictReason = if (successEvidences.isEmpty()) {
+                                    AI_RECOGNITION_FAILED_REASON
+                                } else {
+                                    placeholderCandidate.conflictReason
+                                },
+                                appliedRules = rulesJson(
+                                    "sessionId" to reference.sessionId,
+                                    "decision" to "AI_FAILED",
+                                    "aiRequestId" to result.requestId
+                                ),
+                                version = placeholderCandidate.version + 1
+                            )
+                        )
+                        placeholderCandidate = database.transactionCandidateDao()
+                            .getById(placeholderCandidate.id)
+                            ?: placeholderCandidate
+                    }
+                    if (session.candidateId != placeholderCandidate.id) {
+                        session = session.copy(
+                            candidateId = placeholderCandidate.id,
+                            updatedAt = now
+                        )
+                        database.checkoutSessionDao().update(session)
+                    }
+                    val failedSession = advanceStatus(session, "AI_FAILED", now)
+                    session = if (successEvidences.isNotEmpty()) {
+                        val paymentReady = advancePaymentConfirmed(failedSession, now)
+                        advanceStatus(paymentReady, NEEDS_CONFIRMATION_STATUS, now)
+                    } else {
+                        // AI_FAILED 的公开映射已经是 FAILED，保留内部状态以允许同一候选重试。
+                        failedSession
+                    }
                     // 阶段四 T6：AI 失败但支付成功 → 证据转待确认（sourceType=notification）
-                    if (successEvidences.isNotEmpty() && existingCandidate == null) {
+                    if (successEvidences.isNotEmpty()) {
                         successEvidences.firstOrNull()?.let { evidence ->
-                            pendingFromEvidenceOnly(session, evidence, now)
-                                ?.let { upsertPendingForSession(it) }
+                            pendingFromConflict(
+                                session = session,
+                                candidate = placeholderCandidate,
+                                evidence = evidence,
+                                conflictReason = AI_RECOGNITION_FAILED_REASON,
+                                now = now
+                            )?.let { upsertPendingForSession(it) }
                         }
                     }
                     // 审查修复：AI 失败且无支付证据 → 也生成待确认（金额取证据或 0 占位），
                     // 让用户能在待确认中心看到失败条目并触发重试，而不是无声丢失
-                    if (successEvidences.isEmpty() && existingCandidate == null) {
+                    if (successEvidences.isEmpty()) {
                         val pending = PendingTransactionEntity(
                             id = stableId("pending", reference.sessionId),
                             candidateId = placeholderCandidate.id,
@@ -524,7 +565,7 @@ internal class CheckoutPaymentMatcher(
                             orderId = null,
                             accountId = null,
                             categoryId = null,
-                            conflictReason = "AI_RECOGNITION_FAILED",
+                            conflictReason = AI_RECOGNITION_FAILED_REASON,
                             sourceType = "ai_vision",
                             createdAt = now,
                             version = 1
@@ -560,6 +601,7 @@ internal class CheckoutPaymentMatcher(
                         }
                         candidate
                     }
+                    removeAiFailurePending(reference.sessionId)
 
                     val evidences = database.paymentEvidenceDao()
                         .getBySession(reference.sessionId)
@@ -980,6 +1022,27 @@ internal class CheckoutPaymentMatcher(
     }
 
     /** 自动入账结果：推进后的会话与生成的账单 ID（幂等跳过时为 null 或已存在的 ID）。 */
+    /** 成功重试后只删除 AI 失败占位，保留用户已经产生的其他待确认交易。 */
+    private suspend fun removeAiFailurePending(sessionId: String) {
+        val dao = database.pendingTransactionDao()
+        val pending = dao.findPendingBySessionId(sessionId)
+        if (pending?.conflictReason == AI_RECOGNITION_FAILED_REASON) {
+            dao.delete(pending)
+        }
+    }
+
+    private fun isRetryableAiFailureCandidate(candidate: TransactionCandidateEntity?): Boolean {
+        if (candidate == null) {
+            return false
+        }
+        if (candidate.conflictReason == AI_RECOGNITION_FAILED_REASON) {
+            return true
+        }
+        return runCatching {
+            JSONObject(candidate.appliedRules).optString("decision") == "AI_FAILED"
+        }.getOrDefault(false)
+    }
+
     private data class AutoCommitOutcome(
         val session: CheckoutSessionEntity,
         val billId: String?

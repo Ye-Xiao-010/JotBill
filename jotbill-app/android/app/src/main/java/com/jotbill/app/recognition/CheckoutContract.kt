@@ -1,5 +1,6 @@
 package com.jotbill.app.recognition
 
+import java.util.Locale
 import java.util.UUID
 
 /**
@@ -69,6 +70,15 @@ data class PaymentNotificationFallbackSignal(
     private fun isOptionalTextValid(value: String?): Boolean =
         value == null || (value.isNotBlank() && value.length <= 256)
 }
+
+/** 将支付证据来源收敛为 Native.d.ts 允许的三个小写值。 */
+internal fun normalizePaymentEvidenceSourceType(value: String?): String? =
+    when (value?.trim()?.lowercase(Locale.ROOT)) {
+        "notification" -> "notification"
+        "accessibility", "accessibility_result" -> "accessibility"
+        "manual" -> "manual"
+        else -> null
+    }
 
 /** 截图来源，和现有 Native.d.ts 的 SnapshotSourceReason 保持一致。 */
 enum class SnapshotSourceReason(val wireValue: String) {
@@ -258,7 +268,7 @@ enum class CheckoutJourneyState(val wireValue: String) {
         AI_TRIGGER_ARMED -> SessionStatus.SNAPSHOT_BUFFERED
         AI_PENDING -> SessionStatus.AI_REQUESTING
         AI_COMPLETED -> SessionStatus.WAITING_ENRICHMENT
-        AI_FAILED -> SessionStatus.WAITING_ENRICHMENT
+        AI_FAILED -> SessionStatus.FAILED
         WAITING_PAYMENT -> SessionStatus.WAITING_ENRICHMENT
         PAYMENT_CONFIRMED -> SessionStatus.WAITING_ENRICHMENT
         WAITING_ENRICHMENT -> SessionStatus.WAITING_ENRICHMENT

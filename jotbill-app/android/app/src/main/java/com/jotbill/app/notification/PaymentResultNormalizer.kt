@@ -79,7 +79,7 @@ internal object PaymentResultNormalizer {
     )
 
     /** 交易时间匹配正则：HH:mm 或 HH:mm:ss（通知正文常见格式）。 */
-    private val TIME_PATTERN = Regex("""(?<!\d)([01]?\d|2[0-3]):([0-5]\d)(?::[0-5]\d)?(?!\d)""")
+    private val TIME_PATTERN = Regex("""(?<!\d)([01]?\d|2[0-3]):([0-5]\d)(?::([0-5]\d))?(?!\d)""")
 
     /** 商户名匹配正则 */
     private val MERCHANT_PATTERNS = listOf(
@@ -202,9 +202,10 @@ internal object PaymentResultNormalizer {
         amountMinor: Long,
         orderId: String?
     ): String {
-        val keyPart = notificationKey?.takeIf { it.isNotBlank() }
-            ?: "$sourcePackage|$notificationId|$postTime"
-        return sha256("event|$keyPart|$amountMinor|${orderId.orEmpty()}")
+        return sha256(
+            "notification-event|$sourcePackage|${notificationKey.orEmpty()}|" +
+                "$notificationId|$postTime|$amountMinor|${orderId.orEmpty()}"
+        )
     }
 
     /**
@@ -218,12 +219,13 @@ internal object PaymentResultNormalizer {
         val match = TIME_PATTERN.find(content) ?: return postTime
         val hour = match.groupValues[1].toIntOrNull() ?: return postTime
         val minute = match.groupValues[2].toIntOrNull() ?: return postTime
-        if (hour !in 0..23 || minute !in 0..59) return postTime
+        val second = match.groupValues.getOrNull(3)?.toIntOrNull() ?: 0
+        if (hour !in 0..23 || minute !in 0..59 || second !in 0..59) return postTime
 
         val postInstant = Instant.ofEpochMilli(postTime)
                 .atZone(ZoneId.systemDefault())
         var occurred = postInstant.toLocalDate()
-            .atTime(hour, minute)
+            .atTime(hour, minute, second)
             .atZone(ZoneId.systemDefault())
         // 解析出的时间比通知晚超过 30 分钟：多半是跨午夜（如 23:59 支付、00:01 收到通知）
         if (occurred.toInstant().toEpochMilli() - postTime > 30 * 60 * 1000L) {
