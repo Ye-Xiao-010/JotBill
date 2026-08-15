@@ -678,7 +678,8 @@ class CheckoutAccessibilityService : AccessibilityService() {
                     val result = client.recognize(ready)
                     if (matcher != null) {
                         try {
-                            matcher.recordAiResult(result)
+                            val matchResult = matcher.recordAiResult(result)
+                            Log.i(TAG, "AI 结果匹配落库结果: ${formatMatchResult(matchResult)}")
                         } catch (error: RuntimeException) {
                             Log.w(TAG, "AI 结果匹配写入失败", error)
                         }
@@ -880,7 +881,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
 
         if (handoffReference != null) {
             val result = matcher.recordPaymentEvidence(handoffReference, signal)
-            Log.i(TAG, "支付结果页证据落库结果（交接上下文）: ${result::class.java.simpleName}")
+            Log.i(TAG, "支付结果页证据落库结果（交接上下文）: ${formatMatchResult(result)}")
             return
         }
 
@@ -897,7 +898,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
                     TAG,
                     "支付结果页证据落库结果（" +
                         (if (resolution.byOrderId) "订单号" else "金额+时间窗口") +
-                        "）: ${result::class.java.simpleName}"
+                        "）: ${formatMatchResult(result)}"
                 )
             }
             is PaymentSessionResolution.Ambiguous -> {
@@ -908,6 +909,16 @@ class CheckoutAccessibilityService : AccessibilityService() {
                 Log.d(TAG, "支付结果页无关联活跃会话，证据暂不落库")
             }
         }
+    }
+
+    /** 格式化匹配决策结果用于日志，billId 非空表示阶段四 T5 已自动入账。 */
+    private fun formatMatchResult(result: CheckoutPaymentMatchResult): String = when (result) {
+        is CheckoutPaymentMatchResult.Accepted ->
+            "Accepted(status=${result.status}, matched=${result.matched}" +
+                ", candidateId=${result.candidateId}, evidenceId=${result.evidenceId}" +
+                (result.billId?.let { ", billId=$it（已自动入账）" } ?: "") + ")"
+        is CheckoutPaymentMatchResult.Rejected ->
+            "Rejected(sessionId=${result.sessionId}, reason=${result.reason})"
     }
 
     /**
@@ -989,7 +1000,8 @@ class CheckoutAccessibilityService : AccessibilityService() {
                     return@launch
                 }
                 try {
-                    matcher.recordPaymentEvidence(reference, signal)
+                    val result = matcher.recordPaymentEvidence(reference, signal)
+                    Log.i(TAG, "支付通知证据落库结果: ${formatMatchResult(result)}")
                 } catch (error: RuntimeException) {
                     Log.w(TAG, "支付证据写入失败", error)
                 }

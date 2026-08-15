@@ -3,6 +3,8 @@ package com.jotbill.app.recognition
 import androidx.room.withTransaction
 import com.jotbill.app.ai.AiVisionResult
 import com.jotbill.app.data.JotBillDatabase
+import com.jotbill.app.data.LedgerRepository
+import com.jotbill.app.data.entity.BillEntity
 import com.jotbill.app.data.entity.CheckoutSessionEntity
 import com.jotbill.app.data.entity.PaymentEvidenceEntity
 import com.jotbill.app.data.entity.TransactionCandidateEntity
@@ -18,6 +20,9 @@ private const val PAYMENT_CONFIRMED_STATUS = "PAYMENT_CONFIRMED"
 private const val WAITING_PAYMENT_STATUS = "WAITING_PAYMENT"
 private const val WAITING_ENRICHMENT_STATUS = "WAITING_ENRICHMENT"
 private const val NEEDS_CONFIRMATION_STATUS = "NEEDS_CONFIRMATION"
+private const val AUTO_COMMITTED_STATUS = "AUTO_COMMITTED"
+private const val COMPLETED_STATUS = "COMPLETED"
+private const val AUTO_COMMIT_OPERATOR = "auto_commit"
 private val TERMINAL_SESSION_STATUSES = setOf(
     "COMPLETED",
     "CANCELLED",
@@ -25,13 +30,18 @@ private val TERMINAL_SESSION_STATUSES = setOf(
     "EXPIRED"
 )
 
+/** 与 DefaultDataInitializer 种子账户 ID 保持一致的支付平台资金账户映射。 */
+private const val WECHAT_PAY_ACCOUNT_ID = "default-account-wechat"
+private const val ALIPAY_ACCOUNT_ID = "default-account-alipay"
+
 internal sealed class CheckoutPaymentMatchResult {
     data class Accepted(
         val sessionId: String,
         val status: String,
         val candidateId: String? = null,
         val evidenceId: String? = null,
-        val matched: Boolean = false
+        val matched: Boolean = false,
+        val billId: String? = null
     ) : CheckoutPaymentMatchResult()
 
     data class Rejected(
@@ -61,13 +71,19 @@ internal sealed class PaymentSessionResolution {
 }
 
 /**
- * 将支付证据和视觉候选限制在同一个 sessionId 内关联。
- * 本类只写会话、证据和候选，不创建正式账单，也不更新账户余额。
+ * 将支付证据和视觉候选限制在同一个 sessionId 内关联，并在匹配成功时自动入账。
+ *
+ * 阶段四 T5 起：matched 且 conflictReason == null 的候选通过 [LedgerRepository]
+ * 在同一事务内写 Bill、联动更新账户余额、把候选标记为已入账，会话进入
+ * AUTO_COMMITTED（公开 SessionStatus 为 COMPLETED）；冲突候选仍只写会话、
+ * 证据和候选，由 T6 待确认中心处理，不静默入账。
  */
 internal class CheckoutPaymentMatcher(
     private val database: JotBillDatabase,
     private val nowMillis: () -> Long = { System.currentTimeMillis() }
 ) {
+    private val ledger = LedgerRepository(database)
+
     /** AI 请求开始前先建立会话，支付通知可以在 AI 返回前安全落到同一 sessionId。 */
     suspend fun ensureSession(
         reference: CheckoutSnapshotReference,
@@ -307,17 +323,19 @@ internal class CheckoutPaymentMatcher(
                 updatedAt = now
             )
             database.checkoutSessionDao().update(session)
-            session = if (evaluation.conflictReason == null) {
-                advanceStatus(session, WAITING_ENRICHMENT_STATUS, now)
+            val outcome = if (evaluation.conflictReason == null) {
+                // 阶段四 T5：匹配成功且无冲突，自动入账（写 Bill + 余额更新 + 会话 AUTO_COMMITTED）
+                autoCommitMatchedCandidate(session, updatedCandidate, storedEvidence, now)
             } else {
-                advanceStatus(session, NEEDS_CONFIRMATION_STATUS, now)
+                AutoCommitOutcome(advanceStatus(session, NEEDS_CONFIRMATION_STATUS, now), null)
             }
             CheckoutPaymentMatchResult.Accepted(
                 sessionId = reference.sessionId,
-                status = session.status,
+                status = outcome.session.status,
                 candidateId = updatedCandidate.id,
                 evidenceId = storedEvidence.id,
-                matched = updatedCandidate.matched
+                matched = updatedCandidate.matched,
+                billId = outcome.billId
             )
         }
     }
@@ -473,21 +491,19 @@ internal class CheckoutPaymentMatcher(
                         updatedAt = now
                     )
                     database.checkoutSessionDao().update(session)
-                    session = advanceStatus(
-                        session,
-                        if (evaluation.conflictReason == null) {
-                            WAITING_ENRICHMENT_STATUS
-                        } else {
-                            NEEDS_CONFIRMATION_STATUS
-                        },
-                        now
-                    )
+                    val outcome = if (evaluation.conflictReason == null) {
+                        // 阶段四 T5：匹配成功且无冲突，自动入账（写 Bill + 余额更新 + 会话 AUTO_COMMITTED）
+                        autoCommitMatchedCandidate(session, updatedCandidate, selection.evidence, now)
+                    } else {
+                        AutoCommitOutcome(advanceStatus(session, NEEDS_CONFIRMATION_STATUS, now), null)
+                    }
                     CheckoutPaymentMatchResult.Accepted(
                         sessionId = reference.sessionId,
-                        status = session.status,
+                        status = outcome.session.status,
                         candidateId = updatedCandidate.id,
                         evidenceId = selection.evidence.id,
-                        matched = updatedCandidate.matched
+                        matched = updatedCandidate.matched,
+                        billId = outcome.billId
                     )
                 }
             }
@@ -594,6 +610,98 @@ internal class CheckoutPaymentMatcher(
             advanceStatus(session, PAYMENT_CONFIRMED_STATUS, now)
         }
     }
+
+    /**
+     * 阶段四 T5：把 matched 且无冲突的候选自动入账。
+     *
+     * 必须在外层 database.withTransaction 内调用（Room 嵌套事务合并到外层），
+     * 同一事务内依次完成：幂等检查 → 写 Bill → 联动更新账户余额 → 候选标记已入账 →
+     * 会话进入 AUTO_COMMITTED（公开 SessionStatus 为 COMPLETED）。
+     * 任一步失败整体回滚，会话不进入 COMPLETED。
+     *
+     * 幂等保证：
+     * 1. 会话旅程已是 AUTO_COMMITTED/COMPLETED 时直接返回，不重复入账；
+     * 2. Bill 主键由 sessionId 确定性生成，预查存在时只推进会话状态；
+     * 3. BillDao.insert 为 ABORT 策略，并发竞态下重复插入抛异常回滚整个事务。
+     */
+    private suspend fun autoCommitMatchedCandidate(
+        session: CheckoutSessionEntity,
+        candidate: TransactionCandidateEntity,
+        evidence: PaymentEvidenceEntity,
+        now: Long
+    ): AutoCommitOutcome {
+        val journeyValue = session.journeyState ?: session.status
+        if (journeyValue == AUTO_COMMITTED_STATUS || journeyValue == COMPLETED_STATUS) {
+            return AutoCommitOutcome(session, null)
+        }
+        val billId = stableId("bill", session.id)
+        if (database.billDao().getById(billId) != null) {
+            // 该会话历史上已产生过账单（重复通知/重复决策），只补齐会话状态，不写第二笔 Bill
+            return AutoCommitOutcome(
+                advanceStatus(session, AUTO_COMMITTED_STATUS, now),
+                billId
+            )
+        }
+        val amountMinor = requireNotNull(candidate.amountMinor) {
+            "自动入账候选金额缺失：sessionId=${session.id}"
+        }
+        val bill = BillEntity(
+            id = billId,
+            amountMinor = amountMinor,
+            type = "expense",
+            occurredAt = evidence.occurredAt ?: candidate.aiOccurredAt ?: now,
+            description = candidate.productDescription,
+            categoryId = null,
+            accountId = defaultAccountIdForPayment(evidence.platform),
+            targetAccountId = null,
+            platform = candidate.platform,
+            merchant = candidate.merchant,
+            productDescription = candidate.productDescription,
+            sourceType = "ai_vision",
+            originalTransactionId = session.id,
+            orderId = evidence.orderId ?: candidate.aiOrderId,
+            createdAt = now,
+            updatedAt = now,
+            version = 1
+        )
+        // 写 Bill + 按类型联动余额 + 审计日志；嵌套 withTransaction 合并到外层事务
+        ledger.createBillWithBalanceUpdate(bill, operator = AUTO_COMMIT_OPERATOR)
+
+        // 候选标记为已入账，记录 billId 供审计与前端追溯
+        database.transactionCandidateDao().update(
+            candidate.copy(
+                appliedRules = rulesJson(
+                    "sessionId" to session.id,
+                    "decision" to AUTO_COMMITTED_STATUS,
+                    "billId" to bill.id,
+                    "evidenceId" to evidence.id
+                ),
+                version = candidate.version + 1
+            )
+        )
+        return AutoCommitOutcome(advanceStatus(session, AUTO_COMMITTED_STATUS, now), bill.id)
+    }
+
+    /**
+     * 支付包名到种子资金账户的固定映射：微信支付对应"微信零钱"，支付宝对应"支付宝"。
+     * 账户被删除或停用时返回 null，账单不指定账户也不更新余额，
+     * 由用户在后续编辑中补充（T6 待确认路径不受影响）。
+     */
+    private suspend fun defaultAccountIdForPayment(paymentPackage: String?): String? {
+        val accountId = when (paymentPackage) {
+            "com.tencent.mm" -> WECHAT_PAY_ACCOUNT_ID
+            "com.eg.android.AlipayGphone" -> ALIPAY_ACCOUNT_ID
+            else -> return null
+        }
+        val account = database.accountDao().getById(accountId) ?: return null
+        return if (account.isActive) accountId else null
+    }
+
+    /** 自动入账结果：推进后的会话与生成的账单 ID（幂等跳过时为 null 或已存在的 ID）。 */
+    private data class AutoCommitOutcome(
+        val session: CheckoutSessionEntity,
+        val billId: String?
+    )
 
     private fun candidateFromAi(
         id: String,

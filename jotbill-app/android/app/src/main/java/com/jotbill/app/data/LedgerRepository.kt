@@ -12,7 +12,13 @@ import java.util.UUID
  * 负责账单、账户余额及余额校准的本地事务。
  */
 class LedgerRepository(private val database: JotBillDatabase) {
-    suspend fun createBillWithBalanceUpdate(bill: BillEntity) {
+    /**
+     * 创建账单并按交易类型联动更新账户余额。
+     *
+     * @param bill 待写入的账单实体
+     * @param operator 审计操作者标记：手动路径为 "system"，阶段四 T5 自动入账为 "auto_commit"
+     */
+    suspend fun createBillWithBalanceUpdate(bill: BillEntity, operator: String = "system") {
         val now = System.currentTimeMillis()
         database.withTransaction {
             database.billDao().insert(bill)
@@ -27,7 +33,7 @@ class LedgerRepository(private val database: JotBillDatabase) {
                     fieldName = null,
                     oldValue = null,
                     newValue = billAuditValue(bill),
-                    operator = "system",
+                    operator = operator,
                     createdAt = now
                 )
             )
