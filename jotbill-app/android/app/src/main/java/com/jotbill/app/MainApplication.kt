@@ -20,6 +20,7 @@ import com.jotbill.app.ai.AiPackage
 import com.jotbill.app.runtime.RuntimePackage
 import com.jotbill.app.backup.BackupPackage
 import com.jotbill.app.overlay.OverlayPackage
+import com.jotbill.app.bridge.RecognitionPackage
 import com.facebook.react.ReactInstanceManager
 import com.facebook.react.bridge.JSBundleLoader
 import java.io.File
@@ -90,6 +91,7 @@ class MainApplication : Application(), ReactApplication {
               add(RuntimePackage())
               add(BackupPackage())
               add(OverlayPackage())
+              add(RecognitionPackage())
             }
 
         override fun getJSMainModuleName(): String = "index"

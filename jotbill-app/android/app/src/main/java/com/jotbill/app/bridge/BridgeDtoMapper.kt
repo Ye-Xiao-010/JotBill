@@ -5,9 +5,14 @@ import com.jotbill.app.data.entity.BalanceCalibrationEntity
 import com.jotbill.app.data.entity.BillEntity
 import com.jotbill.app.data.entity.BudgetEntity
 import com.jotbill.app.data.entity.CategoryEntity
+import com.jotbill.app.data.entity.CheckoutSessionEntity
 import com.jotbill.app.data.entity.FinancialGoalEntity
+import com.jotbill.app.data.entity.PaymentEvidenceEntity
 import com.jotbill.app.data.entity.PendingTransactionEntity
 import com.jotbill.app.data.entity.RuleEntity
+import com.jotbill.app.data.entity.TransactionCandidateEntity
+import org.json.JSONArray
+import org.json.JSONException
 import org.json.JSONObject
 import java.time.Instant
 import java.time.LocalDate
@@ -160,6 +165,57 @@ internal object BridgeDtoMapper {
         put("createdAt", formatTimestamp(entity.createdAt))
     }
 
+    /** 将结算会话实体映射为 RN 契约中的 CheckoutSession JSON。时间戳保留毫秒数值。 */
+    fun session(entity: CheckoutSessionEntity): JSONObject = JSONObject().apply {
+        put("sessionId", entity.id)
+        put("status", entity.status)
+        putOptional("shoppingPackage", entity.shoppingPackage)
+        putOptional("pageRole", entity.pageRole)
+        putOptional("pageFingerprint", entity.pageFingerprint)
+        putOptional("snapshotId", entity.snapshotId)
+        putOptional("checkoutRequestKey", entity.checkoutRequestKey)
+        putOptional("aiRequestId", entity.aiRequestId)
+        putOptional("candidateId", entity.candidateId)
+        put("paymentEvidenceIds", JSONArray())
+        put("createdAt", entity.createdAt)
+        put("updatedAt", entity.updatedAt)
+        put("expiresAt", entity.expiresAt)
+    }
+
+    /** 将交易候选实体映射为 RN 契约中的 TransactionCandidate JSON。 */
+    fun candidate(entity: TransactionCandidateEntity): JSONObject = JSONObject().apply {
+        put("candidateId", entity.id)
+        put("sessionId", entity.sessionId)
+        putOptional("amountMinor", entity.amountMinor)
+        putOptional("platform", entity.platform)
+        putOptional("merchant", entity.merchant)
+        putOptional("productDescription", entity.productDescription)
+        putOptional("evidenceAmountMinor", entity.evidenceAmountMinor)
+        putOptional("evidenceMerchant", entity.evidenceMerchant)
+        putOptional("evidenceOrderId", entity.evidenceOrderId)
+        put("matched", entity.matched)
+        putOptional("conflictReason", entity.conflictReason)
+        put("appliedRules", parseAppliedRules(entity.appliedRules))
+        put("createdAt", entity.createdAt)
+        put("version", entity.version)
+    }
+
+    /** 将支付证据实体映射为 RN 契约中的 PaymentEvidence JSON。occurredAt 转为 ISO-8601。 */
+    fun evidence(entity: PaymentEvidenceEntity): JSONObject = JSONObject().apply {
+        put("evidenceId", entity.id)
+        put("sessionId", entity.sessionId)
+        put("sourceType", entity.sourceType)
+        putOptional("amountMinor", entity.amountMinor)
+        putOptional("merchant", entity.merchant)
+        putOptional("platform", entity.platform)
+        putOptional("orderId", entity.orderId)
+        putOptional("paymentMethod", entity.paymentMethod)
+        putOptional("paymentStatus", entity.paymentStatus)
+        entity.occurredAt?.let { put("occurredAt", formatTimestamp(it)) }
+        putOptional("rawTextHash", entity.rawTextHash)
+        put("capturedAt", entity.capturedAt)
+    }
+
     fun parseBillInput(json: JSONObject, now: Long, id: String): BillEntity {
         val type = requiredString(json, "type")
         validateBillType(type)
@@ -274,6 +330,19 @@ internal object BridgeDtoMapper {
     }
 
     fun formatTimestamp(value: Long): String = Instant.ofEpochMilli(value).toString()
+
+    /** 将候选 appliedRules JSON 字符串解析为键名数组；解析失败时返回空数组保持契约稳定。 */
+    private fun parseAppliedRules(rawValue: String?): JSONArray {
+        val array = JSONArray()
+        if (rawValue.isNullOrBlank()) return array
+        try {
+            val parsed = JSONObject(rawValue)
+            parsed.keys().forEach { key -> array.put(key) }
+        } catch (_: JSONException) {
+            // appliedRules 不是预期 JSON 对象时静默回退，避免污染桥接层。
+        }
+        return array
+    }
 
     private fun JSONObject.putOptional(key: String, value: Any?) {
         if (value != null) put(key, value)

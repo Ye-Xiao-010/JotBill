@@ -23,6 +23,8 @@ import {
   Moon,
   Info,
   ChevronRight,
+  Bell,
+  ShieldCheck,
 } from 'lucide-react-native';
 import { ThemeColors } from '../theme/colors';
 import { spacing, borderRadius, borderWidth, shadow } from '../theme';
@@ -71,6 +73,8 @@ const ICON_CANDY_COLORS: Record<string, string> = {
   settings: '#7EB6FF',
   moon: '#C5A3FF',
   info: '#7DCEA0',
+  review: '#FFC9DE',
+  accessibility: '#B5E8DC',
 };
 
 export default function SettingsScreen({ navigation }: SettingsScreenProps) {
@@ -89,6 +93,8 @@ export default function SettingsScreen({ navigation }: SettingsScreenProps) {
     settings: Settings,
     moon: Moon,
     info: Info,
+    review: Bell,
+    accessibility: ShieldCheck,
   };
 
   const settingGroups: SettingGroup[] = [
@@ -104,6 +110,8 @@ export default function SettingsScreen({ navigation }: SettingsScreenProps) {
     {
       title: '🧩 本地能力',
       items: [
+        { id: 'review', label: '待确认中心', icon: 'review', onPress: () => navigation?.navigate('Review') },
+        { id: 'accessibility', label: '无障碍权限', icon: 'accessibility', onPress: () => navigation?.navigate('AccessibilityPermission') },
         { id: 'ai-providers', label: 'AI 服务商', icon: 'ai', onPress: () => navigation?.navigate('AiProviders') },
         { id: 'runtime-status', label: '运行状态', icon: 'runtime', onPress: () => navigation?.navigate('RuntimeStatus') },
         { id: 'data-management', label: '数据管理', icon: 'data', onPress: () => navigation?.navigate('DataManagement') },
