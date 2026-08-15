@@ -9,17 +9,7 @@ export type SessionStatus =
   | 'COMPLETED'
   | 'FAILED'
   | 'CANCELLED'
-  | 'EXPIRED'
-  // 兼容识别链路内部状态机写入的语义化新值，前端需容忍未知状态。
-  | 'AI_PENDING'
-  | 'AI_TRIGGER_ARMED'
-  | 'AI_COMPLETED'
-  | 'AI_FAILED'
-  | 'WAITING_PAYMENT'
-  | 'PAYMENT_CONFIRMED'
-  | 'AUTO_COMMITTED'
-  | 'NEEDS_CONFIRMATION'
-  | 'DISMISSED';
+  | 'EXPIRED';
 
 /** 页面角色；PAYMENT_HANDOFF 在 RN 契约中以 PAYMENT_APP 暴露。 */
 export type PageRole =
@@ -40,7 +30,7 @@ export type EvidenceSourceType = 'notification' | 'accessibility' | 'manual';
 /** 结算会话；时间戳均为毫秒。 */
 export interface CheckoutSession {
   sessionId: string;
-  status: SessionStatus | string;
+  status: SessionStatus;
   shoppingPackage?: string;
   pageRole?: PageRole | string;
   pageFingerprint?: string;
@@ -76,7 +66,7 @@ export interface TransactionCandidate {
 export interface PaymentEvidence {
   evidenceId: string;
   sessionId: string;
-  sourceType: EvidenceSourceType | string;
+  sourceType: EvidenceSourceType;
   amountMinor?: number;
   merchant?: string;
   platform?: string;
@@ -129,6 +119,46 @@ function parseJson<T>(value: string, operation: string): T {
   }
 }
 
+const PUBLIC_SESSION_STATUSES: ReadonlySet<string> = new Set([
+  'OBSERVING',
+  'SNAPSHOT_BUFFERED',
+  'AI_REQUESTING',
+  'WAITING_ENRICHMENT',
+  'COMPLETED',
+  'FAILED',
+  'CANCELLED',
+  'EXPIRED',
+]);
+
+function normalizeSessionStatus(value: unknown): SessionStatus {
+  if (typeof value !== 'string' || !PUBLIC_SESSION_STATUSES.has(value)) {
+    throw new Error('Native Recognition returned an internal session status');
+  }
+  return value as SessionStatus;
+}
+
+function normalizeCheckoutSession(session: CheckoutSession): CheckoutSession {
+  return {
+    ...session,
+    status: normalizeSessionStatus(session.status),
+  };
+}
+
+function normalizeEvidenceSourceType(value: unknown): EvidenceSourceType {
+  if (typeof value !== 'string') {
+    throw new Error('Native Recognition returned an invalid evidence source');
+  }
+  const normalized = value.toLowerCase();
+  if (
+    normalized !== 'notification' &&
+    normalized !== 'accessibility' &&
+    normalized !== 'manual'
+  ) {
+    throw new Error('Native Recognition returned an invalid evidence source');
+  }
+  return normalized;
+}
+
 /** 识别链路桥接封装；不暴露图片或原文，仅提供查询和重试入口。 */
 export const nativeRecognition = {
   async getCheckoutSessions(
@@ -137,12 +167,16 @@ export const nativeRecognition = {
     const raw = await getRawRecognitionModule().getCheckoutSessions(
       JSON.stringify(filter),
     );
-    return parseJson<CheckoutSession[]>(raw, 'getCheckoutSessions');
+    return parseJson<CheckoutSession[]>(raw, 'getCheckoutSessions').map(
+      normalizeCheckoutSession,
+    );
   },
 
   async getCheckoutSession(sessionId: string): Promise<CheckoutSession> {
     const raw = await getRawRecognitionModule().getCheckoutSession(sessionId);
-    return parseJson<CheckoutSession>(raw, 'getCheckoutSession');
+    return normalizeCheckoutSession(
+      parseJson<CheckoutSession>(raw, 'getCheckoutSession'),
+    );
   },
 
   async getTransactionCandidate(
@@ -156,7 +190,12 @@ export const nativeRecognition = {
 
   async getPaymentEvidence(sessionId: string): Promise<PaymentEvidence[]> {
     const raw = await getRawRecognitionModule().getPaymentEvidence(sessionId);
-    return parseJson<PaymentEvidence[]>(raw, 'getPaymentEvidence');
+    return parseJson<PaymentEvidence[]>(raw, 'getPaymentEvidence').map(
+      (evidence) => ({
+        ...evidence,
+        sourceType: normalizeEvidenceSourceType(evidence.sourceType),
+      }),
+    );
   },
 
   async retryAiRecognition(candidateId: string): Promise<void> {

@@ -2,7 +2,7 @@
  * 待确认中心 - Neo-Brutalism 风格
  * 展示 AI 识别产出的待确认交易，支持确认入账、忽略和重试识别
  */
-import React, { useCallback, useMemo } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import {
   RefreshControl,
   ScrollView,
@@ -14,6 +14,7 @@ import {
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
+  AlertCircle,
   Bell,
   Check,
   ChevronLeft,
@@ -31,7 +32,7 @@ import {
   type PaymentEvidence,
   type RecognitionStatus,
 } from '../../native';
-import { QUERY_KEYS } from '../../lib/queryClient';
+import { invalidateCache, QUERY_KEYS } from '../../lib/queryClient';
 import { useAlert } from '../../providers';
 import { borderRadius, borderWidth, spacing } from '../../theme/spacing';
 import { ThemeColors } from '../../theme/colors';
@@ -42,24 +43,15 @@ const PENDING_QUERY_KEY = QUERY_KEYS.recognition.pending;
 const STATUS_QUERY_KEY = QUERY_KEYS.recognition.status;
 const EVIDENCE_QUERY_KEY = QUERY_KEYS.recognition.evidence;
 
-/** 审查修复后需要联动刷新的账本相关缓存前缀：账单、账户余额、首页与报表。 */
-const LEDGER_CACHE_KEYS: readonly (readonly string[])[] = [
-  QUERY_KEYS.bills.all,
-  ['accounts'],
-  ['dashboard'],
-  ['statistics'],
-  ['daily-grid'],
-  ['monthly-grid'],
-  ['yearly-grid'],
-  ['asset-trend'],
-];
-
 /** 待确认中心屏幕组件，对应阶段三任务9前端桥接。 */
 export default function ReviewScreen() {
   const navigation = useNavigation();
   const queryClient = useQueryClient();
   const styles = useStyles(createStyles);
   const { alert } = useAlert();
+  const [retrySubmittedVersions, setRetrySubmittedVersions] = useState<
+    Record<string, number>
+  >({});
 
   const pendingQuery = useQuery({
     queryKey: PENDING_QUERY_KEY,
@@ -71,16 +63,9 @@ export default function ReviewScreen() {
   });
 
   const invalidateAll = useCallback(() => {
-    queryClient.invalidateQueries({ queryKey: PENDING_QUERY_KEY });
-    queryClient.invalidateQueries({ queryKey: STATUS_QUERY_KEY });
-    // 阶段四 T7：确认/忽略/重试后同步刷新各卡片支付证据摘要
-    queryClient.invalidateQueries({ queryKey: EVIDENCE_QUERY_KEY });
-    // 审查修复：确认入账会写 Bill 并更新账户余额，需联动失效账户/首页/报表缓存，
-    // 否则余额与统计仍显示旧数据
-    LEDGER_CACHE_KEYS.forEach((key) => {
-      queryClient.invalidateQueries({ queryKey: [...key] });
-    });
-  }, [queryClient]);
+    invalidateCache.recognition();
+    invalidateCache.bills();
+  }, []);
 
   const confirmMutation = useMutation({
     mutationFn: ({ pending }: { pending: PendingTransaction }) =>
@@ -115,7 +100,13 @@ export default function ReviewScreen() {
       invalidateAll();
       alert('重试已触发', 'AI 识别已重新触发，结果会更新到待确认列表。');
     },
-    onError: (error) => {
+    onError: (error, { candidateId }) => {
+      setRetrySubmittedVersions((current) => {
+        if (!(candidateId in current)) return current;
+        const next = { ...current };
+        delete next[candidateId];
+        return next;
+      });
       const message =
         error instanceof Error ? error.message : '重试识别失败，请稍后重试';
       alert('重试失败', message);
@@ -123,8 +114,15 @@ export default function ReviewScreen() {
   });
 
   const refresh = useCallback(async () => {
-    await Promise.all([pendingQuery.refetch(), statusQuery.refetch()]);
-  }, [pendingQuery, statusQuery]);
+    await Promise.all([
+      pendingQuery.refetch(),
+      statusQuery.refetch(),
+      queryClient.refetchQueries({
+        queryKey: EVIDENCE_QUERY_KEY,
+        type: 'active',
+      }),
+    ]);
+  }, [pendingQuery, queryClient, statusQuery]);
 
   // 焦点期间自动刷新，方便从无障碍服务返回时立即看到最新候选。
   useFocusEffect(
@@ -156,9 +154,16 @@ export default function ReviewScreen() {
         alert('无法重试', '该待确认交易没有关联的候选，不能重试识别。');
         return;
       }
+      if (retrySubmittedVersions[pending.candidateId] === pending.version) {
+        return;
+      }
+      setRetrySubmittedVersions((current) => ({
+        ...current,
+        [pending.candidateId as string]: pending.version,
+      }));
       retryMutation.mutate({ candidateId: pending.candidateId });
     },
-    [retryMutation, alert],
+    [alert, retryMutation, retrySubmittedVersions],
   );
 
   return (
@@ -183,8 +188,22 @@ export default function ReviewScreen() {
           />
         }
       >
-        <RecognitionStatusCard status={status} colors={styles._colors} />
-        {pendingItems.length === 0 ? (
+        {statusQuery.isError ? (
+          <QueryErrorState
+            title="识别状态读取失败"
+            onRetry={() => statusQuery.refetch()}
+            colors={styles._colors}
+          />
+        ) : (
+          <RecognitionStatusCard status={status} colors={styles._colors} />
+        )}
+        {pendingQuery.isError ? (
+          <QueryErrorState
+            title="待确认交易读取失败"
+            onRetry={() => pendingQuery.refetch()}
+            colors={styles._colors}
+          />
+        ) : pendingItems.length === 0 ? (
           <EmptyState colors={styles._colors} />
         ) : (
           <View style={styles.list}>
@@ -206,6 +225,12 @@ export default function ReviewScreen() {
                 isRetrying={
                   retryMutation.isPending &&
                   retryMutation.variables?.candidateId === pending.candidateId
+                }
+                retryBlocked={
+                  Boolean(
+                    pending.candidateId &&
+                      retrySubmittedVersions[pending.candidateId] === pending.version,
+                  )
                 }
                 colors={styles._colors}
               />
@@ -271,6 +296,33 @@ function RecognitionStatusCard({
 }
 
 /** 空状态提示，避免空白页面给用户造成困惑。 */
+function QueryErrorState({
+  title,
+  onRetry,
+  colors,
+}: {
+  title: string;
+  onRetry: () => Promise<unknown>;
+  colors: ThemeColors;
+}) {
+  const styles = useStyles(createStyles);
+  return (
+    <View style={styles.emptyCard}>
+      <AlertCircle size={32} color={colors.error} />
+      <Text style={styles.emptyTitle}>{title}</Text>
+      <Text style={styles.emptyText}>请刷新后重试，当前没有可用的查询结果。</Text>
+      <TouchableOpacity
+        style={styles.errorButton}
+        onPress={() => void onRetry()}
+        activeOpacity={0.85}
+      >
+        <RefreshCw size={16} color={colors.textPrimary} />
+        <Text style={styles.errorButtonText}>重试</Text>
+      </TouchableOpacity>
+    </View>
+  );
+}
+
 function EmptyState({ colors }: { colors: ThemeColors }) {
   const styles = useStyles(createStyles);
   return (
@@ -294,6 +346,7 @@ interface PendingCardProps {
   isConfirming: boolean;
   isIgnoring: boolean;
   isRetrying: boolean;
+  retryBlocked: boolean;
   colors: ThemeColors;
 }
 
@@ -305,6 +358,7 @@ function PendingCard({
   isConfirming,
   isIgnoring,
   isRetrying,
+  retryBlocked,
   colors,
 }: PendingCardProps) {
   const styles = useStyles(createStyles);
@@ -396,9 +450,13 @@ function PendingCard({
         <EvidenceSection
           evidences={evidences}
           loading={evidenceQuery.isLoading}
+          error={evidenceQuery.isError}
+          onRetry={() => evidenceQuery.refetch()}
           colors={colors}
         />
-      ) : null}
+      ) : (
+        <NoSessionEvidenceState />
+      )}
 
       <View style={styles.actionRow}>
         <TouchableOpacity
@@ -423,15 +481,15 @@ function PendingCard({
           <TouchableOpacity
             style={[
               styles.retryButton,
-              isRetrying && styles.actionButtonDisabled,
+              (isRetrying || retryBlocked) && styles.actionButtonDisabled,
             ]}
             onPress={() => onRetry(pending)}
-            disabled={isRetrying || isConfirming || isIgnoring}
+            disabled={isRetrying || isConfirming || isIgnoring || retryBlocked}
             activeOpacity={0.85}
           >
             <RefreshCw size={16} color={colors.textPrimary} />
             <Text style={styles.retryButtonText}>
-              {isRetrying ? '重试中…' : '重试识别'}
+              {isRetrying ? '重试中…' : retryBlocked ? '重试已提交' : '重试识别'}
             </Text>
           </TouchableOpacity>
         ) : null}
@@ -487,13 +545,27 @@ function MetaRow({
  * 支付证据摘要区块（阶段四 T7）。
  * 只展示结构化摘要（来源、金额、订单号、状态），不展示通知原文。
  */
+function NoSessionEvidenceState() {
+  const styles = useStyles(createStyles);
+  return (
+    <View style={styles.evidenceSection}>
+      <Text style={styles.evidenceTitle}>支付证据</Text>
+      <Text style={styles.evidenceEmpty}>无关联结算会话，未查询支付证据。</Text>
+    </View>
+  );
+}
+
 function EvidenceSection({
   evidences,
   loading,
+  error,
+  onRetry,
   colors,
 }: {
   evidences: PaymentEvidence[];
   loading: boolean;
+  error: boolean;
+  onRetry: () => Promise<unknown>;
   colors: ThemeColors;
 }) {
   const styles = useStyles(createStyles);
@@ -502,6 +574,22 @@ function EvidenceSection({
       <View style={styles.evidenceSection}>
         <Text style={styles.evidenceTitle}>支付证据</Text>
         <Text style={styles.evidenceEmpty}>正在读取…</Text>
+      </View>
+    );
+  }
+  if (error) {
+    return (
+      <View style={styles.evidenceSection}>
+        <Text style={styles.evidenceTitle}>支付证据</Text>
+        <Text style={styles.evidenceEmpty}>支付证据读取失败。</Text>
+        <TouchableOpacity
+          style={styles.evidenceRetryButton}
+          onPress={() => void onRetry()}
+          activeOpacity={0.85}
+        >
+          <RefreshCw size={14} color={colors.textPrimary} />
+          <Text style={styles.retryButtonText}>重试</Text>
+        </TouchableOpacity>
       </View>
     );
   }
@@ -797,6 +885,36 @@ const createStyles = (colors: ThemeColors) => ({
       fontWeight: '500',
       color: colors.textTertiary,
       lineHeight: 18,
+    },
+    errorButton: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 4,
+      marginTop: spacing.sm,
+      paddingHorizontal: spacing.md,
+      paddingVertical: spacing.sm,
+      borderRadius: borderRadius.medium,
+      borderWidth: borderWidth.thin,
+      borderColor: colors.stroke,
+      backgroundColor: colors.surface,
+    },
+    errorButtonText: {
+      fontSize: 13,
+      fontWeight: '700',
+      color: colors.textPrimary,
+    },
+    evidenceRetryButton: {
+      alignSelf: 'flex-start',
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 4,
+      paddingHorizontal: spacing.sm,
+      paddingVertical: spacing.xs,
+      borderRadius: borderRadius.small,
+      borderWidth: borderWidth.thin,
+      borderColor: colors.stroke,
+      backgroundColor: colors.surface,
     },
     evidenceRow: {
       flexDirection: 'row',

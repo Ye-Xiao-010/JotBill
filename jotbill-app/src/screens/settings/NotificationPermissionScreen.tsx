@@ -2,7 +2,7 @@
  * 通知权限引导页 - Neo-Brutalism 风格
  * 引导用户开启支付通知监听服务，提供状态检查和跳转系统设置入口
  * 权限状态从 Runtime.getRuntimeHealth().notificationEnabled 读取；
- * 跳转复用 Recognition.openAccessibilitySettings()，不新增公开方法。
+ * 跳转使用 Runtime 的通知监听设置方法。
  */
 import React, { useCallback, useState } from 'react';
 import {
@@ -114,17 +114,27 @@ export default function NotificationPermissionScreen() {
       >
         <View style={styles.statusCard}>
           <View style={styles.statusIconRow}>
-            {enabled ? (
+            {query.isError ? (
+              <AlertCircle size={32} color={styles._colors.error} />
+            ) : enabled ? (
               <CheckCircle2 size={32} color={styles._colors.success} />
             ) : (
               <AlertCircle size={32} color={styles._colors.warning} />
             )}
             <View style={styles.statusMain}>
               <Text style={styles.statusTitle}>
-                {enabled ? '支付通知监听已开启' : '支付通知监听未开启'}
+                {query.isError
+                  ? '无法读取通知权限状态'
+                  : isLoading
+                    ? '正在读取通知权限状态'
+                    : enabled
+                      ? '支付通知监听已开启'
+                      : '支付通知监听未开启'}
               </Text>
               <Text style={styles.statusMeta}>
-                {isLoading
+                {query.isError
+                  ? '读取失败，请刷新状态后重试'
+                  : isLoading
                   ? '正在读取状态…'
                   : enabled
                     ? '已授权通知访问权限，可读取微信/支付宝支付成功通知'

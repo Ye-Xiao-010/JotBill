@@ -149,6 +149,13 @@ export const invalidateCache = {
     queryClient.invalidateQueries({ queryKey: ['accounts'] });
   },
 
+  /** 使识别链路的待确认、状态和支付证据查询保持同步。 */
+  recognition: () => {
+    queryClient.invalidateQueries({ queryKey: QUERY_KEYS.recognition.pending });
+    queryClient.invalidateQueries({ queryKey: QUERY_KEYS.recognition.status });
+    queryClient.invalidateQueries({ queryKey: QUERY_KEYS.recognition.evidence });
+  },
+
   /**
    * 使首页数据失效
    */

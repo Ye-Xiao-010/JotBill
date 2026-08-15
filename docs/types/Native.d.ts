@@ -1041,6 +1041,8 @@ export interface RecognitionModule {
   getTransactionCandidate(candidateId: string): Promise<TransactionCandidate>;
   getPaymentEvidence(sessionId: string): Promise<PaymentEvidence[]>;
   retryAiRecognition(candidateId: string): Promise<void>;
+  openAccessibilitySettings(): Promise<void>;
+  isAccessibilityEnabled(): Promise<boolean>;
   getRecognitionStatus(): Promise<{
     activeSessions: number;
     pendingCount: number;
@@ -1079,6 +1081,7 @@ export interface AiModule {
  */
 export interface RuntimeModule {
   getRuntimeHealth(): Promise<RuntimeHealth>;
+  openNotificationListenerSettings(): Promise<void>;
 }
 
 /**
