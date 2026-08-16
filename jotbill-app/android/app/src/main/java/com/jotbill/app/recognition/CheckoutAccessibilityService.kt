@@ -2,11 +2,13 @@ package com.jotbill.app.recognition
 
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.AccessibilityServiceInfo
+import android.content.Intent
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import android.view.accessibility.AccessibilityWindowInfo
 import com.jotbill.app.ai.CheckoutAiResultCallback
 import com.jotbill.app.ai.CheckoutAiVisionClient
 import com.jotbill.app.data.JotBillDatabaseProvider
@@ -244,6 +246,8 @@ class CheckoutAccessibilityService : AccessibilityService() {
 
     private var lastWindowPackage: String? = null
     private var lastWindowClass: String? = null
+    private var lastObservedEventLogAt = 0L
+    private var lastPaymentWindowScanAt = 0L
     @Volatile
     private var currentStableCheckout: StableCheckoutPage? = null
     @Volatile
@@ -453,13 +457,89 @@ class CheckoutAccessibilityService : AccessibilityService() {
         }
     }
 
+    private fun logObservedEventSampled(
+        shoppingPackage: String,
+        event: AccessibilityEvent,
+        eventPackage: String,
+        activeRootPackage: String
+    ) {
+        val now = System.currentTimeMillis()
+        if (now - lastObservedEventLogAt < 1_000L) {
+            return
+        }
+        lastObservedEventLogAt = now
+        Log.i(
+            TAG,
+            "无障碍事件采样: pkg=$shoppingPackage(eventPkg=${eventPackage.ifBlank { "null" }}, " +
+                "rootPkg=${activeRootPackage.ifBlank { "null" }}), " +
+                "type=${AccessibilityEvent.eventTypeToString(event.eventType)}, " +
+                "class=${event.className}, contentChangeTypes=${event.contentChangeTypes}"
+        )
+    }
+
+    /**
+     * 用事件包名、活动窗口包名和最近已知前台包名推断当前应归属哪个购物/支付应用。
+     *
+     * 真机上的拼多多/微信页面会混入空包名或视频通话悬浮窗等第三方窗口事件；
+     * 单看事件包名会把仍然停留在购物页的状态误判为离开，造成悬浮按钮高频闪烁。
+     */
+    private fun resolveEffectiveShoppingPackage(
+        eventPackage: String,
+        activeRootPackage: String
+    ): String {
+        if (eventPackage.isNotBlank()) {
+            val eventIsKnown = pageDetector.supportsShoppingPackage(eventPackage) ||
+                pageDetector.supportsPaymentPackage(eventPackage)
+            val rootIsPayment = pageDetector.supportsPaymentPackage(activeRootPackage)
+            if (eventIsKnown && !rootIsPayment) {
+                return eventPackage
+            }
+            // 购物应用刚把前台交给微信/支付宝时，活动窗口已经是支付包，按支付包处理，
+            // 保留结算页交接上下文，避免先被 NODE_TREE_UNAVAILABLE 清空。
+            if (pageDetector.supportsShoppingPackage(eventPackage) && rootIsPayment) {
+                return activeRootPackage
+            }
+            if (!eventIsKnown &&
+                (pageDetector.supportsShoppingPackage(activeRootPackage) || rootIsPayment)
+            ) {
+                return activeRootPackage
+            }
+            return eventPackage
+        }
+
+        if (activeRootPackage.isNotBlank()) {
+            return activeRootPackage
+        }
+        return lastWindowPackage.orEmpty()
+    }
+
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (!serviceConnected || event == null) {
             return
         }
 
-        val shoppingPackage = event.packageName?.toString()?.trim().orEmpty()
+        // 部分购物页会发出 packageName 为空的内容变化事件（WebView/系统窗口）。
+        // 空包名不代表已经离开购物应用；同时兼容视频通话悬浮窗等第三方窗口事件
+        // 与购物应用窗口事件交错到达的真机场景，按活动窗口/事件包名推断归属。
+        val eventPackage = event.packageName?.toString()?.trim().orEmpty()
+        val activeRoot = try {
+            rootInActiveWindow
+        } catch (_: RuntimeException) {
+            null
+        }
+        val activeRootPackage = try {
+            activeRoot?.packageName?.toString()?.trim().orEmpty()
+        } catch (_: RuntimeException) {
+            ""
+        }
+        val shoppingPackage = resolveEffectiveShoppingPackage(eventPackage, activeRootPackage)
+        logObservedEventSampled(shoppingPackage, event, eventPackage, activeRootPackage)
         if (!pageDetector.supportsShoppingPackage(shoppingPackage)) {
+            try {
+                activeRoot?.recycle()
+            } catch (_: RuntimeException) {
+                // 系统节点已回收时无需再次处理。
+            }
             clearUserRetryCaptureContext()
             val previousShoppingPackage = lastWindowPackage
             if (pageDetector.supportsPaymentPackage(shoppingPackage)) {
@@ -522,7 +602,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
         } catch (_: RuntimeException) {
             null
         }
-        val root = rootInActiveWindow ?: eventSource
+        val root = activeRoot ?: eventSource
         if (root == null) {
             clearUserRetryCaptureContext()
             dispatchOverlayInvalidation(
@@ -539,6 +619,34 @@ class CheckoutAccessibilityService : AccessibilityService() {
         try {
             val rootPackage = root.packageName?.toString()?.trim().orEmpty()
             if (rootPackage.isNotBlank() && rootPackage != shoppingPackage) {
+                if (pageDetector.supportsPaymentPackage(rootPackage)) {
+                    // 购物应用窗口事件的根节点已经是微信/支付宝：这是提交订单后的
+                    // 支付交接，不是节点树失效。保留稳定结算页引用并继续观察结果页。
+                    if (currentStableCheckout != null) {
+                        handoffStableCheckout = currentStableCheckout
+                        handoffForegroundPackage = rootPackage
+                    } else if (handoffForegroundPackage != rootPackage) {
+                        handoffStableCheckout = null
+                        handoffForegroundPackage = null
+                    }
+                    dispatchOverlayInvalidation(
+                        reason = CheckoutInvalidationReason.PAYMENT_APP_HANDOFF,
+                        shoppingPackage = shoppingPackage,
+                        foregroundPackage = rootPackage
+                    )
+                    stabilityCoordinator.invalidate(
+                        reason = CheckoutInvalidationReason.PAYMENT_APP_HANDOFF,
+                        shoppingPackage = shoppingPackage,
+                        foregroundPackage = rootPackage
+                    )
+                    observePaymentResultIfApplicable(
+                        event = event,
+                        paymentPackage = rootPackage,
+                        handoffContext = capturePaymentResultHandoffContext(rootPackage)
+                    )
+                    return
+                }
+
                 clearUserRetryCaptureContext()
                 dispatchOverlayInvalidation(
                     reason = CheckoutInvalidationReason.NODE_TREE_UNAVAILABLE,
@@ -638,7 +746,30 @@ class CheckoutAccessibilityService : AccessibilityService() {
         }
     }
 
+    /**
+     * 系统要求中断无障碍反馈时，服务通常仍保持绑定，后续事件仍会继续到达。
+     * 这里只结束当前观察旅程并收起悬浮按钮，不能把 serviceConnected、AI/匹配器、
+     * RN 回调和 static activeService 一并拆除，否则 MIUI 等系统只发 onInterrupt
+     * 而不重新回调 onServiceConnected 时，服务会变成“已绑定但永久不再处理事件”的僵尸。
+     */
     override fun onInterrupt() {
+        lastWindowPackage = null
+        lastWindowClass = null
+        currentStableCheckout = null
+        handoffStableCheckout = null
+        handoffForegroundPackage = null
+        submitActionTriggeredKey = null
+        clearUserRetryCaptureContext()
+        snapshotCaptureCoordinator?.onServiceInterrupted()
+        purchaseIntentCoordinator?.onServiceInterrupted()
+        stabilityCoordinator.invalidate(CheckoutInvalidationReason.SERVICE_INTERRUPTED)
+        checkoutCaptureOverlayManager?.onServiceInterrupted()
+        Log.w(TAG, "结算页无障碍观察服务被中断")
+        // AccessibilityService.onInterrupt() 是抽象方法，无法调用 super.onInterrupt()。
+    }
+
+    /** 真正解除绑定时才断开静态桥接；重新绑定由 onServiceConnected 完整重建。 */
+    override fun onUnbind(intent: Intent?): Boolean {
         serviceConnected = false
         lastWindowPackage = null
         lastWindowClass = null
@@ -647,23 +778,12 @@ class CheckoutAccessibilityService : AccessibilityService() {
         handoffForegroundPackage = null
         submitActionTriggeredKey = null
         clearUserRetryCaptureContext()
-        purchaseIntentCoordinator?.setReadyDispatcher(null)
-        purchaseIntentCoordinator?.setResultConsumer(null)
-        checkoutCaptureOverlayManager?.setManualCaptureRequestHandler(null)
-        shutdownPaymentMatcher()
-        shutdownAiClient()
-        snapshotCaptureCoordinator?.onServiceInterrupted()
-        purchaseIntentCoordinator?.onServiceInterrupted()
-        stabilityCoordinator.invalidate(CheckoutInvalidationReason.SERVICE_INTERRUPTED)
-        checkoutCaptureOverlayManager?.onServiceInterrupted()
-        snapshotCaptureResultListener = null
-        purchaseIntentResultConsumer = null
         if (activeService === this) {
             activeService = null
         }
         setObservationListener(null)
-        Log.w(TAG, "结算页无障碍观察服务被中断")
-        // AccessibilityService.onInterrupt() 是抽象方法，无法调用 super.onInterrupt()。
+        Log.i(TAG, "结算页无障碍观察服务已解除绑定")
+        return super.onUnbind(intent)
     }
 
     override fun onDestroy() {
@@ -914,6 +1034,54 @@ class CheckoutAccessibilityService : AccessibilityService() {
     }
 
     /**
+     * 支付结果页节点树优先级：活动窗口 > 事件源节点 > 同包名应用窗口。
+     * 微信支付成功页可能由透明 LiteApp/WebView 承载，活动窗口或事件源会短暂为空，
+     * 此时从已检索窗口中按包名兜底，避免结果页因一次空树而永久漏记。
+     */
+    private fun findPaymentResultRoots(
+        event: AccessibilityEvent,
+        paymentPackage: String,
+        includeWindows: Boolean
+    ): List<AccessibilityNodeInfo> {
+        val roots = mutableListOf<AccessibilityNodeInfo>()
+        fun add(candidate: AccessibilityNodeInfo?) {
+            if (candidate == null || roots.any { it === candidate }) {
+                return
+            }
+            roots += candidate
+        }
+
+        try {
+            add(rootInActiveWindow)
+        } catch (_: RuntimeException) {
+            // 继续尝试事件源节点。
+        }
+        try {
+            add(event.source)
+        } catch (_: RuntimeException) {
+            // 继续尝试窗口列表。
+        }
+        if (includeWindows && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
+            try {
+                windows.forEach { window ->
+                    if (window.type == AccessibilityWindowInfo.TYPE_APPLICATION) {
+                        try {
+                            window.root?.takeIf {
+                                it.packageName?.toString() == paymentPackage
+                            }?.let(::add)
+                        } catch (_: RuntimeException) {
+                            // 单个窗口不可读时继续检查其它窗口。
+                        }
+                    }
+                }
+            } catch (_: RuntimeException) {
+                // 系统窗口列表不可读时保持原有空树语义。
+            }
+        }
+        return roots
+    }
+
+    /**
      * 阶段四 T3：在支付应用中观察支付结果页，提取结构化证据。
      *
      * 只读取无障碍节点文本，不截图、不读密码/付款码/银行卡号。
@@ -925,102 +1093,131 @@ class CheckoutAccessibilityService : AccessibilityService() {
         paymentPackage: String,
         handoffContext: PaymentResultHandoffContext?
     ) {
-        val root = try {
-            rootInActiveWindow
-        } catch (_: RuntimeException) {
-            null
-        } ?: return
+        val observedAt = System.currentTimeMillis()
+        val includeWindows =
+            event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED ||
+                observedAt - lastPaymentWindowScanAt >= 1_500L
+        if (includeWindows) {
+            lastPaymentWindowScanAt = observedAt
+        }
+        val roots = findPaymentResultRoots(event, paymentPackage, includeWindows)
+        if (roots.isEmpty()) {
+            Log.i(
+                TAG,
+                "支付结果页无可用节点树: pkg=$paymentPackage, " +
+                    "type=${AccessibilityEvent.eventTypeToString(event.eventType)}, class=${event.className}"
+            )
+            return
+        }
 
         try {
-            val observation = AccessibilityPageSummaryCollector.collect(
-                shoppingPackage = paymentPackage,
-                windowClass = event.className?.toString()?.trim()?.takeIf { it.isNotBlank() },
-                root = root,
-                observedAt = System.currentTimeMillis()
-            )
+            for (root in roots) {
+                try {
+                    val observation = AccessibilityPageSummaryCollector.collect(
+                        shoppingPackage = paymentPackage,
+                        windowClass = event.className?.toString()?.trim()?.takeIf { it.isNotBlank() },
+                        root = root,
+                        observedAt = observedAt
+                    )
 
-            if (observation.pageRole != CheckoutPageRole.PAYMENT_RESULT) return
+                    if (observation.pageRole != CheckoutPageRole.PAYMENT_RESULT) {
+                        Log.i(
+                            TAG,
+                            "支付包页面未分类为结果页: pkg=$paymentPackage, role=${observation.pageRole}, " +
+                                "class=${observation.windowClass}, sensitive=${observation.isSensitivePage}, " +
+                                "windows=${if (includeWindows) "all" else "active"}"
+                        )
+                        continue
+                    }
 
-            // 敏感页面（密码/付款码等）不提取任何证据
-            if (observation.isSensitivePage) {
-                Log.d(TAG, "支付结果页为敏感页面，跳过证据提取")
-                return
-            }
-
-            // 从节点文本提取结构化证据（collectPageText 已过滤密码/付款码等敏感字段）
-            val pageText = collectPageText(root)
-            val parseResult = PaymentResultParser.parseResult(
-                pageText = pageText,
-                sourcePackage = paymentPackage,
-                pageFingerprint = observation.pageFingerprint,
-                observedAt = observation.observedAt
-            )
-            val evidence = when (parseResult) {
-                is PaymentResultParseResult.Success -> parseResult.evidence
-                is PaymentResultParseResult.Failure -> {
-                    Log.i(TAG, "支付结果页未生成成功证据: reason=${parseResult.reason}")
-                    return
-                }
-                PaymentResultParseResult.NotPaymentResult -> {
-                    Log.d(TAG, "支付结果页未命中可确认的结果语义")
-                    return
-                }
-            }
-
-            Log.i(TAG, "支付结果页解析到证据: 金额=${evidence.amountMinor}分, 状态=${evidence.paymentStatus}")
-
-            // 匹配器尚未初始化时仍保留证据，避免结果页只记录日志后丢失。
-            val matcher = synchronized(aiLifecycleLock) { paymentMatcher }
-                ?: run {
-                    val database = try {
-                        JotBillDatabaseProvider.get(applicationContext)
-                    } catch (error: RuntimeException) {
-                        Log.w(TAG, "支付结果页无法初始化证据数据库", error)
+                    // 敏感页面（密码/付款码等）不提取任何证据
+                    if (observation.isSensitivePage) {
+                        Log.d(TAG, "支付结果页为敏感页面，跳过证据提取")
                         return
                     }
-                    CheckoutPaymentMatcher(database)
-                }
-            val scope = synchronized(aiLifecycleLock) { matchingScope } ?: evidenceFallbackScope
-            scope.launch {
-                try {
-                    recordPaymentResultEvidence(
-                        matcher = matcher,
-                        paymentPackage = paymentPackage,
-                        evidence = evidence,
-                        handoffContext = handoffContext
+
+                    // 从节点文本和 contentDescription 提取结构化证据
+                    val pageText = collectPageText(root)
+                    val parseResult = PaymentResultParser.parseResult(
+                        pageText = pageText,
+                        sourcePackage = paymentPackage,
+                        pageFingerprint = observation.pageFingerprint,
+                        observedAt = observation.observedAt
                     )
-                } catch (error: Exception) {
-                    Log.w(TAG, "支付结果页证据落库失败", error)
-                    try {
-                        matcher.recordOrphanPaymentSignal(
-                            PaymentNotificationFallbackSignal(
-                                paymentPackage = paymentPackage,
-                                amountMinor = evidence.amountMinor,
-                                occurredAt = evidence.occurredAt ?: System.currentTimeMillis(),
-                                merchant = evidence.merchant,
-                                orderId = evidence.orderId,
-                                sourceEventKey = evidence.sourceEventKey,
-                                rawTextHash = evidence.rawTextHash
-                            ),
-                            sourceType = "ACCESSIBILITY",
-                            conflictReason = "EVIDENCE_PERSIST_FAILED"
-                        )
-                    } catch (fallbackError: Exception) {
-                        Log.w(TAG, "支付结果页证据兜底落库失败", fallbackError)
+                    val evidence = when (parseResult) {
+                        is PaymentResultParseResult.Success -> parseResult.evidence
+                        is PaymentResultParseResult.Failure -> {
+                            Log.i(TAG, "支付结果页未生成成功证据: reason=${parseResult.reason}")
+                            return
+                        }
+                        PaymentResultParseResult.NotPaymentResult -> {
+                            Log.d(TAG, "支付结果页未命中可确认的结果语义")
+                            continue
+                        }
                     }
+
+                    Log.i(
+                        TAG,
+                        "支付结果页解析到证据: 金额=${evidence.amountMinor}分, 状态=${evidence.paymentStatus}, " +
+                            "textLength=${pageText.length}"
+                    )
+
+                    // 匹配器尚未初始化时仍保留证据，避免结果页只记录日志后丢失。
+                    val matcher = synchronized(aiLifecycleLock) { paymentMatcher }
+                        ?: run {
+                            val database = try {
+                                JotBillDatabaseProvider.get(applicationContext)
+                            } catch (error: RuntimeException) {
+                                Log.w(TAG, "支付结果页无法初始化证据数据库", error)
+                                return
+                            }
+                            CheckoutPaymentMatcher(database)
+                        }
+                    val scope = synchronized(aiLifecycleLock) { matchingScope } ?: evidenceFallbackScope
+                    scope.launch {
+                        try {
+                            recordPaymentResultEvidence(
+                                matcher = matcher,
+                                paymentPackage = paymentPackage,
+                                evidence = evidence,
+                                handoffContext = handoffContext
+                            )
+                        } catch (error: Exception) {
+                            Log.w(TAG, "支付结果页证据落库失败", error)
+                            try {
+                                matcher.recordOrphanPaymentSignal(
+                                    PaymentNotificationFallbackSignal(
+                                        paymentPackage = paymentPackage,
+                                        amountMinor = evidence.amountMinor,
+                                        occurredAt = evidence.occurredAt ?: System.currentTimeMillis(),
+                                        merchant = evidence.merchant,
+                                        orderId = evidence.orderId,
+                                        sourceEventKey = evidence.sourceEventKey,
+                                        rawTextHash = evidence.rawTextHash
+                                    ),
+                                    sourceType = "ACCESSIBILITY",
+                                    conflictReason = "EVIDENCE_PERSIST_FAILED"
+                                )
+                            } catch (fallbackError: Exception) {
+                                Log.w(TAG, "支付结果页证据兜底落库失败", fallbackError)
+                            }
+                        }
+                    }
+                    return
+                } catch (error: RuntimeException) {
+                    Log.w(TAG, "支付结果页候选根节点解析失败，继续检查下一窗口", error)
                 }
             }
-        } catch (error: RuntimeException) {
-            Log.w(TAG, "支付结果页观察失败", error)
         } finally {
-            try {
-                root.recycle()
-            } catch (_: RuntimeException) {
-                // 系统节点已经回收时无需再次处理。
+            roots.forEach { root ->
+                try {
+                    root.recycle()
+                } catch (_: RuntimeException) {
+                    // 系统节点已经回收时无需再次处理。
+                }
             }
         }
     }
-
     /** 收集节点树可见文本，用于支付结果页证据解析；数值在 parser 哈希前统一脱敏。 */
     private fun collectPageText(root: AccessibilityNodeInfo): String {
         val builder = StringBuilder()
@@ -1038,7 +1235,11 @@ class CheckoutAccessibilityService : AccessibilityService() {
         if (depth > 20) return
         val nodeSensitive = sensitiveAncestor || isSensitiveNode(node)
         if (!nodeSensitive) {
-            node.text?.toString()?.trim()?.takeIf { it.isNotBlank() }?.let { text ->
+            val candidates = listOfNotNull(
+                node.text?.toString()?.trim()?.takeIf { it.isNotBlank() },
+                node.contentDescription?.toString()?.trim()?.takeIf { it.isNotBlank() }
+            )
+            candidates.distinct().forEach { text ->
                 if (
                     SENSITIVE_TEXT_KEYWORDS.none { text.contains(it, ignoreCase = true) } &&
                     !SENSITIVE_ASCII_PATTERN.containsMatchIn(text)

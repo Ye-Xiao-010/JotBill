@@ -99,6 +99,7 @@ internal object PaymentResultParser {
     /** 商户名匹配正则 */
     private val MERCHANT_PATTERNS = listOf(
         Regex("""商户[：:]\s*([^\s,，。；;]{2,30})"""),
+        Regex("""(?:支付成功|付款成功|支付完成|交易完成)\s*([^\s，。；;￥¥0-9]{2,30}?)\s*(?:￥|¥|CNY|[0-9])"""),
         Regex("""在(.{2,30}?)支付"""),
         Regex("""于(.{2,30}?)消费""")
     )
