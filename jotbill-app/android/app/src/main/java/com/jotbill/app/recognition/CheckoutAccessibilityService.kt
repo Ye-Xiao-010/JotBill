@@ -1231,11 +1231,13 @@ class CheckoutAccessibilityService : AccessibilityService() {
                         is PaymentResultParseResult.Success -> parseResult.evidence
                         is PaymentResultParseResult.Failure -> {
                             Log.i(TAG, "支付结果页未生成成功证据: reason=${parseResult.reason}")
+                            maybeCapturePaymentResultScreenshot(paymentPackage, handoffContext)
                             return
                         }
                         PaymentResultParseResult.NotPaymentResult -> {
                             Log.d(TAG, "支付结果页未命中可确认的结果语义")
-                            continue
+                            maybeCapturePaymentResultScreenshot(paymentPackage, handoffContext)
+                            return
                         }
                     }
 
