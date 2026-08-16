@@ -138,8 +138,8 @@ android {
     }
 }
 
-configurations.all {
-    // 阶段七 T2：离线环境缺少 concurrent-futures-ktx 1.2.0，锁定已缓存兼容版本。
+configurations.matching { it.name.contains('AndroidTest') }.all {
+    // 阶段七 T2：离线环境缺少 concurrent-futures-ktx 1.2.0，仅在 AndroidTest 配置锁定已缓存兼容版本。
     resolutionStrategy.force 'androidx.concurrent:concurrent-futures-ktx:1.1.0'
 }
 
