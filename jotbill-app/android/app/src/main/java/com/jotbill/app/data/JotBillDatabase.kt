@@ -267,9 +267,10 @@ object DatabaseMigrations {
                     WHEN `status` IN ('SNAPSHOT_BUFFERED', 'AI_TRIGGER_ARMED') THEN 'SNAPSHOT_BUFFERED'
                     WHEN `status` IN ('AI_PENDING', 'AI_REQUESTING') THEN 'AI_REQUESTING'
                     WHEN `status` IN (
-                        'AI_COMPLETED', 'AI_FAILED', 'WAITING_PAYMENT',
+                        'AI_COMPLETED', 'WAITING_PAYMENT',
                         'PAYMENT_CONFIRMED', 'WAITING_ENRICHMENT', 'NEEDS_CONFIRMATION'
                     ) THEN 'WAITING_ENRICHMENT'
+                    WHEN `status` = 'AI_FAILED' THEN 'FAILED'
                     WHEN `status` IN ('AUTO_COMMITTED', 'COMPLETED') THEN 'COMPLETED'
                     WHEN `status` = 'DISMISSED' THEN 'CANCELLED'
                     WHEN `status` = 'CANCELLED' THEN 'CANCELLED'
