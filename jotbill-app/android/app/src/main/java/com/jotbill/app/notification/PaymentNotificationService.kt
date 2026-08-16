@@ -244,6 +244,7 @@ class PaymentNotificationService : NotificationListenerService() {
             occurredAt = input.occurredAt,
             merchant = input.merchant,
             orderId = input.orderId,
+            rawTextHash = input.rawTextHash,
             sourceEventKey = input.sourceEventKey
         )
 
