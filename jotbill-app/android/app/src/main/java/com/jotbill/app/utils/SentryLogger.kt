@@ -47,6 +47,26 @@ object SentryLogger {
     /** 是否启用 Sentry（可通过配置控制） */
     private var isEnabled = true
 
+    private val sensitivePatterns = listOf(
+        Regex("""(?i)Bearer\s+[A-Za-z0-9._~+/-]+=*"""),
+        Regex("""(?i)(password|passwd|pwd|api[_-]?key|apikey|authorization|access[_-]?token|secret|signature)\s*[:=]\s*([^\s,;]+)"""),
+        Regex("""\b[0-9]{13,19}\b"""),
+        Regex("""data:image/[^;]+;base64,[A-Za-z0-9+/=]+""")
+    )
+
+    /**
+     * 阶段七 T7：统一敏感信息脱敏。
+     * 密码、API Key、Token、Secret、长数字（疑似卡号）与 Base64 图片整值替换为 ***，
+     * 不保留首尾字符。
+     */
+    fun redact(value: String): String {
+        var result = value
+        for (pattern in sensitivePatterns) {
+            result = pattern.replace(result, "***")
+        }
+        return result
+    }
+
     /**
      * 初始化 Sentry
      *
@@ -176,15 +196,15 @@ object SentryLogger {
 
         try {
             val breadcrumb = Breadcrumb().apply {
-                this.message = message
-                this.category = category
+                this.message = redact(message)
+                this.category = category?.let { redact(it) }
                 this.level = level
                 data?.forEach { (key, value) ->
-                    setData(key, value)
+                    setData(redact(key), redact(value.toString()))
                 }
             }
             Sentry.addBreadcrumb(breadcrumb)
-            Log.d(TAG, "🍞 面包屑: $message")
+            Log.d(TAG, "🍞 面包屑: ${redact(message)}")
         } catch (e: Exception) {
             Log.e(TAG, "添加面包屑失败", e)
         }
@@ -204,10 +224,10 @@ object SentryLogger {
         try {
             Sentry.configureScope { scope ->
                 data.forEach { (k, v) ->
-                    scope.setExtra("${key}_${k}", v.toString())
+                    scope.setExtra(redact("${key}_${k}"), redact(v.toString()))
                 }
             }
-            Log.d(TAG, "✓ 已设置上下文: $key")
+            Log.d(TAG, "✓ 已设置上下文: ${redact(key)}")
         } catch (e: Exception) {
             Log.e(TAG, "设置上下文失败", e)
         }
@@ -225,8 +245,8 @@ object SentryLogger {
         if (!isEnabled) return
 
         try {
-            Sentry.setTag(key, value)
-            Log.d(TAG, "✓ 已设置标签: $key=$value")
+            Sentry.setTag(redact(key), redact(value))
+            Log.d(TAG, "✓ 已设置标签: ${redact(key)}=${redact(value)}")
         } catch (e: Exception) {
             Log.e(TAG, "设置标签失败", e)
         }
@@ -241,7 +261,7 @@ object SentryLogger {
      * @param message 日志消息
      */
     fun i(tag: String, message: String) {
-        Log.i(tag, message)
+        Log.i(redact(tag), redact(message))
 
         // Info 级别只添加面包屑，不发送事件
         if (isEnabled) {
@@ -258,7 +278,7 @@ object SentryLogger {
      * @param message 日志消息
      */
     fun d(tag: String, message: String) {
-        Log.d(tag, message)
+        Log.d(redact(tag), redact(message))
 
         // Debug 级别只添加面包屑，不发送事件
         if (isEnabled) {
@@ -276,7 +296,7 @@ object SentryLogger {
      * @param data 附加数据（可选）
      */
     fun w(tag: String, message: String, data: Map<String, Any>? = null) {
-        Log.w(tag, message)
+        Log.w(redact(tag), redact(message))
 
         if (!isEnabled) return
 
@@ -285,7 +305,7 @@ object SentryLogger {
             addBreadcrumb(message, data, category = tag, level = SentryLevel.WARNING)
 
             // 发送警告事件到 Sentry
-            Sentry.captureMessage(message, SentryLevel.WARNING)
+            Sentry.captureMessage(redact(message), SentryLevel.WARNING)
         } catch (e: Exception) {
             Log.e(TAG, "发送警告到 Sentry 失败", e)
         }
@@ -302,7 +322,7 @@ object SentryLogger {
      * @param data 附加数据（可选）
      */
     fun e(tag: String, message: String, throwable: Throwable? = null, data: Map<String, Any>? = null) {
-        Log.e(tag, message, throwable)
+        Log.e(redact(tag), redact(message), throwable)
 
         if (!isEnabled) return
 
@@ -315,7 +335,7 @@ object SentryLogger {
                 Sentry.captureException(throwable) { scope ->
                     if (data != null) {
                         data.forEach { (k, v) ->
-                            scope.setExtra("error_$k", v.toString())
+                            scope.setExtra(redact("error_$k"), redact(v.toString()))
                         }
                     }
                 }
