@@ -44,7 +44,8 @@ class BillEntityContractTest {
 
     @Test
     fun databaseMigrationChainCoversPhase6Step() {
-        assertEquals(10, JOT_BILL_DATABASE_VERSION)
+        assertEquals(11, JOT_BILL_DATABASE_VERSION)
         assertTrue(DatabaseMigrations.all.any { it.startVersion == 9 && it.endVersion == 10 })
+        assertTrue(DatabaseMigrations.all.any { it.startVersion == 10 && it.endVersion == 11 })
     }
 }
