@@ -85,4 +85,24 @@ interface TransactionCandidateDao {
         """
     )
     suspend fun findUnoccupiedByAmountCovering(amountMinor: Long, at: Long): List<TransactionCandidateEntity>
+
+    /**
+     * 查找最近一次 AI 失败且尚未被支付证据补齐的占位候选。
+     * 供支付结果晚到时按时间窗口把孤儿证据回填到原结算会话，避免“结算页截图了、
+     * AI 失败、支付又成功”的场景被拆成两条互不关联的待确认。
+     */
+    @Query(
+        """
+        SELECT candidates.* FROM transaction_candidates candidates
+        INNER JOIN checkout_sessions sessions ON sessions.id = candidates.session_id
+        WHERE candidates.conflict_reason = 'AI_RECOGNITION_FAILED'
+          AND candidates.amount_minor IS NULL
+          AND candidates.evidence_amount_minor IS NULL
+          AND candidates.matched = 0
+          AND sessions.status = 'FAILED'
+          AND sessions.created_at BETWEEN :since AND :until
+        ORDER BY candidates.created_at DESC
+        """
+    )
+    suspend fun findAiFailedUnmatchedCandidates(since: Long, until: Long): List<TransactionCandidateEntity>
 }

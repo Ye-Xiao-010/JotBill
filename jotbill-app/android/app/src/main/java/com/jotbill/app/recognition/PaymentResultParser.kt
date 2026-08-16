@@ -143,9 +143,10 @@ internal object PaymentResultParser {
         val hashableText = sanitizeForHash(pageText, orderId)
         val rawTextHash = sha256("result|$sourcePackage|$hashableText")
 
-        // 事件键使用解析后的发生时间，避免观察延迟导致重复或错误合并。
+        // 事件键不包含页面指纹：同一支付结果页在微信 LiteApp 中会随动态节点变化产生
+        // 多个指纹，旧实现会生成多条幂等键不同的孤儿待确认；现在按包名+分钟+金额+订单号去重。
         val sourceEventKey = sha256(
-            "result-event|$sourcePackage|$pageFingerprint|${occurredAt / 60_000}|$amountMinor|${orderId.orEmpty()}"
+            "result-event|$sourcePackage|${occurredAt / 60_000}|$amountMinor|${orderId.orEmpty()}"
         )
 
         return PaymentResultParseResult.Success(

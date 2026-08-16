@@ -202,7 +202,33 @@ internal class CheckoutPaymentMatcher(
                 }
             }
             sessionIds.size > 1 -> PaymentSessionResolution.Ambiguous(sessionIds)
-            else -> PaymentSessionResolution.NoMatch
+            else -> {
+                // 第三优先级：结算页截图 AI 失败后支付证据晚到。若时间窗口内只有
+                // 一个尚未被证据补齐的 AI_FAILED 占位候选，则回填到原会话，
+                // 而不是生成一条无法关联结算页的纯通知待确认。
+                val failedCandidates = database.transactionCandidateDao()
+                    .findAiFailedUnmatchedCandidates(
+                        since = occurredAt - PAYMENT_MATCH_WINDOW_MILLIS,
+                        until = occurredAt + PAYMENT_MATCH_WINDOW_MILLIS
+                    )
+                val failedSessionIds = failedCandidates.map { it.sessionId }.distinct()
+                when {
+                    failedSessionIds.size == 1 -> {
+                        val session = database.checkoutSessionDao()
+                            .getById(failedSessionIds.single())
+                        if (session != null && session.expiresAt > at) {
+                            PaymentSessionResolution.Matched(
+                                reference = referenceForSession(session),
+                                byOrderId = false
+                            )
+                        } else {
+                            PaymentSessionResolution.NoMatch
+                        }
+                    }
+                    failedSessionIds.size > 1 -> PaymentSessionResolution.Ambiguous(failedSessionIds)
+                    else -> PaymentSessionResolution.NoMatch
+                }
+            }
         }
     }
 
@@ -402,13 +428,43 @@ internal class CheckoutPaymentMatcher(
                 )
             }
             val existingSession = database.checkoutSessionDao().getById(reference.sessionId)
-            if (existingSession != null && existingSession.isClosedOrExpired(now)) {
+            val existingCandidateBeforeReopen = database.transactionCandidateDao()
+                .getBySession(reference.sessionId)
+                .singleOrNull()
+            val failedAiPlaceholder = existingSession != null &&
+                existingSession.status == "FAILED" &&
+                existingCandidateBeforeReopen?.conflictReason == AI_RECOGNITION_FAILED_REASON &&
+                existingCandidateBeforeReopen.amountMinor == null &&
+                existingCandidateBeforeReopen.evidenceAmountMinor == null
+            if (existingSession != null && existingSession.isClosedOrExpired(now) && !failedAiPlaceholder) {
                 return@withTransaction CheckoutPaymentMatchResult.Rejected(
                     reference.sessionId,
                     "PAYMENT_SESSION_CLOSED"
                 )
             }
-            var session = upsertSession(
+            var reopenedFailedSession: CheckoutSessionEntity? = null
+            if (failedAiPlaceholder && existingSession != null) {
+                // AI 失败占位候选获得支付证据：用支付金额补齐候选，并把会话从
+                // FAILED 重开为 PAYMENT_CONFIRMED，后续仍转待确认，不自动入账。
+                val candidate = checkNotNull(existingCandidateBeforeReopen)
+                database.transactionCandidateDao().update(
+                    candidate.copy(
+                        amountMinor = signal.amountMinor,
+                        merchant = signal.merchant ?: candidate.merchant,
+                        evidenceAmountMinor = signal.amountMinor,
+                        evidenceMerchant = signal.merchant,
+                        evidenceOrderId = signal.orderId,
+                        version = candidate.version + 1
+                    )
+                )
+                reopenedFailedSession = existingSession.copy(
+                    status = CheckoutJourneyState.PAYMENT_CONFIRMED.toPublicSessionStatus().wireValue,
+                    journeyState = PAYMENT_CONFIRMED_STATUS,
+                    updatedAt = now
+                )
+                database.checkoutSessionDao().update(reopenedFailedSession)
+            }
+            var session = reopenedFailedSession ?: upsertSession(
                 reference = reference,
                 initialStatus = PAYMENT_CONFIRMED_STATUS,
                 requestKey = null,

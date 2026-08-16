@@ -260,6 +260,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
     private var lastPaymentScreenshotFallbackAt = 0L
     @Volatile
     private var paymentScreenshotFallbackInFlight = false
+    private val recentPaymentResultEventKeys = mutableMapOf<String, Long>()
     private val screenshotCallbackExecutor = Executor { runnable -> mainHandler.post(runnable) }
     @Volatile
     private var currentStableCheckout: StableCheckoutPage? = null
@@ -1206,6 +1207,10 @@ class CheckoutAccessibilityService : AccessibilityService() {
                         }
                     }
 
+                    if (!markPaymentResultEvent(evidence.sourceEventKey, observation.observedAt)) {
+                        Log.d(TAG, "支付结果页同一事件已处理，跳过重复解析: ${evidence.sourceEventKey.take(12)}")
+                        return
+                    }
                     Log.i(
                         TAG,
                         "支付结果页解析到证据: 金额=${evidence.amountMinor}分, 状态=${evidence.paymentStatus}, " +
@@ -1328,10 +1333,10 @@ class CheckoutAccessibilityService : AccessibilityService() {
         paymentPackage: String,
         handoffContext: PaymentResultHandoffContext?
     ) {
-        val sourceEventKey = sha256(
+        val requestSourceKey = sha256(
             "payment-result-screenshot|$paymentPackage|${System.currentTimeMillis() / 60_000L}"
         )
-        val result = client.recognizePaymentResult(imageBytes, sourceEventKey)
+        val result = client.recognizePaymentResult(imageBytes, requestSourceKey)
         if (result !is CheckoutAiVisionClient.PaymentResultVisionResult.Succeeded) {
             val failed = result as CheckoutAiVisionClient.PaymentResultVisionResult.Failed
             Log.i(
@@ -1349,6 +1354,15 @@ class CheckoutAccessibilityService : AccessibilityService() {
                 null
             }
         } ?: System.currentTimeMillis()
+        // 与无障碍结果页共用同一个去重键：同包名、同一分钟、同金额、同订单号只落一次。
+        val sourceEventKey = sha256(
+            "result-event|$paymentPackage|${occurredAt / 60_000L}|${fields.amountMinor}|" +
+                "${fields.orderId.orEmpty()}"
+        )
+        if (!markPaymentResultEvent(sourceEventKey, System.currentTimeMillis())) {
+            Log.d(TAG, "支付结果页截图兜底同一事件已处理，跳过重复落库")
+            return
+        }
         val evidence = PaymentResultEvidence(
             amountMinor = fields.amountMinor,
             merchant = fields.merchant,
@@ -1383,6 +1397,16 @@ class CheckoutAccessibilityService : AccessibilityService() {
         MessageDigest.getInstance("SHA-256")
             .digest(value.toByteArray(Charsets.UTF_8))
             .joinToString("") { "%02x".format(it) }
+
+    private fun markPaymentResultEvent(sourceEventKey: String, now: Long): Boolean {
+        recentPaymentResultEventKeys.entries.removeAll { now - it.value > 60_000L }
+        val previous = recentPaymentResultEventKeys[sourceEventKey]
+        if (previous != null) {
+            return false
+        }
+        recentPaymentResultEventKeys[sourceEventKey] = now
+        return true
+    }
 
     private fun encodePaymentScreenshot(screenshot: ScreenshotResult): ByteArray? {
         var hardwareBuffer: HardwareBuffer? = null
