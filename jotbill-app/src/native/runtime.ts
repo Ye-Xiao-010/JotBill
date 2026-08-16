@@ -11,6 +11,9 @@ export interface RuntimeHealth {
   accessibilityEnabled: boolean;
   notificationEnabled: boolean;
   overlayPermissionGranted: boolean;
+  batteryOptimizationIgnored: boolean;
+  lastMigrationRecoveredAt?: string | null;
+  orphanImportBatches: number;
 }
 
 export type RuntimeStatus = RuntimeHealth;
