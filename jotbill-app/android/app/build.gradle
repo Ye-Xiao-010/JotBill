@@ -97,6 +97,7 @@ android {
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 28
         versionName "0.0.28"
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
     }
     signingConfigs {
         debug {
@@ -137,6 +138,11 @@ android {
     }
 }
 
+configurations.all {
+    // 阶段七 T2：离线环境缺少 concurrent-futures-ktx 1.2.0，锁定已缓存兼容版本。
+    resolutionStrategy.force 'androidx.concurrent:concurrent-futures-ktx:1.1.0'
+}
+
 dependencies {
     // Local-first data layer.
     implementation("androidx.room:room-runtime:2.8.3")
@@ -173,6 +179,16 @@ dependencies {
     testImplementation("junit:junit:4.13.2")
     // 阶段七 T1：本地 JVM 单元测试使用真实 org.json，避免 android.jar 未 mock 实现。
     testImplementation("org.json:json:20180813")
+
+    // 阶段七 T2：Room 迁移与 androidTest DAO 集成测试。
+    androidTestImplementation("androidx.test:runner:1.7.0")
+    androidTestImplementation("androidx.test:core:1.7.0") {
+        exclude group: "androidx.concurrent", module: "concurrent-futures-ktx"
+    }
+    androidTestImplementation("androidx.concurrent:concurrent-futures-ktx:1.1.0")
+    androidTestImplementation("androidx.test.ext:junit:1.1.5")
+    androidTestImplementation("androidx.core:core-ktx:1.13.1")
+    androidTestImplementation("androidx.room:room-testing:2.8.3")
 }
 
 kapt {
