@@ -32,6 +32,11 @@ const DEFAULT_ERROR_CODES: Record<BackupOperation, BackupErrorCode> = {
   executeRestore: 'RESTORE_FAILED',
   exportData: 'EXPORT_FAILED',
   importData: 'IMPORT_FAILED',
+  inspectImport: 'IMPORT_INSPECT_FAILED',
+  executeImport: 'IMPORT_FAILED',
+  cancelImport: 'IMPORT_FAILED',
+  undoImport: 'IMPORT_UNDO_FAILED',
+  getImportBatches: 'IMPORT_FAILED',
   clearData: 'CLEAR_DATA_ERROR',
 };
 
@@ -266,7 +271,12 @@ async function invokeVoid(
   }
 }
 
-export const nativeBackup: BackupModule = {
+type LegacyBackupModule = Omit<
+  BackupModule,
+  'inspectImport' | 'executeImport' | 'cancelImport' | 'undoImport' | 'getImportBatches'
+>;
+
+export const nativeBackup: LegacyBackupModule = {
   async createBackup(options: CreateBackupOptions = {}): Promise<BackupSummary> {
     return invokeJson<BackupSummary>(
       'createBackup',

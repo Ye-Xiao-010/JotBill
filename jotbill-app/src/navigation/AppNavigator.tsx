@@ -29,6 +29,7 @@ import AccountsScreen from '../screens/settings/AccountsScreen';
 import AiProviderScreen from '../screens/settings/AiProviderScreen';
 import RuntimeStatusScreen from '../screens/settings/RuntimeStatusScreen';
 import DataManagementScreen from '../screens/settings/DataManagementScreen';
+import ImportScreen from '../screens/settings/ImportScreen';
 import RulesScreen from '../screens/settings/RulesScreen';
 import AccessibilityPermissionScreen from '../screens/settings/AccessibilityPermissionScreen';
 import NotificationPermissionScreen from '../screens/settings/NotificationPermissionScreen';
@@ -393,6 +394,11 @@ export default function AppNavigator() {
         <Stack.Screen
           name="DataManagement"
           component={DataManagementScreen}
+          options={{ headerShown: false }}
+        />
+        <Stack.Screen
+          name="Import"
+          component={ImportScreen}
           options={{ headerShown: false }}
         />
         <Stack.Screen

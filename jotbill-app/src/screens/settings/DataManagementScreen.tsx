@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, BackHandler, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { useNavigation, usePreventRemove } from '@react-navigation/native';
 import { useQueryClient } from '@tanstack/react-query';
-import { Archive, CheckCircle2, ChevronLeft, Download, FileText, Trash2, X } from 'lucide-react-native';
+import { Archive, CheckCircle2, ChevronLeft, Download, FileText, FileUp, Trash2, X } from 'lucide-react-native';
 import { nativeBackup } from '../../native';
 import type { BackupSummary, RestorePreview } from '../../../../docs/types/Native';
 import { invalidateCache } from '../../lib/queryClient';
@@ -321,6 +321,14 @@ export default function DataManagementScreen() {
             </TouchableOpacity>
           </View>
         ) : null}
+
+        <TouchableOpacity style={styles.actionCard} onPress={() => { if (!busy) navigation.navigate('Import'); }} disabled={busy}>
+          <FileUp size={24} color={styles._colors.primary} />
+          <View style={styles.actionMain}>
+            <Text style={styles.actionTitle}>账单导入</Text>
+            <Text style={styles.actionText}>导入微信/支付宝官方 CSV、XLSX 或加密压缩包账单。</Text>
+          </View>
+        </TouchableOpacity>
 
         <TouchableOpacity style={styles.actionCard} onPress={exportCsv} disabled={busy}>
           {exporting ? <ActivityIndicator color={styles._colors.primary} /> : <Download size={24} color={styles._colors.primary} />}

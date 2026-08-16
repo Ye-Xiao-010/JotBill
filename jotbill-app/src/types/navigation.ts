@@ -63,6 +63,7 @@ declare global {
       AiProviders: undefined;
       RuntimeStatus: undefined;
       DataManagement: undefined;
+      Import: undefined;
       Rules: undefined;
       CreateAccount: undefined;
       EditAccount: {
