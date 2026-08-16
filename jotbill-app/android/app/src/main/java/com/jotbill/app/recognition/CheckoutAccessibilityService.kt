@@ -1184,7 +1184,8 @@ class CheckoutAccessibilityService : AccessibilityService() {
                 matcher.recordOrphanPaymentSignal(
                     signal,
                     sourceType = "ACCESSIBILITY",
-                    conflictReason = "AMBIGUOUS_SESSION_IDS:${resolution.sessionIds.joinToString(",")}"
+                    conflictReason = "AMBIGUOUS_SESSION_IDS:${resolution.sessionIds.joinToString(",")}",
+                    sessionIds = resolution.sessionIds
                 )
                 Log.i(TAG, "支付结果页命中并发会话(${resolution.sessionIds.size}个)，已转待确认")
             }

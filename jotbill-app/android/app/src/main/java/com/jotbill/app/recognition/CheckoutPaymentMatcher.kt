@@ -236,7 +236,8 @@ internal class CheckoutPaymentMatcher(
     suspend fun recordOrphanPaymentSignal(
         signal: PaymentNotificationFallbackSignal,
         sourceType: String = "NOTIFICATION",
-        conflictReason: String = "NO_ACTIVE_SESSION"
+        conflictReason: String = "NO_ACTIVE_SESSION",
+        sessionIds: List<String> = emptyList()
     ) {
         val now = nowMillis()
         database.withTransaction {
@@ -321,6 +322,32 @@ internal class CheckoutPaymentMatcher(
                 createdAt = now,
                 version = 1
             )
+
+            if (sessionIds.isNotEmpty()) {
+                val sessionDao = database.checkoutSessionDao()
+                var insertedAmbiguousPending = false
+                sessionIds
+                    .map { it.trim() }
+                    .filter { it.isNotBlank() }
+                    .distinct()
+                    .forEach { sessionId ->
+                        val session = sessionDao.getById(sessionId) ?: return@forEach
+                        if (session.isClosedOrExpired(now)) return@forEach
+                        val insertResult = dao.insertIfAbsent(
+                            pending.copy(
+                                id = stableId("pending-ambiguous", sessionId, sourceEventKey),
+                                sessionId = sessionId
+                            )
+                        )
+                        if (insertResult != -1L) {
+                            insertedAmbiguousPending = true
+                          }
+                    }
+                  if (!insertedAmbiguousPending) {
+                      dao.insertIfAbsent(pending)
+                  }
+                return@withTransaction
+            }
             dao.insertIfAbsent(pending)
         }
     }

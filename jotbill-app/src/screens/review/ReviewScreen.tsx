@@ -1024,7 +1024,9 @@ function translateConflictReason(reason?: string): string {
   if (!reason) return '';
   return reason
     .split(',')
-    .map((code) => CONFLICT_LABELS[code.trim()] ?? code.trim())
+    .map((code) => code.trim().startsWith('AMBIGUOUS_SESSION_IDS')
+      ? '同时命中多个结算会话，请选择要入账的记录'
+      : CONFLICT_LABELS[code.trim()] ?? code.trim())
     .filter(Boolean)
     .join('；');
 }
