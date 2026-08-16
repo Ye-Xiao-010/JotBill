@@ -4,7 +4,8 @@
 import { useEffect, useState, useCallback } from 'react';
 import { Platform, NativeModules } from 'react-native';
 import RNFS from 'react-native-fs';
-import { appVersionApi, AppVersionInfo } from '../services/update/appVersion';
+import { nativeInstallApk } from '../native/installApk';
+import { appVersionApi, UpdateManifestLatest as AppVersionInfo } from '../services/update/appVersion';
 import { downloadUpdateFile, getSafeUpdateUrl } from '../services/update/client';
 import { useAlert } from '../providers';
 import packageJson from '../../package.json';
@@ -127,7 +128,9 @@ export function useAppUpdate(options: UseAppUpdateOptions = {}) {
     if (!state.latestVersion) return Promise.resolve();
     if (appDownloadInFlight) return appDownloadInFlight;
 
-    const { downloadUrl, version } = state.latestVersion;
+    const latestVersion = state.latestVersion;
+    if (!latestVersion) return Promise.resolve();
+    const { downloadUrl, version } = latestVersion;
     const filePath = createApkPath(version);
     const operation = enqueueAppUpdate(async () => {
       setState(prev => ({ ...prev, downloading: true, progress: 0 }));
@@ -140,6 +143,17 @@ export function useAppUpdate(options: UseAppUpdateOptions = {}) {
           (progress) => setState(prev => ({ ...prev, progress })),
         );
         setState(prev => ({ ...prev, showModal: false }));
+        // 阶段七 T5：安装前校验 SHA-256、包名、版本码与签名一致性。
+        const verification = await nativeInstallApk.verifyApk(filePath, latestVersion.sha256);
+        if (!verification.sha256Matched) {
+          throw new Error('更新包 SHA-256 校验失败，已取消安装');
+        }
+        if (!verification.signatureConsistent) {
+          throw new Error('更新包签名与当前应用不一致，已取消安装');
+        }
+        if (verification.versionCode !== latestVersion.versionCode) {
+          throw new Error('更新包版本码与更新清单不一致，已取消安装');
+        }
         // 安装 APK
         await installApk(filePath);
       } catch (error: unknown) {

@@ -18,6 +18,7 @@ export interface AppConfig {
   APP_NAME: string;
   APP_VERSION: string;
   BUILD_NUMBER: string;
+  UPDATE_MANIFEST_URL: string;
 }
 
 class EnvironmentConfig {
@@ -39,6 +40,7 @@ class EnvironmentConfig {
       APP_NAME: Config.APP_NAME || 'JotBill',
       APP_VERSION: Config.APP_VERSION || '1.0.0',
       BUILD_NUMBER: Config.BUILD_NUMBER || '1',
+      UPDATE_MANIFEST_URL: Config.UPDATE_MANIFEST_URL || '',
     };
 
     this.validateConfig();
@@ -127,6 +129,14 @@ class EnvironmentConfig {
    */
   shouldEnableDebug(): boolean {
     return this.config.DEBUG_NETWORK || this.config.DEBUG_REDUX;
+  }
+
+  /**
+   * 阶段七 T5：自发布 APK 更新清单地址。
+   * 未配置时返回空字符串，调用方必须拒绝检查更新。
+   */
+  getUpdateManifestUrl(): string {
+    return this.config.UPDATE_MANIFEST_URL;
   }
 
   /**

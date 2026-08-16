@@ -10,4 +10,5 @@ module.exports = {
   APP_NAME: 'JotBill',
   APP_VERSION: '1.0.0',
   BUILD_NUMBER: '1',
+  UPDATE_MANIFEST_URL: 'https://example.com/jotbill-update.json',
 };
