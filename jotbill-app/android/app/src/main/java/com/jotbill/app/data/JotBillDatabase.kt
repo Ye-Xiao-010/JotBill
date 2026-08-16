@@ -41,7 +41,7 @@ import com.jotbill.app.data.entity.PendingTransactionEntity
 import com.jotbill.app.data.entity.RuleEntity
 import com.jotbill.app.data.entity.TransactionCandidateEntity
 
-const val JOT_BILL_DATABASE_VERSION = 10
+const val JOT_BILL_DATABASE_VERSION = 11
 
 @Database(
     entities = [
@@ -404,6 +404,24 @@ object DatabaseMigrations {
         }
     }
 
+    /**
+     * 阶段七 T4：10 万笔账单查询路径索引。
+     * 新增 (type, occurred_at, amount_minor) 与 (source_type, order_id) 组合索引；
+     * 既有数据只建索引，不重写表。
+     */
+    private val migration10To11 = object : Migration(10, 11) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS `index_bills_type_occurred_at_amount_minor` " +
+                    "ON `bills` (`type`, `occurred_at`, `amount_minor`)"
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS `index_bills_source_type_order_id` " +
+                    "ON `bills` (`source_type`, `order_id`)"
+            )
+        }
+    }
+
     val all: Array<Migration> = arrayOf(
         migration1To2,
         migration2To3,
@@ -413,6 +431,7 @@ object DatabaseMigrations {
         migration6To7,
         migration7To8,
         migration8To9,
-        migration9To10
+        migration9To10,
+        migration10To11
     )
 }
