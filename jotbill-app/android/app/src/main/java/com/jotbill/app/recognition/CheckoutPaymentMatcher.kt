@@ -2,6 +2,7 @@ package com.jotbill.app.recognition
 
 import androidx.room.withTransaction
 import com.jotbill.app.ai.AiVisionResult
+import com.jotbill.app.data.CreateBillOutcome
 import com.jotbill.app.data.JotBillDatabase
 import com.jotbill.app.data.LedgerRepository
 import com.jotbill.app.data.entity.AuditEntryEntity
@@ -10,6 +11,7 @@ import com.jotbill.app.data.entity.CheckoutSessionEntity
 import com.jotbill.app.data.entity.PendingTransactionEntity
 import com.jotbill.app.data.entity.TransactionCandidateEntity
 import com.jotbill.app.data.entity.PaymentEvidenceEntity
+import com.jotbill.app.rules.DuplicateGuard
 import com.jotbill.app.rules.RuleEngine
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
@@ -269,6 +271,32 @@ internal class CheckoutPaymentMatcher(
                 (ruleDecision as? RuleEngine.Decision.Continue)?.patch
                     ?: RuleEngine.FieldPatch()
             )
+
+            // ---- 阶段五 T6 去重第 4 级：纯通知待确认创建前疑似重复提示（只提示不合并）----
+            // 查询异常保守处理：疑似重复信息缺失不阻塞待确认创建（证据不丢弃），
+            // 保持原 conflictReason；命中时覆盖为 SUSPECTED_DUPLICATE 并在
+            // appliedRules 记录重复账单与因素，原原因保留在 baseConflictReason
+            val resolvedMerchant = rulePatch.merchant ?: signal.merchant
+            val resolvedAccountId = rulePatch.accountId ?: defaultAccountIdForPayment(signal.paymentPackage)
+            var effectiveConflictReason = conflictReason
+            var dedupExtras: Pair<String, String>? = null
+            try {
+                val guard = DuplicateGuard(database)
+                val similarHits = guard.findSimilar(
+                    type = "expense",
+                    amountMinor = signal.amountMinor,
+                    occurredAt = signal.occurredAt,
+                    accountId = resolvedAccountId,
+                    merchant = resolvedMerchant
+                )
+                if (similarHits.isNotEmpty()) {
+                    effectiveConflictReason = DuplicateGuard.CONFLICT_SUSPECTED_DUPLICATE
+                    dedupExtras = "suspectedDuplicate" to guard.suspectedDuplicateHint(similarHits)
+                }
+            } catch (_: RuntimeException) {
+                // 相似检查失败：不阻塞待确认创建，保守不标记
+            }
+
             val pending = PendingTransactionEntity(
                 id = pendingId,
                 candidateId = null,
@@ -277,14 +305,19 @@ internal class CheckoutPaymentMatcher(
                 type = "expense",
                 occurredAt = signal.occurredAt,
                 platform = signal.paymentPackage,
-                merchant = rulePatch.merchant ?: signal.merchant,
+                merchant = resolvedMerchant,
                 productDescription = null,
                 orderId = signal.orderId,
-                accountId = rulePatch.accountId ?: defaultAccountIdForPayment(signal.paymentPackage),
+                accountId = resolvedAccountId,
                 categoryId = rulePatch.categoryId,
-                conflictReason = conflictReason,
+                conflictReason = effectiveConflictReason,
                 sourceType = normalizedSourceType,
-                appliedRules = ruleEngine.mergeAppliedRules("{}", ruleDecision.hits),
+                appliedRules = dedupExtras?.let { extras ->
+                    ruleEngine.mergeAppliedRules(
+                        mergeRulesJson("{}", "baseConflictReason" to conflictReason, extras),
+                        ruleDecision.hits
+                    )
+                } ?: ruleEngine.mergeAppliedRules("{}", ruleDecision.hits),
                 createdAt = now,
                 version = 1
             )
@@ -989,8 +1022,66 @@ internal class CheckoutPaymentMatcher(
             updatedAt = now,
             version = 1
         )
-        // 写 Bill + 按类型联动余额 + 审计日志；嵌套 withTransaction 合并到外层事务
-        ledger.createBillWithBalanceUpdate(bill, operator = AUTO_COMMIT_OPERATOR)
+
+        // ---- 阶段五 T6：自动入账前去重检查（第 1/4 级）----
+        // 第 4 级（相似度）命中或检查异常：不自动入账，转待确认由用户判断，
+        // 宁可进待确认也不冒重复入账风险；第 1 级（orderId 精确命中）由
+        // createBillWithDedup 内部处理——命中时合并进原账单不产生第二笔
+        try {
+            val guard = DuplicateGuard(database)
+            val similarHits = guard.findSimilar(
+                type = bill.type,
+                amountMinor = bill.amountMinor,
+                occurredAt = bill.occurredAt,
+                accountId = bill.accountId,
+                merchant = bill.merchant,
+                excludeId = bill.id
+            )
+            if (similarHits.isNotEmpty()) {
+                val reviewPending = pendingFromConflict(
+                    session = session,
+                    candidate = candidate,
+                    evidence = evidence,
+                    conflictReason = DuplicateGuard.CONFLICT_SUSPECTED_DUPLICATE,
+                    now = now,
+                    appliedRulesExtras = arrayOf(
+                        "suspectedDuplicate" to guard.suspectedDuplicateHint(similarHits)
+                    )
+                )
+                if (reviewPending != null) {
+                    upsertPendingForSession(reviewPending)
+                }
+                return AutoCommitOutcome(
+                    advanceStatus(session, NEEDS_CONFIRMATION_STATUS, now),
+                    null
+                )
+            }
+        } catch (error: RuntimeException) {
+            // 去重检查异常：证据不丢弃，转待确认
+            val fallbackPending = pendingFromConflict(
+                session = session,
+                candidate = candidate,
+                evidence = evidence,
+                conflictReason = DuplicateGuard.CONFLICT_DEDUP_CHECK_FAILED,
+                now = now
+            )
+            if (fallbackPending != null) {
+                upsertPendingForSession(fallbackPending)
+            }
+            return AutoCommitOutcome(
+                advanceStatus(session, NEEDS_CONFIRMATION_STATUS, now),
+                null
+            )
+        }
+
+        // 写 Bill + 按类型联动余额 + 审计日志；嵌套 withTransaction 合并到外层事务；
+        // 阶段五 T6：内部执行第 1 级查重——(sourceType, orderId) 命中时合并进
+        // 既有账单（不产生第二笔），settledBillId 为实际落库账单
+        val createOutcome = ledger.createBillWithDedup(bill, operator = AUTO_COMMIT_OPERATOR)
+        val settledBillId = when (createOutcome) {
+            is CreateBillOutcome.Committed -> createOutcome.bill.id
+            is CreateBillOutcome.MergedInto -> createOutcome.bill.id
+        }
 
         // 候选标记为已入账，记录 billId 供审计与前端追溯；保留规则命中键（rule:*）
         database.transactionCandidateDao().update(
@@ -999,7 +1090,7 @@ internal class CheckoutPaymentMatcher(
                     candidate.appliedRules,
                     "sessionId" to session.id,
                     "decision" to AUTO_COMMITTED_STATUS,
-                    "billId" to bill.id,
+                    "billId" to settledBillId,
                     "evidenceId" to evidence.id
                 ),
                 version = candidate.version + 1
@@ -1009,7 +1100,7 @@ internal class CheckoutPaymentMatcher(
         database.pendingTransactionDao().findPendingBySessionId(session.id)?.let {
             database.pendingTransactionDao().delete(it)
         }
-        return AutoCommitOutcome(advanceStatus(session, AUTO_COMMITTED_STATUS, now), bill.id)
+        return AutoCommitOutcome(advanceStatus(session, AUTO_COMMITTED_STATUS, now), settledBillId)
     }
 
     /**
@@ -1078,17 +1169,27 @@ internal class CheckoutPaymentMatcher(
      * 金额/时间/订单号优先取支付证据，证据缺失时用候选字段补充；
      * conflictReason 必须填充供前端展示；sourceType 为 ai_vision（存在 AI 候选）。
      * 候选金额缺失且证据金额缺失时返回 null（无法构成合法待确认）。
+     *
+     * @param appliedRulesExtras 额外写入 appliedRules 的键值对
+     *   （阶段五 T6 疑似重复提示等元数据），键值均为 String
      */
     private suspend fun pendingFromConflict(
         session: CheckoutSessionEntity,
         candidate: TransactionCandidateEntity,
         evidence: PaymentEvidenceEntity?,
         conflictReason: String?,
-        now: Long
+        now: Long,
+        vararg appliedRulesExtras: Pair<String, String>
     ): PendingTransactionEntity? {
         val amountMinor = evidence?.amountMinor?.takeIf { it > 0L }
             ?: candidate.amountMinor?.takeIf { it > 0L }
             ?: return null
+        val appliedRules = if (appliedRulesExtras.isEmpty()) {
+            // 未显式传附加元数据时维持既有行为（空对象），不继承候选规则记录
+            "{}"
+        } else {
+            mergeRulesJson("{}", *appliedRulesExtras)
+        }
         return PendingTransactionEntity(
             id = stableId("pending", session.id),
             candidateId = candidate.id,
@@ -1104,6 +1205,7 @@ internal class CheckoutPaymentMatcher(
             categoryId = null,
             conflictReason = conflictReason ?: candidate.conflictReason,
             sourceType = "ai_vision",
+            appliedRules = appliedRules,
             createdAt = now,
             version = 1
         )

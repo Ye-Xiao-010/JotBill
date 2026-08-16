@@ -833,13 +833,17 @@ class DataModule(
             updatedAt = now,
             version = 1
         )
-        // 事务内乐观锁确认：版本不一致返回 false，Bill 不写入、余额不更新
-        if (!repository.confirmPendingTransaction(pending, bill)) {
+        // 事务内乐观锁确认：版本不一致返回 false，Bill 不写入、余额不更新。
+        // 阶段五 T6：确认入账前执行去重（第 1 级命中合并进既有账单，不产生第二笔），
+        // settledBill 为实际落库账单（新建或合并目标），事件与返回值均以它为准
+        val confirmResult = repository.confirmPendingTransaction(pending, bill)
+        if (!confirmResult.success) {
             throw BridgeException("VERSION_CONFLICT", "Pending transaction $id has changed")
         }
+        val settledBill = confirmResult.committed ?: confirmResult.mergedInto ?: bill
         events.emit("onPendingChanged", JSONObject().put("pendingId", pending.id).put("deleted", true))
-        events.emit("onBillCreated", BridgeDtoMapper.bill(bill))
-        BridgeDtoMapper.bill(bill).toString()
+        events.emit("onBillCreated", BridgeDtoMapper.bill(settledBill))
+        BridgeDtoMapper.bill(settledBill).toString()
     }
 
     private fun categoryStats(rows: List<CategoryStatRow>, total: Long): JSONArray =

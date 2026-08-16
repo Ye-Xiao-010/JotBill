@@ -73,6 +73,47 @@ interface BillDao {
     @Query("SELECT * FROM bills WHERE id = :id")
     suspend fun getById(id: String): BillEntity?
 
+    /**
+     * 阶段五 T6 去重第 1 级：按 (sourceType, orderId) 精确查重。
+     * 命中说明同一来源订单已入账，新证据应复用/更新原账单而非产生第二笔。
+     *
+     * @param excludeId 排除的账单 ID（更新场景排除自身），传 null 表示不排除
+     */
+    @Query(
+        """
+        SELECT * FROM bills
+        WHERE source_type = :sourceType AND order_id = :orderId
+          AND (:excludeId IS NULL OR id != :excludeId)
+        LIMIT 1
+        """
+    )
+    suspend fun findBySourceAndOrderId(
+        sourceType: String,
+        orderId: String,
+        excludeId: String? = null
+    ): BillEntity?
+
+    /**
+     * 阶段五 T6 去重第 4 级候选查询：金额相等 + 类型相同 + 时间窗口内。
+     * 币种因素由账户币种（CNY）隐含；账户/商户相似度由 DuplicateGuard 在内存判定。
+     */
+    @Query(
+        """
+        SELECT * FROM bills
+        WHERE type = :type
+          AND amount_minor = :amountMinor
+          AND occurred_at BETWEEN :fromAt AND :toAt
+          AND (:excludeId IS NULL OR id != :excludeId)
+        """
+    )
+    suspend fun findSimilarAmountWindow(
+        type: String,
+        amountMinor: Long,
+        fromAt: Long,
+        toAt: Long,
+        excludeId: String? = null
+    ): List<BillEntity>
+
     @Query("SELECT * FROM bills WHERE id = :id")
     fun observeById(id: String): Flow<BillEntity?>
 

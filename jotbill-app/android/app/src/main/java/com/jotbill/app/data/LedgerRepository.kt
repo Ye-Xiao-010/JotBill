@@ -7,11 +7,37 @@ import com.jotbill.app.data.entity.BillEntity
 import com.jotbill.app.data.entity.CheckoutSessionEntity
 import com.jotbill.app.data.entity.PendingTransactionEntity
 import com.jotbill.app.data.entity.TransactionCandidateEntity
+import com.jotbill.app.rules.DuplicateGuard
 import com.jotbill.app.rules.FieldPriorityResolver
 import org.json.JSONObject
 import java.util.UUID
 
 internal const val MAX_SAFE_MINOR_UNIT = 9_007_199_254_740_991L
+
+/**
+ * 阶段五 T6：带去重的账单创建结果。
+ *
+ * - [Committed]：未命中去重，已插入新账单并联动余额；
+ * - [MergedInto]：命中去重第 1 级（同 (sourceType, orderId) 已入账），
+ *   新证据可变字段已合并进既有账单，未产生第二笔；bill 为合并后的最新账单。
+ */
+sealed class CreateBillOutcome {
+    data class Committed(val bill: BillEntity) : CreateBillOutcome()
+    data class MergedInto(val bill: BillEntity) : CreateBillOutcome()
+}
+
+/**
+ * 阶段五 T6：待确认确认入账结果。
+ *
+ * @param success 是否成功（版本/状态校验失败为 false，事务无写入）
+ * @param committed 入账的新账单（正常确认路径）；合并路径为 null
+ * @param mergedInto 第 1 级命中的合并目标账单（合并确认路径）；正常路径为 null
+ */
+data class ConfirmResult(
+    val success: Boolean,
+    val committed: BillEntity?,
+    val mergedInto: BillEntity?
+)
 
 /**
  * 阶段五 T2/T3：待确认交易被用户确认入账后的审计墓碑类型。
@@ -34,10 +60,32 @@ class LedgerRepository(private val database: JotBillDatabase) {
     /**
      * 创建账单并按交易类型联动更新账户余额。
      *
+     * 阶段五 T6 起内部委托 [createBillWithDedup]：写入前执行去重第 1 级查重，
+     * 命中时合并进既有账单（不产生第二笔）。保持 Unit 签名兼容既有调用方；
+     * 需要去重结果的调用方（自动入账/桥接层）请直接使用 [createBillWithDedup]。
+     *
      * @param bill 待写入的账单实体
      * @param operator 审计操作者标记：手动路径为 "system"，阶段四 T5 自动入账为 "auto_commit"
      */
     suspend fun createBillWithBalanceUpdate(bill: BillEntity, operator: String = "system") {
+        createBillWithDedup(bill, operator)
+    }
+
+    /**
+     * 阶段五 T6：带去重的账单创建。
+     *
+     * 写入前执行去重第 1 级（(sourceType, orderId) 精确查重，退款豁免）：
+     * - 未命中：插入新账单并联动余额（与既有行为一致），返回 [CreateBillOutcome.Committed]；
+     * - 命中：不产生第二笔，新证据字段按 EVIDENCE 级经 T5 合并语义补进原账单
+     *   （只补 null 字段、锁定字段保护），返回 [CreateBillOutcome.MergedInto]。
+     *
+     * @param bill 待写入的账单实体
+     * @param operator 审计操作者标记
+     */
+    suspend fun createBillWithDedup(
+        bill: BillEntity,
+        operator: String = "system"
+    ): CreateBillOutcome {
         validateSafeAmount(bill.amountMinor)
         // 阶段五 T5：锁定字段名必须在合并器可锁字段清单内，防止脏数据落库
         val invalidLocks = FieldPriorityResolver.invalidLockFields(
@@ -47,7 +95,18 @@ class LedgerRepository(private val database: JotBillDatabase) {
             "Unknown lockable fields: ${invalidLocks.joinToString()}"
         }
         val now = System.currentTimeMillis()
-        database.withTransaction {
+        return database.withTransaction {
+            // ---- 去重第 1 级：(sourceType, orderId) 精确查重（退款豁免）----
+            val duplicate = DuplicateGuard(database).checkLevel1(
+                sourceType = bill.sourceType,
+                orderId = bill.orderId,
+                type = bill.type,
+                excludeId = bill.id
+            )
+            if (duplicate != null) {
+                return@withTransaction mergeIntoExistingBill(duplicate, bill, now)
+            }
+
             validateBillAccounts(bill, requireActiveAccounts = true)
             database.billDao().insert(bill)
             applyBalanceDelta(
@@ -70,7 +129,52 @@ class LedgerRepository(private val database: JotBillDatabase) {
                     createdAt = now
                 )
             )
+            CreateBillOutcome.Committed(bill)
         }
+    }
+
+    /**
+     * 第 1 级命中后的合并写入：新证据可变字段只补原账单空缺（同 EVIDENCE 级
+     * 不覆盖非空值，符合 T5 合并器语义），金额/时间/账户/类型不改动；
+     * 锁定字段保护由 updateBillWithBalanceUpdate 内部执行。
+     * 原账单余额已入账，合并只做字段补全（金额不变，余额重算净变化为零）。
+     */
+    private suspend fun mergeIntoExistingBill(
+        existing: BillEntity,
+        incoming: BillEntity,
+        now: Long
+    ): CreateBillOutcome {
+        val merged = existing.copy(
+            description = existing.description ?: incoming.description,
+            platform = existing.platform ?: incoming.platform,
+            merchant = existing.merchant ?: incoming.merchant,
+            productDescription = existing.productDescription ?: incoming.productDescription,
+            updatedAt = now,
+            version = existing.version + 1
+        )
+        val updated = updateBillWithBalanceUpdate(
+            existing,
+            merged,
+            fieldUpdateSource = FieldPriorityResolver.Source.EVIDENCE
+        )
+        if (!updated) {
+            // 版本并发变化：抛出让外层事务回滚，由调用方决定转待确认或重试
+            throw LedgerValidationException("Duplicate bill has changed during merge")
+        }
+        database.auditEntryDao().insertIfAbsent(
+            AuditEntryEntity(
+                id = "${existing.id}:dedup-merge:${merged.version}",
+                entityType = "dedup_merge",
+                entityId = existing.id,
+                action = "merge",
+                fieldName = null,
+                oldValue = billAuditValue(existing),
+                newValue = billAuditValue(merged),
+                operator = "duplicate_guard",
+                createdAt = now
+            )
+        )
+        return CreateBillOutcome.MergedInto(merged)
     }
 
     /**
@@ -203,20 +307,27 @@ class LedgerRepository(private val database: JotBillDatabase) {
      * 在同一 Room 事务内完成待确认交易的确认、入账和全部关联终态更新。
      *
      * 事务内重新读取 pending 并校验版本、账户和关联关系；任何一步失败都会整体回滚。
+     *
+     * 阶段五 T6：
+     * - 确认入账前执行去重第 1 级（(sourceType, orderId)，退款豁免）——命中时
+     *   不产生第二笔，新账单可变字段合并进既有账单，其余流转（候选收口、
+     *   会话终态、pending 删除、确认墓碑）照常完成；
+     * - 确认入账前执行第 4 级疑似重复检查——命中只写审计提示
+     *   （suspected_duplicate），不阻塞确认（用户可让两笔并存）。
      */
     suspend fun confirmPendingTransaction(
         pending: PendingTransactionEntity,
         bill: BillEntity
-    ): Boolean {
+    ): ConfirmResult {
         val now = System.currentTimeMillis()
         return database.withTransaction {
             val currentPending = database.pendingTransactionDao().getById(pending.id)
-                ?: return@withTransaction false
+                ?: return@withTransaction ConfirmResult(false, null, null)
             if (
                 currentPending.status != PendingTransactionEntity.STATUS_PENDING ||
                 currentPending.version != pending.version
             ) {
-                return@withTransaction false
+                return@withTransaction ConfirmResult(false, null, null)
             }
 
             // 阶段五 T2：退款待确认确认入账时回填原交易关联（Bill.originalTransactionId），
@@ -248,13 +359,57 @@ class LedgerRepository(private val database: JotBillDatabase) {
                 throw LedgerValidationException("Checkout session has already been committed")
             }
 
-            database.billDao().insert(effectiveBill)
-            applyBalanceDelta(
-                effectiveBill,
-                multiplier = 1L,
-                updatedAt = now,
-                requireActiveAccounts = true
+            // ---- 阶段五 T6 去重第 1 级：确认入账前查重（退款豁免）----
+            val guard = DuplicateGuard(database)
+            val duplicate = guard.checkLevel1(
+                sourceType = effectiveBill.sourceType,
+                orderId = effectiveBill.orderId,
+                type = effectiveBill.type,
+                excludeId = effectiveBill.id
             )
+            val outcome: CreateBillOutcome = if (duplicate != null) {
+                mergeIntoExistingBill(duplicate, effectiveBill, now)
+            } else {
+                database.billDao().insert(effectiveBill)
+                applyBalanceDelta(
+                    effectiveBill,
+                    multiplier = 1L,
+                    updatedAt = now,
+                    requireActiveAccounts = true
+                )
+                CreateBillOutcome.Committed(effectiveBill)
+            }
+            // 落库账单（新建或合并目标）作为候选收口/审计的关联对象
+            val settledBill = when (outcome) {
+                is CreateBillOutcome.Committed -> outcome.bill
+                is CreateBillOutcome.MergedInto -> outcome.bill
+            }
+
+            // ---- 阶段五 T6 去重第 4 级：确认入账前疑似重复提示（只提示不阻塞）----
+            val similarHits = guard.findSimilar(
+                type = effectiveBill.type,
+                amountMinor = effectiveBill.amountMinor,
+                occurredAt = effectiveBill.occurredAt,
+                accountId = effectiveBill.accountId,
+                merchant = effectiveBill.merchant,
+                excludeId = settledBill.id
+            )
+            if (similarHits.isNotEmpty()) {
+                database.auditEntryDao().insertIfAbsent(
+                    AuditEntryEntity(
+                        id = "suspected-duplicate:${currentPending.id}",
+                        entityType = DuplicateGuard.AUDIT_SUSPECTED_DUPLICATE,
+                        entityId = currentPending.id,
+                        action = "hint",
+                        fieldName = null,
+                        oldValue = null,
+                        newValue = guard.suspectedDuplicateHint(similarHits),
+                        operator = "duplicate_guard",
+                        createdAt = now
+                    )
+                )
+            }
+
             relations.candidate?.let { candidate ->
                 val resolved = database.transactionCandidateDao().resolveIfVersion(
                     id = candidate.id,
@@ -262,7 +417,7 @@ class LedgerRepository(private val database: JotBillDatabase) {
                     expectedVersion = candidate.version,
                     matched = true,
                     conflictReason = null,
-                    appliedRules = decisionRules(candidate.appliedRules, "USER_CONFIRMED", effectiveBill.id)
+                    appliedRules = decisionRules(candidate.appliedRules, "USER_CONFIRMED", settledBill.id)
                 )
                 if (resolved != 1) {
                     throw LedgerValidationException("Transaction candidate has changed")
@@ -294,25 +449,29 @@ class LedgerRepository(private val database: JotBillDatabase) {
                     action = "confirm",
                     fieldName = null,
                     oldValue = null,
-                    newValue = billAuditValue(effectiveBill),
+                    newValue = billAuditValue(settledBill),
                     operator = "system",
                     createdAt = now
                 )
             )
-            database.auditEntryDao().insert(
-                AuditEntryEntity(
-                    id = "${effectiveBill.id}:create",
-                    entityType = "bill",
-                    entityId = effectiveBill.id,
-                    action = "create",
-                    fieldName = null,
-                    oldValue = null,
-                    newValue = billAuditValue(effectiveBill),
-                    operator = "system",
-                    createdAt = now
+            if (outcome is CreateBillOutcome.Committed) {
+                database.auditEntryDao().insert(
+                    AuditEntryEntity(
+                        id = "${settledBill.id}:create",
+                        entityType = "bill",
+                        entityId = settledBill.id,
+                        action = "create",
+                        fieldName = null,
+                        oldValue = null,
+                        newValue = billAuditValue(settledBill),
+                        operator = "system",
+                        createdAt = now
+                    )
                 )
-            )
-            true
+                ConfirmResult(true, committed = settledBill, mergedInto = null)
+            } else {
+                ConfirmResult(true, committed = null, mergedInto = settledBill)
+            }
         }
     }
 
