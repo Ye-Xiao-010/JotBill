@@ -170,45 +170,45 @@ internal class ImportFilePreparer(
         } catch (error: Exception) {
             throw ImportPreparationException("UNSUPPORTED_FORMAT", "压缩包无法打开或不是有效 ZIP 文件", error)
         }
-        return try {
+        val result = try {
             val encrypted = zip.isEncrypted ||
                 runCatching { zip.fileHeaders.any { it.isEncrypted } }.getOrDefault(false)
-            if (encrypted) {
-                if (password.isNullOrEmpty()) {
+            if (encrypted && password.isNullOrEmpty()) {
+                // 预览阶段不抛错：让上层先拿到 filePath/encrypted 标记，再引导用户输入密码。
+                emptyList<Candidate>() to true
+            } else {
+                if (encrypted) {
+                    zip.setPassword(password!!.toCharArray())
+                }
+                val outputDirectory = File(tempDirectory, "extracted").apply { mkdirs() }
+                try {
+                    zip.extractAll(outputDirectory.absolutePath)
+                } catch (error: ZipException) {
+                    if (encrypted) {
+                        throw ImportPreparationException("IMPORT_PASSWORD_INVALID", "解压密码不正确", error)
+                    }
+                    throw ImportPreparationException("IMPORT_ZIP_INVALID", "压缩包解压失败", error)
+                }
+                val candidates = outputDirectory.walkTopDown()
+                    .filter { it.isFile && isCandidateFileName(it.name) }
+                    .map { candidateFile ->
+                        val candidateFormat = detectFormat(candidateFile, candidateFile.name)
+                        prepareSingle(candidateFile, candidateFile.name, candidateFormat)
+                    }
+                    .sortedBy { it.fileName.lowercase(Locale.ROOT) }
+                    .toList()
+                if (candidates.isEmpty()) {
                     throw ImportPreparationException(
-                        "IMPORT_PASSWORD_REQUIRED",
-                        "该账单压缩包已加密，请输入解压密码"
+                        "UNSUPPORTED_FORMAT",
+                        "压缩包内没有可导入的微信/支付宝账单文件（CSV/XLSX）"
                     )
                 }
-                zip.setPassword(password.toCharArray())
+                candidates to encrypted
             }
-            val outputDirectory = File(tempDirectory, "extracted").apply { mkdirs() }
-            try {
-                zip.extractAll(outputDirectory.absolutePath)
-            } catch (error: ZipException) {
-                if (encrypted) {
-                    throw ImportPreparationException("IMPORT_PASSWORD_INVALID", "解压密码不正确", error)
-                }
-                throw ImportPreparationException("IMPORT_ZIP_INVALID", "压缩包解压失败", error)
-            }
-            val candidates = outputDirectory.walkTopDown()
-                .filter { it.isFile && isCandidateFileName(it.name) }
-                .map { candidateFile ->
-                    val candidateFormat = detectFormat(candidateFile, candidateFile.name)
-                    prepareSingle(candidateFile, candidateFile.name, candidateFormat)
-                }
-                .sortedBy { it.fileName.lowercase(Locale.ROOT) }
-                .toList()
-            if (candidates.isEmpty()) {
-                throw ImportPreparationException(
-                    "UNSUPPORTED_FORMAT",
-                    "压缩包内没有可导入的微信/支付宝账单文件（CSV/XLSX）"
-                )
-            }
-            candidates to encrypted
         } finally {
             runCatching { zip.close() }
         }
+        return result
     }
 
     private fun createImportDirectory(): File {
