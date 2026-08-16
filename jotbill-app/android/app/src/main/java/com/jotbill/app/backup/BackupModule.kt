@@ -10,6 +10,7 @@ import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
 import com.jotbill.app.data.JotBillDatabase
 import com.jotbill.app.data.JotBillDatabaseProvider
+import com.jotbill.app.importing.ImportEngine
 import com.jotbill.app.importing.ImportFilePreparer
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -33,6 +34,7 @@ class BackupModule(
     private val database: JotBillDatabase by lazy { JotBillDatabaseProvider.get(reactContext) }
     private val backupManager: BackupManager by lazy { BackupManager(database) }
     private val importFilePreparer: ImportFilePreparer by lazy { ImportFilePreparer(reactContext) }
+    private val importEngine: ImportEngine by lazy { ImportEngine(reactContext, database) }
     private val pendingLock = Any()
     private var pendingOperation: PendingFileOperation? = null
 
@@ -41,6 +43,8 @@ class BackupModule(
         CREATE_BACKUP,
         RESTORE_PREVIEW,
         IMPORT,
+        IMPORT_INSPECT,
+        IMPORT_EXECUTE,
     }
 
     private data class PendingFileOperation(
@@ -48,6 +52,8 @@ class BackupModule(
         val promise: Promise,
         val csv: String? = null,
         val backup: BackupManager.BackupFile? = null,
+        val password: String? = null,
+        val candidateFileName: String? = null,
     )
 
     init {
@@ -211,6 +217,87 @@ class BackupModule(
         }
     }
 
+    /**
+     * 阶段六 T5：导入预览（只读不写库）。
+     * filePath 为空时打开 SAF 文件选择器；password 仅用于加密压缩包，调用结束即解引用。
+     * candidateFileName 用于压缩包内多候选账单选择（T7 契约登记该可选参数）。
+     */
+    @ReactMethod
+    fun inspectImport(
+        filePath: String,
+        password: String?,
+        candidateFileName: String?,
+        promise: Promise
+    ) {
+        if (filePath.isBlank()) {
+            openImportPicker(PendingKind.IMPORT_INSPECT, password, candidateFileName, promise)
+            return
+        }
+        scope.launch {
+            processImportInspection(filePath, password, candidateFileName, promise)
+        }
+    }
+
+    /**
+     * 阶段六 T5：导入执行。
+     * 预览确认后调用；原生先落 RUNNING 批次再分批事务写入，取消/失败不残留半批数据。
+     */
+    @ReactMethod
+    fun executeImport(
+        filePath: String,
+        password: String?,
+        candidateFileName: String?,
+        promise: Promise
+    ) {
+        if (filePath.isBlank()) {
+            openImportPicker(PendingKind.IMPORT_EXECUTE, password, candidateFileName, promise)
+            return
+        }
+        scope.launch {
+            processImportExecution(filePath, password, candidateFileName, promise)
+        }
+    }
+
+    /** 阶段六 T5：安全取消当前导入；无进行中任务时静默返回。 */
+    @ReactMethod
+    fun cancelImport(promise: Promise) {
+        importEngine.requestCancel()
+        promise.resolve(null)
+    }
+
+    private fun openImportPicker(
+        kind: PendingKind,
+        password: String?,
+        candidateFileName: String?,
+        promise: Promise
+    ) {
+        val activity = reactContext.currentActivity
+        if (activity == null) {
+            promise.reject("NOT_IMPLEMENTED", "当前没有可用的文件选择器")
+            return
+        }
+        if (isPending()) {
+            promise.reject("IMPORT_IN_PROGRESS", "已有文件操作正在等待完成")
+            return
+        }
+        val operation = PendingFileOperation(
+            kind = kind,
+            promise = promise,
+            password = password,
+            candidateFileName = candidateFileName,
+        )
+        if (!reservePending(operation)) {
+            promise.reject("IMPORT_IN_PROGRESS", "已有文件操作正在等待完成")
+            return
+        }
+        try {
+            activity.startActivityForResult(openImportIntent(), requestCodeFor(kind))
+        } catch (error: Exception) {
+            clearPending(operation)
+            reject(promise, error, "IMPORT_FAILED", "无法打开账单文件选择器")
+        }
+    }
+
     @ReactMethod
     fun exportData(format: String, promise: Promise) {
         if (format != "csv") {
@@ -280,6 +367,8 @@ class BackupModule(
             REQUEST_CREATE_BACKUP -> PendingKind.CREATE_BACKUP
             REQUEST_OPEN_BACKUP -> PendingKind.RESTORE_PREVIEW
             REQUEST_OPEN_IMPORT -> PendingKind.IMPORT
+            REQUEST_OPEN_IMPORT_INSPECT -> PendingKind.IMPORT_INSPECT
+            REQUEST_OPEN_IMPORT_EXECUTE -> PendingKind.IMPORT_EXECUTE
             else -> return
         }
         val operation = takePending(kind) ?: return
@@ -294,6 +383,8 @@ class BackupModule(
             PendingKind.CREATE_BACKUP -> finishBackupCreation(operation, uri)
             PendingKind.RESTORE_PREVIEW -> finishRestoreSelection(operation, uri, data)
             PendingKind.IMPORT -> finishImportSelection(operation, uri, data)
+            PendingKind.IMPORT_INSPECT -> finishImportSelection(operation, uri, data)
+            PendingKind.IMPORT_EXECUTE -> finishImportSelection(operation, uri, data)
         }
     }
 
@@ -301,6 +392,7 @@ class BackupModule(
 
     override fun invalidate() {
         reactContext.removeActivityEventListener(this)
+        importEngine.requestCancel()
         takePending()?.let { operation ->
             operation.promise.reject(cancelCode(operation.kind), "文件操作已结束")
         }
@@ -353,7 +445,49 @@ class BackupModule(
     private fun finishImportSelection(operation: PendingFileOperation, uri: Uri, data: Intent?) {
         takePersistableReadPermission(uri, data)
         scope.launch {
-            processImportPreparation(uri.toString(), password = null, operation.promise)
+            when (operation.kind) {
+                PendingKind.IMPORT_INSPECT -> processImportInspection(
+                    uri.toString(),
+                    operation.password,
+                    operation.candidateFileName,
+                    operation.promise
+                )
+                PendingKind.IMPORT_EXECUTE -> processImportExecution(
+                    uri.toString(),
+                    operation.password,
+                    operation.candidateFileName,
+                    operation.promise
+                )
+                else -> processImportPreparation(uri.toString(), password = null, operation.promise)
+            }
+        }
+    }
+
+    private suspend fun processImportInspection(
+        filePath: String,
+        password: String?,
+        candidateFileName: String?,
+        promise: Promise
+    ) {
+        try {
+            val result = importEngine.inspect(filePath, password, candidateFileName)
+            withContext(Dispatchers.Main) { promise.resolve(result.toString()) }
+        } catch (error: Exception) {
+            rejectFromWorker(promise, error, "IMPORT_INSPECT_FAILED")
+        }
+    }
+
+    private suspend fun processImportExecution(
+        filePath: String,
+        password: String?,
+        candidateFileName: String?,
+        promise: Promise
+    ) {
+        try {
+            val result = importEngine.execute(filePath, password, candidateFileName)
+            withContext(Dispatchers.Main) { promise.resolve(result.toString()) }
+        } catch (error: Exception) {
+            rejectFromWorker(promise, error, "IMPORT_FAILED")
         }
     }
 
@@ -529,14 +663,21 @@ class BackupModule(
     private fun cancelCode(kind: PendingKind): String = when (kind) {
         PendingKind.EXPORT_CSV -> "EXPORT_CANCELLED"
         PendingKind.CREATE_BACKUP, PendingKind.RESTORE_PREVIEW -> "BACKUP_CANCELLED"
-        PendingKind.IMPORT -> "IMPORT_CANCELLED"
+        PendingKind.IMPORT, PendingKind.IMPORT_INSPECT, PendingKind.IMPORT_EXECUTE -> "IMPORT_CANCELLED"
+    }
+
+    private fun requestCodeFor(kind: PendingKind): Int = when (kind) {
+        PendingKind.IMPORT_INSPECT -> REQUEST_OPEN_IMPORT_INSPECT
+        PendingKind.IMPORT_EXECUTE -> REQUEST_OPEN_IMPORT_EXECUTE
+        else -> REQUEST_OPEN_IMPORT
     }
 
     private fun reject(promise: Promise, error: Exception, fallbackCode: String, fallbackMessage: String) {
         val backupError = error as? BackupManager.BackupException
+        val importError = error as? ImportEngine.ImportException
         promise.reject(
-            backupError?.code ?: fallbackCode,
-            backupError?.message ?: (error.message ?: fallbackMessage),
+            backupError?.code ?: importError?.code ?: fallbackCode,
+            backupError?.message ?: importError?.message ?: (error.message ?: fallbackMessage),
             error,
         )
     }
@@ -584,6 +725,8 @@ class BackupModule(
         const val REQUEST_CREATE_BACKUP = 7102
         const val REQUEST_OPEN_BACKUP = 7103
         const val REQUEST_OPEN_IMPORT = 7104
+        const val REQUEST_OPEN_IMPORT_INSPECT = 7105
+        const val REQUEST_OPEN_IMPORT_EXECUTE = 7106
         const val STRATEGY_OVERWRITE = "overwrite"
         const val STRATEGY_MERGE = "merge"
         const val MAX_BACKUP_BYTES = 32 * 1024 * 1024
