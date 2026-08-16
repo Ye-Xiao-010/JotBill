@@ -9,6 +9,7 @@ import com.jotbill.app.recognition.CheckoutAccessibilityService
 import com.jotbill.app.recognition.CheckoutPaymentMatcher
 import com.jotbill.app.recognition.PaymentNotificationFallbackSignal
 import com.jotbill.app.recognition.RefundLinker
+import com.jotbill.app.recognition.TransferClassifier
 import com.jotbill.app.recognition.PurchaseIntentCoordinationResult
 import com.jotbill.app.recognition.PurchaseIntentResultCallback
 import com.jotbill.app.utils.SentryLogger
@@ -143,6 +144,28 @@ class PaymentNotificationService : NotificationListenerService() {
             return
         }
 
+        // 阶段五 T3：转账/还款语义识别（此前被非消费排除丢弃或误入消费路径，现路由到归属决策）
+        val transferInput = PaymentResultNormalizer.normalizeTransfer(
+            sourcePackage = packageName,
+            title = title,
+            titleBig = titleBig,
+            text = text,
+            bigText = bigText,
+            subText = subText,
+            summaryText = summaryText,
+            tickerText = tickerText,
+            postTime = sbn.postTime,
+            notificationKey = sbn.key,
+            notificationId = sbn.id
+        )
+        if (transferInput != null) {
+            Log.i(TAG, "解析到转账/还款证据: 包名=${transferInput.sourcePackage}")
+            scope.launch {
+                handleTransferEvidence(transferInput)
+            }
+            return
+        }
+
         // 解析为结构化证据输入
         val evidenceInput = PaymentResultNormalizer.normalize(
             sourcePackage = packageName,
@@ -257,6 +280,43 @@ class PaymentNotificationService : NotificationListenerService() {
                 "退款证据处理失败",
                 data = mapOf("package" to input.sourcePackage),
                 category = "refund_evidence"
+            )
+        }
+    }
+
+    /**
+     * 阶段五 T3：处理转账/还款证据。
+     *
+     * 转账/还款与结算会话无关（无购物上下文），不走无障碍回退和会话匹配，
+     * 直接交给 TransferClassifier 做方向与账户归属决策：
+     * - 转账：源与目标均精确匹配启用账户且源≠目标 → 自动入账（双账户调整，不计收支）；
+     * - 还款：目标为负债账户 → 自动入账（源扣减、欠款减少，不计支出）；
+     * - 他人转账、账户无法解析、约束不满足 → 待确认（ACCOUNT_UNRESOLVED），
+     *   不自动判定为自有账户转账，不静默入账。
+     *
+     * @param input 解析后的转账/还款证据输入
+     */
+    private suspend fun handleTransferEvidence(input: PaymentEvidenceInput) {
+        try {
+            val database = JotBillDatabaseProvider.get(applicationContext)
+            val outcome = TransferClassifier(database).processTransfer(input)
+            val outcomeInfo = mapOf(
+                "package" to input.sourcePackage,
+                "paymentStatus" to input.paymentStatus,
+                "outcome" to outcome.javaClass.simpleName
+            )
+            SentryLogger.addBreadcrumb(
+                "转账/还款证据处理完成",
+                data = outcomeInfo,
+                category = "transfer_evidence"
+            )
+            Log.i(TAG, "转账/还款证据处理完成: $outcomeInfo")
+        } catch (error: RuntimeException) {
+            Log.w(TAG, "转账/还款证据处理失败", error)
+            SentryLogger.addBreadcrumb(
+                "转账/还款证据处理失败",
+                data = mapOf("package" to input.sourcePackage),
+                category = "transfer_evidence"
             )
         }
     }

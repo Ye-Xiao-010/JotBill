@@ -13,11 +13,11 @@ import java.util.UUID
 internal const val MAX_SAFE_MINOR_UNIT = 9_007_199_254_740_991L
 
 /**
- * 阶段五 T2：退款待确认被用户确认入账后的审计墓碑类型。
- * RefundLinker 以 (该类型, pendingId) 查询，识别已确认的退款事件，
- * 防止待确认被物理删除后重复通知再次挂账。
+ * 阶段五 T2/T3：待确认交易被用户确认入账后的审计墓碑类型。
+ * RefundLinker/TransferClassifier 以 (该类型, pendingId) 查询，识别已确认的事件，
+ * 防止待确认被物理删除后重复通知再次挂账（所有类型的待确认确认均写入）。
  */
-const val REFUND_CONFIRM_AUDIT_TYPE = "refund_confirm"
+const val PENDING_CONFIRM_AUDIT_TYPE = "pending_confirm"
 
 internal class LedgerValidationException(
     message: String,
@@ -240,23 +240,21 @@ class LedgerRepository(private val database: JotBillDatabase) {
             ) {
                 throw LedgerValidationException("Pending transaction has changed")
             }
-            // 阶段五 T2：退款待确认确认后写审计墓碑，防止同一退款事件的重复通知
-            // 在待确认被物理删除后再次挂账（RefundLinker 按 (类型, pendingId) 查询）
-            if (currentPending.type == "refund") {
-                database.auditEntryDao().insertIfAbsent(
-                    AuditEntryEntity(
-                        id = "refund-confirm:${currentPending.id}",
-                        entityType = REFUND_CONFIRM_AUDIT_TYPE,
-                        entityId = currentPending.id,
-                        action = "confirm",
-                        fieldName = null,
-                        oldValue = null,
-                        newValue = billAuditValue(effectiveBill),
-                        operator = "system",
-                        createdAt = now
-                    )
+            // 阶段五 T2/T3：待确认确认后写审计墓碑（所有类型），防止同一事件的重复通知
+            // 在待确认被物理删除后再次挂账（识别链路按 (类型, pendingId) 查询）
+            database.auditEntryDao().insertIfAbsent(
+                AuditEntryEntity(
+                    id = "pending-confirm:${currentPending.id}",
+                    entityType = PENDING_CONFIRM_AUDIT_TYPE,
+                    entityId = currentPending.id,
+                    action = "confirm",
+                    fieldName = null,
+                    oldValue = null,
+                    newValue = billAuditValue(effectiveBill),
+                    operator = "system",
+                    createdAt = now
                 )
-            }
+            )
             database.auditEntryDao().insert(
                 AuditEntryEntity(
                     id = "${effectiveBill.id}:create",
@@ -567,8 +565,11 @@ class LedgerRepository(private val database: JotBillDatabase) {
             if (requireActiveAccounts && !target.isActive) {
                 throw LedgerValidationException("Target account $targetAccountId is inactive")
             }
+            // 阶段五 T3：目标账户方向按账户类型决定——
+            // 资产账户入金加余额；负债账户正余额表示欠款，转入减欠款（还款/转到信用卡）。
+            val direction = if (target.kind == "liability") -1L else 1L
             val targetDelta = checkedMultiply(
-                bill.amountMinor,
+                bill.amountMinor * direction,
                 multiplier,
                 "Target account balance delta is out of range"
             )

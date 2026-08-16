@@ -3,7 +3,7 @@ package com.jotbill.app.recognition
 import androidx.room.withTransaction
 import com.jotbill.app.data.JotBillDatabase
 import com.jotbill.app.data.LedgerRepository
-import com.jotbill.app.data.REFUND_CONFIRM_AUDIT_TYPE
+import com.jotbill.app.data.PENDING_CONFIRM_AUDIT_TYPE
 import com.jotbill.app.data.entity.AuditEntryEntity
 import com.jotbill.app.data.entity.BillEntity
 import com.jotbill.app.data.entity.PendingTransactionEntity
@@ -88,7 +88,7 @@ internal class RefundLinker(
         if (database.billDao().getById(billId) != null ||
             database.pendingTransactionDao().getById(pendingId) != null ||
             database.auditEntryDao()
-                .getByEntity(REFUND_CONFIRM_AUDIT_TYPE, pendingId).isNotEmpty()
+                .getByEntity(PENDING_CONFIRM_AUDIT_TYPE, pendingId).isNotEmpty()
         ) {
             return@withTransaction RefundOutcome.Duplicate
         }

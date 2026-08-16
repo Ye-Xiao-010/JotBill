@@ -21,7 +21,11 @@ data class PaymentEvidenceInput(
     val sourceEventKey: String,
     val rawTextHash: String,
     /** 退款接收账户提示文本（如"退回至余额"），仅退款路径提取；MVP 不映射具体账户。 */
-    val receivingAccountHint: String? = null
+    val receivingAccountHint: String? = null,
+    /** 转账/还款目标账户提示文本（如"转到银行卡""还款至花呗"），由 TransferClassifier 匹配本地账户。 */
+    val targetAccountHint: String? = null,
+    /** 转账收款人姓名（如"转账给张三"）：命中即视为他人转账，不自动判定为自有账户转账。 */
+    val recipientName: String? = null
 )
 
 /**
@@ -43,6 +47,12 @@ internal object PaymentResultNormalizer {
 
     /** 阶段五 T2：退款证据状态标记，区分消费支付（SUCCESS）。 */
     const val PAYMENT_STATUS_REFUND = "REFUND"
+
+    /** 阶段五 T3：转账证据状态标记。 */
+    const val PAYMENT_STATUS_TRANSFER = "TRANSFER"
+
+    /** 阶段五 T3：还款证据状态标记。 */
+    const val PAYMENT_STATUS_REPAYMENT = "REPAYMENT"
 
     /** 支持的支付应用包名白名单 */
     val SUPPORTED_PACKAGES: Set<String> = setOf(WECHAT_PACKAGE, ALIPAY_PACKAGE)
@@ -122,6 +132,47 @@ internal object PaymentResultNormalizer {
     /** 退款接收账户提示匹配正则：如"退回至余额""已退回至招商银行储蓄卡"。 */
     private val RECEIVING_ACCOUNT_PATTERNS = listOf(
         Regex("""(?:退回至|退款至|返回至|已退回至)\s*([^\s,，。；;]{2,20})""")
+    )
+
+    /**
+     * 阶段五 T3：转账语义关键词（资金离开支付应用的方向）。
+     * "转入"（他人转入=收入）不在此列，由收入排除关键词先行过滤。
+     */
+    private val TRANSFER_KEYWORDS = listOf("转出", "转账", "转到", "转至", "提现")
+
+    /** 阶段五 T3：还款语义关键词。 */
+    private val REPAYMENT_KEYWORDS = listOf("还款", "已还", "偿还")
+
+    /** 收入/入账语义排除关键词：转账识别前先排除他人转入、收款等场景。 */
+    private val TRANSFER_INCOME_EXCLUDE_KEYWORDS = listOf(
+        "收款", "到账", "收到", "转入", "红包", "领取", "发放", "工资", "报销"
+    )
+
+    /**
+     * 转账/还款金额匹配正则：优先匹配明确的方向性金额表述，
+     * 避免把余额数字或对方账户尾号当成金额。
+     */
+    private val TRANSFER_AMOUNT_PATTERNS = listOf(
+        Regex("""(?:转出金额|转账金额|转至金额|转到金额|提现金额|还款金额|还款本金|已还金额)\s*[:：]?\s*(?:¥|￥|CNY)?\s*([0-9]+\.?[0-9]*)"""),
+        Regex("""(?:¥|￥|CNY)\s*([0-9]+\.?[0-9]*)\s*(?:元)?\s*(?:转出|转账|转至|转到|提现|还款|已还)"""),
+        Regex("""([0-9]+\.?[0-9]*)\s*元?\s*(?:已转出|已转账|已转至|已转到|已提现|已还款|还款成功)""")
+    )
+
+    /** 转账目标账户提示匹配正则：如"转至零钱""转到银行卡""提现到招商银行储蓄卡"。 */
+    private val TRANSFER_TARGET_PATTERNS = listOf(
+        Regex("""(?:转至|转到|转账至|提现至|提现到)\s*([^\s,，。；;(（]{2,20})""")
+    )
+
+    /** 还款目标账户提示匹配正则：如"还款至花呗""已还信用卡""花呗自动还款"。 */
+    private val REPAY_TARGET_PATTERNS = listOf(
+        Regex("""(?:还款至|还款到|偿还)\s*([^\s,，。；;(（]{2,20})"""),
+        Regex("""已还\s*([^\s,，。；;(（]{2,20})"""),
+        Regex("""(花呗|白条|借呗|信用卡|网商贷|备用金)\s*(?:自动)?还款""")
+    )
+
+    /** 他人转账收款人匹配正则：如"转账给张三""转给李四"；"付款给"是扫码消费语义，不在此列。 */
+    private val RECIPIENT_PATTERNS = listOf(
+        Regex("""(?:转账给|转给)\s*([^\s,，。；;(（]{1,20})""")
     )
 
     /** 交易时间匹配正则：HH:mm 或 HH:mm:ss（通知正文常见格式）。 */
@@ -295,6 +346,103 @@ internal object PaymentResultNormalizer {
     /** 退款金额提取：先按退款表述匹配，再回退通用金额格式。 */
     private fun extractRefundAmountMinor(content: String): Long? {
         for (pattern in REFUND_AMOUNT_PATTERNS) {
+            val match = pattern.find(content) ?: continue
+            return parseAmountMinor(match.groupValues[1]) ?: continue
+        }
+        return extractAmountMinor(content)
+    }
+
+    /**
+     * 阶段五 T3：解析转账/还款通知正文，返回结构化证据输入；非转账/还款通知返回 null。
+     *
+     * 语义路由（还款优先于转账判断，"信用卡还款"也含"还款"关键词）：
+     * - 先排除收入/入账语义（他人转入、收款、红包等），避免"收到转账"被误判为转出；
+     * - 排除手续费/服务费通知（属于阶段五 T4 手续费路径，不在本函数处理）；
+     * - 还款关键词命中 → paymentStatus = REPAYMENT；否则转账关键词命中 → TRANSFER；
+     * - 金额优先按方向性表述提取（避免把余额或尾号当金额）；
+     * - 目标账户提示与收款人姓名分别提取：收款人命中即他人转账，
+     *   由 TransferClassifier 按支出语义转待确认，不自动判定为自有账户转账；
+     * - sourceEventKey 使用 transfer- 前缀（还款同样归入该键空间），与支付/退款事件键隔离。
+     */
+    fun normalizeTransfer(
+        sourcePackage: String,
+        title: String,
+        text: String,
+        bigText: String,
+        subText: String,
+        summaryText: String,
+        tickerText: String,
+        postTime: Long,
+        notificationKey: String?,
+        notificationId: Int,
+        titleBig: String = ""
+    ): PaymentEvidenceInput? {
+        if (sourcePackage !in SUPPORTED_PACKAGES) return null
+
+        val fullContent = listOf(title, titleBig, text, bigText, subText, summaryText, tickerText)
+            .filter { it.isNotBlank() }
+            .joinToString(" ")
+
+        if (fullContent.isBlank()) return null
+
+        // 手续费/服务费通知属于 T4 路径，此处直接放弃，防止被当成转账本金
+        if (fullContent.contains("手续费") || fullContent.contains("服务费")) return null
+
+        // 排除收入/入账语义：转账识别只关心资金离开支付应用的方向
+        if (TRANSFER_INCOME_EXCLUDE_KEYWORDS.any { fullContent.contains(it) }) return null
+
+        // 语义判定：还款优先（"信用卡还款"同时含"还款"；"已还"不与转账关键词共存）
+        val isRepayment = REPAYMENT_KEYWORDS.any { fullContent.contains(it) }
+        val isTransfer = !isRepayment && TRANSFER_KEYWORDS.any { fullContent.contains(it) }
+        if (!isRepayment && !isTransfer) return null
+
+        // 排除失败/进行中语义（叠加通用失败关键词兜底）
+        if (FAILURE_KEYWORDS.any { fullContent.contains(it) }) return null
+
+        // 金额：优先方向性表述，回退通用金额格式
+        val amountMinor = extractTransferAmountMinor(fullContent) ?: return null
+        if (amountMinor <= 0L) return null
+
+        val orderId = extractField(fullContent, ORDER_ID_PATTERNS)
+
+        // 目标账户提示：还款取还款目标模式，转账取转账目标模式
+        val targetAccountHint = if (isRepayment) {
+            extractField(fullContent, REPAY_TARGET_PATTERNS)
+        } else {
+            extractField(fullContent, TRANSFER_TARGET_PATTERNS)
+        }
+
+        // 收款人：仅转账语义提取（还款无收款人概念）
+        val recipientName = if (isRepayment) null else extractField(fullContent, RECIPIENT_PATTERNS)
+
+        val occurredAt = extractOccurredAt(fullContent, postTime)
+
+        val sourceEventKey = sha256(
+            "transfer-event|$sourcePackage|${notificationKey.orEmpty()}|" +
+                "$notificationId|$postTime|$amountMinor|${orderId.orEmpty()}"
+        )
+
+        val rawTextHash = sha256(
+            "transfer-raw|$sourcePackage|${sanitizeForHash(fullContent, orderId)}"
+        )
+
+        return PaymentEvidenceInput(
+            sourcePackage = sourcePackage,
+            amountMinor = amountMinor,
+            occurredAt = occurredAt,
+            merchant = null,
+            orderId = orderId,
+            paymentStatus = if (isRepayment) PAYMENT_STATUS_REPAYMENT else PAYMENT_STATUS_TRANSFER,
+            sourceEventKey = sourceEventKey,
+            rawTextHash = rawTextHash,
+            targetAccountHint = targetAccountHint,
+            recipientName = recipientName
+        )
+    }
+
+    /** 转账/还款金额提取：先按方向性表述匹配，再回退通用金额格式。 */
+    private fun extractTransferAmountMinor(content: String): Long? {
+        for (pattern in TRANSFER_AMOUNT_PATTERNS) {
             val match = pattern.find(content) ?: continue
             return parseAmountMinor(match.groupValues[1]) ?: continue
         }
