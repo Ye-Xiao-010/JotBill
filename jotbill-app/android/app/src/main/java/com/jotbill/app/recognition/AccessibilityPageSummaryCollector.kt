@@ -116,10 +116,16 @@ internal object AccessibilityPageSummaryCollector {
         shoppingPackage: String,
         windowClass: String?,
         root: AccessibilityNodeInfo,
-        observedAt: Long
+        observedAt: Long,
+        includeHiddenContentDescriptions: Boolean = false
     ): CheckoutPageObservation {
         val accumulator = NodeSummaryAccumulator()
-        collectNode(root, accumulator, depth = 0)
+        collectNode(
+            node = root,
+            accumulator = accumulator,
+            depth = 0,
+            includeHiddenContentDescriptions = includeHiddenContentDescriptions
+        )
 
         val normalizedText = normalizeTokens(accumulator.tokens)
         val lowerText = normalizedText.lowercase(Locale.ROOT)
@@ -161,14 +167,19 @@ internal object AccessibilityPageSummaryCollector {
         node: AccessibilityNodeInfo,
         accumulator: NodeSummaryAccumulator,
         depth: Int,
-        sensitiveAncestor: Boolean = false
+        sensitiveAncestor: Boolean = false,
+        includeHiddenContentDescriptions: Boolean = false
     ) {
         if (depth > MAX_DEPTH || accumulator.visitedNodes >= MAX_NODE_COUNT) {
             return
         }
 
         accumulator.visitedNodes += 1
-        val visible = depth == 0 || node.isVisibleToUser
+        val hasContentDescription = !node.contentDescription.isNullOrBlank()
+        // 微信支付成功页的语义节点在无障碍服务视角可能 isVisibleToUser=false，
+        // 但 uiautomator 与用户可见；支付结果观察允许把这些 contentDescription 纳入分类。
+        val visible = depth == 0 || node.isVisibleToUser ||
+            (includeHiddenContentDescriptions && hasContentDescription)
         val className = node.className?.toString().orEmpty()
         val viewId = node.viewIdResourceName.orEmpty()
         val nodeSensitive = sensitiveAncestor ||
@@ -209,7 +220,13 @@ internal object AccessibilityPageSummaryCollector {
             }
             if (child != null) {
                 try {
-                    collectNode(child, accumulator, depth + 1, nodeSensitive)
+                    collectNode(
+                    child,
+                    accumulator,
+                    depth + 1,
+                    nodeSensitive,
+                    includeHiddenContentDescriptions
+                )
                 } finally {
                     child.recycle()
                 }

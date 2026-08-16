@@ -1063,17 +1063,29 @@ class CheckoutAccessibilityService : AccessibilityService() {
         }
         if (includeWindows && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
             try {
+                val inventory = mutableListOf<String>()
                 windows.forEach { window ->
-                    if (window.type == AccessibilityWindowInfo.TYPE_APPLICATION) {
-                        try {
-                            window.root?.takeIf {
-                                it.packageName?.toString() == paymentPackage
-                            }?.let(::add)
-                        } catch (_: RuntimeException) {
-                            // 单个窗口不可读时继续检查其它窗口。
-                        }
+                    val rootPackage = try {
+                        window.root?.packageName?.toString().orEmpty()
+                    } catch (_: RuntimeException) {
+                        ""
+                    }
+                    val rootClass = try {
+                        window.root?.className?.toString().orEmpty()
+                    } catch (_: RuntimeException) {
+                        ""
+                    }
+                    inventory += "${window.type}:${rootPackage.ifBlank { "null" }}:${rootClass.substringAfterLast('.')}"
+                    // 真机上的微信 LiteApp 成功页窗口类型/包名可能与活动窗口不一致，
+                    // 先收集全部窗口根节点，后续按“能否分类为 PAYMENT_RESULT”逐个筛选，
+                    // 不因类型或包名白名单漏掉带支付成功语义的窗口。
+                    try {
+                        add(window.root)
+                    } catch (_: RuntimeException) {
+                        // 单个窗口不可读时继续检查其它窗口。
                     }
                 }
+                Log.i(TAG, "支付窗口列表(${inventory.size}): ${inventory.joinToString(" | ")}")
             } catch (_: RuntimeException) {
                 // 系统窗口列表不可读时保持原有空树语义。
             }
@@ -1117,15 +1129,34 @@ class CheckoutAccessibilityService : AccessibilityService() {
                         shoppingPackage = paymentPackage,
                         windowClass = event.className?.toString()?.trim()?.takeIf { it.isNotBlank() },
                         root = root,
-                        observedAt = observedAt
+                        observedAt = observedAt,
+                        includeHiddenContentDescriptions = true
                     )
 
                     if (observation.pageRole != CheckoutPageRole.PAYMENT_RESULT) {
+                        val rootPackage = try {
+                            root.packageName?.toString().orEmpty()
+                        } catch (_: RuntimeException) {
+                            ""
+                        }
+                        val rootClass = try {
+                            root.className?.toString()?.substringAfterLast('.')
+                        } catch (_: RuntimeException) {
+                            ""
+                        }
+                        val pageTextLength = try {
+                            collectPageText(root).length
+                        } catch (_: RuntimeException) {
+                            -1
+                        }
                         Log.i(
                             TAG,
                             "支付包页面未分类为结果页: pkg=$paymentPackage, role=${observation.pageRole}, " +
                                 "class=${observation.windowClass}, sensitive=${observation.isSensitivePage}, " +
-                                "windows=${if (includeWindows) "all" else "active"}"
+                                "windows=${if (includeWindows) "all" else "active"}, " +
+                                "rootPkg=${rootPackage.ifBlank { "null" }}, " +
+                                "rootClass=${rootClass?.takeIf { it.isNotBlank() } ?: "null"}, " +
+                                "children=${root.childCount}, pageTextLength=$pageTextLength"
                         )
                         continue
                     }
