@@ -59,9 +59,14 @@
           <intent-filter>
               <action android:name="android.service.notification.NotificationListenerService" />
           </intent-filter>
+          <!--
+              阶段七真机修复：微信/支付宝支付凭证多为静默通知；只声明 alerting
+              会收不到这些通知，导致支付成功页节点不可读时没有任何兜底证据。
+              同时声明 alerting|silent，由代码白名单继续过滤非支付通知。
+          -->
           <meta-data
               android:name="android.service.notification.default_filter_types"
-              android:value="alerting" />
+              android:value="alerting|silent" />
       </service>
 
       <!-- 结算页只读观察服务，不执行点击或输入；截图仅交给内存缓冲协调器 -->

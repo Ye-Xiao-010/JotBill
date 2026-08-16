@@ -106,6 +106,13 @@ internal class CheckoutCaptureOverlayManager(context: Context) {
         private const val KEY_MODE = "manual_capture_mode"
         private const val DEFAULT_MODE = "checkout_only"
 
+        /**
+         * 结算页内容变化会短暂把页面判成普通页/节点不可读，立即移除按钮会造成
+         * 高频 addView/removeView 闪烁。隐藏前保留一段时间，若期间页面重新稳定为
+         * 可展示状态，则取消隐藏并继续复用同一个系统窗口。
+         */
+        private const val HIDE_GRACE_MILLIS = 1_500L
+
         @Volatile
         private var activeManager: CheckoutCaptureOverlayManager? = null
 
@@ -173,6 +180,12 @@ internal class CheckoutCaptureOverlayManager(context: Context) {
     private var currentCheckout = false
     private var currentUserRetryContext = false
     private var closed = false
+    private var hideScheduled = false
+
+    private val pendingHideRunnable = Runnable {
+        hideScheduled = false
+        removeView()
+    }
 
     @Volatile
     private var state = CheckoutOverlayState(
@@ -365,6 +378,7 @@ internal class CheckoutCaptureOverlayManager(context: Context) {
                     reasonCode = CheckoutOverlayStatus.SERVICE_NOT_CONNECTED.wireValue,
                     clearSnapshotMetadata = true
                 )
+                removeViewImmediately()
             }
         }
     }
@@ -382,7 +396,7 @@ internal class CheckoutCaptureOverlayManager(context: Context) {
             currentSensitivePage = false
             currentCheckout = false
             currentUserRetryContext = false
-            removeView()
+            removeViewImmediately()
             state = state.copy(
                 status = CheckoutOverlayStatus.SERVICE_NOT_CONNECTED,
                 visible = false,
@@ -513,6 +527,7 @@ internal class CheckoutCaptureOverlayManager(context: Context) {
             configuredEnabled = enabled
             if (!enabled) {
                 updateState(CheckoutOverlayStatus.HIDDEN, false, "DISABLED")
+                removeViewImmediately()
             } else {
                 refreshVisibility()
             }
@@ -524,6 +539,7 @@ internal class CheckoutCaptureOverlayManager(context: Context) {
             mode = nextMode
             if (nextMode == CheckoutOverlayMode.OFF) {
                 updateState(CheckoutOverlayStatus.HIDDEN, false, nextMode.wireValue)
+                removeViewImmediately()
             } else {
                 refreshVisibility()
             }
@@ -565,7 +581,7 @@ internal class CheckoutCaptureOverlayManager(context: Context) {
         result: SnapshotCaptureResult? = null,
         clearSnapshotMetadata: Boolean = false
     ) {
-        state = state.copy(
+        val nextState = state.copy(
             status = status,
             visible = visible,
             enabled = configuredEnabled && mode != CheckoutOverlayMode.OFF,
@@ -594,18 +610,55 @@ internal class CheckoutCaptureOverlayManager(context: Context) {
                 result?.requiresDisambiguation ?: state.requiresDisambiguation
             }
         )
+        if (nextState == state) {
+            return
+        }
+        state = nextState
         refreshVisibility()
         CheckoutCaptureOverlayStateHub.emit(state)
     }
 
     private fun refreshVisibility() {
         val shouldShow = state.visible && canShowOnCurrentPage()
-        if (!shouldShow) {
-            removeView()
+        if (shouldShow) {
+            cancelPendingHide()
+            ensureView()
+            updateViewAppearance()
             return
         }
-        ensureView()
-        updateViewAppearance()
+        scheduleDelayedHide()
+    }
+
+    /** 短暂失效不立即移除窗口；保留期间禁用按钮，页面恢复后复用原窗口。 */
+    private fun scheduleDelayedHide() {
+        val view = overlayView ?: return
+        if (hideScheduled) {
+            // 已处于隐藏宽限期内，不重置计时，避免持续无关事件让按钮永远不消失。
+            view.isEnabled = false
+            view.alpha = 0.55f
+            return
+        }
+        hideScheduled = true
+        view.isEnabled = false
+        view.alpha = 0.55f
+        android.util.Log.d(
+            TAG,
+            "悬浮按钮进入隐藏宽限: status=${state.status}, reason=${state.reasonCode}"
+        )
+        mainHandler.postDelayed(pendingHideRunnable, HIDE_GRACE_MILLIS)
+    }
+
+    private fun cancelPendingHide() {
+        if (!hideScheduled && overlayView == null) {
+            return
+        }
+        hideScheduled = false
+        mainHandler.removeCallbacks(pendingHideRunnable)
+    }
+
+    private fun removeViewImmediately() {
+        cancelPendingHide()
+        removeView()
     }
 
     private fun ensureView() {
@@ -629,6 +682,11 @@ internal class CheckoutCaptureOverlayManager(context: Context) {
             manager.addView(view, createLayoutParams())
             windowManager = manager
             overlayView = view
+            android.util.Log.d(
+                TAG,
+                "悬浮按钮已添加: status=${state.status}, reason=${state.reasonCode}, " +
+                    "mode=$mode, checkout=$currentCheckout"
+            )
         } catch (error: RuntimeException) {
             windowManager = null
             overlayView = null
@@ -646,6 +704,7 @@ internal class CheckoutCaptureOverlayManager(context: Context) {
         val view = overlayView ?: return
         try {
             windowManager?.removeView(view)
+            android.util.Log.d(TAG, "悬浮按钮已移除: status=${state.status}, reason=${state.reasonCode}")
         } catch (error: RuntimeException) {
             android.util.Log.w(TAG, "结算截图悬浮按钮移除失败", error)
         } finally {
