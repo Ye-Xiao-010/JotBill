@@ -1390,7 +1390,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
         } ?: System.currentTimeMillis()
         // 与无障碍结果页共用同一个去重键：同包名、同一分钟、同金额、同订单号只落一次。
         val sourceEventKey = sha256(
-            "result-event|$paymentPackage|${occurredAt / 60_000L}|${fields.amountMinor}|" +
+            "result-event|$paymentPackage|${occurredAt / 120_000L}|${fields.amountMinor}|" +
                 "${fields.orderId.orEmpty()}"
         )
         if (!markPaymentResultEvent(sourceEventKey, System.currentTimeMillis())) {

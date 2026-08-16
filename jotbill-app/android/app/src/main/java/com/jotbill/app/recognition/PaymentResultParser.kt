@@ -146,7 +146,7 @@ internal object PaymentResultParser {
         // 事件键不包含页面指纹：同一支付结果页在微信 LiteApp 中会随动态节点变化产生
         // 多个指纹，旧实现会生成多条幂等键不同的孤儿待确认；现在按包名+分钟+金额+订单号去重。
         val sourceEventKey = sha256(
-            "result-event|$sourcePackage|${occurredAt / 60_000}|$amountMinor|${orderId.orEmpty()}"
+            "result-event|$sourcePackage|${occurredAt / 120_000}|$amountMinor|${orderId.orEmpty()}"
         )
 
         return PaymentResultParseResult.Success(
