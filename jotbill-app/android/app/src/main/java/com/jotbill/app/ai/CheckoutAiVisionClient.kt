@@ -391,6 +391,441 @@ class CheckoutAiVisionClient(
         }
     }
 
+    data class PaymentResultVisionFields(
+        val amountMinor: Long,
+        val merchant: String?,
+        val orderId: String?,
+        val occurredAt: String?
+    )
+
+    sealed class PaymentResultVisionResult {
+        data class Succeeded(
+            val fields: PaymentResultVisionFields,
+            val requestId: String,
+            val provider: String,
+            val model: String,
+            val attempts: Int,
+            val tokensIn: Int?,
+            val tokensOut: Int?,
+            val latencyMillis: Long
+        ) : PaymentResultVisionResult()
+
+        data class Failed(
+            val code: AiVisionFailureCode,
+            val attempts: Int,
+            val requestId: String?,
+            val provider: String?,
+            val model: String?,
+            val lastFailureCode: AiVisionFailureCode? = null,
+            val httpStatus: Int? = null,
+            val retryable: Boolean = false,
+            val latencyMillis: Long
+        ) : PaymentResultVisionResult()
+    }
+
+    private data class PaymentAttemptResult(
+        val fields: PaymentResultVisionFields?,
+        val code: AiVisionFailureCode?,
+        val httpStatus: Int? = null,
+        val tokensIn: Int? = null,
+        val tokensOut: Int? = null
+    )
+
+    suspend fun recognizePaymentResult(
+        imageBytes: ByteArray,
+        sourceEventKey: String
+    ): PaymentResultVisionResult {
+        val startedAt = System.currentTimeMillis()
+        val requestKey = UUID.randomUUID().toString()
+        activeRequestKeys.add(requestKey)
+        var imageDataUrl: String? = null
+        var costConfig: AiProviderConfigEntity? = null
+        var shouldRecordCost = false
+        var finalResult: PaymentResultVisionResult? = null
+
+        try {
+            val outcome = try {
+                when {
+                    closed -> paymentFailed(AiVisionFailureCode.CLIENT_CLOSED, 0, null, null, null, startedAt)
+                    imageBytes.isEmpty() -> paymentFailed(AiVisionFailureCode.SNAPSHOT_INVALID, 0, null, null, null, startedAt)
+                    imageBytes.size > MAX_IMAGE_BYTES -> paymentFailed(AiVisionFailureCode.IMAGE_TOO_LARGE, 0, null, null, null, startedAt)
+                    else -> {
+                        val mimeType = imageMimeType(imageBytes) ?: return paymentFailed(
+                            AiVisionFailureCode.SNAPSHOT_INVALID,
+                            0,
+                            null,
+                            null,
+                            null,
+                            startedAt
+                        )
+                        val config = resolveProvider() ?: return paymentFailed(
+                            AiVisionFailureCode.AI_CONFIG_MISSING,
+                            0,
+                            null,
+                            null,
+                            null,
+                            startedAt
+                        )
+                        if (!config.supportsVision) {
+                            return paymentFailed(
+                                AiVisionFailureCode.AI_VISION_UNSUPPORTED,
+                                0,
+                                null,
+                                config.provider,
+                                config.model,
+                                startedAt
+                            )
+                        }
+                        costConfig = config
+                        val endpoint = AiEndpointResolver.chatCompletions(config)
+                        val apiKey = decryptApiKey(config)
+                        imageDataUrl = "data:$mimeType;base64," +
+                            Base64.encodeToString(imageBytes, Base64.NO_WRAP)
+                        shouldRecordCost = true
+                        paymentRequestWithRetries(
+                            requestKey = requestKey,
+                            sourceEventKey = sourceEventKey,
+                            config = config,
+                            endpoint = endpoint,
+                            apiKey = apiKey,
+                            imageDataUrl = imageDataUrl!!,
+                            startedAt = startedAt
+                        )
+                    }
+                }
+            } catch (_: AiChatException) {
+                paymentFailed(AiVisionFailureCode.AI_CONFIG_INVALID, 0, null, costConfig?.provider, costConfig?.model, startedAt)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Exception) {
+                paymentFailed(AiVisionFailureCode.REQUEST_FAILED, 0, null, costConfig?.provider, costConfig?.model, startedAt)
+            }
+            finalResult = outcome
+            return outcome
+        } finally {
+            imageDataUrl = null
+            activeRequestKeys.remove(requestKey)
+            cancelledRequestKeys.remove(requestKey)
+            imageBytes.fill(0)
+            val config = costConfig
+            if (shouldRecordCost && config != null) {
+                val succeeded = finalResult as? PaymentResultVisionResult.Succeeded
+                withContext(NonCancellable) {
+                    recordCostSafely(
+                        config = config,
+                        success = succeeded != null,
+                        tokensIn = succeeded?.tokensIn,
+                        tokensOut = succeeded?.tokensOut,
+                        requestType = "payment_result_vision"
+                    )
+                }
+            }
+        }
+    }
+
+    private suspend fun paymentRequestWithRetries(
+        requestKey: String,
+        sourceEventKey: String,
+        config: AiProviderConfigEntity,
+        endpoint: String,
+        apiKey: String?,
+        imageDataUrl: String,
+        startedAt: Long
+    ): PaymentResultVisionResult {
+        var attempts = 0
+        var lastFailure = PaymentAttemptResult(null, AiVisionFailureCode.REQUEST_FAILED)
+        var lastRequestId: String? = null
+
+        return try {
+            withTimeout(TOTAL_TIMEOUT_MILLIS) {
+                while (attempts < MAX_ATTEMPTS) {
+                    attempts += 1
+                    val requestId = UUID.randomUUID().toString()
+                    lastRequestId = requestId
+                    if (cancelledRequestKeys.contains(requestKey)) {
+                        return@withTimeout paymentFailed(
+                            AiVisionFailureCode.CANCELLED,
+                            attempts,
+                            requestId,
+                            config.provider,
+                            config.model,
+                            startedAt
+                        )
+                    }
+
+                    val outcome = try {
+                        val request = buildPaymentRequest(
+                            config = config,
+                            endpoint = endpoint,
+                            apiKey = apiKey,
+                            requestId = requestId,
+                            sourceEventKey = sourceEventKey,
+                            imageDataUrl = imageDataUrl
+                        )
+                        withTimeout(ATTEMPT_TIMEOUT_MILLIS) {
+                            executePaymentAttempt(requestKey, request)
+                        }
+                    } catch (_: TimeoutCancellationException) {
+                        PaymentAttemptResult(null, AiVisionFailureCode.TIMEOUT)
+                    }
+
+                    val fields = outcome.fields
+                    if (fields != null) {
+                        return@withTimeout PaymentResultVisionResult.Succeeded(
+                            fields = fields,
+                            requestId = requestId,
+                            provider = config.provider,
+                            model = config.model,
+                            attempts = attempts,
+                            tokensIn = outcome.tokensIn,
+                            tokensOut = outcome.tokensOut,
+                            latencyMillis = System.currentTimeMillis() - startedAt
+                        )
+                    }
+
+                    val code = outcome.code ?: AiVisionFailureCode.PROTOCOL_ERROR
+                    lastFailure = outcome
+                    if (code == AiVisionFailureCode.CANCELLED) {
+                        return@withTimeout paymentFailed(
+                            code,
+                            attempts,
+                            requestId,
+                            config.provider,
+                            config.model,
+                            startedAt
+                        )
+                    }
+                    val retryable = code == AiVisionFailureCode.REQUEST_FAILED ||
+                        code == AiVisionFailureCode.TIMEOUT ||
+                        (code == AiVisionFailureCode.HTTP_ERROR &&
+                            (outcome.httpStatus == 429 || (outcome.httpStatus ?: 0) >= 500))
+                    if (!retryable || attempts >= MAX_ATTEMPTS) {
+                        return@withTimeout paymentFailed(
+                            if (retryable) AiVisionFailureCode.RETRY_EXHAUSTED else code,
+                            attempts,
+                            requestId,
+                            config.provider,
+                            config.model,
+                            startedAt,
+                            lastFailureCode = if (retryable) code else null,
+                            httpStatus = outcome.httpStatus,
+                            retryable = retryable
+                        )
+                    }
+                    delay(RETRY_BACKOFF_MILLIS)
+                }
+                paymentFailed(
+                    AiVisionFailureCode.RETRY_EXHAUSTED,
+                    attempts,
+                    lastRequestId,
+                    config.provider,
+                    config.model,
+                    startedAt,
+                    lastFailureCode = lastFailure.code,
+                    httpStatus = lastFailure.httpStatus
+                )
+            }
+        } catch (_: TimeoutCancellationException) {
+            paymentFailed(
+                AiVisionFailureCode.TIMEOUT,
+                attempts,
+                lastRequestId,
+                config.provider,
+                config.model,
+                startedAt,
+                lastFailureCode = lastFailure.code,
+                httpStatus = lastFailure.httpStatus,
+                retryable = true
+            )
+        }
+    }
+
+    private fun paymentFailed(
+        code: AiVisionFailureCode,
+        attempts: Int,
+        requestId: String?,
+        provider: String?,
+        model: String?,
+        startedAt: Long,
+        lastFailureCode: AiVisionFailureCode? = null,
+        httpStatus: Int? = null,
+        retryable: Boolean = false
+    ): PaymentResultVisionResult.Failed = PaymentResultVisionResult.Failed(
+        code = code,
+        attempts = attempts,
+        requestId = requestId,
+        provider = provider,
+        model = model,
+        lastFailureCode = lastFailureCode,
+        httpStatus = httpStatus,
+        retryable = retryable,
+        latencyMillis = System.currentTimeMillis() - startedAt
+    )
+
+    private fun buildPaymentRequest(
+        config: AiProviderConfigEntity,
+        endpoint: String,
+        apiKey: String?,
+        requestId: String,
+        sourceEventKey: String,
+        imageDataUrl: String
+    ): Request {
+        val prompt = buildPaymentPrompt(requestId, sourceEventKey)
+        val content = JSONArray()
+            .put(JSONObject().put("type", "text").put("text", prompt))
+            .put(
+                JSONObject()
+                    .put("type", "image_url")
+                    .put("image_url", JSONObject().put("url", imageDataUrl))
+            )
+        val body = JSONObject()
+            .put("model", config.model)
+            .put("messages", JSONArray().put(JSONObject().put("role", "user").put("content", content)))
+            .put("stream", false)
+            .put("temperature", 0)
+            .put("response_format", JSONObject().put("type", "json_object"))
+
+        return Request.Builder()
+            .url(endpoint)
+            .header("Content-Type", JSON_MEDIA_TYPE_VALUE)
+            .apply { apiKey?.let { header("Authorization", "Bearer $it") } }
+            .post(body.toString().toRequestBody(JSON_MEDIA_TYPE))
+            .build()
+    }
+
+    private fun buildPaymentPrompt(requestId: String, sourceEventKey: String): String = """
+        你是 JotBill 的支付结果页识别器。只分析截图中的微信/支付宝支付成功页事实，不推断、不创建账单。
+        只返回一个 JSON 对象，禁止 Markdown、解释文字和额外字段。
+        promptVersion=payment-result-v1；requestId=$requestId；sourceEventKey=$sourceEventKey。
+        必须返回字段：screenType、paymentStatus、amount、merchant、orderId、occurredAt、confidence。
+        screenType 必须为 payment_result；paymentStatus 只能是 SUCCESS 或 FAILED；
+        amount 必须是正数十进制字符串，最多两位小数；缺失的 merchant、orderId、occurredAt 使用 null，不要使用空字符串；
+        occurredAt 存在时必须是 ISO-8601 时间字符串；confidence 必须是 0 到 1 的数字。
+        只把“支付成功/付款成功/支付完成”旁边的实付金额作为 amount；原价、优惠金额、单号数字都不要作为 amount。
+    """.trimIndent()
+
+    private suspend fun executePaymentAttempt(
+        requestKey: String,
+        request: Request
+    ): PaymentAttemptResult = suspendCancellableCoroutine { continuation ->
+        if (closed || cancelledRequestKeys.contains(requestKey)) {
+            runCatching { continuation.resume(PaymentAttemptResult(null, AiVisionFailureCode.CANCELLED)) }
+            return@suspendCancellableCoroutine
+        }
+        val call = httpClient.newCall(request)
+        activeCalls[requestKey] = call
+        continuation.invokeOnCancellation {
+            activeCalls.remove(requestKey, call)
+            call.cancel()
+        }
+        if (closed || cancelledRequestKeys.contains(requestKey)) {
+            activeCalls.remove(requestKey, call)
+            call.cancel()
+            runCatching { continuation.resume(PaymentAttemptResult(null, AiVisionFailureCode.CANCELLED)) }
+            return@suspendCancellableCoroutine
+        }
+        call.enqueue(object : Callback {
+            override fun onFailure(call: Call, error: IOException) {
+                activeCalls.remove(requestKey, call)
+                if (!continuation.isActive) return
+                val code = if (
+                    call.isCanceled() || error is SocketTimeoutException ||
+                        error.message.orEmpty().contains("timeout", ignoreCase = true)
+                ) {
+                    if (call.isCanceled()) {
+                        AiVisionFailureCode.CANCELLED
+                    } else {
+                        AiVisionFailureCode.TIMEOUT
+                    }
+                } else {
+                    AiVisionFailureCode.REQUEST_FAILED
+                }
+                runCatching { continuation.resume(PaymentAttemptResult(null, code)) }
+            }
+
+            override fun onResponse(call: Call, response: Response) {
+                activeCalls.remove(requestKey, call)
+                if (!continuation.isActive) {
+                    response.close()
+                    return
+                }
+                val result = try {
+                    response.use(::parsePaymentResponse)
+                } catch (_: ResponseTooLargeException) {
+                    PaymentAttemptResult(null, AiVisionFailureCode.RESPONSE_TOO_LARGE)
+                } catch (_: SchemaException) {
+                    PaymentAttemptResult(null, AiVisionFailureCode.JSON_SCHEMA_INVALID)
+                } catch (_: JSONException) {
+                    PaymentAttemptResult(null, AiVisionFailureCode.PROTOCOL_ERROR)
+                } catch (_: IOException) {
+                    PaymentAttemptResult(null, AiVisionFailureCode.PROTOCOL_ERROR)
+                } catch (_: Exception) {
+                    PaymentAttemptResult(null, AiVisionFailureCode.PROTOCOL_ERROR)
+                }
+                if (continuation.isActive) {
+                    runCatching { continuation.resume(result) }
+                }
+            }
+        })
+    }
+
+    private fun parsePaymentResponse(response: Response): PaymentAttemptResult {
+        if (!response.isSuccessful) {
+            return PaymentAttemptResult(
+                fields = null,
+                code = AiVisionFailureCode.HTTP_ERROR,
+                httpStatus = response.code
+            )
+        }
+        val body = response.body ?: return PaymentAttemptResult(null, AiVisionFailureCode.PROTOCOL_ERROR)
+        if (body.contentLength() > MAX_RESPONSE_BYTES) throw ResponseTooLargeException()
+        val bodyText = readLimitedBody(body)
+        val root = try {
+            JSONObject(bodyText)
+        } catch (_: JSONException) {
+            return PaymentAttemptResult(null, AiVisionFailureCode.PROTOCOL_ERROR)
+        }
+        val content = extractContent(root)
+            ?: return PaymentAttemptResult(null, AiVisionFailureCode.PROTOCOL_ERROR)
+        val payload = try {
+            parsePaymentPayload(JSONObject(content))
+        } catch (_: JSONException) {
+            return PaymentAttemptResult(null, AiVisionFailureCode.JSON_SCHEMA_INVALID)
+        }
+        val usage = root.optJSONObject("usage")?.let(::parseUsage)
+            ?: ResponseUsage(tokensIn = null, tokensOut = null)
+        return PaymentAttemptResult(payload, null, tokensIn = usage.tokensIn, tokensOut = usage.tokensOut)
+    }
+
+    private fun parsePaymentPayload(root: JSONObject): PaymentResultVisionFields {
+        if (requiredString(root, "screenType") != "payment_result") throw SchemaException()
+        if (requiredString(root, "paymentStatus") != "SUCCESS") throw SchemaException()
+        val amountText = requiredString(root, "amount")
+        if (!AMOUNT_PATTERN.matches(amountText)) throw SchemaException()
+        val amountMinor = try {
+            BigDecimal(amountText).movePointRight(2).longValueExact()
+        } catch (_: ArithmeticException) {
+            throw SchemaException()
+        }
+        if (amountMinor <= 0) throw SchemaException()
+        val merchant = requiredNullableString(root, "merchant", MAX_MERCHANT_LENGTH)
+        val orderId = requiredNullableString(root, "orderId", MAX_ORDER_ID_LENGTH)
+        val occurredAt = requiredNullableString(root, "occurredAt", MAX_TIMESTAMP_LENGTH)?.also {
+            try {
+                Instant.parse(it)
+            } catch (_: Exception) {
+                throw SchemaException()
+            }
+        }
+        if (requiredNumber(root, "confidence") !in 0.0..1.0) throw SchemaException()
+        return PaymentResultVisionFields(
+            amountMinor = amountMinor,
+            merchant = merchant,
+            orderId = orderId,
+            occurredAt = occurredAt
+        )
+    }
+
     /** 取消指定请求；取消后仍由 recognize 的 finally 释放 Ready.snapshot。 */
     fun cancel(requestKey: CheckoutRequestKey): Boolean {
         val key = requestKey.value

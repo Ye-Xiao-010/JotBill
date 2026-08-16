@@ -1,0 +1,159 @@
+08-16 22:30:54.246 21406 21406 D CheckoutCaptureOverlay: 悬浮按钮按下: enabled=true, status=READY, reason=NON_CHECKOUT_PAGE
+08-16 22:30:54.269 21406 21406 D CheckoutCaptureOverlay: 悬浮按钮抬起: moved=false, enabled=true
+08-16 22:30:54.269 21406 21406 D CheckoutCaptureOverlay: 手动截图点击已受理: status=READY, reason=NON_CHECKOUT_PAGE
+08-16 22:30:54.326 21406 21406 I CheckoutSnapshotCapture: 截图状态: STORED, 来源=MANUAL_CAPTURE, 原因=STORED
+08-16 22:30:57.637 21406 22562 I CheckoutAccessibilityService: AI 结果匹配落库结果: Accepted(status=FAILED, matched=false, candidateId=candidate-223afe48a3d7c1c7b09f30bbcdf03f4dfc645d16b7b9a80655c711e04e0725cc, evidenceId=null)
+08-16 22:30:58.678 21406 21406 I CheckoutAccessibilityService: 支付窗口列表(5): 3:com.android.systemui:FrameLayout | 3:com.tencent.mobileqq:FrameLayout | 3:com.jotbill.app:TextView | 3:com.miui.notes:LinearLayout | 1:com.xunmeng.pinduoduo:
+08-16 22:30:58.913 21406 21406 I CheckoutAccessibilityService: 支付窗口列表(5): 3:com.android.systemui:FrameLayout | 3:com.tencent.mobileqq:FrameLayout | 3:com.jotbill.app:TextView | 3:com.miui.notes:LinearLayout | 1:com.tencent.mm:FrameLayout
+08-16 22:30:59.018 21406 21406 I CheckoutAccessibilityService: 支付结果页截图兜底已取得: 98284 bytes
+08-16 22:30:59.167 21406 21406 I CheckoutAccessibilityService: 支付窗口列表(5): 3:com.android.systemui:FrameLayout | 3:com.tencent.mobileqq:FrameLayout | 3:com.jotbill.app:TextView | 3:com.miui.notes:LinearLayout | 1:com.tencent.mm:FrameLayout
+08-16 22:31:00.571 21406 22562 I CheckoutAccessibilityService: 支付结果页截图兜底解析到证据: 金额=<已脱敏>分
+08-16 22:31:00.670 21406 22625 I CheckoutAccessibilityService: 支付结果页无关联活跃会话，已转纯通知待确认
+08-16 22:31:00.790 21406 21406 I CheckoutAccessibilityService: 支付窗口列表(4): 3:com.android.systemui:FrameLayout | 3:com.tencent.mobileqq:FrameLayout | 3:com.miui.notes:LinearLayout | 1:com.tencent.mm:FrameLayout
+08-16 22:31:02.371 21406 21406 I CheckoutAccessibilityService: 支付窗口列表(4): 3:com.android.systemui:FrameLayout | 3:com.tencent.mobileqq:FrameLayout | 3:com.miui.notes:LinearLayout | 1:com.tencent.mm:FrameLayout
+08-16 22:31:02.712 21406 21406 I CheckoutAccessibilityService: 支付窗口列表(4): 3:com.android.systemui:FrameLayout | 3:com.tencent.mobileqq:FrameLayout | 3:com.miui.notes:LinearLayout | 1:com.tencent.mm:FrameLayout
+08-16 22:31:04.252 21406 21406 I CheckoutAccessibilityService: 支付窗口列表(4): 3:com.android.systemui:FrameLayout | 3:com.tencent.mobileqq:FrameLayout | 3:com.miui.notes:LinearLayout | 1:com.tencent.mm:FrameLayout
+08-16 22:31:04.309 21406 21406 I CheckoutAccessibilityService: 支付结果页解析到证据: 金额=<已脱敏>分, 状态=SUCCESS, textLength=21
+08-16 22:31:04.318 21406 22561 I CheckoutAccessibilityService: 支付结果页无关联活跃会话，已转纯通知待确认
+08-16 22:31:04.343 21406 21406 I CheckoutAccessibilityService: 支付结果页解析到证据: 金额=<已脱敏>分, 状态=SUCCESS, textLength=21
+08-16 22:31:04.352 21406 22625 I CheckoutAccessibilityService: 支付结果页无关联活跃会话，已转纯通知待确认
+08-16 22:31:04.363 21406 21406 I CheckoutAccessibilityService: 支付结果页解析到证据: 金额=<已脱敏>分, 状态=SUCCESS, textLength=21
+08-16 22:31:04.367 21406 22562 I CheckoutAccessibilityService: 支付结果页无关联活跃会话，已转纯通知待确认
+08-16 22:31:04.380 21406 21406 I CheckoutAccessibilityService: 支付结果页解析到证据: 金额=<已脱敏>分, 状态=SUCCESS, textLength=21
+08-16 22:31:04.391 21406 22562 I CheckoutAccessibilityService: 支付结果页无关联活跃会话，已转纯通知待确认
+08-16 22:31:04.415 21406 21406 I CheckoutAccessibilityService: 支付结果页解析到证据: 金额=<已脱敏>分, 状态=SUCCESS, textLength=21
+08-16 22:31:04.424 21406 21406 I CheckoutAccessibilityService: 支付结果页解析到证据: 金额=<已脱敏>分, 状态=SUCCESS, textLength=21
+08-16 22:31:04.431 21406 22562 I CheckoutAccessibilityService: 支付结果页无关联活跃会话，已转纯通知待确认
+08-16 22:31:04.443 21406 21406 I CheckoutAccessibilityService: 支付结果页解析到证据: 金额=<已脱敏>分, 状态=SUCCESS, textLength=21
+08-16 22:31:04.448 21406 22562 I CheckoutAccessibilityService: 支付结果页无关联活跃会话，已转纯通知待确认
+08-16 22:31:04.449 21406 22562 I CheckoutAccessibilityService: 支付结果页无关联活跃会话，已转纯通知待确认
+08-16 22:31:04.456 21406 21406 I CheckoutAccessibilityService: 支付结果页解析到证据: 金额=<已脱敏>分, 状态=SUCCESS, textLength=21
+08-16 22:31:04.462 21406 22561 I CheckoutAccessibilityService: 支付结果页无关联活跃会话，已转纯通知待确认
+08-16 22:31:04.485 21406 21406 I CheckoutAccessibilityService: 支付结果页解析到证据: 金额=<已脱敏>分, 状态=SUCCESS, textLength=21
+08-16 22:31:04.493 21406 21406 I CheckoutAccessibilityService: 支付结果页解析到证据: 金额=<已脱敏>分, 状态=SUCCESS, textLength=21
+08-16 22:31:04.498 21406 22560 I CheckoutAccessibilityService: 支付结果页无关联活跃会话，已转纯通知待确认
+08-16 22:31:04.502 21406 22562 I CheckoutAccessibilityService: 支付结果页无关联活跃会话，已转纯通知待确认
+08-16 22:31:04.521 21406 21406 I CheckoutAccessibilityService: 支付结果页解析到证据: 金额=<已脱敏>分, 状态=SUCCESS, textLength=21
+08-16 22:31:04.532 21406 22561 I CheckoutAccessibilityService: 支付结果页无关联活跃会话，已转纯通知待确认
+08-16 22:31:04.536 21406 21406 I CheckoutAccessibilityService: 支付结果页解析到证据: 金额=<已脱敏>分, 状态=SUCCESS, textLength=21
+08-16 22:31:04.539 21406 22561 I CheckoutAccessibilityService: 支付结果页无关联活跃会话，已转纯通知待确认
+08-16 22:31:04.543 21406 21406 I CheckoutAccessibilityService: 支付结果页解析到证据: 金额=<已脱敏>分, 状态=SUCCESS, textLength=21
+08-16 22:31:04.546 21406 22561 I CheckoutAccessibilityService: 支付结果页无关联活跃会话，已转纯通知待确认
+08-16 22:31:04.551 21406 21406 I CheckoutAccessibilityService: 支付结果页解析到证据: 金额=<已脱敏>分, 状态=SUCCESS, textLength=21
+08-16 22:31:04.558 21406 22561 I CheckoutAccessibilityService: 支付结果页无关联活跃会话，已转纯通知待确认
+08-16 22:31:04.560 21406 21406 I CheckoutAccessibilityService: 支付结果页解析到证据: 金额=<已脱敏>分, 状态=SUCCESS, textLength=21
+08-16 22:31:04.562 21406 22561 I CheckoutAccessibilityService: 支付结果页无关联活跃会话，已转纯通知待确认
+08-16 22:31:04.569 21406 21406 I CheckoutAccessibilityService: 支付结果页解析到证据: 金额=<已脱敏>分, 状态=SUCCESS, textLength=21
+08-16 22:31:04.575 21406 22561 I CheckoutAccessibilityService: 支付结果页无关联活跃会话，已转纯通知待确认
+08-16 22:31:04.575 21406 21406 I CheckoutAccessibilityService: 支付结果页解析到证据: 金额=<已脱敏>分, 状态=SUCCESS, textLength=21
+08-16 22:31:04.579 21406 22561 I CheckoutAccessibilityService: 支付结果页无关联活跃会话，已转纯通知待确认
+08-16 22:31:04.585 21406 21406 I CheckoutAccessibilityService: 支付结果页解析到证据: 金额=<已脱敏>分, 状态=SUCCESS, textLength=21
+08-16 22:31:04.593 21406 21406 I CheckoutAccessibilityService: 支付结果页解析到证据: 金额=<已脱敏>分, 状态=SUCCESS, textLength=21
+08-16 22:31:04.596 21406 22561 I CheckoutAccessibilityService: 支付结果页无关联活跃会话，已转纯通知待确认
+08-16 22:31:04.600 21406 22625 I CheckoutAccessibilityService: 支付结果页无关联活跃会话，已转纯通知待确认
+08-16 22:31:04.604 21406 21406 I CheckoutAccessibilityService: 支付结果页解析到证据: 金额=<已脱敏>分, 状态=SUCCESS, textLength=21
+08-16 22:31:04.608 21406 22625 I CheckoutAccessibilityService: 支付结果页无关联活跃会话，已转纯通知待确认
+08-16 22:31:04.611 21406 21406 I CheckoutAccessibilityService: 支付结果页解析到证据: 金额=<已脱敏>分, 状态=SUCCESS, textLength=21
+08-16 22:31:04.616 21406 22562 I CheckoutAccessibilityService: 支付结果页无关联活跃会话，已转纯通知待确认
+08-16 22:31:04.619 21406 21406 I CheckoutAccessibilityService: 支付结果页解析到证据: 金额=<已脱敏>分, 状态=SUCCESS, textLength=21
+08-16 22:31:04.622 21406 22562 I CheckoutAccessibilityService: 支付结果页无关联活跃会话，已转纯通知待确认
+08-16 22:31:04.625 21406 21406 I CheckoutAccessibilityService: 支付结果页解析到证据: 金额=<已脱敏>分, 状态=SUCCESS, textLength=21
+08-16 22:31:04.628 21406 22625 I CheckoutAccessibilityService: 支付结果页无关联活跃会话，已转纯通知待确认
+08-16 22:31:04.630 21406 21406 I CheckoutAccessibilityService: 支付结果页解析到证据: 金额=<已脱敏>分, 状态=SUCCESS, textLength=21
+08-16 22:31:04.640 21406 22625 I CheckoutAccessibilityService: 支付结果页无关联活跃会话，已转纯通知待确认
+08-16 22:31:04.642 21406 21406 I CheckoutAccessibilityService: 支付结果页解析到证据: 金额=<已脱敏>分, 状态=SUCCESS, textLength=21
+08-16 22:31:04.649 21406 22562 I CheckoutAccessibilityService: 支付结果页无关联活跃会话，已转纯通知待确认
+08-16 22:31:04.653 21406 21406 I CheckoutAccessibilityService: 支付结果页解析到证据: 金额=<已脱敏>分, 状态=SUCCESS, textLength=21
+08-16 22:31:04.658 21406 22625 I CheckoutAccessibilityService: 支付结果页无关联活跃会话，已转纯通知待确认
+08-16 22:31:04.661 21406 21406 I CheckoutAccessibilityService: 支付结果页解析到证据: 金额=<已脱敏>分, 状态=SUCCESS, textLength=21
+08-16 22:31:04.665 21406 22562 I CheckoutAccessibilityService: 支付结果页无关联活跃会话，已转纯通知待确认
+08-16 22:31:04.669 21406 21406 I CheckoutAccessibilityService: 支付结果页解析到证据: 金额=<已脱敏>分, 状态=SUCCESS, textLength=21
+08-16 22:31:04.671 21406 22625 I CheckoutAccessibilityService: 支付结果页无关联活跃会话，已转纯通知待确认
+08-16 22:31:04.679 21406 21406 I CheckoutAccessibilityService: 支付结果页解析到证据: 金额=<已脱敏>分, 状态=SUCCESS, textLength=21
+08-16 22:31:04.689 21406 22562 I CheckoutAccessibilityService: 支付结果页无关联活跃会话，已转纯通知待确认
+08-16 22:31:04.690 21406 21406 I CheckoutAccessibilityService: 支付结果页解析到证据: 金额=<已脱敏>分, 状态=SUCCESS, textLength=21
+08-16 22:31:04.696 21406 22562 I CheckoutAccessibilityService: 支付结果页无关联活跃会话，已转纯通知待确认
+08-16 22:31:04.698 21406 21406 I CheckoutAccessibilityService: 支付结果页解析到证据: 金额=<已脱敏>分, 状态=SUCCESS, textLength=21
+08-16 22:31:04.702 21406 22562 I CheckoutAccessibilityService: 支付结果页无关联活跃会话，已转纯通知待确认
+08-16 22:31:04.706 21406 21406 I CheckoutAccessibilityService: 支付结果页解析到证据: 金额=<已脱敏>分, 状态=SUCCESS, textLength=21
+08-16 22:31:04.710 21406 22562 I CheckoutAccessibilityService: 支付结果页无关联活跃会话，已转纯通知待确认
+08-16 22:31:04.712 21406 21406 I CheckoutAccessibilityService: 支付结果页解析到证据: 金额=<已脱敏>分, 状态=SUCCESS, textLength=21
+08-16 22:31:04.718 21406 22561 I CheckoutAccessibilityService: 支付结果页无关联活跃会话，已转纯通知待确认
+08-16 22:31:04.728 21406 21406 I CheckoutAccessibilityService: 支付结果页解析到证据: 金额=<已脱敏>分, 状态=SUCCESS, textLength=21
+08-16 22:31:04.734 21406 22561 I CheckoutAccessibilityService: 支付结果页无关联活跃会话，已转纯通知待确认
+08-16 22:31:04.737 21406 21406 I CheckoutAccessibilityService: 支付结果页解析到证据: 金额=<已脱敏>分, 状态=SUCCESS, textLength=21
+08-16 22:31:04.744 21406 22561 I CheckoutAccessibilityService: 支付结果页无关联活跃会话，已转纯通知待确认
+08-16 22:31:04.746 21406 21406 I CheckoutAccessibilityService: 支付结果页解析到证据: 金额=<已脱敏>分, 状态=SUCCESS, textLength=21
+08-16 22:31:04.752 21406 22562 I CheckoutAccessibilityService: 支付结果页无关联活跃会话，已转纯通知待确认
+08-16 22:31:04.754 21406 21406 I CheckoutAccessibilityService: 支付结果页解析到证据: 金额=<已脱敏>分, 状态=SUCCESS, textLength=21
+08-16 22:31:04.764 21406 21406 I CheckoutAccessibilityService: 支付结果页解析到证据: 金额=<已脱敏>分, 状态=SUCCESS, textLength=21
+08-16 22:31:04.777 21406 22625 I CheckoutAccessibilityService: 支付结果页无关联活跃会话，已转纯通知待确认
+08-16 22:31:04.777 21406 21406 I CheckoutAccessibilityService: 支付结果页解析到证据: 金额=<已脱敏>分, 状态=SUCCESS, textLength=21
+08-16 22:31:04.779 21406 22625 I CheckoutAccessibilityService: 支付结果页无关联活跃会话，已转纯通知待确认
+08-16 22:31:04.788 21406 21406 I CheckoutAccessibilityService: 支付结果页解析到证据: 金额=<已脱敏>分, 状态=SUCCESS, textLength=21
+08-16 22:31:04.788 21406 22562 I CheckoutAccessibilityService: 支付结果页无关联活跃会话，已转纯通知待确认
+08-16 22:31:04.792 21406 22560 I CheckoutAccessibilityService: 支付结果页无关联活跃会话，已转纯通知待确认
+08-16 22:31:04.834 21406 21406 I CheckoutAccessibilityService: 支付结果页解析到证据: 金额=<已脱敏>分, 状态=SUCCESS, textLength=21
+08-16 22:31:04.837 21406 22625 I CheckoutAccessibilityService: 支付结果页无关联活跃会话，已转纯通知待确认
+08-16 22:31:05.230 21406 21406 I CheckoutAccessibilityService: 支付结果页解析到证据: 金额=<已脱敏>分, 状态=SUCCESS, textLength=21
+08-16 22:31:05.235 21406 22625 I CheckoutAccessibilityService: 支付结果页无关联活跃会话，已转纯通知待确认
+08-16 22:31:05.327 21406 21406 I CheckoutAccessibilityService: 支付结果页解析到证据: 金额=<已脱敏>分, 状态=SUCCESS, textLength=21
+08-16 22:31:05.331 21406 22625 I CheckoutAccessibilityService: 支付结果页无关联活跃会话，已转纯通知待确认
+08-16 22:31:05.434 21406 21406 I CheckoutAccessibilityService: 支付结果页解析到证据: 金额=<已脱敏>分, 状态=SUCCESS, textLength=21
+08-16 22:31:05.438 21406 22625 I CheckoutAccessibilityService: 支付结果页无关联活跃会话，已转纯通知待确认
+08-16 22:31:05.529 21406 21406 I CheckoutAccessibilityService: 支付结果页解析到证据: 金额=<已脱敏>分, 状态=SUCCESS, textLength=21
+08-16 22:31:05.534 21406 22560 I CheckoutAccessibilityService: 支付结果页无关联活跃会话，已转纯通知待确认
+08-16 22:31:05.628 21406 21406 I CheckoutAccessibilityService: 支付结果页解析到证据: 金额=<已脱敏>分, 状态=SUCCESS, textLength=21
+08-16 22:31:05.639 21406 22560 I CheckoutAccessibilityService: 支付结果页无关联活跃会话，已转纯通知待确认
+08-16 22:31:05.729 21406 21406 I CheckoutAccessibilityService: 支付结果页解析到证据: 金额=<已脱敏>分, 状态=SUCCESS, textLength=21
+08-16 22:31:05.732 21406 22560 I CheckoutAccessibilityService: 支付结果页无关联活跃会话，已转纯通知待确认
+08-16 22:31:06.234 21406 21406 I CheckoutAccessibilityService: 支付窗口列表(4): 3:com.android.systemui:FrameLayout | 3:com.tencent.mobileqq:FrameLayout | 3:com.miui.notes:LinearLayout | 1:com.tencent.mm:FrameLayout
+08-16 22:31:06.240 21406 21406 I CheckoutAccessibilityService: 支付结果页解析到证据: 金额=<已脱敏>分, 状态=SUCCESS, textLength=21
+08-16 22:31:06.242 21406 22560 I CheckoutAccessibilityService: 支付结果页无关联活跃会话，已转纯通知待确认
+08-16 22:31:06.326 21406 21406 I CheckoutAccessibilityService: 支付结果页解析到证据: 金额=<已脱敏>分, 状态=SUCCESS, textLength=21
+08-16 22:31:06.330 21406 22625 I CheckoutAccessibilityService: 支付结果页无关联活跃会话，已转纯通知待确认
+08-16 22:31:06.432 21406 21406 I CheckoutAccessibilityService: 支付结果页解析到证据: 金额=<已脱敏>分, 状态=SUCCESS, textLength=21
+08-16 22:31:06.435 21406 22625 I CheckoutAccessibilityService: 支付结果页无关联活跃会话，已转纯通知待确认
+08-16 22:31:06.531 21406 21406 I CheckoutAccessibilityService: 支付结果页解析到证据: 金额=<已脱敏>分, 状态=SUCCESS, textLength=21
+08-16 22:31:06.534 21406 22625 I CheckoutAccessibilityService: 支付结果页无关联活跃会话，已转纯通知待确认
+08-16 22:31:06.630 21406 21406 I CheckoutAccessibilityService: 支付结果页解析到证据: 金额=<已脱敏>分, 状态=SUCCESS, textLength=21
+08-16 22:31:06.633 21406 22560 I CheckoutAccessibilityService: 支付结果页无关联活跃会话，已转纯通知待确认
+08-16 22:31:08.769 21406 21406 I CheckoutAccessibilityService: 支付窗口列表(4): 3:com.android.systemui:FrameLayout | 3:com.tencent.mobileqq:FrameLayout | 3:com.miui.notes:LinearLayout | 1:com.tencent.mm:FrameLayout
+08-16 22:31:08.772 21406 21406 I CheckoutAccessibilityService: 支付结果页解析到证据: 金额=<已脱敏>分, 状态=SUCCESS, textLength=21
+08-16 22:31:08.777 21406 22560 I CheckoutAccessibilityService: 支付结果页无关联活跃会话，已转纯通知待确认
+08-16 22:31:08.867 21406 21406 I CheckoutAccessibilityService: 支付结果页解析到证据: 金额=<已脱敏>分, 状态=SUCCESS, textLength=21
+08-16 22:31:08.870 21406 22560 I CheckoutAccessibilityService: 支付结果页无关联活跃会话，已转纯通知待确认
+08-16 22:31:12.793 21406 21406 I CheckoutAccessibilityService: 支付窗口列表(4): 3:com.android.systemui:FrameLayout | 3:com.tencent.mobileqq:FrameLayout | 3:com.miui.notes:LinearLayout | 1:com.tencent.mm:FrameLayout
+08-16 22:31:12.797 21406 21406 I CheckoutAccessibilityService: 支付结果页解析到证据: 金额=<已脱敏>分, 状态=SUCCESS, textLength=21
+08-16 22:31:12.799 21406 22560 I CheckoutAccessibilityService: 支付结果页无关联活跃会话，已转纯通知待确认
+08-16 22:31:12.885 21406 21406 I CheckoutAccessibilityService: 支付结果页解析到证据: 金额=<已脱敏>分, 状态=SUCCESS, textLength=21
+08-16 22:31:12.888 21406 22560 I CheckoutAccessibilityService: 支付结果页无关联活跃会话，已转纯通知待确认
+08-16 22:31:14.176 21406 21406 I CheckoutAccessibilityService: 支付结果页解析到证据: 金额=<已脱敏>分, 状态=SUCCESS, textLength=21
+08-16 22:31:14.180 21406 22625 I CheckoutAccessibilityService: 支付结果页无关联活跃会话，已转纯通知待确认
+08-16 22:31:16.800 21406 21406 I CheckoutAccessibilityService: 支付窗口列表(4): 3:com.android.systemui:FrameLayout | 3:com.tencent.mobileqq:FrameLayout | 3:com.miui.notes:LinearLayout | 1:com.tencent.mm:FrameLayout
+08-16 22:31:16.803 21406 21406 I CheckoutAccessibilityService: 支付结果页解析到证据: 金额=<已脱敏>分, 状态=SUCCESS, textLength=21
+08-16 22:31:16.807 21406 22560 I CheckoutAccessibilityService: 支付结果页无关联活跃会话，已转纯通知待确认
+08-16 22:31:16.899 21406 21406 I CheckoutAccessibilityService: 支付结果页解析到证据: 金额=<已脱敏>分, 状态=SUCCESS, textLength=21
+08-16 22:31:16.901 21406 22560 I CheckoutAccessibilityService: 支付结果页无关联活跃会话，已转纯通知待确认
+08-16 22:31:20.804 21406 21406 I CheckoutAccessibilityService: 支付窗口列表(4): 3:com.android.systemui:FrameLayout | 3:com.tencent.mobileqq:FrameLayout | 3:com.miui.notes:LinearLayout | 1:com.tencent.mm:FrameLayout
+08-16 22:31:20.808 21406 21406 I CheckoutAccessibilityService: 支付结果页解析到证据: 金额=<已脱敏>分, 状态=SUCCESS, textLength=21
+08-16 22:31:20.811 21406 22560 I CheckoutAccessibilityService: 支付结果页无关联活跃会话，已转纯通知待确认
+08-16 22:31:20.900 21406 21406 I CheckoutAccessibilityService: 支付结果页解析到证据: 金额=<已脱敏>分, 状态=SUCCESS, textLength=21
+08-16 22:31:20.905 21406 22625 I CheckoutAccessibilityService: 支付结果页无关联活跃会话，已转纯通知待确认
+08-16 22:31:24.614 21406 21406 I CheckoutAccessibilityService: 支付窗口列表(4): 3:com.android.systemui:FrameLayout | 3:com.tencent.mobileqq:FrameLayout | 3:com.miui.notes:LinearLayout | 1:com.tencent.mm:FrameLayout
+08-16 22:31:24.618 21406 21406 I CheckoutAccessibilityService: 支付结果页解析到证据: 金额=<已脱敏>分, 状态=SUCCESS, textLength=21
+08-16 22:31:24.621 21406 22560 I CheckoutAccessibilityService: 支付结果页无关联活跃会话，已转纯通知待确认
+08-16 22:31:24.801 21406 21406 I CheckoutAccessibilityService: 支付结果页解析到证据: 金额=<已脱敏>分, 状态=SUCCESS, textLength=21
+08-16 22:31:24.803 21406 22560 I CheckoutAccessibilityService: 支付结果页无关联活跃会话，已转纯通知待确认
+08-16 22:31:24.905 21406 21406 I CheckoutAccessibilityService: 支付结果页解析到证据: 金额=<已脱敏>分, 状态=SUCCESS, textLength=21
+08-16 22:31:24.911 21406 22560 I CheckoutAccessibilityService: 支付结果页无关联活跃会话，已转纯通知待确认
+08-16 22:31:27.029 21406 21406 I CheckoutAccessibilityService: 支付窗口列表(4): 3:com.android.systemui:FrameLayout | 3:com.tencent.mobileqq:FrameLayout | 3:com.miui.notes:LinearLayout | 1:com.tencent.mm:FrameLayout
+08-16 22:31:27.032 21406 21406 I CheckoutAccessibilityService: 支付结果页解析到证据: 金额=<已脱敏>分, 状态=SUCCESS, textLength=21
+08-16 22:31:27.035 21406 22560 I CheckoutAccessibilityService: 支付结果页无关联活跃会话，已转纯通知待确认
+08-16 22:31:28.818 21406 21406 I CheckoutAccessibilityService: 支付窗口列表(4): 3:com.android.systemui:FrameLayout | 3:com.tencent.mobileqq:FrameLayout | 3:com.miui.notes:LinearLayout | 1:com.tencent.mm:FrameLayout
+08-16 22:31:28.821 21406 21406 I CheckoutAccessibilityService: 支付结果页解析到证据: 金额=<已脱敏>分, 状态=SUCCESS, textLength=21
+08-16 22:31:28.824 21406 22625 I CheckoutAccessibilityService: 支付结果页无关联活跃会话，已转纯通知待确认
+08-16 22:31:28.904 21406 21406 I CheckoutAccessibilityService: 支付结果页解析到证据: 金额=<已脱敏>分, 状态=SUCCESS, textLength=21
+08-16 22:31:28.909 21406 22560 I CheckoutAccessibilityService: 支付结果页无关联活跃会话，已转纯通知待确认
+08-16 22:31:29.440 21406 21406 I CheckoutAccessibilityService: 支付结果页解析到证据: 金额=<已脱敏>分, 状态=SUCCESS, textLength=21
+08-16 22:31:29.447 21406 22625 I CheckoutAccessibilityService: 支付结果页无关联活跃会话，已转纯通知待确认

@@ -20,11 +20,13 @@ enum class CheckoutPageRole(val storageValue: String) {
 
     fun canBufferSnapshot(): Boolean = this == CHECKOUT
 
-    /** 用户主动重试只能引用已确认的购物普通页，未知、结算和支付页面均不在范围内。 */
+    /** 用户主动截图允许引用任何非敏感的购物普通页；未知页与结算页由手动截图放宽稳定窗口。 */
     internal fun canBufferUserRetrySnapshot(): Boolean = this in setOf(
         SHOPPING_HOME,
         PRODUCT_DETAIL,
-        CART
+        CART,
+        CHECKOUT,
+        UNKNOWN
     )
 
     companion object {
