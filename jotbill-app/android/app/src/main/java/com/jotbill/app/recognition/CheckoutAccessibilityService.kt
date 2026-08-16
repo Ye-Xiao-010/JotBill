@@ -583,6 +583,12 @@ class CheckoutAccessibilityService : AccessibilityService() {
                     handoffStableCheckout = null
                     handoffForegroundPackage = null
                 }
+                Log.i(
+                    TAG,
+                    "支付交接诊断: payment=$shoppingPackage, currentStable=${currentStableCheckout != null}, " +
+                        "handoffStable=${handoffStableCheckout != null}, previousShopping=$previousShoppingPackage, " +
+                        "coordRef=${snapshotCaptureCoordinator?.currentPaymentHandoffReference()?.sessionId ?: "null"}"
+                )
                 // 阶段四 T3：在支付应用中观察支付结果页，提取结构化证据
                 observePaymentResultIfApplicable(
                     event = event,
@@ -1610,10 +1616,11 @@ class CheckoutAccessibilityService : AccessibilityService() {
         } ?: return null
         val observation = stableCheckout.observation
         val slotId = checkoutSnapshotSlotId(observation.shoppingPackage)
-        val reference = checkoutSnapshotBuffer?.findReference(
+        val bufferedReference = checkoutSnapshotBuffer?.findReference(
             slotId = slotId,
             pageFingerprint = observation.pageFingerprint
-        ) ?: synchronized(aiLifecycleLock) {
+        )
+        val reference = bufferedReference ?: synchronized(aiLifecycleLock) {
             activeAiReferences.values
                 .filter {
                     it.shoppingPackage == observation.shoppingPackage &&
@@ -1621,6 +1628,13 @@ class CheckoutAccessibilityService : AccessibilityService() {
                 }
                 .singleOrNull()
         } ?: fallbackReference
+        Log.i(
+            TAG,
+            "支付交接上下文: stable=${stableCheckout.observation.pageFingerprint.take(12)}, " +
+                "buffered=${bufferedReference != null}, aiRef=${reference != null && reference !== fallbackReference}, " +
+                "fallback=${fallbackReference?.sessionId ?: "null"}, " +
+                "finalRef=${reference?.sessionId ?: "null"}"
+        )
         return PaymentResultHandoffContext(
             stableCheckout = stableCheckout,
             reference = reference,
