@@ -826,11 +826,15 @@ export interface ImportCandidate {
 
 /** inspectImport 的只读预览结果。 */
 export interface ImportInspection {
+  /** SAF content URI 或本地路径，预览后继续执行时必须回传该值。 */
+  filePath: string;
   source: ImportSource | null;
   format: ImportFileFormat;
   formatVersion?: string;
   fileHash: string;
   encrypted: boolean;
+  /** 加密压缩包尚未输入密码时为 true；用户输入密码后再次 inspectImport 才会返回统计。 */
+  passwordRequired?: boolean;
   duplicateFile: boolean;
   needsCandidateSelection: boolean;
   candidates: ImportCandidate[];
