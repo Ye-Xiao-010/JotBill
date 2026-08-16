@@ -454,7 +454,9 @@ internal class CheckoutPaymentMatcher(
                 database.transactionCandidateDao().update(
                     candidate.copy(
                         amountMinor = signal.amountMinor,
-                        merchant = signal.merchant ?: candidate.merchant,
+                        merchant = signal.merchant
+                            ?: candidate.merchant
+                            ?: shoppingPackageMerchant(existingSession.shoppingPackage),
                         evidenceAmountMinor = signal.amountMinor,
                         evidenceMerchant = signal.merchant,
                         evidenceOrderId = signal.orderId,
@@ -1101,7 +1103,10 @@ internal class CheckoutPaymentMatcher(
             accountId = accountId,
             targetAccountId = null,
             platform = rulePatch.platform ?: candidate.platform,
-            merchant = rulePatch.merchant ?: candidate.merchant,
+            merchant = rulePatch.merchant
+                ?: candidate.merchant
+                ?: evidence.merchant
+                ?: shoppingPackageMerchant(session.shoppingPackage),
             productDescription = candidate.productDescription,
             sourceType = "ai_vision",
             originalTransactionId = session.id,
@@ -1286,7 +1291,9 @@ internal class CheckoutPaymentMatcher(
             type = "expense",
             occurredAt = evidence?.occurredAt ?: candidate.aiOccurredAt ?: now,
             platform = candidate.platform ?: evidence?.platform,
-            merchant = candidate.merchant ?: evidence?.merchant,
+            merchant = candidate.merchant
+                ?: evidence?.merchant
+                ?: shoppingPackageMerchant(session.shoppingPackage),
             productDescription = candidate.productDescription,
             orderId = evidence?.orderId ?: candidate.aiOrderId,
             accountId = defaultAccountIdForPayment(evidence?.platform),
@@ -1579,6 +1586,19 @@ internal class CheckoutPaymentMatcher(
     )
 
     private fun candidateIdFor(sessionId: String): String = stableId("candidate", sessionId)
+
+    /** 结算会话的购物包名兜底成中文商户名，避免支付证据无商户时账单只显示时间。 */
+    private fun shoppingPackageMerchant(shoppingPackage: String?): String? = when (shoppingPackage) {
+        "com.xunmeng.pinduoduo" -> "拼多多"
+        "com.taobao.taobao" -> "淘宝"
+        "com.tmall.wireless" -> "天猫"
+        "com.jingdong.app.mall" -> "京东"
+        "com.sankuai.meituan" -> "美团"
+        "com.sdu.didi.psnger" -> "滴滴"
+        "com.ss.android.ugc.aweme" -> "抖音"
+        "com.xingin.xhs" -> "小红书"
+        else -> null
+    }
 
     private fun parseTimestamp(value: String): Long? = runCatching {
         Instant.parse(value).toEpochMilli()
