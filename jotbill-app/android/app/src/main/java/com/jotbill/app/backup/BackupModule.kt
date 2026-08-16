@@ -271,6 +271,44 @@ class BackupModule(
         promise.resolve(null)
     }
 
+    /** 阶段六 T7 撤销入口所需：读取导入批次列表（不包含进行中的中间态）。 */
+    @ReactMethod
+    fun getImportBatches(promise: Promise) {
+        scope.launch {
+            try {
+                val batches = database.importBatchDao().getPage(limit = 1000, offset = 0)
+                val result = org.json.JSONArray()
+                batches.forEach { batch ->
+                    result.put(
+                        org.json.JSONObject()
+                            .put("id", batch.id)
+                            .put("fileHash", batch.fileHash)
+                            .put("source", batch.source)
+                            .put("format", batch.format)
+                            .put("formatVersion", batch.formatVersion)
+                            .put("importerVersion", batch.importerVersion)
+                            .put("status", batch.status)
+                            .put("totalRecords", batch.totalRecords)
+                            .put("validRecords", batch.validRecords)
+                            .put("importedCount", batch.importedCount)
+                            .put("mergedCount", batch.mergedCount)
+                            .put("skippedCount", batch.skippedCount)
+                            .put("pendingCount", batch.pendingCount)
+                            .put("failedCount", batch.failedCount)
+                            .put("suspiciousCount", batch.suspiciousCount)
+                            .put("accountUnmatchedCount", batch.accountUnmatchedCount)
+                            .put("createdAt", batch.createdAt)
+                            .put("updatedAt", batch.updatedAt)
+                            .put("completedAt", batch.completedAt ?: org.json.JSONObject.NULL)
+                    )
+                }
+                withContext(Dispatchers.Main) { promise.resolve(result.toString()) }
+            } catch (error: Exception) {
+                rejectFromWorker(promise, error, "IMPORT_FAILED")
+            }
+        }
+    }
+
     /**
      * 阶段六 T6：撤销最近一批已完成的导入。
      * 受用户保护的记录不自动删除/回滚，返回清单且批次状态为 UNDO_FAILED。
