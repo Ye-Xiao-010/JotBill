@@ -507,6 +507,17 @@ class CheckoutAccessibilityService : AccessibilityService() {
                 pageDetector.supportsPaymentPackage(eventPackage)
             val rootIsPayment = pageDetector.supportsPaymentPackage(activeRootPackage)
             if (eventIsKnown && !rootIsPayment) {
+                // 离开支付/购物应用后，后台仍可能继续发出旧窗口事件（尤其微信
+                // OrderHandlerUI/WxaLite 成功页）。若事件包是支付包、活动根窗口
+                // 既不是支付包也不是购物包，说明支付页已经不在前台，不能把旧窗口
+                // 当成当前支付结果页，否则会产生错误金额的待确认。
+                val eventIsPayment = pageDetector.supportsPaymentPackage(eventPackage)
+                val rootIsKnown = activeRootPackage.isBlank() ||
+                    pageDetector.supportsShoppingPackage(activeRootPackage) ||
+                    rootIsPayment
+                if (eventIsPayment && !rootIsKnown) {
+                    return activeRootPackage
+                }
                 return eventPackage
             }
             // 购物应用刚把前台交给微信/支付宝时，活动窗口已经是支付包，按支付包处理，
@@ -1091,13 +1102,19 @@ class CheckoutAccessibilityService : AccessibilityService() {
                         ""
                     }
                     inventory += "${window.type}:${rootPackage.ifBlank { "null" }}:${rootClass.substringAfterLast('.')}"
-                    // 真机上的微信 LiteApp 成功页窗口类型/包名可能与活动窗口不一致，
-                    // 先收集全部窗口根节点，后续按“能否分类为 PAYMENT_RESULT”逐个筛选，
-                    // 不因类型或包名白名单漏掉带支付成功语义的窗口。
-                    try {
-                        add(window.root)
+                    // 只取活动/聚焦窗口。此前扫描全部窗口会在离开微信后把后台旧成功页
+                    // 再次解析成支付证据，产生错误金额的待确认。
+                    val windowActive = try {
+                        window.isActive || window.isFocused
                     } catch (_: RuntimeException) {
-                        // 单个窗口不可读时继续检查其它窗口。
+                        false
+                    }
+                    if (windowActive) {
+                        try {
+                            add(window.root)
+                        } catch (_: RuntimeException) {
+                            // 单个窗口不可读时继续检查其它窗口。
+                        }
                     }
                 }
                 Log.i(TAG, "支付窗口列表(${inventory.size}): ${inventory.joinToString(" | ")}")
