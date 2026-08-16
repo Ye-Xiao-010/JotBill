@@ -8,6 +8,7 @@ import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
+import com.jotbill.app.data.DatabaseMigrationGuard
 import com.jotbill.app.data.JOT_BILL_DATABASE_VERSION
 import com.jotbill.app.data.JotBillDatabase
 import com.jotbill.app.data.JotBillDatabaseProvider
@@ -69,6 +70,11 @@ class RuntimeModule(
                     put("categoryCount", database.categoryDao().getAll().size)
                     put("accountCount", database.accountDao().getAll().size)
                     put("lastLaunchAt", preferences.getString(LAST_LAUNCH_KEY, Instant.now().toString()))
+                    val lastMigrationRecoveredAt = DatabaseMigrationGuard(reactContext).lastRecoveredAt()
+                    put(
+                        "lastMigrationRecoveredAt",
+                        if (lastMigrationRecoveredAt > 0L) Instant.ofEpochMilli(lastMigrationRecoveredAt).toString() else JSONObject.NULL
+                    )
                     put("checkedAt", Instant.now().toString())
                     put("aiProviderConfigured", database.aiProviderConfigDao().getDefault() != null)
                     put("accessibilityEnabled", isAccessibilityServiceEnabled())
