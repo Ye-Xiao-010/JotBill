@@ -115,6 +115,22 @@ interface BillDao {
     ): BillEntity?
 
     /**
+     * 阶段六 T5 跨来源订单号合并候选：导入行的商户订单号命中既有账单。
+     * 不限制 sourceType（含自动识别、手动、历史导入），由导入引擎经
+     * FieldPriorityResolver(Source.IMPORT) 决定可变字段是否写入。
+     * 退款行由引擎豁免，不调用本查询。
+     */
+    @Query(
+        """
+        SELECT * FROM bills
+        WHERE order_id = :orderId
+        ORDER BY occurred_at DESC, id DESC
+        LIMIT 1
+        """
+    )
+    suspend fun findByOrderIdForImportMerge(orderId: String): BillEntity?
+
+    /**
      * 阶段五 T6 去重第 4 级候选查询：金额相等 + 类型相同 + 时间窗口内。
      * 币种因素由账户币种（CNY）隐含；账户/商户相似度由 DuplicateGuard 在内存判定。
      */
