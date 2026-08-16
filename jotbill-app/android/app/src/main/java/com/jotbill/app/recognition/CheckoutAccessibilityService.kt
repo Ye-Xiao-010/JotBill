@@ -512,8 +512,13 @@ class CheckoutAccessibilityService : AccessibilityService() {
                 // 既不是支付包也不是购物包，说明支付页已经不在前台，不能把旧窗口
                 // 当成当前支付结果页，否则会产生错误金额的待确认。
                 val eventIsPayment = pageDetector.supportsPaymentPackage(eventPackage)
+                val rootIsShopping = pageDetector.supportsShoppingPackage(activeRootPackage)
+                // 活动窗口已经回到购物 App 时，微信旧窗口事件是后台残留，直接按购物包处理。
+                if (eventIsPayment && rootIsShopping) {
+                    return activeRootPackage
+                }
                 val rootIsKnown = activeRootPackage.isBlank() ||
-                    pageDetector.supportsShoppingPackage(activeRootPackage) ||
+                    rootIsShopping ||
                     rootIsPayment
                 if (eventIsPayment && !rootIsKnown) {
                     return activeRootPackage
@@ -1303,6 +1308,18 @@ class CheckoutAccessibilityService : AccessibilityService() {
             paymentScreenshotFallbackInFlight ||
             now - lastPaymentScreenshotFallbackAt < 15_000L
         ) {
+            return
+        }
+        val activeRootPackage = try {
+            rootInActiveWindow?.packageName?.toString()?.trim().orEmpty()
+        } catch (_: RuntimeException) {
+            ""
+        }
+        if (
+            activeRootPackage.isNotBlank() &&
+            !pageDetector.supportsPaymentPackage(activeRootPackage)
+        ) {
+            Log.i(TAG, "支付结果页截图兜底跳过: 当前前台不是支付应用 pkg=$activeRootPackage")
             return
         }
         val client = synchronized(aiLifecycleLock) { aiVisionClient }
