@@ -20,6 +20,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.coroutines.resume
@@ -257,6 +258,17 @@ class PaymentNotificationService : NotificationListenerService() {
         if (!acceptedByAccessibility) {
             try {
                 val database = JotBillDatabaseProvider.get(applicationContext)
+                if (result == null) {
+                    // 超时可能是无障碍链路仍在异步落库；短暂等待后按 sourceEventKey 复查，
+                    // 避免同一次支付既落会话证据又落孤儿待确认。
+                    delay(EVIDENCE_GRACE_MILLIS)
+                }
+                val evidenceAlreadyStored = database.paymentEvidenceDao()
+                    .getBySourceEventKey(input.sourceEventKey) != null
+                if (evidenceAlreadyStored) {
+                    Log.i(TAG, "支付证据已由无障碍链路落库，跳过纯通知兜底")
+                    return
+                }
                 CheckoutPaymentMatcher(database).recordOrphanPaymentSignal(
                     signal, sourceType = "NOTIFICATION"
                 )
@@ -428,6 +440,7 @@ class PaymentNotificationService : NotificationListenerService() {
     companion object {
         private const val TAG = "PaymentNotificationService"
         private const val FALLBACK_TIMEOUT_MILLIS = 5_000L
+        private const val EVIDENCE_GRACE_MILLIS = 1_000L
 
         /** Accepted 或 AiDispatched 表示无障碍链路已接收证据，其余情况才进入纯通知待确认。 */
 
