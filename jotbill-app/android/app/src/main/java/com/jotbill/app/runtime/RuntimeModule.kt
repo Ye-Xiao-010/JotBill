@@ -3,6 +3,7 @@ package com.jotbill.app.runtime
 import android.content.ComponentName
 import android.content.Intent
 import android.os.Build
+import android.os.PowerManager
 import android.provider.Settings
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
@@ -80,6 +81,8 @@ class RuntimeModule(
                     put("accessibilityEnabled", isAccessibilityServiceEnabled())
                     put("notificationEnabled", isNotificationListenerEnabled())
                     put("overlayPermissionGranted", isOverlayPermissionGranted())
+                    put("batteryOptimizationIgnored", isIgnoringBatteryOptimizations())
+                    put("orphanImportBatches", database.importBatchDao().getRunning().size)
                 }.toString()
                 withContext(Dispatchers.Main) { promise.resolve(result) }
             } catch (error: Exception) {
@@ -123,6 +126,12 @@ class RuntimeModule(
         } else {
             true
         }
+    }
+
+    /** 阶段七 T6：电池优化白名单状态（未加入时提示用户前往系统设置）。 */
+    private fun isIgnoringBatteryOptimizations(): Boolean {
+        val powerManager = reactContext.getSystemService(PowerManager::class.java) ?: return false
+        return powerManager.isIgnoringBatteryOptimizations(reactContext.packageName)
     }
 
     override fun invalidate() {

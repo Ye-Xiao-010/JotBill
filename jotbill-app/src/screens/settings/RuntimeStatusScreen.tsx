@@ -1,15 +1,20 @@
 import React, { useCallback } from 'react';
 import { RefreshControl, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
+import { Linking } from 'react-native';
 import { useQuery } from '@tanstack/react-query';
-import { Activity, CheckCircle2, ChevronLeft, Database, FileText, Layers3, WalletCards } from 'lucide-react-native';
-import { nativeRuntime } from '../../native';
+import { Activity, AlertTriangle, Battery, CheckCircle2, ChevronLeft, Database, FileText, Layers3, WalletCards } from 'lucide-react-native';
+import { nativeRecognition, nativeRuntime } from '../../native';
 import { borderRadius, borderWidth, spacing } from '../../theme/spacing';
 import { ThemeColors } from '../../theme/colors';
 import { useStyles } from '../../hooks';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 const STATUS_QUERY_KEY = ['runtime-status'] as const;
+
+function booleanText(value?: boolean): string {
+  return value ? '已授权/已开启' : '未授权/未开启';
+}
 
 function formatTime(value?: string): string {
   if (!value) return '--';
@@ -78,6 +83,53 @@ export default function RuntimeStatusScreen() {
             <Text style={styles.detailLabel}>数据存储</Text>
             <Text style={styles.detailValue}>本机 Room / SQLCipher</Text>
           </View>
+          <View style={styles.detailRow}>
+            <Text style={styles.detailLabel}>无障碍服务</Text>
+            <Text style={styles.detailValue}>{booleanText(status?.accessibilityEnabled)}</Text>
+          </View>
+          <View style={styles.detailRow}>
+            <Text style={styles.detailLabel}>通知监听</Text>
+            <Text style={styles.detailValue}>{booleanText(status?.notificationEnabled)}</Text>
+          </View>
+          <View style={styles.detailRow}>
+            <Text style={styles.detailLabel}>悬浮窗权限</Text>
+            <Text style={styles.detailValue}>{booleanText(status?.overlayPermissionGranted)}</Text>
+          </View>
+          <View style={styles.detailRow}>
+            <Text style={styles.detailLabel}>电池优化白名单</Text>
+            <Text style={styles.detailValue}>{booleanText(status?.batteryOptimizationIgnored)}</Text>
+          </View>
+          <View style={styles.detailRow}>
+            <Text style={styles.detailLabel}>孤儿导入批次</Text>
+            <Text style={styles.detailValue}>{status?.orphanImportBatches ?? '--'}</Text>
+          </View>
+          {status?.lastMigrationRecoveredAt ? (
+            <View style={styles.detailRow}>
+              <Text style={styles.detailLabel}>迁移回滚时间</Text>
+              <Text style={styles.detailValue}>{formatTime(status.lastMigrationRecoveredAt)}</Text>
+            </View>
+          ) : null}
+        </View>
+        <View style={styles.detailCard}>
+          <Text style={styles.detailTitle}>重新授权</Text>
+          <View style={styles.detailRow}>
+            <Text style={styles.detailLabel}>通知监听设置</Text>
+            <TouchableOpacity onPress={() => { void nativeRuntime.openNotificationListenerSettings(); }}>
+              <Text style={styles.linkText}>打开</Text>
+            </TouchableOpacity>
+          </View>
+          <View style={styles.detailRow}>
+            <Text style={styles.detailLabel}>无障碍服务设置</Text>
+            <TouchableOpacity onPress={() => { void nativeRecognition.openAccessibilitySettings(); }}>
+              <Text style={styles.linkText}>打开</Text>
+            </TouchableOpacity>
+          </View>
+          <View style={styles.detailRow}>
+            <Text style={styles.detailLabel}>悬浮窗/电池优化</Text>
+            <TouchableOpacity onPress={() => { void Linking.openSettings(); }}>
+              <Text style={styles.linkText}>打开系统设置</Text>
+            </TouchableOpacity>
+          </View>
         </View>
       </ScrollView>
     </SafeAreaView>
@@ -106,6 +158,7 @@ const createStyles = (colors: ThemeColors) => ({
     detailRow: { flexDirection: 'row', justifyContent: 'space-between', gap: spacing.md, paddingVertical: spacing.sm, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.divider },
     detailLabel: { fontSize: 13, color: colors.textSecondary },
     detailValue: { flexShrink: 1, fontSize: 13, fontWeight: '700', color: colors.textPrimary, textAlign: 'right' },
+    linkText: { fontSize: 13, fontWeight: '800', color: colors.primary },
   }),
   _colors: colors,
 });
