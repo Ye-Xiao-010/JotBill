@@ -260,6 +260,8 @@ class CheckoutAccessibilityService : AccessibilityService() {
     private var lastPaymentScreenshotFallbackAt = 0L
     @Volatile
     private var paymentScreenshotFallbackInFlight = false
+    @Volatile
+    private var lastSuccessfulPaymentEvidenceAt = 0L
     private val recentPaymentResultEventKeys = mutableMapOf<String, Long>()
     private val screenshotCallbackExecutor = Executor { runnable -> mainHandler.post(runnable) }
     @Volatile
@@ -1233,6 +1235,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
                         Log.d(TAG, "支付结果页同一事件已处理，跳过重复解析: ${evidence.sourceEventKey.take(12)}")
                         return
                     }
+                    lastSuccessfulPaymentEvidenceAt = System.currentTimeMillis()
                     Log.i(
                         TAG,
                         "支付结果页解析到证据: 金额=${evidence.amountMinor}分, 状态=${evidence.paymentStatus}, " +
@@ -1306,7 +1309,8 @@ class CheckoutAccessibilityService : AccessibilityService() {
         val now = System.currentTimeMillis()
         if (
             paymentScreenshotFallbackInFlight ||
-            now - lastPaymentScreenshotFallbackAt < 15_000L
+            now - lastPaymentScreenshotFallbackAt < 15_000L ||
+            now - lastSuccessfulPaymentEvidenceAt < 90_000L
         ) {
             return
         }
@@ -1393,10 +1397,12 @@ class CheckoutAccessibilityService : AccessibilityService() {
             "result-event|$paymentPackage|${occurredAt / 120_000L}|${fields.amountMinor}|" +
                 "${fields.orderId.orEmpty()}"
         )
-        if (!markPaymentResultEvent(sourceEventKey, System.currentTimeMillis())) {
+        val now = System.currentTimeMillis()
+        if (!markPaymentResultEvent(sourceEventKey, now)) {
             Log.d(TAG, "支付结果页截图兜底同一事件已处理，跳过重复落库")
             return
         }
+        lastSuccessfulPaymentEvidenceAt = now
         val evidence = PaymentResultEvidence(
             amountMinor = fields.amountMinor,
             merchant = fields.merchant,
