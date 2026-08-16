@@ -11,7 +11,7 @@ import kotlinx.coroutines.runBlocking
 
 /** 按进程复用数据库实例，并使用应用上下文避免持有 Activity。 */
 object JotBillDatabaseProvider {
-    private const val DATABASE_NAME = "jotbill.db"
+    const val DATABASE_NAME = "jotbill.db"
 
     @Volatile
     private var instance: JotBillDatabase? = null
@@ -31,18 +31,34 @@ object JotBillDatabaseProvider {
 
     private fun build(context: Context): JotBillDatabase {
         SQLiteDatabase.loadLibs(context)
+        val migrationGuard = DatabaseMigrationGuard(context)
+        val backup = migrationGuard.backupCurrentDatabase()
         val passphrase = KeyStoreSecretStore(context).getOrCreateDatabasePassphrase()
         val factory = SupportFactory(passphrase)
 
-        val database = Room.databaseBuilder(context, JotBillDatabase::class.java, DATABASE_NAME)
-            .openHelperFactory(factory)
-            .addMigrations(*DatabaseMigrations.all)
-            .build()
+        var database: JotBillDatabase? = null
+        return try {
+            database = Room.databaseBuilder(context, JotBillDatabase::class.java, DATABASE_NAME)
+                .openHelperFactory(factory)
+                .addMigrations(*DatabaseMigrations.all)
+                .build()
 
-        // 等待迁移完成后再初始化默认数据，确保数据库交给调用方时已经可用。
-        runBlocking(Dispatchers.IO) {
-            DefaultDataInitializer(database).initializeIfFirstRun()
+            // 等待迁移完成后再初始化默认数据，确保数据库交给调用方时已经可用。
+            runBlocking(Dispatchers.IO) {
+                DefaultDataInitializer(database!!).initializeIfFirstRun()
+            }
+            database!!
+        } catch (error: Exception) {
+            runCatching { database?.close() }
+            val restored = migrationGuard.restoreOnMigrationFailure(backup)
+            throw IllegalStateException(
+                if (restored) {
+                    "数据库迁移失败，已恢复迁移前数据库，请先导出数据"
+                } else {
+                    "数据库迁移失败，且迁移前备份恢复未成功"
+                },
+                error
+            )
         }
-        return database
     }
 }
