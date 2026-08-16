@@ -101,6 +101,9 @@ internal class ImportEngine(
         try {
             val requestedCandidate = candidateFileName?.takeIf { it.isNotBlank() }
             prepared = preparer.prepare(filePath, password)
+            if (prepared.encrypted && password.isNullOrBlank()) {
+                return passwordRequiredJson(prepared)
+            }
             if (prepared.candidates.size > 1 && requestedCandidate == null) {
                 return candidateSelectionJson(prepared)
             }
@@ -200,6 +203,12 @@ internal class ImportEngine(
         prepared: ImportFilePreparer.PreparedImport,
         requestedFileName: String?
     ): ImportFilePreparer.Candidate {
+        if (prepared.candidates.isEmpty()) {
+            throw ImportException(
+                "IMPORT_PASSWORD_REQUIRED",
+                "该账单压缩包已加密，请输入解压密码"
+            )
+        }
         val requested = requestedFileName?.takeIf { it.isNotBlank() }
         return when {
             requested != null -> prepared.candidates.firstOrNull {
@@ -213,6 +222,23 @@ internal class ImportEngine(
                 "IMPORT_CANDIDATE_REQUIRED",
                 "压缩包内存在多个候选账单文件，请选择要导入的文件"
             )
+        }
+    }
+
+    private suspend fun passwordRequiredJson(
+        prepared: ImportFilePreparer.PreparedImport
+    ): JSONObject {
+        val duplicateBatch = database.importBatchDao().findByFileHash(prepared.fileHash)
+        return JSONObject().apply {
+            put("filePath", prepared.originalPath)
+            put("passwordRequired", true)
+            put("needsCandidateSelection", false)
+            put("source", JSONObject.NULL)
+            put("format", prepared.format)
+            put("fileHash", prepared.fileHash)
+            put("encrypted", true)
+            put("duplicateFile", duplicateBatch != null)
+            put("candidates", JSONArray())
         }
     }
 
