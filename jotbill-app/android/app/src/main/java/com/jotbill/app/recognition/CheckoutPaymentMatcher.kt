@@ -217,8 +217,12 @@ internal class CheckoutPaymentMatcher(
                         val session = database.checkoutSessionDao()
                             .getById(failedSessionIds.single())
                         if (session != null && session.expiresAt > at) {
+                            // AI 失败占位来自普通页手动截图（pageRole 常为 UNKNOWN），
+                            // 支付证据晚到时把引用角色提升为 CHECKOUT，允许通过支付证据校验。
                             PaymentSessionResolution.Matched(
-                                reference = referenceForSession(session),
+                                reference = referenceForSession(session).copy(
+                                    pageRole = CheckoutPageRole.CHECKOUT
+                                ),
                                 byOrderId = false
                             )
                         } else {
