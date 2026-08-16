@@ -671,7 +671,7 @@ internal object PaymentResultNormalizer {
         }
         for (pattern in AMOUNT_PATTERNS) {
             for (match in pattern.findAll(content)) {
-                parseAmountMinor(match.groupValues.getOrNull(1))?.let { return it }
+                parseAmountMinor(match.groupValues.getOrNull(1) ?: continue)?.let { return it }
             }
         }
         return null
