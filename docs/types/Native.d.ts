@@ -1204,6 +1204,26 @@ export interface AiModule {
 }
 
 /**
+ * 阶段七 T5：APK 安装前校验结果。
+ */
+export interface ApkVerification {
+  packageName: string;
+  versionCode: number;
+  versionName: string;
+  sha256: string;
+  /** expectedSha256 为空时恒为 true；否则表示待安装 APK 与更新清单哈希一致。 */
+  sha256Matched: boolean;
+  /** 同包名当前应用已安装时，比较待安装包与当前应用签名证书 SHA-256；否则表示待安装包自身签名有效。 */
+  signatureConsistent: boolean;
+}
+
+export interface InstallApkModule {
+  install(filePath: string): Promise<void>;
+  /** 安装前校验包名、版本、SHA-256 与签名一致性；任何一项不满足时调用方不得安装。 */
+  verifyApk(filePath: string, expectedSha256?: string): Promise<ApkVerification>;
+}
+
+/**
  * 运行状态接口
  */
 export interface RuntimeModule {
@@ -1322,6 +1342,7 @@ export interface NativeModules {
   Runtime: RuntimeModule;
   Overlay: OverlayModule;
   Backup: BackupModule;
+  InstallApk: InstallApkModule;
 }
 
 /**
