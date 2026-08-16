@@ -1,10 +1,10 @@
 # 阶段七真机修复：结算悬浮按钮闪烁与支付结果漏记
 
-> 状态：**已修复并装机（0.0.29），支付结果链路待真机再次支付复测**
+> 状态：**0.0.31 真机复测通过**
 >
 > 设备：25128PNA1C（MIUI/HyperOS），adb serial `4a6e283b`
 >
-> 修复前版本：0.0.28；修复后版本：0.0.29（versionCode 29）
+> 修复前版本：0.0.28；最终验证版本：0.0.31（versionCode 31）
 
 ## 1. 真机现象
 
@@ -81,12 +81,21 @@
 - 证据：
   - `docs/qa/phase7/device/2026-08-16-pdd-wechat-payment-result-diagnosis.logcat.txt`
 
-## 5. 待复测
+## 5. 真机复测结论（0.0.31）
 
-- 用户再完成一笔真实的拼多多 + 微信支付，并在支付成功页停留数秒：
-  1. 打开 JotBill“待确认中心”，确认出现待确认交易或已入账账单；
-  2. 保留复测期间的 `CheckoutAccessibilityService` 与
-     `PaymentNotificationService` 日志。
-- 期望日志从 21:54 的 `role=UNKNOWN` 变为
-  `支付结果页解析到证据: 金额=2745分, 状态=SUCCESS`，并出现匹配或待确认落库结果。
-- 若仍未命中，新日志会分别列出每个候选窗口的 role，据此继续排查窗口可见性。
+- 结算页悬浮按钮：22:30:54 真机手动点击，日志 `enabled=true` →
+  `手动截图点击已受理` → `截图状态: STORED, 来源=MANUAL_CAPTURE`，按钮可点击。
+- 微信支付成功页：`flagIncludeNotImportantViews` 生效后，无障碍节点成功读到
+  `支付成功` 语义，日志 `支付结果页解析到证据: 状态=SUCCESS, textLength=21`；
+  同时截图 AI 兜底也成功解析出同一笔金额，形成双保险。
+- 待确认中心：出现 1 条“支出 / 来源=无障碍节点 / 平台=com.tencent.mm /
+  商户=拼多多 / 未关联结算页，请核对后确认”的待确认交易，金额与实付一致。
+- 证据：
+  - `docs/qa/phase7/device/2026-08-16-payment-result-capture-verified.logcat.txt`（金额已脱敏）
+
+## 6. 后续优化
+
+- 同一支付结果页会随多个内容变化事件重复解析；落库已按 sourceEventKey 幂等，
+  可进一步在服务层做按页面指纹的短窗口去抖，减少日志与数据库查询。
+- 手动截图触发 AI 识别仍可能因截图不是标准结算页而 FAILED；此时支付结果页
+  兜底会把正确金额写入待确认，不影响最终记账闭环。
