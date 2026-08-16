@@ -1394,19 +1394,62 @@ internal class CheckoutPaymentMatcher(
         }
         if (!aiOrderId.isNullOrBlank()) {
             val exact = evidences.filter { it.orderId == aiOrderId }
-            if (exact.size == 1) {
-                return EvidenceSelection(exact.single(), null)
+            if (exact.isNotEmpty()) {
+                return deduplicateEvidence(exact)
             }
             if (exact.size > 1) {
-                return EvidenceSelection(null, "PAYMENT_EVIDENCE_AMBIGUOUS")
+                // 不可达保留分支：同订单多证据的歧义判定已统一收敛到 deduplicateEvidence
             }
         }
-        return if (evidences.size == 1) {
+        return deduplicateEvidence(evidences) ?: if (evidences.size == 1) {
             EvidenceSelection(evidences.single(), null)
         } else {
             EvidenceSelection(null, "PAYMENT_EVIDENCE_AMBIGUOUS")
         }
     }
+
+    /**
+     * 收敛同一笔支付可能产生的多条证据（通知监听 + 支付结果页）。
+     *
+     * 一致证据只选 capturedAt 最新的一条参与匹配，避免把“同一次支付的两个来源”
+     * 误判为 PAYMENT_EVIDENCE_AMBIGUOUS；只有金额/订单号/平台真正冲突时才保留歧义。
+     * 无订单号时仅允许 60 秒内的同金额证据收敛，避免把连续两笔支付自动合并。
+     */
+    private fun deduplicateEvidence(
+        evidences: List<PaymentEvidenceEntity>
+    ): EvidenceSelection {
+        if (evidences.isEmpty()) {
+            return EvidenceSelection(null, "PAYMENT_EVIDENCE_MISSING")
+        }
+        if (evidences.size == 1) {
+            return EvidenceSelection(evidences.single(), null)
+        }
+        val representative = evidences.maxByOrNull { it.capturedAt }
+            ?: return EvidenceSelection(null, "PAYMENT_EVIDENCE_AMBIGUOUS")
+        val representativeOrderId = representative.orderId
+        val representativeAmount = representative.amountMinor
+        val representativeOccurredAt = representative.occurredAt
+        val compatible = evidences.all { evidence ->
+            val samePlatform = evidence.platform == representative.platform
+            val sameAmount = evidence.amountMinor != null &&
+                evidence.amountMinor == representativeAmount
+            val samePayment = if (!representativeOrderId.isNullOrBlank()) {
+                evidence.orderId == representativeOrderId
+            } else {
+                evidence.orderId.isNullOrBlank() &&
+                    representativeOccurredAt != null &&
+                    evidence.occurredAt != null &&
+                    abs((evidence.occurredAt ?: 0L) - (representativeOccurredAt ?: 0L)) <= 60_000L
+            }
+            samePlatform && sameAmount && samePayment
+        }
+        return if (compatible) {
+            EvidenceSelection(representative, null)
+        } else {
+            EvidenceSelection(null, "PAYMENT_EVIDENCE_AMBIGUOUS")
+        }
+    }
+
 
     private fun validatePayment(
         reference: CheckoutSnapshotReference,
