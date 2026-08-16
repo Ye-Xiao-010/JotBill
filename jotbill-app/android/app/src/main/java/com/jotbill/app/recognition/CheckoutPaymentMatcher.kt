@@ -30,6 +30,7 @@ private const val AUTO_COMMITTED_STATUS = "AUTO_COMMITTED"
 private const val COMPLETED_STATUS = "COMPLETED"
 private const val AUTO_COMMIT_OPERATOR = "auto_commit"
 private const val AI_RECOGNITION_FAILED_REASON = "AI_RECOGNITION_FAILED"
+private const val EVIDENCE_ONLY_DECISION = "EVIDENCE_ONLY"
 private val TERMINAL_SESSION_STATUSES = setOf(
     "COMPLETED",
     "CANCELLED",
@@ -522,13 +523,54 @@ internal class CheckoutPaymentMatcher(
                 .getBySession(reference.sessionId)
                 .singleOrNull()
             if (candidate == null) {
+                // AI 尚未返回时支付证据先到：先用证据建立 EVIDENCE_ONLY 临时候选，
+                // 让待确认中心立刻显示关联到本会话的金额/商户/时间；AI 成功返回后仍可
+                // 覆盖该占位候选并补全商品描述，AI 失败时也会回填失败原因和重试入口。
+                val provisionalCandidate = TransactionCandidateEntity(
+                    id = candidateIdFor(reference.sessionId),
+                    sessionId = reference.sessionId,
+                    amountMinor = storedEvidence.amountMinor,
+                    platform = storedEvidence.platform,
+                    merchant = storedEvidence.merchant
+                        ?: shoppingPackageMerchant(session.shoppingPackage),
+                    productDescription = null,
+                    evidenceAmountMinor = storedEvidence.amountMinor,
+                    evidenceMerchant = storedEvidence.merchant,
+                    evidenceOrderId = storedEvidence.orderId,
+                    aiOrderId = null,
+                    aiOccurredAt = null,
+                    matched = false,
+                    conflictReason = null,
+                    appliedRules = rulesJson(
+                        "sessionId" to reference.sessionId,
+                        "decision" to EVIDENCE_ONLY_DECISION
+                    ),
+                    createdAt = now,
+                    version = 1
+                )
+                database.transactionCandidateDao().insertIfAbsent(provisionalCandidate)
+                val persistedProvisional = database.transactionCandidateDao()
+                    .getById(provisionalCandidate.id)
+                    ?: provisionalCandidate
+                session = session.copy(
+                    candidateId = persistedProvisional.id,
+                    updatedAt = now
+                )
+                database.checkoutSessionDao().update(session)
                 session = advanceStatus(session, WAITING_ENRICHMENT_STATUS, now)
-                // 阶段四 T6：纯通知回退（无 AI 候选）→ 转 PendingTransaction，sourceType=notification
-                pendingFromEvidenceOnly(session, storedEvidence, now)?.let { upsertPendingForSession(it) }
+                // 阶段四 T6：AI 未就绪时用证据金额转待确认，候选和会话 ID 均已关联。
+                pendingFromEvidenceOnly(
+                    session = session,
+                    evidence = storedEvidence,
+                    now = now,
+                    candidateId = persistedProvisional.id
+                )?.let { upsertPendingForSession(it) }
                 return@withTransaction CheckoutPaymentMatchResult.Accepted(
                     sessionId = reference.sessionId,
                     status = session.status,
-                    evidenceId = storedEvidence.id
+                    candidateId = persistedProvisional.id,
+                    evidenceId = storedEvidence.id,
+                    matched = false
                 )
             }
 
@@ -567,6 +609,75 @@ internal class CheckoutPaymentMatcher(
         }
     }
 
+    /**
+     * 升级到 EVIDENCE_ONLY 候选逻辑后，为历史“证据先到、AI 未返回”的会话补齐候选关联。
+     *
+     * 只处理尚无候选的活跃会话；每笔证据只补一次，已有待确认交易会被幂等升级为
+     * candidateId/sessionId 完整关联，不改变用户已忽略或已确认的状态。
+     */
+    suspend fun backfillEvidenceOnlyCandidates(): Int {
+        var backfilled = 0
+        database.withTransaction {
+            val now = nowMillis()
+            // 兼容已过期的历史会话：证据已落库的会话即使过了 5 分钟窗口也应补齐候选关联。
+            val sessions = database.checkoutSessionDao().getByStatuses(
+                listOf("WAITING_ENRICHMENT", "PAYMENT_CONFIRMED", "NEEDS_CONFIRMATION")
+            )
+            for (session in sessions) {
+                val existingCandidate = database.transactionCandidateDao()
+                    .getBySession(session.id)
+                    .singleOrNull()
+                if (existingCandidate != null) {
+                    continue
+                }
+                val evidence = database.paymentEvidenceDao()
+                    .getBySession(session.id)
+                    .firstOrNull { it.paymentStatus == "SUCCESS" && (it.amountMinor ?: 0L) > 0L }
+                    ?: continue
+                val provisionalCandidate = TransactionCandidateEntity(
+                    id = candidateIdFor(session.id),
+                    sessionId = session.id,
+                    amountMinor = evidence.amountMinor,
+                    platform = evidence.platform,
+                    merchant = evidence.merchant
+                        ?: shoppingPackageMerchant(session.shoppingPackage),
+                    productDescription = null,
+                    evidenceAmountMinor = evidence.amountMinor,
+                    evidenceMerchant = evidence.merchant,
+                    evidenceOrderId = evidence.orderId,
+                    aiOrderId = null,
+                    aiOccurredAt = null,
+                    matched = false,
+                    conflictReason = null,
+                    appliedRules = rulesJson(
+                        "sessionId" to session.id,
+                        "decision" to EVIDENCE_ONLY_DECISION
+                    ),
+                    createdAt = now,
+                    version = 1
+                )
+                database.transactionCandidateDao().insertIfAbsent(provisionalCandidate)
+                val persisted = database.transactionCandidateDao()
+                    .getById(provisionalCandidate.id)
+                    ?: provisionalCandidate
+                var updatedSession = session.copy(
+                    candidateId = persisted.id,
+                    updatedAt = now
+                )
+                database.checkoutSessionDao().update(updatedSession)
+                updatedSession = advanceStatus(updatedSession, WAITING_ENRICHMENT_STATUS, now)
+                pendingFromEvidenceOnly(
+                    session = updatedSession,
+                    evidence = evidence,
+                    now = now,
+                    candidateId = persisted.id
+                )?.let { upsertPendingForSession(it) }
+                backfilled += 1
+            }
+        }
+        return backfilled
+    }
+
     /** 保存 AI 结果；AI 先到时只建立 WAITING_PAYMENT 候选。 */
     suspend fun recordAiResult(result: AiVisionResult): CheckoutPaymentMatchResult {
         val metadata = result.metadata
@@ -584,7 +695,10 @@ internal class CheckoutPaymentMatcher(
                 .singleOrNull()
             val sameRequestKey = existingSession?.checkoutRequestKey == metadata.requestKey.value
             val retryableAiFailure = isRetryableAiFailureCandidate(existingCandidate)
-            val duplicateResult = existingSession != null && when (result) {
+            // 证据先到并临时建了 EVIDENCE_ONLY 候选时，后面的 AI 结果不能按重复请求跳过：
+            // 成功要回填商户/商品并补全账单，失败也要把 AI 失败原因和重试入口落到候选。
+            val evidenceOnlyPlaceholder = isEvidenceOnlyProvisionalCandidate(existingCandidate)
+            val duplicateResult = existingSession != null && !evidenceOnlyPlaceholder && when (result) {
                 is AiVisionResult.Succeeded ->
                     (requestId != null && requestId == existingSession.aiRequestId) ||
                         (sameRequestKey && existingCandidate != null && !retryableAiFailure)
@@ -1226,25 +1340,28 @@ internal class CheckoutPaymentMatcher(
     }
 
     /**
-     * 阶段四 T6：从支付证据构建纯通知待确认（无 AI 候选）。
+     * 阶段四 T6：从支付证据构建待确认交易。
      *
-     * sourceType 继承证据来源，candidateId 为空；证据金额无效时返回 null（不生成待确认）。
+     * AI 尚未返回时仍传入 EVIDENCE_ONLY 候选 ID，保证候选、会话、待确认三者关联；
+     * 商户缺失时按会话购物包名兜底。sourceType 继承证据来源；
+     * 证据金额无效时返回 null（不生成待确认）。
      */
     private suspend fun pendingFromEvidenceOnly(
         session: CheckoutSessionEntity,
         evidence: PaymentEvidenceEntity,
-        now: Long
+        now: Long,
+        candidateId: String? = null
     ): PendingTransactionEntity? {
         val amountMinor = evidence.amountMinor?.takeIf { it > 0L } ?: return null
         return PendingTransactionEntity(
             id = stableId("pending", session.id),
-            candidateId = null,
+            candidateId = candidateId ?: session.candidateId,
             sessionId = session.id,
             amountMinor = amountMinor,
             type = "expense",
             occurredAt = evidence.occurredAt ?: now,
             platform = evidence.platform,
-            merchant = evidence.merchant,
+            merchant = evidence.merchant ?: shoppingPackageMerchant(session.shoppingPackage),
             productDescription = null,
             orderId = evidence.orderId,
             accountId = defaultAccountIdForPayment(evidence.platform),
@@ -1348,6 +1465,16 @@ internal class CheckoutPaymentMatcher(
         }
         return runCatching {
             JSONObject(candidate.appliedRules).optString("decision") == "AI_FAILED"
+        }.getOrDefault(false)
+    }
+
+    /** 支付证据先于 AI 返回时创建的临时占位候选；后续 AI 结果必须覆盖而非按重复跳过。 */
+    private fun isEvidenceOnlyProvisionalCandidate(candidate: TransactionCandidateEntity?): Boolean {
+        if (candidate == null) {
+            return false
+        }
+        return runCatching {
+            JSONObject(candidate.appliedRules).optString("decision") == EVIDENCE_ONLY_DECISION
         }.getOrDefault(false)
     }
 

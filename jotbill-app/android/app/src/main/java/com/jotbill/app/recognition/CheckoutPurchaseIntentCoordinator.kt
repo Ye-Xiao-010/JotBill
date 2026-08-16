@@ -509,6 +509,7 @@ internal class CheckoutPurchaseIntentCoordinator(
         result: PurchaseIntentCoordinationResult,
         consumer: PurchaseIntentResultCallback?
     ): PurchaseIntentCoordinationResult {
+        Log.i(TAG, "购买意图结果: ${describe(result)}")
         if (
             result !is PurchaseIntentCoordinationResult.Accepted ||
             result.aiResult !is CheckoutAiTriggerResult.Ready
@@ -535,11 +536,21 @@ internal class CheckoutPurchaseIntentCoordinator(
                     slotId = ready.snapshot.slotId,
                     pageFingerprint = ready.snapshot.pageFingerprint
                 )
+                Log.i(
+                    TAG,
+                    "购买意图已派发 AI: session=${handoff.sessionId.take(8)}, " +
+                        "intent=${handoff.intent.wireValue}, requestKey=${handoff.requestKey.value.take(24)}"
+                )
                 consumer?.let { notifyConsumer(it, handoff) }
                 return handoff
             }
         }
 
+        Log.i(
+            TAG,
+            "购买意图无 AI 接管，快照已释放: intent=${result.intent.wireValue}, " +
+                "reason=${if (dispatcher == null) "DISPATCHER_MISSING" else "DISPATCH_FAILED"}"
+        )
         ready.snapshot.release()
         val released = releasedWithoutConsumer(
             intent = result.intent,
@@ -552,6 +563,26 @@ internal class CheckoutPurchaseIntentCoordinator(
         )
         consumer?.let { notifyConsumer(it, released) }
         return released
+    }
+
+    private fun describe(result: PurchaseIntentCoordinationResult): String = when (result) {
+        is PurchaseIntentCoordinationResult.Accepted -> when (val ai = result.aiResult) {
+            is CheckoutAiTriggerResult.Ready ->
+                "Accepted(intent=${result.intent.wireValue}, session=${ai.snapshot.sessionId.take(8)}, " +
+                    "fingerprint=${ai.snapshot.pageFingerprint.take(12)})"
+            is CheckoutAiTriggerResult.AlreadyTriggered ->
+                "Accepted(intent=${result.intent.wireValue}, alreadyTriggered=${ai.requestKey.value.take(24)})"
+            is CheckoutAiTriggerResult.Rejected ->
+                "Accepted?rejected(intent=${result.intent.wireValue}, reason=${ai.reason.wireValue})"
+        }
+        is PurchaseIntentCoordinationResult.AiDispatched ->
+            "AiDispatched(intent=${result.intent.wireValue}, session=${result.sessionId.take(8)})"
+        is PurchaseIntentCoordinationResult.ReleasedWithoutConsumer ->
+            "ReleasedWithoutConsumer(intent=${result.intent.wireValue}, session=${result.sessionId.take(8)}, " +
+                "reason=${result.reasonCode})"
+        is PurchaseIntentCoordinationResult.Rejected ->
+            "Rejected(intent=${result.intent.wireValue}, reason=${result.reasonCode}, " +
+                "slot=${result.slotId.orEmpty()}, fingerprint=${result.pageFingerprint.orEmpty().take(12)})"
     }
 
     private fun notifyConsumer(

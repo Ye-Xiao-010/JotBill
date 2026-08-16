@@ -714,10 +714,8 @@ class CheckoutAccessibilityService : AccessibilityService() {
                             pageDetector.detect(stablePage.observation) is CheckoutPageDetection.Accepted
                     } == true
 
-                    if (!sameStableCheckout && stable != null) {
-                        currentStableCheckout = null
-                        submitActionTriggeredKey = null
-                    }
+                    // 新指纹只是“候选观察”，要等稳定窗口确认后才能替换当前结算页；
+                    // 提前清空会在 PDD 内部支付中间页切微信时丢掉手头正在提交的会话。
                     stabilityCoordinator.observe(detection.observation)
                     if (sameStableCheckout && shouldTriggerSubmitAction(observation, event, eventSource)) {
                         triggerSubmitAction(observation.pageFingerprint)
@@ -897,10 +895,23 @@ class CheckoutAccessibilityService : AccessibilityService() {
         if (database == null) {
             return
         }
+        val matcher = CheckoutPaymentMatcher(database)
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         synchronized(aiLifecycleLock) {
-            paymentMatcher = CheckoutPaymentMatcher(database)
-            matchingScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+            paymentMatcher = matcher
+            matchingScope = scope
             activeAiReferences.clear()
+        }
+        // 为历史“证据先到、AI 未返回”的会话补齐 EVIDENCE_ONLY 候选关联。
+        scope.launch {
+            try {
+                val backfilled = matcher.backfillEvidenceOnlyCandidates()
+                if (backfilled > 0) {
+                    Log.i(TAG, "支付证据历史会话补齐候选: count=$backfilled")
+                }
+            } catch (error: RuntimeException) {
+                Log.w(TAG, "支付证据历史会话补齐失败", error)
+            }
         }
     }
 
@@ -945,6 +956,12 @@ class CheckoutAccessibilityService : AccessibilityService() {
         }
 
         val reference = ready.snapshot.reference()
+        val dispatchStartedAt = System.currentTimeMillis()
+        Log.i(
+            TAG,
+            "结算页 AI 派发: session=${reference.sessionId.take(8)}, " +
+                "intent=${ready.intent.wireValue}, requestKey=${requestKey.take(24)}"
+        )
 
         val clientStarted = AtomicBoolean(false)
         val handoffAccepted = AtomicBoolean(false)
@@ -996,6 +1013,11 @@ class CheckoutAccessibilityService : AccessibilityService() {
                     }
                     notifyAiResult(result)
                 } catch (error: CancellationException) {
+                    Log.i(
+                        TAG,
+                        "结算页 AI 任务被取消: session=${reference.sessionId.take(8)}, " +
+                            "elapsed=${System.currentTimeMillis() - dispatchStartedAt}ms"
+                    )
                     throw error
                 } catch (error: Throwable) {
                     Log.w(TAG, "结算页 AI 任务异常", error)
@@ -1008,6 +1030,11 @@ class CheckoutAccessibilityService : AccessibilityService() {
                             activeAiReferences.remove(reference.sessionId)
                         }
                     }
+                    Log.i(
+                        TAG,
+                        "结算页 AI 任务结束: session=${reference.sessionId.take(8)}, " +
+                            "elapsed=${System.currentTimeMillis() - dispatchStartedAt}ms"
+                    )
                 }
             }
         } catch (error: RuntimeException) {
@@ -1741,8 +1768,8 @@ class CheckoutAccessibilityService : AccessibilityService() {
     /** 格式化匹配决策结果用于日志，billId 非空表示阶段四 T5 已自动入账。 */
     private fun formatMatchResult(result: CheckoutPaymentMatchResult): String = when (result) {
         is CheckoutPaymentMatchResult.Accepted ->
-            "Accepted(status=${result.status}, matched=${result.matched}" +
-                ", candidateId=${result.candidateId}, evidenceId=${result.evidenceId}" +
+            "Accepted(sessionId=${result.sessionId.take(8)}, status=${result.status}, matched=${result.matched}" +
+                ", candidateId=${result.candidateId?.take(8)}, evidenceId=${result.evidenceId?.take(12)}" +
                 (result.billId?.let { ", billId=$it（已自动入账）" } ?: "") + ")"
         is CheckoutPaymentMatchResult.Rejected ->
             "Rejected(sessionId=${result.sessionId}, reason=${result.reason})"
