@@ -888,6 +888,7 @@ class CheckoutAiVisionClient(
                         )
                     }
 
+                    val relaxedSchema = metadata.intent == PurchaseIntent.USER_RETRY
                     val outcome = try {
                         val request = buildRequest(
                             config = config,
@@ -895,10 +896,11 @@ class CheckoutAiVisionClient(
                             apiKey = apiKey,
                             requestId = requestId,
                             metadata = metadata,
-                            imageDataUrl = imageDataUrl
+                            imageDataUrl = imageDataUrl,
+                            relaxedSchema = relaxedSchema
                         )
                         withTimeout(ATTEMPT_TIMEOUT_MILLIS) {
-                            executeAttempt(metadata.requestKey.value, request)
+                            executeAttempt(metadata.requestKey.value, request, relaxedSchema)
                         }
                     } catch (_: TimeoutCancellationException) {
                         AttemptResult.Failure(AiVisionFailureCode.TIMEOUT)
@@ -993,9 +995,10 @@ class CheckoutAiVisionClient(
         apiKey: String?,
         requestId: String,
         metadata: AiVisionRequestMetadata,
-        imageDataUrl: String
+        imageDataUrl: String,
+        relaxedSchema: Boolean
     ): Request {
-        val prompt = buildPrompt(requestId, metadata)
+        val prompt = buildPrompt(requestId, metadata, relaxedSchema)
         val content = JSONArray()
             .put(JSONObject().put("type", "text").put("text", prompt))
             .put(
@@ -1020,8 +1023,18 @@ class CheckoutAiVisionClient(
 
     private fun buildPrompt(
         requestId: String,
-        metadata: AiVisionRequestMetadata
-    ): String = """
+        metadata: AiVisionRequestMetadata,
+        relaxedSchema: Boolean
+    ): String = if (relaxedSchema) """
+        你是 JotBill 的购物结算页视觉识别器。用户刚在购物 App 手动点击截图，图片可能来自确认订单页。
+        只返回一个 JSON 对象，禁止 Markdown、解释文字和额外字段。
+        promptVersion=checkout-manual-v1；requestId=$requestId；sessionId=${metadata.sessionId}。
+        必须返回字段：screenType、amount；screenType 可以是 checkout 或 order_confirm。
+        推荐返回：merchant、productDescription、platform、orderId，缺失时使用 null。
+        可选返回：amountSemantic、currency、occurredAt、confidence、fieldConfidence。
+        amount 必须是正数十进制字符串或数字，最多两位小数；只取最终需要支付的金额，
+        原价、单价、优惠金额、运费、积分抵扣都不要作为 amount。
+    """.trimIndent() else """
         你是 JotBill 的结算页视觉识别器。只分析图片中的结算页事实，不推断支付成功，不创建账单。
         只返回一个 JSON 对象，禁止 Markdown、解释文字和额外字段。
         promptVersion=$PROMPT_VERSION；requestId=$requestId；sessionId=${metadata.sessionId}。
@@ -1035,7 +1048,11 @@ class CheckoutAiVisionClient(
         fieldConfidence 至少包含 platform、merchant、productDescription、amount、orderId 这五个字段。
     """.trimIndent()
 
-    private suspend fun executeAttempt(requestKey: String, request: Request): AttemptResult =
+    private suspend fun executeAttempt(
+        requestKey: String,
+        request: Request,
+        relaxedSchema: Boolean
+    ): AttemptResult =
         suspendCancellableCoroutine { continuation ->
             if (closed || cancelledRequestKeys.contains(requestKey)) {
                 runCatching {
@@ -1083,7 +1100,7 @@ class CheckoutAiVisionClient(
                         return
                     }
                     val result = try {
-                        response.use(::parseResponse)
+                        response.use { parseResponse(it, relaxedSchema) }
                     } catch (_: ResponseTooLargeException) {
                         AttemptResult.Failure(AiVisionFailureCode.RESPONSE_TOO_LARGE)
                     } catch (_: SchemaException) {
@@ -1102,7 +1119,7 @@ class CheckoutAiVisionClient(
             })
         }
 
-    private fun parseResponse(response: Response): AttemptResult {
+    private fun parseResponse(response: Response, relaxedSchema: Boolean): AttemptResult {
         if (!response.isSuccessful) {
             return AttemptResult.Failure(
                 code = AiVisionFailureCode.HTTP_ERROR,
@@ -1122,7 +1139,7 @@ class CheckoutAiVisionClient(
         val content = extractContent(root)
             ?: return AttemptResult.Failure(AiVisionFailureCode.PROTOCOL_ERROR)
         val payload = try {
-            parseVisionPayload(JSONObject(content))
+            parseVisionPayload(JSONObject(content), relaxedSchema)
         } catch (_: JSONException) {
             return AttemptResult.Failure(AiVisionFailureCode.JSON_SCHEMA_INVALID)
         }
@@ -1173,14 +1190,34 @@ class CheckoutAiVisionClient(
         }
     }
 
-    private fun parseVisionPayload(root: JSONObject): AiVisionFields {
-        requireExactKeys(root, RESULT_KEYS)
+    private fun parseVisionPayload(
+        root: JSONObject,
+        relaxedSchema: Boolean
+    ): AiVisionFields {
+        if (!relaxedSchema) {
+            requireExactKeys(root, RESULT_KEYS)
+        }
         val screenType = requiredString(root, "screenType")
-        if (screenType != "checkout") throw SchemaException()
-        val platform = requiredNullableString(root, "platform", MAX_PLATFORM_LENGTH)
-        val merchant = requiredNullableString(root, "merchant", MAX_MERCHANT_LENGTH)
-        val productDescription = requiredNullableString(root, "productDescription", MAX_PRODUCT_LENGTH)
-        val amountText = requiredString(root, "amount")
+        val screenTypeAccepted = if (relaxedSchema) {
+            screenType == "checkout" || screenType == "order_confirm"
+        } else {
+            screenType == "checkout"
+        }
+        if (!screenTypeAccepted) throw SchemaException()
+        val platform = nullableString(root, "platform", MAX_PLATFORM_LENGTH, relaxedSchema)
+        val merchant = nullableString(root, "merchant", MAX_MERCHANT_LENGTH, relaxedSchema)
+        val productDescription = nullableString(
+            root,
+            "productDescription",
+            MAX_PRODUCT_LENGTH,
+            relaxedSchema
+        )
+        val amountValue = root.opt("amount") ?: throw SchemaException()
+        val amountText = when (amountValue) {
+            is String -> amountValue.trim()
+            is Number -> amountValue.toString()
+            else -> throw SchemaException()
+        }
         if (!AMOUNT_PATTERN.matches(amountText)) throw SchemaException()
         val amountMinor = try {
             BigDecimal(amountText).movePointRight(2).longValueExact()
@@ -1188,20 +1225,51 @@ class CheckoutAiVisionClient(
             throw SchemaException()
         }
         if (amountMinor <= 0) throw SchemaException()
-        val amountSemantic = requiredString(root, "amountSemantic")
-        if (amountSemantic !in SAFE_AMOUNT_SEMANTICS) throw SchemaException()
-        if (requiredString(root, "currency") != "CNY") throw SchemaException()
-        val orderId = requiredNullableString(root, "orderId", MAX_ORDER_ID_LENGTH)
-        val paymentMethod = requiredNullableString(root, "paymentMethod", MAX_PAYMENT_METHOD_LENGTH)
-        val occurredAt = requiredNullableString(root, "occurredAt", MAX_TIMESTAMP_LENGTH)?.also {
+        val amountSemantic = if (relaxedSchema) {
+            root.optString("amountSemantic", "FINAL_PAYABLE")
+                .takeIf { it in SAFE_AMOUNT_SEMANTICS }
+                ?: "FINAL_PAYABLE"
+        } else {
+            requiredString(root, "amountSemantic").also {
+                if (it !in SAFE_AMOUNT_SEMANTICS) throw SchemaException()
+            }
+        }
+        val currency = if (relaxedSchema) {
+            root.optString("currency", "CNY").takeIf { it == "CNY" } ?: "CNY"
+        } else {
+            if (requiredString(root, "currency") != "CNY") throw SchemaException()
+            "CNY"
+        }
+        val orderId = nullableString(root, "orderId", MAX_ORDER_ID_LENGTH, relaxedSchema)
+        val paymentMethod = nullableString(
+            root,
+            "paymentMethod",
+            MAX_PAYMENT_METHOD_LENGTH,
+            relaxedSchema
+        )
+        val occurredAt = nullableString(
+            root,
+            "occurredAt",
+            MAX_TIMESTAMP_LENGTH,
+            relaxedSchema
+        )?.also {
             try {
                 Instant.parse(it)
             } catch (_: Exception) {
                 throw SchemaException()
             }
         }
-        val confidence = requiredNumber(root, "confidence")
-        val fieldConfidence = parseFieldConfidence(root.optJSONObject("fieldConfidence"))
+        val confidence = if (relaxedSchema) {
+            optionalNumber(root, "confidence") ?: 0.0
+        } else {
+            requiredNumber(root, "confidence")
+        }
+        if (confidence !in 0.0..1.0) throw SchemaException()
+        val fieldConfidence = if (relaxedSchema && root.optJSONObject("fieldConfidence") == null) {
+            emptyMap()
+        } else {
+            parseFieldConfidence(root.optJSONObject("fieldConfidence"))
+        }
         return AiVisionFields(
             screenType = screenType,
             platform = platform,
@@ -1239,6 +1307,25 @@ class CheckoutAiVisionClient(
         if (!root.has(key) || root.isNull(key)) throw SchemaException()
         val value = root.get(key) as? String ?: throw SchemaException()
         return value.trim().takeIf { it.isNotEmpty() } ?: throw SchemaException()
+    }
+
+    private fun nullableString(
+        root: JSONObject,
+        key: String,
+        maxLength: Int,
+        relaxedSchema: Boolean
+    ): String? {
+        if (!relaxedSchema) {
+            return requiredNullableString(root, key, maxLength)
+        }
+        if (!root.has(key) || root.isNull(key)) return null
+        val value = root.get(key) as? String ?: return null
+        return value.trim().takeIf { it.isNotEmpty() && it.length <= maxLength }
+    }
+
+    private fun optionalNumber(root: JSONObject, key: String): Double? {
+        if (!root.has(key) || root.isNull(key)) return null
+        return (root.get(key) as? Number)?.toDouble()
     }
 
     private fun requiredNullableString(root: JSONObject, key: String, maxLength: Int): String? {

@@ -279,6 +279,14 @@ internal object AccessibilityPageSummaryCollector {
         if (containsAny(text, finalAmountTerms)) {
             return true
         }
+        // 拼多多确认订单页可能只出现“提交订单 + ¥55.70”，没有“实付/合计”等标签；
+        // 这种情况下把“提交/支付动作 + 货币金额”作为最终金额信号。
+        if (
+            containsAny(text, checkoutActionTerms) &&
+            Regex("""currency\s*[0-9]{1,9}(?:\.[0-9]{1,2})?""").containsMatchIn(text)
+        ) {
+            return true
+        }
         return (text.contains("合计") || text.contains("总计")) &&
             (text.contains("订单") || text.contains("收货") || text.contains("优惠后"))
     }
