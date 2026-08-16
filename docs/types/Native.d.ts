@@ -795,9 +795,98 @@ export type BackupOperation =
   | 'executeRestore'
   | 'exportData'
   | 'importData'
+  | 'inspectImport'
+  | 'executeImport'
+  | 'cancelImport'
+  | 'undoImport'
+  | 'getImportBatches'
   | 'clearData';
 export type RestoreStrategy = 'overwrite' | 'merge';
 export type DuplicateRecordPolicy = 'skip' | 'replace' | 'fail';
+
+/** 阶段六账单导入来源。 */
+export type ImportSource = 'wechat' | 'alipay';
+/** 阶段六账单导入文件格式：zip 表示原始文件为压缩包，候选解析后仍为 csv/xlsx。 */
+export type ImportFileFormat = 'csv' | 'xlsx' | 'zip';
+/** 导入批次状态机：RUNNING/COMPLETED/CANCELLED/FAILED/UNDONE/UNDO_FAILED。 */
+export type ImportBatchStatus =
+  | 'RUNNING'
+  | 'COMPLETED'
+  | 'CANCELLED'
+  | 'FAILED'
+  | 'UNDONE'
+  | 'UNDO_FAILED';
+
+/** 压缩包候选账单文件（不暴露设备临时路径）。 */
+export interface ImportCandidate {
+  fileName: string;
+  format: 'csv' | 'xlsx';
+  encoding: 'UTF-8' | 'GBK' | null;
+}
+
+/** inspectImport 的只读预览结果。 */
+export interface ImportInspection {
+  source: ImportSource | null;
+  format: ImportFileFormat;
+  formatVersion?: string;
+  fileHash: string;
+  encrypted: boolean;
+  duplicateFile: boolean;
+  needsCandidateSelection: boolean;
+  candidates: ImportCandidate[];
+  totalRecords?: number;
+  validRecords?: number;
+  filteredRecords?: number;
+  skippedBySource?: number;
+  timeRangeStart?: number | null;
+  timeRangeEnd?: number | null;
+  planned?: {
+    imported: number;
+    merged: number;
+    skipped: number;
+    pending: number;
+    failed: number;
+  };
+  suspiciousCount?: number;
+  accountUnmatchedCount?: number;
+  typeDistribution?: Partial<Record<TransactionType, number>>;
+  sampleErrors: string[];
+}
+
+/** 导入批次摘要：只保存哈希与计数，不保存文件内容或解压密码。 */
+export interface ImportBatch {
+  id: string;
+  fileHash: string;
+  source: ImportSource;
+  format: ImportFileFormat;
+  formatVersion: string;
+  importerVersion: string;
+  status: ImportBatchStatus;
+  totalRecords: number;
+  validRecords: number;
+  importedCount: number;
+  mergedCount: number;
+  skippedCount: number;
+  pendingCount: number;
+  failedCount: number;
+  suspiciousCount: number;
+  accountUnmatchedCount: number;
+  createdAt: number;
+  updatedAt: number;
+  completedAt?: number | null;
+}
+
+/** undoImport 返回值：UNDO_FAILED 时 protectedRecords 列出用户已修改、未自动处理的记录。 */
+export interface UndoImportResult {
+  status: 'UNDONE' | 'UNDO_FAILED';
+  deletedCount: number;
+  rollbackCount: number;
+  pendingDeletedCount: number;
+  protectedRecords: Array<{
+    billId: string;
+    reason: string;
+  }>;
+}
 
 /**
  * 备份文件格式版本。版本变化必须经过兼容性检查，不能用数据库版本代替。
@@ -903,8 +992,28 @@ export interface CsvImportResult extends ImportResultBase {
   strategy?: never;
 }
 
+/**
+ * 阶段六 executeImport 返回类型：复用 ImportResult 基础计数，
+ * 补充 batchId、合并/待确认计数、批次哈希与类型分布。
+ */
+export interface ImportExecutionResult extends ImportResultBase {
+  source: ImportSource;
+  format: ImportFileFormat;
+  formatVersion: string;
+  batchId: string;
+  fileHash: string;
+  merged: number;
+  pending: number;
+  suspiciousCount: number;
+  accountUnmatchedCount: number;
+  totalRecords: number;
+  validRecords: number;
+  processed: number;
+  typeDistribution: Partial<Record<TransactionType, number>>;
+}
+
 /** 导入和恢复共用同一份直接返回 DTO，避免引入第二套恢复结果模型。 */
-export type ImportResult = BackupImportResult | CsvImportResult;
+export type ImportResult = BackupImportResult | CsvImportResult | ImportExecutionResult;
 
 /** 备份包装器能够消费的原生错误码边界，不接受 AI、截图等无关错误码。 */
 export type BackupErrorCode =
@@ -923,6 +1032,14 @@ export type BackupErrorCode =
   | 'RESTORE_FAILED'
   | 'EXPORT_FAILED'
   | 'IMPORT_FAILED'
+  | 'IMPORT_IN_PROGRESS'
+  | 'IMPORT_CANCELLED'
+  | 'IMPORT_INSPECT_FAILED'
+  | 'IMPORT_PASSWORD_REQUIRED'
+  | 'IMPORT_PASSWORD_INVALID'
+  | 'IMPORT_CANDIDATE_REQUIRED'
+  | 'IMPORT_ZIP_INVALID'
+  | 'IMPORT_UNDO_FAILED'
   | 'BACKUP_UNSUPPORTED_FORMAT'
   | 'BACKUP_VALIDATION_FAILED'
   | 'BACKUP_CANCELLED'
@@ -960,6 +1077,12 @@ export type BackupFailureStatus =
   | 'restore_failed'
   | 'export_failed'
   | 'import_failed'
+  | 'import_in_progress'
+  | 'import_cancelled'
+  | 'import_inspect_failed'
+  | 'import_encryption_error'
+  | 'import_candidate_required'
+  | 'import_undo_failed'
   | 'clear_data_failed'
   | 'unknown';
 
@@ -1149,8 +1272,22 @@ export interface BackupModule {
   executeRestore(filePath: string, strategy: RestoreOptions['strategy']): Promise<RestoreImportResult>;
   /** 保留阶段二的 CSV 导出调用。 */
   exportData(format: 'csv'): Promise<ExportDataResult>;
-  /** 导入文件并返回明确的导入及重复记录计数，失败通过 BackupError reject。 */
+  /** 保留阶段二旧入口；阶段六导入流程请使用 inspectImport/executeImport。 */
   importData(filePath: string): Promise<ImportResult>;
+  /**
+   * 阶段六账单导入预览：只解析与统计，不写数据库。
+   * filePath 为空时由原生打开 SAF 文件选择器；password 仅用于加密压缩包；
+   * candidateFileName 在压缩包内存在多个候选账单时用于指定候选文件。
+   */
+  inspectImport(filePath: string, password?: string, candidateFileName?: string): Promise<ImportInspection>;
+  /** 阶段六账单导入执行：先落 RUNNING 批次，再分批事务写入，可安全取消。 */
+  executeImport(filePath: string, password?: string, candidateFileName?: string): Promise<ImportExecutionResult>;
+  /** 请求取消当前导入；无进行中任务时静默返回。 */
+  cancelImport(): Promise<void>;
+  /** 整批撤销最近一批已完成的导入；受用户保护记录逐笔返回且不自动处理。 */
+  undoImport(batchId: string): Promise<UndoImportResult>;
+  /** 撤销入口所需的批次列表（不含进行中的 RUNNING 批次）。 */
+  getImportBatches(): Promise<ImportBatch[]>;
   clearData(): Promise<void>;
 }
 
