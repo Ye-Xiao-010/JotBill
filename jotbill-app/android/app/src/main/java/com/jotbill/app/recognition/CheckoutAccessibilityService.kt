@@ -974,6 +974,14 @@ class CheckoutAccessibilityService : AccessibilityService() {
                     }
                     clientOwnsSnapshot = true
                     val result = client.recognize(ready)
+                    if (result is com.jotbill.app.ai.AiVisionResult.Failed) {
+                        Log.i(
+                            TAG,
+                            "AI 视觉识别失败: code=${result.code}, attempts=${result.attempts}, " +
+                                "httpStatus=${result.httpStatus}, retryable=${result.retryable}, " +
+                                "requestId=${result.requestId}"
+                        )
+                    }
                     if (matcher != null) {
                         try {
                             val matchResult = matcher.recordAiResult(result)

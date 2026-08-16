@@ -458,6 +458,7 @@ internal class CheckoutPaymentMatcher(
                         evidenceAmountMinor = signal.amountMinor,
                         evidenceMerchant = signal.merchant,
                         evidenceOrderId = signal.orderId,
+                        aiOccurredAt = signal.occurredAt,
                         version = candidate.version + 1
                     )
                 )
