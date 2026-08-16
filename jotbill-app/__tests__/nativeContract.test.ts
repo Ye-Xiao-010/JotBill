@@ -19,6 +19,7 @@ import type {
   RuleUpdateInput as DeclaredRuleUpdateInput,
   RuntimeHealth as DeclaredRuntimeHealth,
 } from '../../docs/types/Native';
+import { nativeRecognition } from '../src/native/recognition';
 
 const modules = NativeModules as unknown as Record<string, unknown>;
 
@@ -144,4 +145,70 @@ test('Backup 模块只通过 CSV 导出和清库边界', async () => {
 
   expect(exportData).toHaveBeenCalledWith('csv');
   expect(clearData).toHaveBeenCalledTimes(1);
+});
+
+
+test('Recognition 拒绝内部 SessionStatus 泄漏到 RN 契约', async () => {
+  const session = {
+    sessionId: 'session-1',
+    status: 'AI_PENDING',
+    paymentEvidenceIds: [],
+    createdAt: 1,
+    updatedAt: 1,
+    expiresAt: 2,
+  };
+  const getCheckoutSessions = jest
+    .fn()
+    .mockResolvedValue(JSON.stringify([session]));
+  modules.Recognition = { getCheckoutSessions };
+
+  await expect(nativeRecognition.getCheckoutSessions({})).rejects.toThrow(
+    'Native Recognition returned an internal session status',
+  );
+});
+
+test('Recognition 接受 Native.d.ts 声明的 8 个 SessionStatus', async () => {
+  const statuses = [
+    'OBSERVING',
+    'SNAPSHOT_BUFFERED',
+    'AI_REQUESTING',
+    'WAITING_ENRICHMENT',
+    'COMPLETED',
+    'FAILED',
+    'CANCELLED',
+    'EXPIRED',
+  ] as const;
+  const sessions = statuses.map((status, index) => ({
+    sessionId: `session-${index}`,
+    status,
+    paymentEvidenceIds: [],
+    createdAt: 1,
+    updatedAt: 1,
+    expiresAt: 2,
+  }));
+  const getCheckoutSessions = jest
+    .fn()
+    .mockResolvedValue(JSON.stringify(sessions));
+  modules.Recognition = { getCheckoutSessions };
+
+  await expect(nativeRecognition.getCheckoutSessions({})).resolves.toEqual(
+    sessions,
+  );
+});
+
+test('Recognition 拒绝未声明的支付证据来源', async () => {
+  const evidence = {
+    evidenceId: 'evidence-1',
+    sessionId: 'session-1',
+    sourceType: 'legacy_notification',
+    capturedAt: 1,
+  };
+  const getPaymentEvidence = jest
+    .fn()
+    .mockResolvedValue(JSON.stringify([evidence]));
+  modules.Recognition = { getPaymentEvidence };
+
+  await expect(nativeRecognition.getPaymentEvidence('session-1')).rejects.toThrow(
+    'Native Recognition returned an invalid evidence source',
+  );
 });
