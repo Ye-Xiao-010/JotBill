@@ -338,7 +338,8 @@ class CheckoutAccessibilityService : AccessibilityService() {
         configuredInfo.notificationTimeout = 100L
         configuredInfo.flags = configuredInfo.flags or
             AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS or
-            AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS
+            AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS or
+            AccessibilityServiceInfo.FLAG_INCLUDE_NOT_IMPORTANT_VIEWS
         // 不在 XML 中限定包名，才能观察离开购物应用的事件并清理旧页面状态；代码仍会先做白名单资格判断。
         configuredInfo.packageNames = null
         serviceInfo = configuredInfo

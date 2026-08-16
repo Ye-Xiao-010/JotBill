@@ -565,13 +565,12 @@ internal class CheckoutCaptureOverlayManager(context: Context) {
 
     private fun canManualCapture(): Boolean =
         canShowOnCurrentPage() &&
+            !currentSensitivePage &&
             (
                 currentCheckout ||
                     (
                         mode == CheckoutOverlayMode.ALWAYS_ON &&
                             currentSupportedShoppingApp &&
-                            !currentSensitivePage &&
-                            currentUserRetryContext &&
                             currentFingerprint.isSha256PageFingerprint()
                     )
                 ) &&
