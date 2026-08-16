@@ -312,7 +312,12 @@ class CheckoutAccessibilityService : AccessibilityService() {
                 AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED or
                 AccessibilityEvent.TYPE_VIEW_SCROLLED or
                 AccessibilityEvent.TYPE_VIEW_CLICKED
-        configuredInfo.feedbackType = AccessibilityServiceInfo.FEEDBACK_GENERIC
+        configuredInfo.feedbackType = AccessibilityServiceInfo.FEEDBACK_SPOKEN or
+            AccessibilityServiceInfo.FEEDBACK_HAPTIC or
+            AccessibilityServiceInfo.FEEDBACK_AUDIBLE or
+            AccessibilityServiceInfo.FEEDBACK_VISUAL or
+            AccessibilityServiceInfo.FEEDBACK_GENERIC or
+            AccessibilityServiceInfo.FEEDBACK_BRAILLE
         configuredInfo.notificationTimeout = 100L
         configuredInfo.flags = configuredInfo.flags or
             AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS or
