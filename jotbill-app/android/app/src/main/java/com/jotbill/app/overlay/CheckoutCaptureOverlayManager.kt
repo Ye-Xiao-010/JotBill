@@ -333,8 +333,15 @@ internal class CheckoutCaptureOverlayManager(context: Context) {
                 return@runOnMain
             }
             if (!canManualCapture()) {
+                android.util.Log.d(
+                    TAG,
+                    "手动截图点击被拒绝: status=${state.status}, reason=${state.reasonCode}, " +
+                        "checkout=$currentCheckout, supported=$currentSupportedShoppingApp, " +
+                        "retry=$currentUserRetryContext"
+                )
                 return@runOnMain
             }
+            android.util.Log.d(TAG, "手动截图点击已受理: status=${state.status}, reason=${state.reasonCode}")
             updateState(
                 status = CheckoutOverlayStatus.CAPTURING,
                 visible = true,
@@ -570,6 +577,10 @@ internal class CheckoutCaptureOverlayManager(context: Context) {
                 ) &&
             state.status in setOf(
                 CheckoutOverlayStatus.READY,
+                // 结算页稳定后自动截图立即开始，悬浮按钮先进入 CAPTURING；
+                // 此时仍允许用户点击，由截图协调器用 CAPTURE_IN_FLIGHT 拒绝并发请求，
+                // 不能在自动截图开始前就把按钮禁用到无法手动触发。
+                CheckoutOverlayStatus.CAPTURING,
                 CheckoutOverlayStatus.EXPIRED_RETRY,
                 CheckoutOverlayStatus.UNAVAILABLE
             )
@@ -724,6 +735,10 @@ internal class CheckoutCaptureOverlayManager(context: Context) {
         setOnTouchListener { view, event ->
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
+                    android.util.Log.d(
+                        TAG,
+                        "悬浮按钮按下: enabled=${view.isEnabled}, status=${state.status}, reason=${state.reasonCode}"
+                    )
                     downRawX = event.rawX
                     downRawY = event.rawY
                     val params = view.layoutParams as? WindowManager.LayoutParams
@@ -755,6 +770,7 @@ internal class CheckoutCaptureOverlayManager(context: Context) {
                 }
 
                 MotionEvent.ACTION_UP -> {
+                    android.util.Log.d(TAG, "悬浮按钮抬起: moved=$moved, enabled=${view.isEnabled}")
                     if (!moved) {
                         onManualCaptureRequested()
                     }

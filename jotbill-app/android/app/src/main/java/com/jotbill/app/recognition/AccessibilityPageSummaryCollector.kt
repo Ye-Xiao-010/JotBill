@@ -59,7 +59,14 @@ internal object AccessibilityPageSummaryCollector {
         "待支付",
         "待付款",
         "需付款",
-        "付款金额"
+        "付款金额",
+        // 拼多多确认订单页常见金额标签：折后/券后/大促价/到手价。
+        "折后",
+        "券后",
+        "大促价",
+        "到手价",
+        "拼单价",
+        "单买价"
     )
     private val checkoutActionTerms = listOf(
         "提交订单",

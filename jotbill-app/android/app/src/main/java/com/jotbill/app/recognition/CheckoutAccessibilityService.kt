@@ -1,11 +1,16 @@
 package com.jotbill.app.recognition
 
 import android.accessibilityservice.AccessibilityService
+import android.accessibilityservice.AccessibilityService.ScreenshotResult
+import android.accessibilityservice.AccessibilityService.TakeScreenshotCallback
 import android.accessibilityservice.AccessibilityServiceInfo
 import android.content.Intent
+import android.graphics.Bitmap
+import android.hardware.HardwareBuffer
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import android.view.Display
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
@@ -14,6 +19,10 @@ import com.jotbill.app.ai.CheckoutAiVisionClient
 import com.jotbill.app.data.JotBillDatabaseProvider
 import com.jotbill.app.overlay.CheckoutCaptureOverlayManager
 import com.jotbill.app.security.KeyStoreSecretStore
+import java.io.ByteArrayOutputStream
+import java.security.MessageDigest
+import java.time.Instant
+import java.util.concurrent.Executor
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -248,6 +257,10 @@ class CheckoutAccessibilityService : AccessibilityService() {
     private var lastWindowClass: String? = null
     private var lastObservedEventLogAt = 0L
     private var lastPaymentWindowScanAt = 0L
+    private var lastPaymentScreenshotFallbackAt = 0L
+    @Volatile
+    private var paymentScreenshotFallbackInFlight = false
+    private val screenshotCallbackExecutor = Executor { runnable -> mainHandler.post(runnable) }
     @Volatile
     private var currentStableCheckout: StableCheckoutPage? = null
     @Volatile
@@ -1119,9 +1132,11 @@ class CheckoutAccessibilityService : AccessibilityService() {
                 "支付结果页无可用节点树: pkg=$paymentPackage, " +
                     "type=${AccessibilityEvent.eventTypeToString(event.eventType)}, class=${event.className}"
             )
+            maybeCapturePaymentResultScreenshot(paymentPackage, handoffContext)
             return
         }
 
+        var sawResultPage = false
         try {
             for (root in roots) {
                 try {
@@ -1133,6 +1148,9 @@ class CheckoutAccessibilityService : AccessibilityService() {
                         includeHiddenContentDescriptions = true
                     )
 
+                    if (observation.pageRole == CheckoutPageRole.PAYMENT_RESULT) {
+                        sawResultPage = true
+                    }
                     if (observation.pageRole != CheckoutPageRole.PAYMENT_RESULT) {
                         val rootPackage = try {
                             root.packageName?.toString().orEmpty()
@@ -1248,7 +1266,189 @@ class CheckoutAccessibilityService : AccessibilityService() {
                 }
             }
         }
+        if (!sawResultPage) {
+            maybeCapturePaymentResultScreenshot(paymentPackage, handoffContext)
+        }
     }
+    /** 微信 LiteApp 成功页对无障碍服务暴露空树时，用系统截图 + AI 视觉兜底提取证据。 */
+    private fun maybeCapturePaymentResultScreenshot(
+        paymentPackage: String,
+        handoffContext: PaymentResultHandoffContext?
+    ) {
+        val now = System.currentTimeMillis()
+        if (
+            paymentScreenshotFallbackInFlight ||
+            now - lastPaymentScreenshotFallbackAt < 15_000L
+        ) {
+            return
+        }
+        val client = synchronized(aiLifecycleLock) { aiVisionClient }
+        if (client == null) {
+            Log.i(TAG, "支付结果页截图兜底未启用: AI 客户端不可用")
+            return
+        }
+        lastPaymentScreenshotFallbackAt = now
+        paymentScreenshotFallbackInFlight = true
+        try {
+            @Suppress("NewApi")
+            takeScreenshot(
+                Display.DEFAULT_DISPLAY,
+                screenshotCallbackExecutor,
+                object : TakeScreenshotCallback {
+                    override fun onSuccess(screenshot: ScreenshotResult) {
+                        paymentScreenshotFallbackInFlight = false
+                        val bytes = encodePaymentScreenshot(screenshot)
+                        if (bytes == null || bytes.isEmpty()) {
+                            bytes?.fill(0)
+                            Log.w(TAG, "支付结果页截图兜底编码失败")
+                            return
+                        }
+                        Log.i(TAG, "支付结果页截图兜底已取得: ${bytes.size} bytes")
+                        evidenceFallbackScope.launch {
+                            consumePaymentResultScreenshot(client, bytes, paymentPackage, handoffContext)
+                        }
+                    }
+
+                    override fun onFailure(errorCode: Int) {
+                        paymentScreenshotFallbackInFlight = false
+                        Log.w(TAG, "支付结果页截图兜底失败: errorCode=$errorCode")
+                    }
+                }
+            )
+        } catch (error: RuntimeException) {
+            paymentScreenshotFallbackInFlight = false
+            Log.w(TAG, "支付结果页截图兜底调用失败", error)
+        }
+    }
+
+    private suspend fun consumePaymentResultScreenshot(
+        client: CheckoutAiVisionClient,
+        imageBytes: ByteArray,
+        paymentPackage: String,
+        handoffContext: PaymentResultHandoffContext?
+    ) {
+        val sourceEventKey = sha256(
+            "payment-result-screenshot|$paymentPackage|${System.currentTimeMillis() / 60_000L}"
+        )
+        val result = client.recognizePaymentResult(imageBytes, sourceEventKey)
+        if (result !is CheckoutAiVisionClient.PaymentResultVisionResult.Succeeded) {
+            val failed = result as CheckoutAiVisionClient.PaymentResultVisionResult.Failed
+            Log.i(
+                TAG,
+                "支付结果页截图兜底未生成证据: code=${failed.code}, attempts=${failed.attempts}, " +
+                    "httpStatus=${failed.httpStatus}"
+            )
+            return
+        }
+        val fields = result.fields
+        val occurredAt = fields.occurredAt?.let {
+            try {
+                Instant.parse(it).toEpochMilli()
+            } catch (_: Exception) {
+                null
+            }
+        } ?: System.currentTimeMillis()
+        val evidence = PaymentResultEvidence(
+            amountMinor = fields.amountMinor,
+            merchant = fields.merchant,
+            orderId = fields.orderId,
+            paymentStatus = "SUCCESS",
+            occurredAt = occurredAt,
+            rawTextHash = sha256(
+                "payment-result-screenshot|$paymentPackage|${fields.amountMinor}|" +
+                    "${fields.merchant.orEmpty()}|${fields.orderId.orEmpty()}"
+            ),
+            sourceEventKey = sourceEventKey
+        )
+        Log.i(TAG, "支付结果页截图兜底解析到证据: 金额=${evidence.amountMinor}分")
+        val matcher = synchronized(aiLifecycleLock) { paymentMatcher }
+            ?: run {
+                val database = JotBillDatabaseProvider.get(applicationContext)
+                CheckoutPaymentMatcher(database)
+            }
+        try {
+            recordPaymentResultEvidence(
+                matcher = matcher,
+                paymentPackage = paymentPackage,
+                evidence = evidence,
+                handoffContext = handoffContext
+            )
+        } catch (error: Exception) {
+            Log.w(TAG, "支付结果页截图兜底证据落库失败", error)
+        }
+    }
+
+    private fun sha256(value: String): String =
+        MessageDigest.getInstance("SHA-256")
+            .digest(value.toByteArray(Charsets.UTF_8))
+            .joinToString("") { "%02x".format(it) }
+
+    private fun encodePaymentScreenshot(screenshot: ScreenshotResult): ByteArray? {
+        var hardwareBuffer: HardwareBuffer? = null
+        var hardwareBitmap: Bitmap? = null
+        var softwareBitmap: Bitmap? = null
+        var scaledBitmap: Bitmap? = null
+        var transferred = false
+        var compressed: ByteArray? = null
+        try {
+            val capturedBuffer = screenshot.hardwareBuffer ?: return null
+            hardwareBuffer = capturedBuffer
+            val capturedHardwareBitmap = Bitmap.wrapHardwareBuffer(capturedBuffer, screenshot.colorSpace)
+                ?: return null
+            hardwareBitmap = capturedHardwareBitmap
+            val capturedSoftwareBitmap = capturedHardwareBitmap.copy(Bitmap.Config.ARGB_8888, false)
+                ?: return null
+            softwareBitmap = capturedSoftwareBitmap
+            val longestEdge = maxOf(capturedSoftwareBitmap.width, capturedSoftwareBitmap.height)
+            val bitmapToEncode = if (longestEdge > 1080) {
+                val scale = 1080f / longestEdge.toFloat()
+                Bitmap.createScaledBitmap(
+                    capturedSoftwareBitmap,
+                    (capturedSoftwareBitmap.width * scale).toInt().coerceAtLeast(1),
+                    (capturedSoftwareBitmap.height * scale).toInt().coerceAtLeast(1),
+                    true
+                ).also { scaledBitmap = it }
+            } else {
+                capturedSoftwareBitmap
+            }
+            val output = ByteArrayOutputStream()
+            if (!bitmapToEncode.compress(Bitmap.CompressFormat.JPEG, 85, output)) {
+                return null
+            }
+            val bytes = output.toByteArray()
+            if (bytes.isEmpty() || bytes.size > 5 * 1024 * 1024) {
+                bytes.fill(0)
+                return null
+            }
+            compressed = bytes
+            transferred = true
+            return bytes
+        } catch (_: RuntimeException) {
+            return null
+        } finally {
+            if (!transferred) {
+                compressed?.fill(0)
+            }
+            try {
+                scaledBitmap?.recycle()
+            } finally {
+                try {
+                    softwareBitmap?.recycle()
+                } finally {
+                    try {
+                        hardwareBitmap?.recycle()
+                    } finally {
+                        try {
+                            hardwareBuffer?.close()
+                        } catch (_: RuntimeException) {
+                            // 系统缓冲区已关闭时无需再次处理。
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     /** 收集节点树可见文本，用于支付结果页证据解析；数值在 parser 哈希前统一脱敏。 */
     private fun collectPageText(root: AccessibilityNodeInfo): String {
         val builder = StringBuilder()
