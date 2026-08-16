@@ -111,6 +111,7 @@ export default function ReviewScreen() {
       nativeRecognition.retryAiRecognition(candidateId),
     onSuccess: () => {
       invalidateAll();
+      setRetrySubmittedVersions({});
       alert('重试已触发', 'AI 识别已重新触发，结果会更新到待确认列表。');
     },
     onError: (error, { candidateId }) => {
