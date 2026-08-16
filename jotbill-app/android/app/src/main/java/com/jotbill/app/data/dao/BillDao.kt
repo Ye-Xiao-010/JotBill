@@ -94,6 +94,27 @@ interface BillDao {
     ): BillEntity?
 
     /**
+     * 阶段六 T1 去重第 3 级：按导入文件记录标识精确查重。
+     * 命中说明同一账单文件的同一记录已入账，执行时应跳过该行。
+     *
+     * @param excludeId 排除的账单 ID（更新场景排除自身），传 null 表示不排除
+     */
+    @Query(
+        """
+        SELECT * FROM bills
+        WHERE source_type = :sourceType
+          AND import_record_id = :importRecordId
+          AND (:excludeId IS NULL OR id != :excludeId)
+        LIMIT 1
+        """
+    )
+    suspend fun findBySourceTypeAndImportRecordId(
+        sourceType: String,
+        importRecordId: String,
+        excludeId: String? = null
+    ): BillEntity?
+
+    /**
      * 阶段五 T6 去重第 4 级候选查询：金额相等 + 类型相同 + 时间窗口内。
      * 币种因素由账户币种（CNY）隐含；账户/商户相似度由 DuplicateGuard 在内存判定。
      */

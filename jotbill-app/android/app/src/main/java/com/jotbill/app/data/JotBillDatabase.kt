@@ -17,6 +17,7 @@ import com.jotbill.app.data.dao.CategoryDao
 import com.jotbill.app.data.dao.ChatDao
 import com.jotbill.app.data.dao.CheckoutSessionDao
 import com.jotbill.app.data.dao.FinancialGoalDao
+import com.jotbill.app.data.dao.ImportBatchDao
 import com.jotbill.app.data.dao.PaymentEvidenceDao
 import com.jotbill.app.data.dao.PendingTransactionDao
 import com.jotbill.app.data.dao.RuleDao
@@ -34,12 +35,13 @@ import com.jotbill.app.data.entity.ChatMessageEntity
 import com.jotbill.app.data.entity.ChatSessionEntity
 import com.jotbill.app.data.entity.CheckoutSessionEntity
 import com.jotbill.app.data.entity.FinancialGoalEntity
+import com.jotbill.app.data.entity.ImportBatchEntity
 import com.jotbill.app.data.entity.PaymentEvidenceEntity
 import com.jotbill.app.data.entity.PendingTransactionEntity
 import com.jotbill.app.data.entity.RuleEntity
 import com.jotbill.app.data.entity.TransactionCandidateEntity
 
-const val JOT_BILL_DATABASE_VERSION = 9
+const val JOT_BILL_DATABASE_VERSION = 10
 
 @Database(
     entities = [
@@ -57,6 +59,7 @@ const val JOT_BILL_DATABASE_VERSION = 9
         AiCostRecordEntity::class,
         BalanceCalibrationEntity::class,
         AuditEntryEntity::class,
+        ImportBatchEntity::class,
         AppSettingEntity::class,
         ChatSessionEntity::class,
         ChatMessageEntity::class
@@ -80,6 +83,7 @@ abstract class JotBillDatabase : RoomDatabase() {
     abstract fun aiCostRecordDao(): AiCostRecordDao
     abstract fun balanceCalibrationDao(): BalanceCalibrationDao
     abstract fun auditEntryDao(): AuditEntryDao
+    abstract fun importBatchDao(): ImportBatchDao
     abstract fun appSettingDao(): AppSettingDao
     abstract fun chatDao(): ChatDao
 }
@@ -345,6 +349,61 @@ object DatabaseMigrations {
         }
     }
 
+    /**
+     * 阶段六 T1：导入数据层。
+     *
+     * 1. bills 新增 import_record_id（导入文件记录标识，可空，旧数据保持 NULL）；
+     * 2. bills 建 (source_type, import_record_id) 索引，第 3 级去重查询使用；
+     * 3. 新建 import_batches 表，file_hash 唯一索引承担文件级重复检测。
+     */
+    private val migration9To10 = object : Migration(9, 10) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL("ALTER TABLE `bills` ADD COLUMN `import_record_id` TEXT")
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS `index_bills_source_type_import_record_id` " +
+                    "ON `bills` (`source_type`, `import_record_id`)"
+            )
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `import_batches` (
+                    `id` TEXT NOT NULL,
+                    `file_hash` TEXT NOT NULL,
+                    `source` TEXT NOT NULL,
+                    `format` TEXT NOT NULL,
+                    `format_version` TEXT NOT NULL,
+                    `importer_version` TEXT NOT NULL,
+                    `status` TEXT NOT NULL,
+                    `total_records` INTEGER NOT NULL,
+                    `valid_records` INTEGER NOT NULL,
+                    `imported_count` INTEGER NOT NULL,
+                    `merged_count` INTEGER NOT NULL,
+                    `skipped_count` INTEGER NOT NULL,
+                    `pending_count` INTEGER NOT NULL,
+                    `failed_count` INTEGER NOT NULL,
+                    `suspicious_count` INTEGER NOT NULL,
+                    `account_unmatched_count` INTEGER NOT NULL,
+                    `created_at` INTEGER NOT NULL,
+                    `updated_at` INTEGER NOT NULL,
+                    `completed_at` INTEGER,
+                    PRIMARY KEY(`id`)
+                )
+                """.trimIndent()
+            )
+            db.execSQL(
+                "CREATE UNIQUE INDEX IF NOT EXISTS `index_import_batches_file_hash` " +
+                    "ON `import_batches` (`file_hash`)"
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS `index_import_batches_status` " +
+                    "ON `import_batches` (`status`)"
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS `index_import_batches_created_at` " +
+                    "ON `import_batches` (`created_at`)"
+            )
+        }
+    }
+
     val all: Array<Migration> = arrayOf(
         migration1To2,
         migration2To3,
@@ -353,6 +412,7 @@ object DatabaseMigrations {
         migration5To6,
         migration6To7,
         migration7To8,
-        migration8To9
+        migration8To9,
+        migration9To10
     )
 }

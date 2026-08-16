@@ -14,7 +14,7 @@ import org.json.JSONObject
  * |---|---|---|
  * | 1 | 来源订单号精确匹配 `(sourceType, orderId)` | 复用/更新原账单可变字段（经 T5 合并器，EVIDENCE 级只补空），不产生第二笔 |
  * | 2 | 同一来源事件标识 `sourceEventKey` | 沿用现状：确定性主键幂等 + 用户确认墓碑（T2/T3/T4 已接入同一键族），本类不重复实现 |
- * | 3 | 导入文件记录标识 | 预留挂点（阶段六启用）：[checkLevel3] 占位，当前恒返回未命中 |
+ * | 3 | 导入文件记录标识 `(sourceType=import, importRecordId)` | 命中即跳过导入行并返回既有账单供上层计数 |
  * | 4 | 金额+币种+时间窗口+账户+商户相似度综合 | 只提示不合并：标记 SUSPECTED_DUPLICATE 附因素清单，用户仍可确认两笔并存 |
  *
  * 退款豁免：退款支持多次部分退款，按退款单号去重（第 2 级幂等键族），
@@ -54,12 +54,26 @@ internal class DuplicateGuard(
     }
 
     /**
-     * 第 3 级：导入文件记录标识查重——预留挂点（阶段六启用）。
-     * 当前无导入通道，恒返回 null；接入时按 (sourceType=import, 导入记录 ID) 查重。
+     * 阶段六 T1 第 3 级：导入文件记录标识精确查重（docs/tdd/10_phase6_tasks.md 第 3.4 节）。
+     *
+     * 判定口径：sourceType 固定为 "import"，以账单文件的记录唯一标识
+     * （微信交易单号/支付宝交易订单号）精确匹配既有账单；命中返回既有账单，
+     * 调用方计为 skipped 且不产生第二笔。空标识不参与判定。
+     *
+     * @param importRecordId 导入文件记录标识；空值视为无标识，直接未命中
+     * @param excludeId 排除的账单 ID（更新场景排除自身），传 null 表示不排除
      */
     suspend fun checkLevel3(
-        @Suppress("UNUSED_PARAMETER") importRecordId: String?
-    ): BillEntity? = null
+        importRecordId: String?,
+        excludeId: String? = null
+    ): BillEntity? {
+        if (importRecordId.isNullOrBlank()) return null
+        return database.billDao().findBySourceTypeAndImportRecordId(
+            sourceType = IMPORT_SOURCE_TYPE,
+            importRecordId = importRecordId,
+            excludeId = excludeId
+        )
+    }
 
     /**
      * 第 4 级：疑似重复综合匹配（只提示不合并）。
@@ -153,6 +167,9 @@ internal class DuplicateGuard(
 
         /** 疑似重复审计实体类型（确认入账前提示留痕，供前端 T7 展示）。 */
         const val AUDIT_SUSPECTED_DUPLICATE = "suspected_duplicate"
+
+        /** 阶段六导入账单的 sourceType 常量（第 3 级去重固定在此来源内）。 */
+        const val IMPORT_SOURCE_TYPE = "import"
 
         /** 第 4 级时间窗口（毫秒）：发生时间前后 10 分钟。 */
         const val SIMILAR_WINDOW_MILLIS = 10 * 60 * 1000L

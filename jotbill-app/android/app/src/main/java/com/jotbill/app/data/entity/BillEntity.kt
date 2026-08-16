@@ -16,6 +16,7 @@ import androidx.room.PrimaryKey
         Index(value = ["platform"]),
         Index(value = ["order_id"]),
         Index(value = ["source_type"]),
+        Index(value = ["source_type", "import_record_id"]),
         Index(value = ["original_transaction_id"]),
         Index(value = ["occurred_at", "type"])
     ],
@@ -64,5 +65,10 @@ data class BillEntity(
      * 旧库迁移与新建账单默认空数组，行为与锁定功能引入前完全一致。
      * 锁定只作用于字段级，不支持行级整体锁。
      */
-    @ColumnInfo(name = "field_locks", defaultValue = "[]") val fieldLocks: String = "[]"
+    @ColumnInfo(name = "field_locks", defaultValue = "[]") val fieldLocks: String = "[]",
+    /**
+     * 阶段六 T1：导入文件记录标识（如微信交易单号/支付宝交易订单号）。
+     * 仅 sourceType = "import" 的账单使用；旧库迁移与实时链路账单保持 NULL。
+     */
+    @ColumnInfo(name = "import_record_id") val importRecordId: String? = null
 )
