@@ -219,7 +219,7 @@ internal object PaymentResultParser {
     private fun extractAmountMinor(content: String): Long? {
         for (pattern in FINAL_AMOUNT_PATTERNS) {
             val match = pattern.find(content) ?: continue
-            return parseAmountMinor(match.groupValues[1])
+            parseAmountMinor(match.groupValues[1])?.let { return it }
         }
         for (pattern in AMOUNT_PATTERNS) {
             for (match in pattern.findAll(content)) {

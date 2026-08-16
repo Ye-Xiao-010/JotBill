@@ -4,6 +4,7 @@ import java.math.BigDecimal
 import java.security.MessageDigest
 import java.time.Instant
 import java.time.ZoneId
+import kotlin.math.abs
 
 /**
  * 支付通知归一化结果。
@@ -272,7 +273,7 @@ internal object PaymentResultNormalizer {
         if (PAYMENT_KEYWORDS.none { fullContent.contains(it) }) return null
 
         // 提取金额（分）
-        val amountMinor = extractAmountMinor(fullContent) ?: return null
+        val amountMinor = extractFirstValidAmount(fullContent) ?: return null
         if (amountMinor <= 0L) return null
 
         // 提取订单号
@@ -659,6 +660,24 @@ internal object PaymentResultNormalizer {
         return null
     }
 
+    /**
+     * 主消费证据金额提取：优先最终支付栏；匹配到非法候选（0、超两位小数、超 Long）
+     * 时继续尝试后续候选，不因首个匹配失败而丢弃整条通知。
+     */
+    private fun extractFirstValidAmount(content: String): Long? {
+        for (pattern in FINAL_AMOUNT_PATTERNS) {
+            val match = pattern.find(content) ?: continue
+            parseAmountMinor(match.groupValues[1])?.let { return it }
+        }
+        for (pattern in AMOUNT_PATTERNS) {
+            for (match in pattern.findAll(content)) {
+                parseAmountMinor(match.groupValues.getOrNull(1))?.let { return it }
+            }
+        }
+        return null
+    }
+
+
     private fun parseAmountMinor(amountText: String): Long? {
         val amount = try {
             BigDecimal(amountText)
@@ -715,7 +734,8 @@ internal object PaymentResultNormalizer {
      * 从正文提取交易发生时间，优先级高于通知到达时间。
      *
      * 支持"HH:mm"和"HH:mm:ss"格式（通知正文常见），结合通知时间的日期部分还原时间戳；
-     * 解析结果比通知时间晚超过 30 分钟视为跨午夜，回退一天。
+     * 正文只有时分时，在通知日期前一天/当天/后一天中选最接近 postTime 的时间，
+     * 覆盖跨午夜的双向场景；解析失败时返回通知时间。
      * 无法解析时返回通知时间。
      */
     private fun extractOccurredAt(content: String, postTime: Long): Long {
@@ -726,15 +746,15 @@ internal object PaymentResultNormalizer {
         if (hour !in 0..23 || minute !in 0..59 || second !in 0..59) return postTime
 
         val postInstant = Instant.ofEpochMilli(postTime)
-                .atZone(ZoneId.systemDefault())
-        var occurred = postInstant.toLocalDate()
-            .atTime(hour, minute, second)
-            .atZone(ZoneId.systemDefault())
-        // 解析出的时间比通知晚超过 30 分钟：多半是跨午夜（如 23:59 支付、00:01 收到通知）
-        if (occurred.toInstant().toEpochMilli() - postTime > 30 * 60 * 1000L) {
-            occurred = occurred.minusDays(1)
+        .atZone(ZoneId.systemDefault())
+        val occurred = (-1L..1L)
+            .map { offset ->
+                postInstant.toLocalDate().plusDays(offset)
+                    .atTime(hour, minute, second)
+                    .atZone(ZoneId.systemDefault())
+                    .toInstant().toEpochMilli()
         }
-        return occurred.toInstant().toEpochMilli()
+        return occurred.minByOrNull { candidate -> abs(candidate - postTime) } ?: postTime
     }
 
     /** 计算 SHA-256 哈希，返回十六进制字符串。 */
