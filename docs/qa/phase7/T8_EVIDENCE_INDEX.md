@@ -40,8 +40,8 @@
 
 | 证据文件 | 内容 | 提交哈希 | 状态 |
 |---|---|---|---|
-| `CHECKOUT_OVERLAY_FLICKER_AND_PAYMENT_CAPTURE_FIX.md` | 悬浮按钮闪烁/支付漏记根因、修复与复测口径 | 待提交 | 已采集 |
-| `device/2026-08-16-pdd-checkout-overlay-stable.png` | 拼多多确认订单页悬浮按钮稳定截图 | 待提交 | 已采集 |
-| `device/2026-08-16-pdd-checkout-overlay-stable.xml` | 同场景 UI 层级（不含原文，已由截图代替原文） | 待提交 | 已采集 |
-| `device/2026-08-16-pdd-checkout-overlay-stable.logcat.txt` | 30 秒事件包名交错但窗口不闪烁的诊断日志 | 待提交 | 已采集 |
-| `device/2026-08-16-pdd-wechat-payment-result-diagnosis.logcat.txt` | 真实支付后微信成功页 role=UNKNOWN 与根窗口错配诊断 | 待提交 | 已采集 |
+| `CHECKOUT_OVERLAY_FLICKER_AND_PAYMENT_CAPTURE_FIX.md` | 悬浮按钮闪烁/支付漏记根因、修复与复测口径 | `4227227` | 已采集 |
+| `device/2026-08-16-pdd-checkout-overlay-stable.png` | 拼多多确认订单页悬浮按钮稳定截图 | `4227227` | 已采集 |
+| `device/2026-08-16-pdd-checkout-overlay-stable.xml` | 同场景 UI 层级（不含原文，已由截图代替原文） | `4227227` | 已采集 |
+| `device/2026-08-16-pdd-checkout-overlay-stable.logcat.txt` | 30 秒事件包名交错但窗口不闪烁的诊断日志 | `4227227` | 已采集 |
+| `device/2026-08-16-pdd-wechat-payment-result-diagnosis.logcat.txt` | 真实支付后微信成功页 role=UNKNOWN 与根窗口错配诊断 | `4227227` | 已采集 |
