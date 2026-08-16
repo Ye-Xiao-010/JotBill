@@ -171,6 +171,8 @@ dependencies {
     }
 
     testImplementation("junit:junit:4.13.2")
+    // 阶段七 T1：本地 JVM 单元测试使用真实 org.json，避免 android.jar 未 mock 实现。
+    testImplementation("org.json:json:20180813")
 }
 
 kapt {
