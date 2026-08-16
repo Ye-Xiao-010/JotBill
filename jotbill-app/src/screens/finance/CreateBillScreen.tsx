@@ -31,6 +31,26 @@ const FIXED_CATEGORIES = [
   { icon: '📚', name: '教育' },
 ];
 
+/** 阶段五 T7：手动表单支持的交易类型（转账/还款需要双账户，退款/手续费走待确认链路）。 */
+type BillFormType = 'expense' | 'income' | 'transfer' | 'repayment';
+
+/** 类型选项标签（阶段五 T7 双账户语义）。 */
+const FORM_TYPE_OPTIONS: Array<{ value: BillFormType; label: string }> = [
+  { value: 'expense', label: '支出' },
+  { value: 'income', label: '收入' },
+  { value: 'transfer', label: '转账' },
+  { value: 'repayment', label: '还款' },
+];
+
+/** 编辑既有账单时，回显支持的手动类型；不支持的类型（退款/手续费等）回退支出。 */
+function resolveInitialFormType(billType: string | undefined, fallback?: 'income' | 'expense'): BillFormType {
+  const supported: BillFormType[] = ['expense', 'income', 'transfer', 'repayment'];
+  if (billType && (supported as string[]).includes(billType)) {
+    return billType as BillFormType;
+  }
+  return fallback ?? 'expense';
+}
+
 interface CreateBillScreenProps {
   navigation: any;
   route?: {
@@ -53,16 +73,22 @@ const CreateBillScreen: React.FC<CreateBillScreenProps> = ({ navigation, route }
   const [amount, setAmount] = useState(
     editingBill ? (editingBill.amountMinor / 100).toFixed(2) : ''
   );
-  const [type, setType] = useState<'income' | 'expense'>(
-    editingBill?.type === 'income' ? 'income' : initialType || 'expense'
+  const [type, setType] = useState<BillFormType>(
+    resolveInitialFormType(editingBill?.type, initialType)
   );
   const [selectedCategory, setSelectedCategory] = useState<Category | null>(null);
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [selectedAccountId, setSelectedAccountId] = useState<string | undefined>(editingBill?.accountId);
+  // 阶段五 T7：转账/还款目标账户（编辑回显）
+  const [selectedTargetAccountId, setSelectedTargetAccountId] = useState<string | undefined>(
+    editingBill?.targetAccountId
+  );
   const [description, setDescription] = useState(editingBill?.description || '');
   const [loading, setLoading] = useState(false);
 
-  const { categories } = useCategories(type);
+  // 转账/还款不计收支，无分类概念
+  const isTransferLike = type === 'transfer' || type === 'repayment';
+  const { categories } = useCategories(isTransferLike ? 'expense' : type);
 
   useEffect(() => {
     let mounted = true;
@@ -80,7 +106,8 @@ const CreateBillScreen: React.FC<CreateBillScreenProps> = ({ navigation, route }
 
   useEffect(() => {
     setSelectedAccountId(editingBill?.accountId);
-  }, [editingBill?.accountId]);
+    setSelectedTargetAccountId(editingBill?.targetAccountId);
+  }, [editingBill?.accountId, editingBill?.targetAccountId]);
 
   useEffect(() => {
     if (!editingBill?.categoryId) return;
@@ -93,9 +120,11 @@ const CreateBillScreen: React.FC<CreateBillScreenProps> = ({ navigation, route }
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [categoryToDelete, setCategoryToDelete] = useState<Category | null>(null);
 
-  const handleTypeChange = (newType: 'income' | 'expense') => {
+  /** 切换类型时清空分类与目标账户（不同类型的字段语义不同）。 */
+  const handleTypeChange = (newType: BillFormType) => {
     setType(newType);
     setSelectedCategory(null);
+    setSelectedTargetAccountId(undefined);
   };
 
   const handleCategorySelect = (category: Category) => {
@@ -154,10 +183,36 @@ const CreateBillScreen: React.FC<CreateBillScreenProps> = ({ navigation, route }
     account => account.isActive || account.id === editingBill?.accountId,
   );
 
+  /** 转账/还款的目标账户候选：转账为全部启用账户，还款限定负债账户。 */
+  const selectableTargetAccounts = selectableAccounts.filter(account =>
+    type === 'repayment' ? account.kind === 'liability' : true,
+  );
+
+  /** 表单校验：金额必填；非转账类必选分类；转账/还款必选双账户且源≠目标、还款目标为负债。 */
   const validateForm = () => {
     if (!amount || parseFloat(amount) <= 0) {
       showError('请输入有效的金额');
       return false;
+    }
+    if (isTransferLike) {
+      if (!selectedAccountId) {
+        showError('请选择源账户');
+        return false;
+      }
+      if (!selectedTargetAccountId) {
+        showError(type === 'repayment' ? '请选择还款的负债账户' : '请选择目标账户');
+        return false;
+      }
+      if (selectedAccountId === selectedTargetAccountId) {
+        showError('源账户与目标账户不能相同');
+        return false;
+      }
+      const target = accounts.find(account => account.id === selectedTargetAccountId);
+      if (type === 'repayment' && target && target.kind !== 'liability') {
+        showError('还款的目标账户必须是负债账户（信用卡/花呗等）');
+        return false;
+      }
+      return true;
     }
     if (!selectedCategory) {
       showError('请选择分类');
@@ -176,9 +231,14 @@ const CreateBillScreen: React.FC<CreateBillScreenProps> = ({ navigation, route }
         type,
         description: description.trim() || null,
         occurredAt: editingBill?.occurredAt || new Date().toISOString(),
-        categoryId: selectedCategory!.id,
+        // 转账/还款不计收支，不写分类
+        ...(isTransferLike ? {} : { categoryId: selectedCategory!.id }),
         sourceType: editingBill?.sourceType || 'manual' as const,
-        ...(selectedAccountId ? { accountId: selectedAccountId } : {}),
+        ...(isTransferLike
+          ? { accountId: selectedAccountId, targetAccountId: selectedTargetAccountId }
+          : selectedAccountId
+            ? { accountId: selectedAccountId }
+            : {}),
       };
 
       if (isEditing) {
@@ -227,24 +287,26 @@ const CreateBillScreen: React.FC<CreateBillScreenProps> = ({ navigation, route }
     <View style={styles.container}>
       <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
         <View style={styles.content}>
-          {/* 支出/收入切换 */}
+          {/* 类型切换（阶段五 T7：含转账/还款双账户语义） */}
           <View style={styles.typeSelector}>
-            <TouchableOpacity
-              style={[styles.typeButton, type === 'expense' && styles.typeButtonExpenseActive]}
-              onPress={() => handleTypeChange('expense')}
-            >
-              <Text style={[styles.typeButtonText, type === 'expense' && styles.typeButtonTextActive]}>
-                支出
-              </Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.typeButton, type === 'income' && styles.typeButtonIncomeActive]}
-              onPress={() => handleTypeChange('income')}
-            >
-              <Text style={[styles.typeButtonText, type === 'income' && styles.typeButtonTextActive]}>
-                收入
-              </Text>
-            </TouchableOpacity>
+            {FORM_TYPE_OPTIONS.map(option => (
+              <TouchableOpacity
+                key={option.value}
+                style={[
+                  styles.typeButton,
+                  type === option.value && styles.typeButtonActive,
+                  type === option.value && option.value === 'expense' && styles.typeButtonExpenseActive,
+                  type === option.value && option.value === 'income' && styles.typeButtonIncomeActive,
+                  type === option.value && option.value === 'transfer' && styles.typeButtonTransferActive,
+                  type === option.value && option.value === 'repayment' && styles.typeButtonRepaymentActive,
+                ]}
+                onPress={() => handleTypeChange(option.value)}
+              >
+                <Text style={[styles.typeButtonText, type === option.value && styles.typeButtonTextActive]}>
+                  {option.label}
+                </Text>
+              </TouchableOpacity>
+            ))}
           </View>
 
           {/* 金额输入 */}
@@ -265,7 +327,7 @@ const CreateBillScreen: React.FC<CreateBillScreenProps> = ({ navigation, route }
 
           {selectableAccounts.length > 0 && (
             <View style={styles.formGroup}>
-              <Text style={styles.formLabel}>账户</Text>
+              <Text style={styles.formLabel}>{isTransferLike ? '💳 源账户' : '账户'}</Text>
               <View style={styles.accountGrid}>
                 {selectableAccounts.map(account => (
                   <TouchableOpacity
@@ -288,7 +350,45 @@ const CreateBillScreen: React.FC<CreateBillScreenProps> = ({ navigation, route }
             </View>
           )}
 
-          {/* 分类选择 */}
+          {/* 目标账户（阶段五 T7：转账/还款双账户，还款限负债账户） */}
+          {isTransferLike && selectableTargetAccounts.length > 0 && (
+            <View style={styles.formGroup}>
+              <Text style={styles.formLabel}>
+                {type === 'repayment' ? '🏦 目标账户（限负债）' : '🏦 目标账户'}
+              </Text>
+              <View style={styles.accountGrid}>
+                {selectableTargetAccounts.map(account => (
+                  <TouchableOpacity
+                    key={account.id}
+                    style={[
+                      styles.accountOption,
+                      selectedTargetAccountId === account.id && styles.accountOptionSelected,
+                    ]}
+                    onPress={() => setSelectedTargetAccountId(account.id)}
+                  >
+                    <Text style={styles.accountOptionName} numberOfLines={1}>
+                      {account.name}
+                    </Text>
+                    <Text style={styles.accountOptionType}>
+                      {account.kind === 'liability' ? '负债' : '资产'}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+              {type === 'repayment' ? (
+                <Text style={styles.targetAccountHint}>
+                  还款目标须为负债账户（信用卡/花呗等），确认后欠款减少。
+                </Text>
+              ) : (
+                <Text style={styles.targetAccountHint}>
+                  转账不计收支，源账户扣减、目标账户入账。
+                </Text>
+              )}
+            </View>
+          )}
+
+          {/* 分类选择（转账/还款不计收支，无分类） */}
+          {!isTransferLike && (
           <View style={styles.formGroup}>
             <Text style={styles.formLabel}>📂 分类</Text>
             <View style={styles.categoryGrid}>
@@ -312,6 +412,7 @@ const CreateBillScreen: React.FC<CreateBillScreenProps> = ({ navigation, route }
               </TouchableOpacity>
             </View>
           </View>
+          )}
 
           {/* 备注输入 */}
           <View style={styles.formGroup}>
@@ -353,7 +454,7 @@ const CreateBillScreen: React.FC<CreateBillScreenProps> = ({ navigation, route }
         visible={showAddCategoryModal}
         onClose={() => setShowAddCategoryModal(false)}
         onSuccess={handleAddCategorySuccess}
-        billType={type}
+        billType={type === 'income' ? 'income' : 'expense'}
       />
 
       <ConfirmModal
@@ -383,23 +484,35 @@ const createStyles = (colors: ThemeColors) => ({
       padding: 4,
       marginBottom: spacing.lg,
       alignSelf: 'center',
-      width: '60%',
+      width: '100%',
     },
     typeButton: {
       flex: 1,
-      paddingVertical: spacing.md,
+      paddingVertical: spacing.sm,
       alignItems: 'center',
       borderRadius: borderRadius.small,
     },
-    typeButtonExpenseActive: {
-      backgroundColor: colors.expense,
+    typeButtonActive: {
       borderWidth: borderWidth.thin,
       borderColor: colors.stroke,
     },
+    typeButtonExpenseActive: {
+      backgroundColor: colors.expense,
+    },
     typeButtonIncomeActive: {
       backgroundColor: colors.income,
-      borderWidth: borderWidth.thin,
-      borderColor: colors.stroke,
+    },
+    typeButtonTransferActive: {
+      backgroundColor: colors.primary,
+    },
+    typeButtonRepaymentActive: {
+      backgroundColor: colors.warning,
+    },
+    targetAccountHint: {
+      marginTop: spacing.xs,
+      fontSize: 12,
+      fontWeight: '600',
+      color: colors.textSecondary,
     },
     typeButtonText: { fontSize: 16, fontWeight: '700', color: colors.textSecondary },
     typeButtonTextActive: { color: '#FFFFFF', fontWeight: '800' },

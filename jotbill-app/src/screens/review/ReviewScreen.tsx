@@ -9,6 +9,7 @@ import {
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   TouchableOpacity,
   View,
 } from 'react-native';
@@ -20,8 +21,10 @@ import {
   Check,
   ChevronLeft,
   Clock3,
+  Copy,
   Inbox,
   Loader2,
+  Pencil,
   RefreshCw,
   Sparkles,
   X,
@@ -29,9 +32,13 @@ import {
 import {
   nativeData,
   nativeRecognition,
+  type Account,
+  type Bill,
+  type PendingConfirmationInput,
   type PendingTransaction,
   type PaymentEvidence,
   type RecognitionStatus,
+  type TransactionType,
 } from '../../native';
 import { invalidateCache, QUERY_KEYS } from '../../lib/queryClient';
 import { useAlert } from '../../providers';
@@ -69,8 +76,13 @@ export default function ReviewScreen() {
   }, []);
 
   const confirmMutation = useMutation({
-    mutationFn: ({ pending }: { pending: PendingTransaction }) =>
-      nativeData.confirmPendingTransaction(pending.pendingId, {}, pending.version),
+    mutationFn: ({
+      pending,
+      input,
+    }: {
+      pending: PendingTransaction;
+      input: PendingConfirmationInput;
+    }) => nativeData.confirmPendingTransaction(pending.pendingId, input, pending.version),
     onSuccess: () => {
       invalidateAll();
     },
@@ -137,7 +149,15 @@ export default function ReviewScreen() {
 
   const handleConfirm = useCallback(
     (pending: PendingTransaction) => {
-      confirmMutation.mutate({ pending });
+      confirmMutation.mutate({ pending, input: {} });
+    },
+    [confirmMutation],
+  );
+
+  /** 编辑后确认：类型/金额/账户/目标账户/原交易经 input 通道提交，不改方法签名。 */
+  const handleConfirmWithInput = useCallback(
+    (pending: PendingTransaction, input: PendingConfirmationInput) => {
+      confirmMutation.mutate({ pending, input });
     },
     [confirmMutation],
   );
@@ -215,6 +235,7 @@ export default function ReviewScreen() {
                 key={pending.pendingId}
                 pending={pending}
                 onConfirm={handleConfirm}
+                onConfirmWithInput={handleConfirmWithInput}
                 onIgnore={handleIgnore}
                 onRetry={handleRetry}
                 isConfirming={
@@ -352,10 +373,14 @@ function LoadingState({ colors }: { colors: ThemeColors }) {
   );
 }
 
-/** 单条待确认交易卡片，展示候选字段并触发确认/忽略/重试。 */
+/** 单条待确认交易卡片，展示候选字段并触发确认/忽略/重试/编辑。 */
 interface PendingCardProps {
   pending: PendingTransaction;
   onConfirm: (pending: PendingTransaction) => void;
+  onConfirmWithInput: (
+    pending: PendingTransaction,
+    input: PendingConfirmationInput,
+  ) => void;
   onIgnore: (pending: PendingTransaction) => void;
   onRetry: (pending: PendingTransaction) => void;
   isConfirming: boolean;
@@ -368,6 +393,7 @@ interface PendingCardProps {
 function PendingCard({
   pending,
   onConfirm,
+  onConfirmWithInput,
   onIgnore,
   onRetry,
   isConfirming,
@@ -376,6 +402,7 @@ function PendingCard({
   retryBlocked,
   colors,
 }: PendingCardProps) {
+  const [editing, setEditing] = useState(false);
   const styles = useStyles(createStyles);
   // 阶段四 T7：按会话查询支付证据摘要；无会话的纯手动记录不查询
   const evidenceQuery = useQuery({
@@ -473,7 +500,27 @@ function PendingCard({
         <NoSessionEvidenceState />
       )}
 
+      {editing ? (
+        <PendingEditPanel
+          pending={pending}
+          submitting={isConfirming}
+          onCancel={() => setEditing(false)}
+          onSubmit={(input) => onConfirmWithInput(pending, input)}
+        />
+      ) : null}
+
       <View style={styles.actionRow}>
+        <TouchableOpacity
+          style={[styles.retryButton, editing && styles.actionButtonDisabled]}
+          onPress={() => setEditing(current => !current)}
+          disabled={isConfirming || isIgnoring}
+          activeOpacity={0.85}
+        >
+          <Pencil size={16} color={colors.textPrimary} />
+          <Text style={styles.retryButtonText}>
+            {editing ? '收起编辑' : '编辑'}
+          </Text>
+        </TouchableOpacity>
         <TouchableOpacity
           style={[
             styles.confirmButton,
@@ -520,6 +567,306 @@ function PendingCard({
           <X size={16} color={colors.textSecondary} />
           <Text style={styles.ignoreButtonText}>
             {isIgnoring ? '忽略中…' : '忽略'}
+          </Text>
+        </TouchableOpacity>
+      </View>
+    </View>
+  );
+}
+
+/** 待确认编辑面板支持修改的类型（adjustment 不开放手动选择）。 */
+const EDITABLE_TYPE_LABELS: Array<{ value: TransactionType; label: string }> = [
+  { value: 'expense', label: '支出' },
+  { value: 'income', label: '收入' },
+  { value: 'transfer', label: '转账' },
+  { value: 'repayment', label: '还款' },
+  { value: 'refund', label: '退款' },
+  { value: 'fee', label: '手续费' },
+];
+
+/**
+ * 待确认编辑面板（阶段五 T7）。
+ *
+ * - 类型/金额/账户/目标账户/退款原交易的修正经 confirmPendingTransaction
+ *   的 input 通道提交，不改方法签名；
+ * - 转账/还款校验目标账户必填且源≠目标，还款目标限定负债账户；
+ * - 退款原交易选择复用 getBills() 服务端查询（关键词过滤），不做本地全文搜索；
+ * - "保存为规则"（FR-051）只把账户修正映射为单条规则草稿，
+ *   用户确认后才 addRule 落库，不静默创建。
+ */
+interface PendingEditPanelProps {
+  pending: PendingTransaction;
+  submitting: boolean;
+  onCancel: () => void;
+  onSubmit: (input: PendingConfirmationInput) => void;
+}
+
+function PendingEditPanel({ pending, submitting, onCancel, onSubmit }: PendingEditPanelProps) {
+  const styles = useStyles(createStyles);
+  const { alert, confirm: confirmDialog } = useAlert();
+  const queryClient = useQueryClient();
+  const [type, setType] = useState<TransactionType>(pending.type);
+  const [amountText, setAmountText] = useState(
+    pending.amountMinor > 0 ? (pending.amountMinor / 100).toFixed(2) : '',
+  );
+  const [accountId, setAccountId] = useState<string | undefined>(pending.accountId);
+  const [targetAccountId, setTargetAccountId] = useState<string | undefined>(undefined);
+  const [originalBillId, setOriginalBillId] = useState<string | undefined>(undefined);
+  const [refundKeyword, setRefundKeyword] = useState('');
+
+  const accountsQuery = useQuery({
+    queryKey: ['accounts', 'list'],
+    queryFn: () => nativeData.getAccounts(),
+  });
+  const activeAccounts: Account[] = useMemo(
+    () => (accountsQuery.data ?? []).filter((account: Account) => account.isActive),
+    [accountsQuery.data],
+  );
+
+  /** 退款原交易候选：复用 getBills 服务端关键词查询，不做本地全文搜索。 */
+  const refundBillsQuery = useQuery({
+    queryKey: ['bills', 'refund-origin', refundKeyword],
+    queryFn: () =>
+      nativeData.getBills({
+        type: 'expense',
+        keyword: refundKeyword.trim() || undefined,
+        limit: 20,
+        orderBy: 'date',
+        orderDirection: 'desc',
+      }),
+    enabled: type === 'refund',
+  });
+
+  const isTransferLike = type === 'transfer' || type === 'repayment';
+  const targetAccounts = useMemo(
+    () =>
+      isTransferLike
+        ? activeAccounts.filter((account: Account) =>
+            type === 'repayment' ? account.kind === 'liability' : true,
+          )
+        : [],
+    [activeAccounts, isTransferLike, type],
+  );
+
+  /** 账户修正相对原值的差异，作为"保存为规则"草稿的依据。 */
+  const accountChanged =
+    Boolean(accountId) && accountId !== pending.accountId;
+  const selectedAccount = activeAccounts.find((account: Account) => account.id === accountId);
+  const originalBill = (refundBillsQuery.data?.items ?? []).find(
+    (bill: Bill) => bill.id === originalBillId,
+  );
+
+  /** FR-051：把账户修正映射为规则草稿，用户确认后落库（不静默创建）。 */
+  const handleCreateRule = () => {
+    if (!accountId) return;
+    const useMerchant = Boolean(pending.merchant?.trim());
+    const ruleCondition = useMerchant ? 'merchant_contains' : 'platform_equals';
+    const ruleConditionValue = useMerchant
+      ? (pending.merchant as string)
+      : (pending.platform ?? '');
+    if (!ruleConditionValue) {
+      alert('无法创建规则', '该待确认缺少商户与平台信息，无法生成规则条件。');
+      return;
+    }
+    const ruleName = `${useMerchant ? pending.merchant : pending.platform} → ${
+      selectedAccount?.name ?? accountId
+    }`;
+    confirmDialog(
+      '保存为规则',
+      `将创建规则：当${useMerchant ? '商户包含' : '平台等于'}“${ruleConditionValue}”时，账户设为“${
+        selectedAccount?.name ?? accountId
+      }”。规则会对未来交易生效，是否创建？`,
+      async () => {
+        try {
+          await nativeData.addRule({
+            name: ruleName,
+            condition: ruleCondition,
+            conditionValue: ruleConditionValue,
+            action: 'set_account',
+            actionValue: accountId,
+            priority: 100,
+          });
+          queryClient.invalidateQueries({ queryKey: ['rules'] });
+          alert('规则已创建', '后续匹配交易将自动应用该账户。');
+        } catch (error) {
+          const message = error instanceof Error ? error.message : '创建规则失败';
+          alert('创建规则失败', message);
+        }
+      },
+    );
+  };
+
+  /** 提交前校验：金额、双账户约束、还款负债约束。 */
+  const handleSubmit = () => {
+    const amountMinor = Math.round((parseFloat(amountText) || 0) * 100);
+    if (!amountText.trim() || amountMinor <= 0) {
+      alert('表单不完整', '请填写有效金额。');
+      return;
+    }
+    if (isTransferLike) {
+      if (!accountId) {
+        alert('表单不完整', '请选择源账户。');
+        return;
+      }
+      if (!targetAccountId) {
+        alert('表单不完整', '请选择目标账户。');
+        return;
+      }
+      if (accountId === targetAccountId) {
+        alert('表单有误', '源账户与目标账户不能相同。');
+        return;
+      }
+      if (type === 'repayment') {
+        const target = activeAccounts.find((account: Account) => account.id === targetAccountId);
+        if (target && target.kind !== 'liability') {
+          alert('表单有误', '还款的目标账户必须是负债账户（信用卡/花呗等）。');
+          return;
+        }
+      }
+    }
+    onSubmit({
+      type,
+      amountMinor,
+      ...(accountId ? { accountId } : {}),
+      ...(isTransferLike && targetAccountId ? { targetAccountId } : {}),
+      ...(type === 'refund' && originalBillId
+        ? {
+            originalTransactionId: originalBillId,
+            description: originalBill
+              ? `退款原交易：${originalBill.description ?? originalBill.merchant ?? originalBillId}`
+              : undefined,
+          }
+        : {}),
+    });
+  };
+
+  return (
+    <View style={styles.editPanel}>
+      <Text style={styles.editTitle}>修正交易信息</Text>
+
+      <Text style={styles.editLabel}>类型</Text>
+      <View style={styles.chipGrid}>
+        {EDITABLE_TYPE_LABELS.map(option => (
+          <TouchableOpacity
+            key={option.value}
+            style={[styles.chip, type === option.value && styles.chipSelected]}
+            onPress={() => {
+              setType(option.value);
+              setTargetAccountId(undefined);
+            }}
+          >
+            <Text style={styles.chipText}>{option.label}</Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+
+      <Text style={styles.editLabel}>金额（元）</Text>
+      <TextInput
+        style={styles.editInput}
+        value={amountText}
+        onChangeText={setAmountText}
+        keyboardType="numeric"
+        placeholder="0.00"
+        placeholderTextColor={styles._colors.textTertiary}
+      />
+
+      {activeAccounts.length > 0 ? (
+        <>
+          <Text style={styles.editLabel}>{isTransferLike ? '源账户' : '账户'}</Text>
+          <View style={styles.chipGrid}>
+            {activeAccounts.map((account: Account) => (
+              <TouchableOpacity
+                key={account.id}
+                style={[styles.chip, accountId === account.id && styles.chipSelected]}
+                onPress={() => setAccountId(account.id)}
+              >
+                <Text style={styles.chipText}>{account.name}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        </>
+      ) : null}
+
+      {isTransferLike && targetAccounts.length > 0 ? (
+        <>
+          <Text style={styles.editLabel}>
+            目标账户{type === 'repayment' ? '（限负债账户）' : ''}
+          </Text>
+          <View style={styles.chipGrid}>
+            {targetAccounts.map((account: Account) => (
+              <TouchableOpacity
+                key={account.id}
+                style={[styles.chip, targetAccountId === account.id && styles.chipSelected]}
+                onPress={() => setTargetAccountId(account.id)}
+              >
+                <Text style={styles.chipText}>{account.name}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        </>
+      ) : null}
+
+      {type === 'refund' ? (
+        <>
+          <Text style={styles.editLabel}>原交易（可选，输入关键词查询）</Text>
+          <TextInput
+            style={styles.editInput}
+            value={refundKeyword}
+            onChangeText={setRefundKeyword}
+            placeholder="商户 / 备注 / 商品关键词"
+            placeholderTextColor={styles._colors.textTertiary}
+          />
+          {(refundBillsQuery.data?.items ?? []).map((bill: Bill) => (
+            <TouchableOpacity
+              key={bill.id}
+              style={[
+                styles.refundBillRow,
+                originalBillId === bill.id && styles.chipSelected,
+              ]}
+              onPress={() => setOriginalBillId(bill.id)}
+            >
+              <Text style={styles.refundBillAmount}>
+                ¥{(bill.amountMinor / 100).toFixed(2)}
+              </Text>
+              <Text style={styles.refundBillText} numberOfLines={1}>
+                {bill.description ?? bill.merchant ?? bill.orderId ?? bill.id}
+              </Text>
+              <Text style={styles.refundBillTime}>{formatTime(bill.occurredAt)}</Text>
+            </TouchableOpacity>
+          ))}
+          {refundBillsQuery.isLoading ? (
+            <Text style={styles.editHint}>正在查询历史账单…</Text>
+          ) : (refundBillsQuery.data?.items ?? []).length === 0 ? (
+            <Text style={styles.editHint}>未找到匹配的历史支出账单。</Text>
+          ) : null}
+        </>
+      ) : null}
+
+      {accountChanged ? (
+        <TouchableOpacity
+          style={styles.createRuleButton}
+          onPress={handleCreateRule}
+          activeOpacity={0.85}
+        >
+          <Copy size={14} color={styles._colors.primary} />
+          <Text style={styles.createRuleText}>
+            保存为规则：{selectedAccount?.name ?? '该账户'}
+          </Text>
+        </TouchableOpacity>
+      ) : null}
+
+      <View style={styles.editActions}>
+        <TouchableOpacity style={styles.editCancelButton} onPress={onCancel} activeOpacity={0.85}>
+          <Text style={styles.editCancelButtonText}>取消</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.editConfirmButton, submitting && styles.actionButtonDisabled]}
+          onPress={handleSubmit}
+          disabled={submitting}
+          activeOpacity={0.85}
+        >
+          <Text style={styles.editConfirmButtonText}>
+            {submitting ? '确认中…' : '按修正确认入账'}
           </Text>
         </TouchableOpacity>
       </View>
@@ -664,6 +1011,12 @@ const CONFLICT_LABELS: Record<string, string> = {
   ACCOUNT_UNAVAILABLE: '支付账户不存在或已停用，请手动选择账户',
   NO_ACTIVE_SESSION: '未关联结算页，请核对后确认',
   AI_RECOGNITION_FAILED: 'AI 识别失败，金额未知，请重试识别',
+  // 阶段五 T2/T3/T4/T6 新增冲突码
+  ACCOUNT_UNRESOLVED: '账户无法自动判定，请手动选择账户与目标账户',
+  RULE_FORCED_REVIEW: '命中转待确认规则，需人工确认',
+  SUSPECTED_DUPLICATE: '疑似重复交易（同金额/时间/账户/商户相近），请核对后再确认',
+  DEDUP_CHECK_FAILED: '去重检查异常，请人工核对是否重复',
+  FEE_AMOUNT_UNPARSED: '手续费金额解析失败，请补填金额',
 };
 
 /** 冲突原因可能为逗号拼接的多个代码，逐个翻译后合并展示。 */
@@ -1038,6 +1391,146 @@ const createStyles = (colors: ThemeColors) => ({
     },
     actionButtonDisabled: {
       opacity: 0.5,
+    },
+    // ---- 阶段五 T7：待确认编辑面板样式 ----
+    editPanel: {
+      marginTop: spacing.sm,
+      padding: spacing.md,
+      backgroundColor: colors.background,
+      borderWidth: borderWidth.thin,
+      borderColor: colors.stroke,
+      borderRadius: borderRadius.medium,
+      gap: spacing.xs,
+    },
+    editTitle: {
+      fontSize: 13,
+      fontWeight: '800',
+      color: colors.textPrimary,
+      marginBottom: spacing.xs,
+    },
+    editLabel: {
+      fontSize: 12,
+      fontWeight: '700',
+      color: colors.textSecondary,
+      marginTop: spacing.xs,
+    },
+    chipGrid: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      gap: spacing.sm,
+    },
+    chip: {
+      paddingHorizontal: spacing.sm,
+      paddingVertical: spacing.xs,
+      borderRadius: borderRadius.small,
+      borderWidth: borderWidth.thin,
+      borderColor: colors.stroke,
+      backgroundColor: colors.surface,
+    },
+    chipSelected: {
+      backgroundColor: colors.accent,
+      borderWidth: borderWidth.medium,
+    },
+    chipText: {
+      fontSize: 12,
+      fontWeight: '700',
+      color: colors.textPrimary,
+    },
+    editInput: {
+      backgroundColor: colors.surface,
+      borderWidth: borderWidth.thin,
+      borderColor: colors.stroke,
+      borderRadius: borderRadius.medium,
+      paddingHorizontal: spacing.md,
+      paddingVertical: spacing.sm,
+      fontSize: 14,
+      fontWeight: '600',
+      color: colors.textPrimary,
+    },
+    editHint: {
+      fontSize: 12,
+      fontWeight: '500',
+      color: colors.textTertiary,
+    },
+    refundBillRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: spacing.sm,
+      padding: spacing.sm,
+      borderWidth: borderWidth.thin,
+      borderColor: colors.stroke,
+      borderRadius: borderRadius.small,
+      backgroundColor: colors.surface,
+    },
+    refundBillAmount: {
+      fontSize: 12,
+      fontWeight: '800',
+      color: colors.textPrimary,
+      fontFamily: 'Courier',
+    },
+    refundBillText: {
+      flex: 1,
+      fontSize: 12,
+      fontWeight: '600',
+      color: colors.textPrimary,
+    },
+    refundBillTime: {
+      fontSize: 10,
+      fontWeight: '500',
+      color: colors.textTertiary,
+    },
+    createRuleButton: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 4,
+      marginTop: spacing.xs,
+      paddingHorizontal: spacing.sm,
+      paddingVertical: spacing.xs,
+      borderRadius: borderRadius.small,
+      borderWidth: borderWidth.thin,
+      borderColor: colors.primary,
+      backgroundColor: colors.surface,
+      alignSelf: 'flex-start',
+    },
+    createRuleText: {
+      fontSize: 12,
+      fontWeight: '700',
+      color: colors.primary,
+    },
+    editActions: {
+      flexDirection: 'row',
+      gap: spacing.sm,
+      marginTop: spacing.sm,
+    },
+    editCancelButton: {
+      flex: 1,
+      alignItems: 'center',
+      justifyContent: 'center',
+      paddingVertical: spacing.sm,
+      borderRadius: borderRadius.medium,
+      borderWidth: borderWidth.thin,
+      borderColor: colors.stroke,
+      backgroundColor: colors.surface,
+    },
+    editCancelButtonText: {
+      fontSize: 13,
+      fontWeight: '700',
+      color: colors.textSecondary,
+    },
+    editConfirmButton: {
+      flex: 1.5,
+      alignItems: 'center',
+      justifyContent: 'center',
+      paddingVertical: spacing.sm,
+      borderRadius: borderRadius.medium,
+      borderWidth: borderWidth.thin,
+      borderColor: colors.stroke,
+      backgroundColor: colors.primary,
+    },
+    editConfirmButtonText: {
+      fontSize: 13,
+      fontWeight: '800',
+      color: '#FFFFFF',
     },
   }),
   _colors: colors,

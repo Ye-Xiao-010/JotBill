@@ -212,6 +212,30 @@ export interface Rule {
   updatedAt: string;
 }
 
+/**
+ * 阶段五 T7：规则条件类型（与原生 RuleEngine 支持的条件一致）。
+ * 契约字段仍为 string（Native.d.ts 未声明枚举），此联合类型仅供表单层收紧。
+ */
+export type RuleConditionType =
+  | 'platform_equals'
+  | 'merchant_equals'
+  | 'merchant_contains'
+  | 'description_contains'
+  | 'source_equals'
+  | 'amount_range';
+
+/**
+ * 阶段五 T7：规则动作类型（与原生 RuleEngine 支持的动作一致）。
+ * set_* 携带 actionValue；ignore/send_to_review 无值。
+ */
+export type RuleActionType =
+  | 'set_platform'
+  | 'set_merchant'
+  | 'set_category'
+  | 'set_account'
+  | 'ignore'
+  | 'send_to_review';
+
 export interface RuleInput {
   name: string;
   condition: string;
