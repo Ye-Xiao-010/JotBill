@@ -20,6 +20,7 @@ import com.jotbill.app.data.entity.RuleEntity
 import com.jotbill.app.data.model.CategoryStatRow
 import com.jotbill.app.data.model.PlatformStatRow
 import com.jotbill.app.data.model.TrendRow
+import com.jotbill.app.rules.RuleEngine
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -45,6 +46,9 @@ class DataModule(
     }
     private val repository: LedgerRepository by lazy {
         LedgerRepository(database)
+    }
+    private val ruleEngine: RuleEngine by lazy {
+        RuleEngine(database)
     }
 
     override fun getName(): String = "Data"
@@ -642,6 +646,12 @@ class DataModule(
             actionValue = input.optionalString("actionValue"),
             priority = input.optInt("priority", 0),
             isActive = true,
+            // 阶段五 T1：记录创建来源；from_correction 表示用户修正记录后创建，其余按 manual
+            source = if (input.optionalString("source") == RuleEntity.SOURCE_FROM_CORRECTION) {
+                RuleEntity.SOURCE_FROM_CORRECTION
+            } else {
+                RuleEntity.SOURCE_MANUAL
+            },
             createdAt = now,
             updatedAt = now
         )
@@ -663,6 +673,12 @@ class DataModule(
             actionValue = input.updatedNullableString("actionValue", existing.actionValue),
             priority = input.optionalInt("priority") ?: existing.priority,
             isActive = input.optionalBoolean("isActive") ?: existing.isActive,
+            // 阶段五 T1：来源可随修正更新；非法值保持原值
+            source = when (input.optionalString("source")) {
+                RuleEntity.SOURCE_MANUAL -> RuleEntity.SOURCE_MANUAL
+                RuleEntity.SOURCE_FROM_CORRECTION -> RuleEntity.SOURCE_FROM_CORRECTION
+                else -> existing.source
+            },
             updatedAt = System.currentTimeMillis()
         )
         database.ruleDao().update(updated)
@@ -745,6 +761,22 @@ class DataModule(
         if (amountMinor !in 1L..MAX_SAFE_MINOR_UNIT) {
             throw BridgeException("INVALID_ARGUMENT", "amountMinor must be a positive safe integer minor unit")
         }
+        // 阶段五 T1 时机二：用户确认入账前最终执行规则。
+        // 字段优先级：用户显式输入 > 规则补全 > 待确认既有字段（证据/AI）；
+        // ignore/send_to_review 不阻断用户确认（用户明确操作优先级最高），仅记录命中。
+        val ruleDecision = ruleEngine.evaluateAndRecord(
+            RuleEngine.Subject(
+                amountMinor = amountMinor,
+                platform = pending.platform,
+                merchant = pending.merchant,
+                description = pending.productDescription,
+                sourceType = sourceType
+            )
+        )
+        val rulePatch = ruleEngine.sanitizePatch(
+            (ruleDecision as? RuleEngine.Decision.Continue)?.patch
+                ?: RuleEngine.FieldPatch()
+        )
         // 确认入账必须使用正数安全整数金额，AI 失败占位记录只能忽略或重试。
         val bill = BillEntity(
             id = UUID.randomUUID().toString(),
@@ -756,11 +788,19 @@ class DataModule(
                 pending.occurredAt
             },
             description = input.updatedNullableString("description", null),
-            categoryId = input.optionalString("categoryId") ?: pending.categoryId,
-            accountId = input.optionalString("accountId") ?: pending.accountId,
+            categoryId = input.optionalString("categoryId")
+                ?: rulePatch.categoryId
+                ?: pending.categoryId,
+            accountId = input.optionalString("accountId")
+                ?: rulePatch.accountId
+                ?: pending.accountId,
             targetAccountId = input.optionalString("targetAccountId"),
-            platform = input.optionalString("platform") ?: pending.platform,
-            merchant = input.optionalString("merchant") ?: pending.merchant,
+            platform = input.optionalString("platform")
+                ?: rulePatch.platform
+                ?: pending.platform,
+            merchant = input.optionalString("merchant")
+                ?: rulePatch.merchant
+                ?: pending.merchant,
             productDescription = input.optionalString("productDescription") ?: pending.productDescription,
             sourceType = sourceType,
             // 来源会话 ID 固定为 pending 绑定值，避免请求改写幂等边界。

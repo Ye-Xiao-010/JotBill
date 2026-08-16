@@ -39,7 +39,7 @@ import com.jotbill.app.data.entity.PendingTransactionEntity
 import com.jotbill.app.data.entity.RuleEntity
 import com.jotbill.app.data.entity.TransactionCandidateEntity
 
-const val JOT_BILL_DATABASE_VERSION = 6
+const val JOT_BILL_DATABASE_VERSION = 7
 
 @Database(
     entities = [
@@ -298,11 +298,33 @@ object DatabaseMigrations {
         }
     }
 
+    /**
+     * 阶段五 T1：规则引擎落地。
+     *
+     * 1. rules 表新增 hit_count（命中次数，默认 0）与 source（创建来源，默认 manual）；
+     * 2. pending_transactions 新增 applied_rules（纯通知路径的规则命中记录，默认空对象）。
+     * 已有行均取默认值，向前兼容。
+     */
+    private val migration6To7 = object : Migration(6, 7) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL(
+                "ALTER TABLE `rules` ADD COLUMN `hit_count` INTEGER NOT NULL DEFAULT 0"
+            )
+            db.execSQL(
+                "ALTER TABLE `rules` ADD COLUMN `source` TEXT NOT NULL DEFAULT 'manual'"
+            )
+            db.execSQL(
+                "ALTER TABLE `pending_transactions` ADD COLUMN `applied_rules` TEXT NOT NULL DEFAULT '{}'"
+            )
+        }
+    }
+
     val all: Array<Migration> = arrayOf(
         migration1To2,
         migration2To3,
         migration3To4,
         migration4To5,
-        migration5To6
+        migration5To6,
+        migration6To7
     )
 }

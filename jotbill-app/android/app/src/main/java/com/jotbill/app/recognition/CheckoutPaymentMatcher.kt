@@ -4,11 +4,13 @@ import androidx.room.withTransaction
 import com.jotbill.app.ai.AiVisionResult
 import com.jotbill.app.data.JotBillDatabase
 import com.jotbill.app.data.LedgerRepository
+import com.jotbill.app.data.entity.AuditEntryEntity
 import com.jotbill.app.data.entity.BillEntity
 import com.jotbill.app.data.entity.CheckoutSessionEntity
 import com.jotbill.app.data.entity.PendingTransactionEntity
-import com.jotbill.app.data.entity.PaymentEvidenceEntity
 import com.jotbill.app.data.entity.TransactionCandidateEntity
+import com.jotbill.app.data.entity.PaymentEvidenceEntity
+import com.jotbill.app.rules.RuleEngine
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 import java.time.Instant
@@ -86,6 +88,7 @@ internal class CheckoutPaymentMatcher(
     private val nowMillis: () -> Long = { System.currentTimeMillis() }
 ) {
     private val ledger = LedgerRepository(database)
+    private val ruleEngine = RuleEngine(database)
 
     /** AI 请求开始前先建立会话，支付通知可以在 AI 返回前安全落到同一 sessionId。 */
     suspend fun ensureSession(
@@ -246,6 +249,26 @@ internal class CheckoutPaymentMatcher(
             if (dao.getById(pendingId) != null) {
                 return@withTransaction
             }
+            // 阶段五 T1 时机一：纯通知待确认创建前执行规则；
+            // set_platform 不应用于 pending.platform（该列承担支付包名语义），
+            // set_merchant/set_account/set_category 可安全应用
+            val ruleDecision = ruleEngine.evaluateAndRecord(
+                RuleEngine.Subject(
+                    amountMinor = signal.amountMinor,
+                    platform = signal.paymentPackage,
+                    merchant = signal.merchant,
+                    description = null,
+                    sourceType = normalizedSourceType.lowercase()
+                )
+            )
+            if (ruleDecision is RuleEngine.Decision.Ignored) {
+                recordRuleDecisionAudit(pendingId, "ignore", ruleDecision.hits)
+                return@withTransaction
+            }
+            val rulePatch = ruleEngine.sanitizePatch(
+                (ruleDecision as? RuleEngine.Decision.Continue)?.patch
+                    ?: RuleEngine.FieldPatch()
+            )
             val pending = PendingTransactionEntity(
                 id = pendingId,
                 candidateId = null,
@@ -254,13 +277,14 @@ internal class CheckoutPaymentMatcher(
                 type = "expense",
                 occurredAt = signal.occurredAt,
                 platform = signal.paymentPackage,
-                merchant = signal.merchant,
+                merchant = rulePatch.merchant ?: signal.merchant,
                 productDescription = null,
                 orderId = signal.orderId,
-                accountId = defaultAccountIdForPayment(signal.paymentPackage),
-                categoryId = null,
+                accountId = rulePatch.accountId ?: defaultAccountIdForPayment(signal.paymentPackage),
+                categoryId = rulePatch.categoryId,
                 conflictReason = conflictReason,
                 sourceType = normalizedSourceType,
+                appliedRules = ruleEngine.mergeAppliedRules("{}", ruleDecision.hits),
                 createdAt = now,
                 version = 1
             )
@@ -608,14 +632,16 @@ internal class CheckoutPaymentMatcher(
                         existing = existing,
                         now = now
                     )
+                    // 阶段五 T1 时机一：AI 候选落库前执行规则（补全字段 / ignore / 强制待确认）
+                    val ruleAdjustedCandidate = applyRulesAtCandidate(candidate)
                     val persistedCandidate = if (existing == null) {
-                        database.transactionCandidateDao().insertIfAbsent(candidate)
-                        database.transactionCandidateDao().getById(candidate.id) ?: candidate
+                        database.transactionCandidateDao().insertIfAbsent(ruleAdjustedCandidate)
+                        database.transactionCandidateDao().getById(ruleAdjustedCandidate.id) ?: ruleAdjustedCandidate
                     } else {
-                        if (candidate != existing) {
-                            database.transactionCandidateDao().update(candidate)
+                        if (ruleAdjustedCandidate != existing) {
+                            database.transactionCandidateDao().update(ruleAdjustedCandidate)
                         }
-                        candidate
+                        ruleAdjustedCandidate
                     }
                     removeAiFailurePending(reference.sessionId)
 
@@ -641,7 +667,8 @@ internal class CheckoutPaymentMatcher(
                         val conflicted = persistedCandidate.copy(
                             matched = false,
                             conflictReason = selection.conflictReason,
-                            appliedRules = rulesJson(
+                            appliedRules = mergeRulesJson(
+                                persistedCandidate.appliedRules,
                                 "sessionId" to reference.sessionId,
                                 "decision" to "NEEDS_CONFIRMATION",
                                 "reason" to selection.conflictReason
@@ -857,9 +884,75 @@ internal class CheckoutPaymentMatcher(
         val amountMinor = requireNotNull(candidate.amountMinor) {
             "自动入账候选金额缺失：sessionId=${session.id}"
         }
+        // 阶段五 T1：候选生成时规则 ignore 已标记的交易不再入账（规则先标、证据后到的时序）
+        if (ruleEngine.decisionOf(candidate.appliedRules) == RuleEngine.DECISION_IGNORED) {
+            return AutoCommitOutcome(session, null)
+        }
+        // 阶段五 T1 时机二：自动入账前最终执行规则（规则可能在候选生成后被用户修改/删除）；
+        // ignore 跳过记账，send_to_review 强制转待确认，set_* 按优先级补全账单字段
+        val ruleDecision = ruleEngine.evaluateAndRecord(
+            RuleEngine.Subject(
+                amountMinor = amountMinor,
+                platform = candidate.platform,
+                merchant = candidate.merchant,
+                description = candidate.productDescription,
+                sourceType = "ai_vision"
+            )
+        )
+        when (ruleDecision) {
+            is RuleEngine.Decision.Ignored -> {
+                recordRuleDecisionAudit(candidate.id, "ignore", ruleDecision.hits)
+                database.transactionCandidateDao().update(
+                    candidate.copy(
+                        appliedRules = ruleEngine.mergeAppliedRules(
+                            candidate.appliedRules,
+                            ruleDecision.hits,
+                            decisionOverride = RuleEngine.DECISION_IGNORED
+                        ),
+                        version = candidate.version + 1
+                    )
+                )
+                // 不写 Bill、不进待确认；会话保持 WAITING_ENRICHMENT 等待过期回收
+                return AutoCommitOutcome(session, null)
+            }
+            is RuleEngine.Decision.ToReview -> {
+                database.transactionCandidateDao().update(
+                    candidate.copy(
+                        matched = false,
+                        conflictReason = RuleEngine.CONFLICT_RULE_FORCED_REVIEW,
+                        appliedRules = ruleEngine.mergeAppliedRules(
+                            candidate.appliedRules,
+                            ruleDecision.hits,
+                            decisionOverride = RuleEngine.DECISION_FORCED_REVIEW
+                        ),
+                        version = candidate.version + 1
+                    )
+                )
+                val reviewPending = pendingFromConflict(
+                    session = session,
+                    candidate = candidate,
+                    evidence = evidence,
+                    conflictReason = RuleEngine.CONFLICT_RULE_FORCED_REVIEW,
+                    now = now
+                )
+                if (reviewPending != null) {
+                    upsertPendingForSession(reviewPending)
+                }
+                return AutoCommitOutcome(
+                    advanceStatus(session, NEEDS_CONFIRMATION_STATUS, now),
+                    null
+                )
+            }
+            else -> Unit
+        }
+        val rulePatch = ruleEngine.sanitizePatch(
+            (ruleDecision as? RuleEngine.Decision.Continue)?.patch
+                ?: RuleEngine.FieldPatch()
+        )
         // 审查修复：支付账户缺失/停用时不自动入账——无账户账单虽不更新余额，
-        // 但会话进入 COMPLETED 会让用户误以为已正确入账；转待确认由用户补选账户
-        val accountId = defaultAccountIdForPayment(evidence.platform)
+        // 但会话进入 COMPLETED 会让用户误以为已正确入账；转待确认由用户补选账户；
+        // 阶段五 T1：规则 set_account 指定的账户优先于包名默认映射
+        val accountId = rulePatch.accountId ?: defaultAccountIdForPayment(evidence.platform)
         if (accountId == null) {
             val pending = pendingFromConflict(
                 session = session,
@@ -882,11 +975,12 @@ internal class CheckoutPaymentMatcher(
             type = "expense",
             occurredAt = evidence.occurredAt ?: candidate.aiOccurredAt ?: now,
             description = candidate.productDescription,
-            categoryId = null,
+            // 阶段五 T1：规则 set_category/set_account/set_platform/set_merchant 补全账单字段
+            categoryId = rulePatch.categoryId,
             accountId = accountId,
             targetAccountId = null,
-            platform = candidate.platform,
-            merchant = candidate.merchant,
+            platform = rulePatch.platform ?: candidate.platform,
+            merchant = rulePatch.merchant ?: candidate.merchant,
             productDescription = candidate.productDescription,
             sourceType = "ai_vision",
             originalTransactionId = session.id,
@@ -898,10 +992,11 @@ internal class CheckoutPaymentMatcher(
         // 写 Bill + 按类型联动余额 + 审计日志；嵌套 withTransaction 合并到外层事务
         ledger.createBillWithBalanceUpdate(bill, operator = AUTO_COMMIT_OPERATOR)
 
-        // 候选标记为已入账，记录 billId 供审计与前端追溯
+        // 候选标记为已入账，记录 billId 供审计与前端追溯；保留规则命中键（rule:*）
         database.transactionCandidateDao().update(
             candidate.copy(
-                appliedRules = rulesJson(
+                appliedRules = mergeRulesJson(
+                    candidate.appliedRules,
                     "sessionId" to session.id,
                     "decision" to AUTO_COMMITTED_STATUS,
                     "billId" to bill.id,
@@ -1124,7 +1219,8 @@ internal class CheckoutPaymentMatcher(
         evidenceOrderId = evidence.orderId,
         matched = evaluation.conflictReason == null,
         conflictReason = evaluation.conflictReason,
-        appliedRules = rulesJson(
+        appliedRules = mergeRulesJson(
+            candidate.appliedRules,
             "decision" to if (evaluation.conflictReason == null) "MATCHED" else "NEEDS_CONFIRMATION",
             "amountRule" to evaluation.amountRule,
             "orderRule" to evaluation.orderRule,
@@ -1265,6 +1361,100 @@ internal class CheckoutPaymentMatcher(
     private fun rulesJson(vararg values: Pair<String, Any?>): String = JSONObject().apply {
         values.forEach { (key, value) -> put(key, value ?: JSONObject.NULL) }
     }.toString()
+
+    /**
+     * 阶段五 T1 时机一：AI 候选生成时执行规则引擎。
+     *
+     * - Continue：set_platform/set_merchant 覆盖候选展示字段（用户确认的规则优先级
+     *   高于 AI 视觉识别），set_category/set_account 记录命中，待入账/待确认时应用；
+     * - Ignored：候选标记 decision=IGNORED，后续证据到达时不再入账或转待确认，审计留痕；
+     * - ToReview：候选标记 decision=FORCED_REVIEW，证据匹配后由时机二强制转待确认。
+     *
+     * 命中摘要合并进 appliedRules（保留既有元数据键），命中计数由引擎在事务内累加。
+     */
+    private suspend fun applyRulesAtCandidate(
+        candidate: TransactionCandidateEntity
+    ): TransactionCandidateEntity {
+        val decision = ruleEngine.evaluateAndRecord(
+            RuleEngine.Subject(
+                amountMinor = candidate.amountMinor,
+                platform = candidate.platform,
+                merchant = candidate.merchant,
+                description = candidate.productDescription,
+                sourceType = "ai_vision"
+            )
+        )
+        return when (decision) {
+            is RuleEngine.Decision.Continue -> {
+                if (decision.hits.isEmpty()) {
+                    candidate
+                } else {
+                    candidate.copy(
+                        platform = decision.patch.platform ?: candidate.platform,
+                        merchant = decision.patch.merchant ?: candidate.merchant,
+                        appliedRules = ruleEngine.mergeAppliedRules(
+                            candidate.appliedRules,
+                            decision.hits
+                        )
+                    )
+                }
+            }
+            is RuleEngine.Decision.Ignored -> {
+                recordRuleDecisionAudit(candidate.id, "ignore", decision.hits)
+                candidate.copy(
+                    appliedRules = ruleEngine.mergeAppliedRules(
+                        candidate.appliedRules,
+                        decision.hits,
+                        decisionOverride = RuleEngine.DECISION_IGNORED
+                    )
+                )
+            }
+            is RuleEngine.Decision.ToReview -> {
+                candidate.copy(
+                    appliedRules = ruleEngine.mergeAppliedRules(
+                        candidate.appliedRules,
+                        decision.hits,
+                        decisionOverride = RuleEngine.DECISION_FORCED_REVIEW
+                    )
+                )
+            }
+        }
+    }
+
+    /**
+     * 规则 ignore 决策审计：确定性 ID 幂等插入，保留命中规则清单供追溯，
+     * 不写 Bill、不更新余额、不进待确认。
+     */
+    private suspend fun recordRuleDecisionAudit(
+        entityId: String,
+        action: String,
+        hits: List<RuleEngine.RuleHit>
+    ) {
+        database.auditEntryDao().insertIfAbsent(
+            AuditEntryEntity(
+                id = "rule-$action:$entityId",
+                entityType = "rule_decision",
+                entityId = entityId,
+                action = action,
+                fieldName = null,
+                oldValue = null,
+                newValue = org.json.JSONArray().apply {
+                    hits.forEach { hit ->
+                        put("${hit.ruleId}:${hit.action}:${hit.actionValue ?: ""}")
+                    }
+                }.toString(),
+                operator = "rule_engine",
+                createdAt = nowMillis()
+            )
+        )
+    }
+
+    /** 在既有 appliedRules JSON 对象上合并决策元数据键，保留规则命中键（rule:*）。 */
+    private fun mergeRulesJson(base: String, vararg values: Pair<String, Any?>): String {
+        val merged = runCatching { JSONObject(base) }.getOrDefault(JSONObject())
+        values.forEach { (key, value) -> merged.put(key, value ?: JSONObject.NULL) }
+        return merged.toString()
+    }
 
     private data class PaymentEvaluation(
         val conflictReason: String?,

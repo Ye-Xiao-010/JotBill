@@ -197,7 +197,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
                 )
                 return
             }
-            service.requestUserRetryForSession(sessionId, expectedShoppingPackage, callback)
+            service.performUserRetryForSession(sessionId, expectedShoppingPackage, callback)
         }
 
         private fun notifyPurchaseIntentUnavailable(
@@ -344,8 +344,13 @@ class CheckoutAccessibilityService : AccessibilityService() {
         Log.i(TAG, "结算页无障碍观察服务已连接")
     }
 
-    /** 在当前安全购物页重新截图，成功后才向桥接层报告新的 AI 请求。 */
-    private fun requestUserRetryForSession(
+    /**
+     * 在当前安全购物页重新截图，成功后才向桥接层报告新的 AI 请求。
+     *
+     * 命名为 perform* 以避免与 companion 的 @JvmStatic requestUserRetryForSession
+     * 产生相同 JVM 签名（platform declaration clash）。
+     */
+    private fun performUserRetryForSession(
         sessionId: String,
         expectedShoppingPackage: String,
         callback: PurchaseIntentResultCallback

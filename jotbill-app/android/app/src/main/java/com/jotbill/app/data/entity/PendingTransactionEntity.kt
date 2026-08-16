@@ -37,6 +37,12 @@ data class PendingTransactionEntity(
     @ColumnInfo(name = "category_id") val categoryId: String?,
     @ColumnInfo(name = "conflict_reason") val conflictReason: String?,
     @ColumnInfo(name = "source_type") val sourceType: String,
+    /**
+     * 规则引擎命中记录（阶段五 T1）：JSON 对象，键为 `rule:<规则ID>`、值为动作摘要，
+     * 与候选 appliedRules 约定一致；纯通知路径没有候选，命中记录落在本列。
+     * 桥接层暂不序列化（Native.d.ts 的 PendingTransaction 未声明该字段）。
+     */
+    @ColumnInfo(name = "applied_rules", defaultValue = "{}") val appliedRules: String = "{}",
     @ColumnInfo(name = "created_at") val createdAt: Long,
     val version: Int,
     @ColumnInfo(name = "status", defaultValue = "pending") val status: String = "pending"
