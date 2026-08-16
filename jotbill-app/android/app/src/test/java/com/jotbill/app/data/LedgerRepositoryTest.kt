@@ -16,8 +16,13 @@ class LedgerRepositoryTest {
     }
 
     @Test
-    fun transferDoesNotChangeTheSourceBalance() {
-        assertEquals(1_000L, BalanceCalculator.calculate(1_000L, 100L, "transfer"))
+    fun transferReducesSourceBalanceUntilTargetIsApplied() {
+        assertEquals(900L, BalanceCalculator.calculate(1_000L, 100L, "transfer"))
+    }
+
+    @Test
+    fun repaymentReducesSourceBalanceUntilLiabilityTargetIsApplied() {
+        assertEquals(900L, BalanceCalculator.calculate(1_000L, 100L, "repayment"))
     }
 
     @Test(expected = IllegalStateException::class)

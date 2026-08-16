@@ -1,45 +1,50 @@
 package com.jotbill.app.data
 
-import androidx.room.Database
-import androidx.room.Entity
-import androidx.room.ForeignKey
-import com.jotbill.app.data.entity.AccountEntity
 import com.jotbill.app.data.entity.BillEntity
-import com.jotbill.app.data.entity.CategoryEntity
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
+/**
+ * 阶段七 T1：本地 JVM 不再依赖 Room 注解反射。
+ * Room 注解、外键和表结构验证移交 T2 的 room-testing/androidTest。
+ */
 class BillEntityContractTest {
-    @Test
-    fun billForeignKeysUseRestrictForAllAccountAndCategoryReferences() {
-        val entity = BillEntity::class.java.getAnnotation(Entity::class.java)
-        val foreignKeys = entity.foreignKeys.toList()
+    private fun sampleBill() = BillEntity(
+        id = "bill-1",
+        amountMinor = 100L,
+        type = "expense",
+        occurredAt = 1L,
+        description = null,
+        categoryId = null,
+        accountId = null,
+        targetAccountId = null,
+        platform = null,
+        merchant = null,
+        productDescription = null,
+        sourceType = "manual",
+        originalTransactionId = null,
+        orderId = null,
+        createdAt = 1L,
+        updatedAt = 1L,
+        version = 1
+    )
 
-        assertEquals(3, foreignKeys.size)
-        assertTrue(foreignKeys.all { it.onDelete == ForeignKey.RESTRICT })
-        assertEquals(
-            setOf("category_id", "account_id", "target_account_id"),
-            foreignKeys.flatMap { it.childColumns.toList() }.toSet()
-        )
-        assertEquals(
-            CategoryEntity::class,
-            foreignKeys.single { it.childColumns.contentEquals(arrayOf("category_id")) }.entity
-        )
-        assertEquals(
-            setOf(AccountEntity::class),
-            foreignKeys
-                .filter { it.childColumns.single() != "category_id" }
-                .map { it.entity }
-                .toSet()
-        )
+    @Test
+    fun phase5FieldLocksDefaultToEmptyArray() {
+        assertEquals("[]", sampleBill().fieldLocks)
     }
 
     @Test
-    fun foreignKeyChangeHasDatabaseMigration() {
-        val database = JotBillDatabase::class.java.getAnnotation(Database::class.java)
+    fun phase6ImportRecordIdDefaultsToNullAndIsPreserved() {
+        assertNull(sampleBill().importRecordId)
+        assertEquals("import-record-1", sampleBill().copy(importRecordId = "import-record-1").importRecordId)
+    }
 
-        assertEquals(JOT_BILL_DATABASE_VERSION, database.version)
-        assertTrue(DatabaseMigrations.all.any { it.startVersion == 3 && it.endVersion == 4 })
+    @Test
+    fun databaseMigrationChainCoversPhase6Step() {
+        assertEquals(10, JOT_BILL_DATABASE_VERSION)
+        assertTrue(DatabaseMigrations.all.any { it.startVersion == 9 && it.endVersion == 10 })
     }
 }
