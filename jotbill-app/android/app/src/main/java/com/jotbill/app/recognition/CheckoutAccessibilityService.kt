@@ -637,12 +637,10 @@ class CheckoutAccessibilityService : AccessibilityService() {
         }
         val root = activeRoot ?: eventSource
         if (root == null) {
+            // 从购物页切到微信支付的瞬间常有一帧节点树为空；这里只暂时隐藏悬浮按钮，
+            // 不把稳定结算页和截图缓冲清掉，否则支付结果到达时永远无会话可关联。
             clearUserRetryCaptureContext()
             dispatchOverlayInvalidation(
-                reason = CheckoutInvalidationReason.NODE_TREE_UNAVAILABLE,
-                shoppingPackage = shoppingPackage
-            )
-            stabilityCoordinator.invalidate(
                 reason = CheckoutInvalidationReason.NODE_TREE_UNAVAILABLE,
                 shoppingPackage = shoppingPackage
             )
