@@ -221,6 +221,7 @@ internal class ImportEngine(
     ): JSONObject {
         val duplicateBatch = database.importBatchDao().findByFileHash(prepared.fileHash)
         return JSONObject().apply {
+            put("filePath", prepared.originalPath)
             put("needsCandidateSelection", true)
             put("source", JSONObject.NULL)
             put("format", prepared.format)
@@ -252,6 +253,7 @@ internal class ImportEngine(
         val typeDistribution = JSONObject()
         plan.typeDistribution.toSortedMap().forEach { (type, count) -> typeDistribution.put(type, count) }
         return JSONObject().apply {
+            put("filePath", prepared.originalPath)
             put("source", loaded.adapter.source)
             put("format", loaded.candidate.format)
             put("formatVersion", loaded.adapter.formatVersion)
