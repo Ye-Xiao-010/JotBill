@@ -57,5 +57,12 @@ data class BillEntity(
     @ColumnInfo(name = "order_id") val orderId: String?,
     @ColumnInfo(name = "created_at") val createdAt: Long,
     @ColumnInfo(name = "updated_at") val updatedAt: Long,
-    val version: Int
+    val version: Int,
+    /**
+     * 阶段五 T5：用户锁定的字段名集合（JSON 数组字符串，如 `["platform","categoryId"]`）。
+     * 锁定字段不被任何低优先级来源（规则/证据/AI/会话/默认）覆盖，只产生冲突提示；
+     * 旧库迁移与新建账单默认空数组，行为与锁定功能引入前完全一致。
+     * 锁定只作用于字段级，不支持行级整体锁。
+     */
+    @ColumnInfo(name = "field_locks", defaultValue = "[]") val fieldLocks: String = "[]"
 )

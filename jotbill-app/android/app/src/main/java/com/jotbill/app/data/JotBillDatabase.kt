@@ -39,7 +39,7 @@ import com.jotbill.app.data.entity.PendingTransactionEntity
 import com.jotbill.app.data.entity.RuleEntity
 import com.jotbill.app.data.entity.TransactionCandidateEntity
 
-const val JOT_BILL_DATABASE_VERSION = 8
+const val JOT_BILL_DATABASE_VERSION = 9
 
 @Database(
     entities = [
@@ -331,6 +331,19 @@ object DatabaseMigrations {
         }
     }
 
+    /**
+     * 阶段五 T5：账单字段锁定存储。
+     * bills 新增 field_locks（JSON 数组字符串，默认空数组），向前兼容：
+     * 已有账单锁定集合为空，行为与锁定功能引入前完全一致。
+     */
+    private val migration8To9 = object : Migration(8, 9) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL(
+                "ALTER TABLE `bills` ADD COLUMN `field_locks` TEXT NOT NULL DEFAULT '[]'"
+            )
+        }
+    }
+
     val all: Array<Migration> = arrayOf(
         migration1To2,
         migration2To3,
@@ -338,6 +351,7 @@ object DatabaseMigrations {
         migration4To5,
         migration5To6,
         migration6To7,
-        migration7To8
+        migration7To8,
+        migration8To9
     )
 }

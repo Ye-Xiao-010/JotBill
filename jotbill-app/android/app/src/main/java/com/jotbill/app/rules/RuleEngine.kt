@@ -217,6 +217,34 @@ class RuleEngine(private val database: JotBillDatabase) {
         }
     )
 
+    /**
+     * 阶段五 T5：把 set_* 动作补全结果映射为优先级合并器候选（RULE 级，3.3 节第 2 级）。
+     *
+     * 调用方组装账单/待确认字段时，把本结果与证据、AI、默认建议等来源的候选
+     * 一并交给 [FieldPriorityResolver.resolve]：规则（rank 2）可覆盖会话推断与默认建议
+     * （rank 6/7），但不得覆盖用户锁定字段（rank 1），被拒候选以冲突提示呈现。
+     * 字段名对齐 BillEntity：category → categoryId、account → accountId。
+     */
+    fun patchAssignments(patch: FieldPatch): List<FieldPriorityResolver.Assignment> =
+        listOfNotNull(
+            patch.platform?.let {
+                FieldPriorityResolver.Assignment(FIELD_PLATFORM, it, FieldPriorityResolver.Source.RULE)
+            },
+            patch.merchant?.let {
+                FieldPriorityResolver.Assignment(FIELD_MERCHANT, it, FieldPriorityResolver.Source.RULE)
+            },
+            patch.categoryId?.let {
+                FieldPriorityResolver.Assignment(
+                    "categoryId", it, FieldPriorityResolver.Source.RULE
+                )
+            },
+            patch.accountId?.let {
+                FieldPriorityResolver.Assignment(
+                    "accountId", it, FieldPriorityResolver.Source.RULE
+                )
+            }
+        )
+
     /** 逐条求值规则条件；条件类型或取值非法按未命中处理。 */
     private fun matchesCondition(subject: Subject, rule: RuleEntity): Boolean {
         val expected = rule.conditionValue.trim()

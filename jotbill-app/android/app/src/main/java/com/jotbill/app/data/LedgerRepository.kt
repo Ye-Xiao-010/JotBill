@@ -7,6 +7,7 @@ import com.jotbill.app.data.entity.BillEntity
 import com.jotbill.app.data.entity.CheckoutSessionEntity
 import com.jotbill.app.data.entity.PendingTransactionEntity
 import com.jotbill.app.data.entity.TransactionCandidateEntity
+import com.jotbill.app.rules.FieldPriorityResolver
 import org.json.JSONObject
 import java.util.UUID
 
@@ -38,6 +39,13 @@ class LedgerRepository(private val database: JotBillDatabase) {
      */
     suspend fun createBillWithBalanceUpdate(bill: BillEntity, operator: String = "system") {
         validateSafeAmount(bill.amountMinor)
+        // 阶段五 T5：锁定字段名必须在合并器可锁字段清单内，防止脏数据落库
+        val invalidLocks = FieldPriorityResolver.invalidLockFields(
+            FieldPriorityResolver.parseLocks(bill.fieldLocks)
+        )
+        require(invalidLocks.isEmpty()) {
+            "Unknown lockable fields: ${invalidLocks.joinToString()}"
+        }
         val now = System.currentTimeMillis()
         database.withTransaction {
             validateBillAccounts(bill, requireActiveAccounts = true)
@@ -65,7 +73,22 @@ class LedgerRepository(private val database: JotBillDatabase) {
         }
     }
 
-    suspend fun updateBillWithBalanceUpdate(existing: BillEntity, updated: BillEntity): Boolean {
+    /**
+     * 更新账单并联动修正账户余额（版本化乐观锁）。
+     *
+     * 阶段五 T5：入账前经字段优先级合并器校验——非用户来源（规则/证据/AI/会话/默认）
+     * 不得改动用户锁定字段（fieldLocks 命中），被拒字段回退为既有值并写入
+     * field_lock_conflict 审计提示，不静默覆写；用户来源（默认）不受限制。
+     *
+     * @param existing 调用方读取的既有账单（版本基准）
+     * @param updated 拟写入的更新账单（version = existing.version + 1）
+     * @param fieldUpdateSource 本次字段更新来源级别；默认用户编辑（可改锁定字段本身）
+     */
+    suspend fun updateBillWithBalanceUpdate(
+        existing: BillEntity,
+        updated: BillEntity,
+        fieldUpdateSource: FieldPriorityResolver.Source = FieldPriorityResolver.Source.USER_LOCK
+    ): Boolean {
         require(existing.id == updated.id) {
             "Bill ids must match for update"
         }
@@ -84,44 +107,65 @@ class LedgerRepository(private val database: JotBillDatabase) {
             if (current.version != existing.version) {
                 return@withTransaction false
             }
-            validateBillAccounts(updated, requireActiveAccounts = true)
+            // 阶段五 T5：锁定字段保护（以事务内 current 为基准，防止并发期间锁定变化）
+            val (protected, lockConflicts) = FieldPriorityResolver.protectLockedUpdate(
+                current, updated, fieldUpdateSource
+            )
+            validateBillAccounts(protected, requireActiveAccounts = true)
             val updatedRows = database.billDao().updateIfVersion(
-                id = updated.id,
+                id = protected.id,
                 expectedVersion = current.version,
-                amountMinor = updated.amountMinor,
-                type = updated.type,
-                occurredAt = updated.occurredAt,
-                description = updated.description,
-                categoryId = updated.categoryId,
-                accountId = updated.accountId,
-                targetAccountId = updated.targetAccountId,
-                platform = updated.platform,
-                merchant = updated.merchant,
-                productDescription = updated.productDescription,
-                sourceType = updated.sourceType,
-                originalTransactionId = updated.originalTransactionId,
-                orderId = updated.orderId,
-                updatedAt = updated.updatedAt,
-                newVersion = updated.version
+                amountMinor = protected.amountMinor,
+                type = protected.type,
+                occurredAt = protected.occurredAt,
+                description = protected.description,
+                categoryId = protected.categoryId,
+                accountId = protected.accountId,
+                targetAccountId = protected.targetAccountId,
+                platform = protected.platform,
+                merchant = protected.merchant,
+                productDescription = protected.productDescription,
+                sourceType = protected.sourceType,
+                originalTransactionId = protected.originalTransactionId,
+                orderId = protected.orderId,
+                fieldLocks = protected.fieldLocks,
+                updatedAt = protected.updatedAt,
+                newVersion = protected.version
             )
             if (updatedRows != 1) {
                 return@withTransaction false
             }
             applyBalanceDelta(current, multiplier = -1L, updatedAt = now)
-            applyBalanceDelta(updated, multiplier = 1L, updatedAt = now)
+            applyBalanceDelta(protected, multiplier = 1L, updatedAt = now)
             database.auditEntryDao().insert(
                 AuditEntryEntity(
-                    id = "${updated.id}:update:${updated.version}",
+                    id = "${protected.id}:update:${protected.version}",
                     entityType = "bill",
-                    entityId = updated.id,
+                    entityId = protected.id,
                     action = "update",
                     fieldName = null,
                     oldValue = billAuditValue(current),
-                    newValue = billAuditValue(updated),
+                    newValue = billAuditValue(protected),
                     operator = "system",
                     createdAt = now
                 )
             )
+            // 锁定冲突提示：逐字段留痕（供待确认展示与审计追溯），不阻塞本次更新
+            lockConflicts.forEach { conflict ->
+                database.auditEntryDao().insert(
+                    AuditEntryEntity(
+                        id = "${protected.id}:lock-conflict:${protected.version}:${conflict.field}",
+                        entityType = "field_lock_conflict",
+                        entityId = protected.id,
+                        action = "reject",
+                        fieldName = conflict.field,
+                        oldValue = conflict.rejectedValue?.toString(),
+                        newValue = conflict.keptValue?.toString(),
+                        operator = "field_priority_resolver",
+                        createdAt = now
+                    )
+                )
+            }
             true
         }
     }
@@ -609,6 +653,7 @@ class LedgerRepository(private val database: JotBillDatabase) {
         put("createdAt", bill.createdAt)
         put("updatedAt", bill.updatedAt)
         put("version", bill.version)
+        put("fieldLocks", bill.fieldLocks)
     }.toString()
 
     private fun JSONObject.putNullable(key: String, value: String?) {

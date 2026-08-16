@@ -12,6 +12,7 @@ import com.jotbill.app.data.LedgerValidationException
 import com.jotbill.app.data.seed.DefaultDataInitializer
 import com.jotbill.app.data.entity.AccountEntity
 import com.jotbill.app.data.entity.BillEntity
+import com.jotbill.app.rules.FieldPriorityResolver
 import com.jotbill.app.data.entity.BudgetEntity
 import com.jotbill.app.data.entity.CategoryEntity
 import com.jotbill.app.data.entity.FinancialGoalEntity
@@ -154,6 +155,27 @@ class DataModule(
         }
         val sourceType = input.optionalString("sourceType") ?: existing.sourceType
         BridgeDtoMapper.validateSourceType(sourceType)
+        // 阶段五 T5：可选 fieldLocks 数组输入（经现有 JSON 输入通道，RN 契约暂不声明，
+        // 字段级锁定：用户编辑可增删锁定集合；校验字段名必须在可锁清单内）
+        val fieldLocks = if (input.has("fieldLocks")) {
+            val locksArray = input.optJSONArray("fieldLocks")
+                ?: throw BridgeException("INVALID_ARGUMENT", "fieldLocks must be an array of field names")
+            val requestedLocks = buildSet {
+                for (index in 0 until locksArray.length()) {
+                    locksArray.optString(index).takeIf { it.isNotBlank() }?.let { add(it) }
+                }
+            }
+            val invalid = FieldPriorityResolver.invalidLockFields(requestedLocks)
+            if (invalid.isNotEmpty()) {
+                throw BridgeException(
+                    "INVALID_ARGUMENT",
+                    "Unknown lockable fields: ${invalid.joinToString()}"
+                )
+            }
+            FieldPriorityResolver.serializeLocks(requestedLocks)
+        } else {
+            existing.fieldLocks
+        }
         val updated = existing.copy(
             amountMinor = input.optionalMinor("amountMinor") ?: existing.amountMinor,
             type = type,
@@ -175,6 +197,7 @@ class DataModule(
                 existing.originalTransactionId
             ),
             orderId = input.updatedNullableString("orderId", existing.orderId),
+            fieldLocks = fieldLocks,
             updatedAt = System.currentTimeMillis(),
             version = existing.version + 1
         )

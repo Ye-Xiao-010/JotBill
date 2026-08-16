@@ -37,6 +37,7 @@ interface BillDao {
           source_type = :sourceType,
           original_transaction_id = :originalTransactionId,
           order_id = :orderId,
+          field_locks = :fieldLocks,
           updated_at = :updatedAt,
           version = :newVersion
         WHERE id = :id AND version = :expectedVersion
@@ -58,6 +59,7 @@ interface BillDao {
         sourceType: String,
         originalTransactionId: String?,
         orderId: String?,
+        fieldLocks: String,
         updatedAt: Long,
         newVersion: Int
     ): Int
