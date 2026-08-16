@@ -287,4 +287,60 @@ interface BillDao {
         """
     )
     suspend fun findOriginalForRefund(orderId: String): BillEntity?
+
+    /**
+     * 阶段五 T2：按订单号查全部支出账单。
+     * 退款原交易关联需要感知多笔命中（同订单号多笔支出时不自动关联，转待确认由用户选择）。
+     */
+    @Query(
+        """
+        SELECT * FROM bills
+        WHERE order_id = :orderId AND type = 'expense'
+        ORDER BY occurred_at DESC
+        """
+    )
+    suspend fun findExpensesByOrderId(orderId: String): List<BillEntity>
+
+    /**
+     * 阶段五 T2：原交易已入账退款合计（多次部分退款的累计口径）。
+     * 统计 original_transaction_id 指向原账单且 type = 'refund' 的全部退款。
+     */
+    @Query(
+        """
+        SELECT COALESCE(SUM(amount_minor), 0)
+        FROM bills
+        WHERE original_transaction_id = :originalBillId AND type = 'refund'
+        """
+    )
+    suspend fun sumRefundsByOriginalId(originalBillId: String): Long
+
+    /**
+     * 阶段五 T2：无订单号时的退款原交易组合候选。
+     * 条件：支出类型、金额不小于退款额（部分退款时原金额≥退款额）、
+     * 发生时间在退款时间前的窗口内、商户精确匹配或平台匹配。
+     * 仅用于待确认提示，不作为自动入账依据。
+     */
+    @Query(
+        """
+        SELECT * FROM bills
+        WHERE type = 'expense'
+          AND amount_minor >= :minAmountMinor
+          AND occurred_at >= :startDate
+          AND occurred_at <= :endDate
+          AND (
+              (:merchant IS NOT NULL AND merchant = :merchant)
+              OR (:platform IS NOT NULL AND platform = :platform)
+          )
+        ORDER BY occurred_at DESC
+        LIMIT :limit
+        """
+    )
+    suspend fun findRefundCandidates(
+        merchant: String?,
+        platform: String?,
+        minAmountMinor: Long,
+        startDate: Long,
+        endDate: Long,
+        limit: Int
+    ): List<BillEntity>
 }

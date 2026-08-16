@@ -8,6 +8,7 @@ import com.jotbill.app.data.JotBillDatabaseProvider
 import com.jotbill.app.recognition.CheckoutAccessibilityService
 import com.jotbill.app.recognition.CheckoutPaymentMatcher
 import com.jotbill.app.recognition.PaymentNotificationFallbackSignal
+import com.jotbill.app.recognition.RefundLinker
 import com.jotbill.app.recognition.PurchaseIntentCoordinationResult
 import com.jotbill.app.recognition.PurchaseIntentResultCallback
 import com.jotbill.app.utils.SentryLogger
@@ -120,6 +121,28 @@ class PaymentNotificationService : NotificationListenerService() {
         val bigText = extras.getCharSequence(Notification.EXTRA_BIG_TEXT)?.toString() ?: ""
         val tickerText = notification.tickerText?.toString() ?: ""
 
+        // 阶段五 T2：退款语义优先识别（此前退款被非消费排除丢弃，现路由到退款链路）
+        val refundInput = PaymentResultNormalizer.normalizeRefund(
+            sourcePackage = packageName,
+            title = title,
+            titleBig = titleBig,
+            text = text,
+            bigText = bigText,
+            subText = subText,
+            summaryText = summaryText,
+            tickerText = tickerText,
+            postTime = sbn.postTime,
+            notificationKey = sbn.key,
+            notificationId = sbn.id
+        )
+        if (refundInput != null) {
+            Log.i(TAG, "解析到退款证据: 包名=${refundInput.sourcePackage}")
+            scope.launch {
+                handleRefundEvidence(refundInput)
+            }
+            return
+        }
+
         // 解析为结构化证据输入
         val evidenceInput = PaymentResultNormalizer.normalize(
             sourcePackage = packageName,
@@ -202,6 +225,40 @@ class PaymentNotificationService : NotificationListenerService() {
             category = "payment_evidence"
         )
         Log.i(TAG, "支付证据处理完成: $resultInfo")
+    }
+
+    /**
+     * 阶段五 T2：处理退款证据。
+     *
+     * 退款与结算会话无关（通常在购买后异步到达），不走无障碍回退和会话匹配，
+     * 直接交给 RefundLinker 做原交易关联决策：
+     * 原交易号唯一命中且累计未超原实付时自动入账（type=refund 冲减原支出），
+     * 其余场景进入待确认中心，不静默丢弃也不静默入账。
+     *
+     * @param input 解析后的退款证据输入
+     */
+    private suspend fun handleRefundEvidence(input: PaymentEvidenceInput) {
+        try {
+            val database = JotBillDatabaseProvider.get(applicationContext)
+            val outcome = RefundLinker(database).processRefund(input)
+            val outcomeInfo = mapOf(
+                "package" to input.sourcePackage,
+                "outcome" to outcome.javaClass.simpleName
+            )
+            SentryLogger.addBreadcrumb(
+                "退款证据处理完成",
+                data = outcomeInfo,
+                category = "refund_evidence"
+            )
+            Log.i(TAG, "退款证据处理完成: $outcomeInfo")
+        } catch (error: RuntimeException) {
+            Log.w(TAG, "退款证据处理失败", error)
+            SentryLogger.addBreadcrumb(
+                "退款证据处理失败",
+                data = mapOf("package" to input.sourcePackage),
+                category = "refund_evidence"
+            )
+        }
     }
 
     /**

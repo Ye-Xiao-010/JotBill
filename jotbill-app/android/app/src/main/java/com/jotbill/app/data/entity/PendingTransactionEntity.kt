@@ -43,6 +43,12 @@ data class PendingTransactionEntity(
      * 桥接层暂不序列化（Native.d.ts 的 PendingTransaction 未声明该字段）。
      */
     @ColumnInfo(name = "applied_rules", defaultValue = "{}") val appliedRules: String = "{}",
+    /**
+     * 阶段五 T2：退款待确认关联的原交易账单 ID。
+     * 原交易号唯一命中时记录；确认入账时由 LedgerRepository 回填到 Bill.originalTransactionId，
+     * 保证多次部分退款的累计口径。其余路径为 null。
+     */
+    @ColumnInfo(name = "original_bill_id") val originalBillId: String? = null,
     @ColumnInfo(name = "created_at") val createdAt: Long,
     val version: Int,
     @ColumnInfo(name = "status", defaultValue = "pending") val status: String = "pending"

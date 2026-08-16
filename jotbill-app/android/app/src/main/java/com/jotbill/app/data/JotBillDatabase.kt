@@ -39,7 +39,7 @@ import com.jotbill.app.data.entity.PendingTransactionEntity
 import com.jotbill.app.data.entity.RuleEntity
 import com.jotbill.app.data.entity.TransactionCandidateEntity
 
-const val JOT_BILL_DATABASE_VERSION = 7
+const val JOT_BILL_DATABASE_VERSION = 8
 
 @Database(
     entities = [
@@ -319,12 +319,25 @@ object DatabaseMigrations {
         }
     }
 
+    /**
+     * 阶段五 T2：退款待确认关联原交易。
+     * pending_transactions 新增 original_bill_id（可空，默认 NULL），向前兼容。
+     */
+    private val migration7To8 = object : Migration(7, 8) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL(
+                "ALTER TABLE `pending_transactions` ADD COLUMN `original_bill_id` TEXT"
+            )
+        }
+    }
+
     val all: Array<Migration> = arrayOf(
         migration1To2,
         migration2To3,
         migration3To4,
         migration4To5,
         migration5To6,
-        migration6To7
+        migration6To7,
+        migration7To8
     )
 }

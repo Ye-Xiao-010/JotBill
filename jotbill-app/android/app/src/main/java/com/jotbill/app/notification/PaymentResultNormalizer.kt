@@ -19,7 +19,9 @@ data class PaymentEvidenceInput(
     val orderId: String?,
     val paymentStatus: String,
     val sourceEventKey: String,
-    val rawTextHash: String
+    val rawTextHash: String,
+    /** 退款接收账户提示文本（如"退回至余额"），仅退款路径提取；MVP 不映射具体账户。 */
+    val receivingAccountHint: String? = null
 )
 
 /**
@@ -38,6 +40,9 @@ internal object PaymentResultNormalizer {
 
     /** 支付宝包名 */
     const val ALIPAY_PACKAGE = "com.eg.android.AlipayGphone"
+
+    /** 阶段五 T2：退款证据状态标记，区分消费支付（SUCCESS）。 */
+    const val PAYMENT_STATUS_REFUND = "REFUND"
 
     /** 支持的支付应用包名白名单 */
     val SUPPORTED_PACKAGES: Set<String> = setOf(WECHAT_PACKAGE, ALIPAY_PACKAGE)
@@ -84,6 +89,39 @@ internal object PaymentResultNormalizer {
         Regex("""订单号[：:]\s*([A-Za-z0-9\-]{6,40})"""),
         Regex("""单号[：:]\s*([A-Za-z0-9\-]{6,40})"""),
         Regex("""交易号[：:]\s*([A-Za-z0-9\-]{6,40})""")
+    )
+
+    /**
+     * 阶段五 T2：退款语义关键词。
+     * 退款通知此前被归入非消费语义直接排除，现改为独立识别路径。
+     */
+    private val REFUND_KEYWORDS = listOf("退款", "退回", "返还")
+
+    /** 退款失败/进行中关键词：命中即排除，防止"申请退款""退款处理中"被当成退款到账。 */
+    private val REFUND_FAILURE_KEYWORDS = listOf(
+        "退款失败", "退回失败", "退款处理中", "退款中", "待退款",
+        "申请退款", "退款申请", "退款审核"
+    )
+
+    /** 退款金额匹配正则：优先匹配"退款金额/已退回"等明确退款金额表述。 */
+    private val REFUND_AMOUNT_PATTERNS = listOf(
+        Regex("""(?:退款金额|退回金额|返还金额|退款)\s*(?:人民币|CNY)?\s*(?:¥|￥)?\s*([0-9]+\.?[0-9]*)"""),
+        Regex("""(?:¥|￥|CNY)\s*([0-9]+\.?[0-9]*)\s*(?:退款|退回|返还|已退回)"""),
+        Regex("""([0-9]+\.?[0-9]*)\s*元?\s*(?:已退回|已退款|退款成功|退回|返还)""")
+    )
+
+    /** 退款订单号匹配正则：原交易号/原订单号优先，再回退通用订单号。 */
+    private val REFUND_ORDER_ID_PATTERNS = listOf(
+        Regex("""原交易号[：:]\s*([A-Za-z0-9\-]{6,40})"""),
+        Regex("""原订单号[：:]\s*([A-Za-z0-9\-]{6,40})"""),
+        Regex("""订单号[：:]\s*([A-Za-z0-9\-]{6,40})"""),
+        Regex("""交易号[：:]\s*([A-Za-z0-9\-]{6,40})"""),
+        Regex("""单号[：:]\s*([A-Za-z0-9\-]{6,40})""")
+    )
+
+    /** 退款接收账户提示匹配正则：如"退回至余额""已退回至招商银行储蓄卡"。 */
+    private val RECEIVING_ACCOUNT_PATTERNS = listOf(
+        Regex("""(?:退回至|退款至|返回至|已退回至)\s*([^\s,，。；;]{2,20})""")
     )
 
     /** 交易时间匹配正则：HH:mm 或 HH:mm:ss（通知正文常见格式）。 */
@@ -174,6 +212,93 @@ internal object PaymentResultNormalizer {
             sourceEventKey = sourceEventKey,
             rawTextHash = rawTextHash
         )
+    }
+
+    /**
+     * 阶段五 T2：解析退款通知正文，返回结构化退款证据输入；非退款通知返回 null。
+     *
+     * 与消费支付解析（[normalize]）分离：
+     * - 退款关键词命中是前置条件（退款/退回/返还）；
+     * - 排除退款失败/申请中语义（申请退款≠退款到账）；
+     * - 金额优先按退款表述提取（避免把原订单金额当成退款金额）；
+     * - 订单号优先取"原交易号/原订单号"，作为原交易关联键；
+     * - sourceEventKey 使用 refund- 前缀，与支付事件键空间隔离；
+     * - paymentStatus = REFUND，由调用方路由到退款链路（RefundLinker）。
+     */
+    fun normalizeRefund(
+        sourcePackage: String,
+        title: String,
+        text: String,
+        bigText: String,
+        subText: String,
+        summaryText: String,
+        tickerText: String,
+        postTime: Long,
+        notificationKey: String?,
+        notificationId: Int,
+        titleBig: String = ""
+    ): PaymentEvidenceInput? {
+        if (sourcePackage !in SUPPORTED_PACKAGES) return null
+
+        val fullContent = listOf(title, titleBig, text, bigText, subText, summaryText, tickerText)
+            .filter { it.isNotBlank() }
+            .joinToString(" ")
+
+        if (fullContent.isBlank()) return null
+
+        // 必须命中退款关键词
+        if (REFUND_KEYWORDS.none { fullContent.contains(it) }) return null
+
+        // 排除退款失败/申请中语义，再叠加通用失败关键词兜底
+        if (REFUND_FAILURE_KEYWORDS.any { fullContent.contains(it) }) return null
+        if (FAILURE_KEYWORDS.any { fullContent.contains(it) }) return null
+
+        // 提取退款金额（分）：优先退款表述，回退通用金额格式
+        val amountMinor = extractRefundAmountMinor(fullContent) ?: return null
+        if (amountMinor <= 0L) return null
+
+        // 提取订单号（原交易号优先）
+        val orderId = extractField(fullContent, REFUND_ORDER_ID_PATTERNS)
+
+        // 提取商户
+        val merchant = extractField(fullContent, MERCHANT_PATTERNS)
+
+        // 提取退款接收账户提示（如"退回至余额"）
+        val receivingAccountHint = extractField(fullContent, RECEIVING_ACCOUNT_PATTERNS)
+
+        // 发生时间：优先正文时间，回退通知时间
+        val occurredAt = extractOccurredAt(fullContent, postTime)
+
+        // sourceEventKey：refund- 前缀与支付事件键隔离；同一通知重复到达沿用同一键
+        val sourceEventKey = sha256(
+            "refund-event|$sourcePackage|${notificationKey.orEmpty()}|" +
+                "$notificationId|$postTime|$amountMinor|${orderId.orEmpty()}"
+        )
+
+        val rawTextHash = sha256(
+            "refund-raw|$sourcePackage|${sanitizeForHash(fullContent, orderId)}"
+        )
+
+        return PaymentEvidenceInput(
+            sourcePackage = sourcePackage,
+            amountMinor = amountMinor,
+            occurredAt = occurredAt,
+            merchant = merchant,
+            orderId = orderId,
+            paymentStatus = PAYMENT_STATUS_REFUND,
+            sourceEventKey = sourceEventKey,
+            rawTextHash = rawTextHash,
+            receivingAccountHint = receivingAccountHint
+        )
+    }
+
+    /** 退款金额提取：先按退款表述匹配，再回退通用金额格式。 */
+    private fun extractRefundAmountMinor(content: String): Long? {
+        for (pattern in REFUND_AMOUNT_PATTERNS) {
+            val match = pattern.find(content) ?: continue
+            return parseAmountMinor(match.groupValues[1]) ?: continue
+        }
+        return extractAmountMinor(content)
     }
 
     /** 从文本中提取金额并转换为分（Long），无法提取时返回 null。 */

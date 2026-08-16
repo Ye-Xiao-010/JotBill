@@ -12,6 +12,13 @@ import java.util.UUID
 
 internal const val MAX_SAFE_MINOR_UNIT = 9_007_199_254_740_991L
 
+/**
+ * 阶段五 T2：退款待确认被用户确认入账后的审计墓碑类型。
+ * RefundLinker 以 (该类型, pendingId) 查询，识别已确认的退款事件，
+ * 防止待确认被物理删除后重复通知再次挂账。
+ */
+const val REFUND_CONFIRM_AUDIT_TYPE = "refund_confirm"
+
 internal class LedgerValidationException(
     message: String,
     cause: Throwable? = null
@@ -168,10 +175,25 @@ class LedgerRepository(private val database: JotBillDatabase) {
                 return@withTransaction false
             }
 
-            if (bill.originalTransactionId != currentPending.sessionId) {
+            // 阶段五 T2：退款待确认确认入账时回填原交易关联（Bill.originalTransactionId），
+            // 保证多次部分退款的累计口径（sumRefundsByOriginalId）覆盖用户确认路径。
+            val isRefundLinkBackfill = currentPending.type == "refund" &&
+                currentPending.originalBillId != null
+            val effectiveBill = if (isRefundLinkBackfill && bill.originalTransactionId == null) {
+                bill.copy(originalTransactionId = currentPending.originalBillId)
+            } else {
+                bill
+            }
+
+            // 来源绑定不可改写：非退款绑 sessionId，退款绑原交易账单 ID
+            if (isRefundLinkBackfill) {
+                if (effectiveBill.originalTransactionId != currentPending.originalBillId) {
+                    throw LedgerValidationException("Refund original binding is immutable")
+                }
+            } else if (effectiveBill.originalTransactionId != currentPending.sessionId) {
                 throw LedgerValidationException("Pending transaction source binding is immutable")
             }
-            validateConfirmationBill(bill)
+            validateConfirmationBill(effectiveBill)
             val relations = loadPendingRelations(currentPending)
             if (relations.session?.let { it.status in TERMINAL_SESSION_STATUSES } == true) {
                 throw LedgerValidationException("Checkout session is already terminal")
@@ -182,9 +204,9 @@ class LedgerRepository(private val database: JotBillDatabase) {
                 throw LedgerValidationException("Checkout session has already been committed")
             }
 
-            database.billDao().insert(bill)
+            database.billDao().insert(effectiveBill)
             applyBalanceDelta(
-                bill,
+                effectiveBill,
                 multiplier = 1L,
                 updatedAt = now,
                 requireActiveAccounts = true
@@ -196,7 +218,7 @@ class LedgerRepository(private val database: JotBillDatabase) {
                     expectedVersion = candidate.version,
                     matched = true,
                     conflictReason = null,
-                    appliedRules = decisionRules(candidate.appliedRules, "USER_CONFIRMED", bill.id)
+                    appliedRules = decisionRules(candidate.appliedRules, "USER_CONFIRMED", effectiveBill.id)
                 )
                 if (resolved != 1) {
                     throw LedgerValidationException("Transaction candidate has changed")
@@ -218,15 +240,32 @@ class LedgerRepository(private val database: JotBillDatabase) {
             ) {
                 throw LedgerValidationException("Pending transaction has changed")
             }
+            // 阶段五 T2：退款待确认确认后写审计墓碑，防止同一退款事件的重复通知
+            // 在待确认被物理删除后再次挂账（RefundLinker 按 (类型, pendingId) 查询）
+            if (currentPending.type == "refund") {
+                database.auditEntryDao().insertIfAbsent(
+                    AuditEntryEntity(
+                        id = "refund-confirm:${currentPending.id}",
+                        entityType = REFUND_CONFIRM_AUDIT_TYPE,
+                        entityId = currentPending.id,
+                        action = "confirm",
+                        fieldName = null,
+                        oldValue = null,
+                        newValue = billAuditValue(effectiveBill),
+                        operator = "system",
+                        createdAt = now
+                    )
+                )
+            }
             database.auditEntryDao().insert(
                 AuditEntryEntity(
-                    id = "${bill.id}:create",
+                    id = "${effectiveBill.id}:create",
                     entityType = "bill",
-                    entityId = bill.id,
+                    entityId = effectiveBill.id,
                     action = "create",
                     fieldName = null,
                     oldValue = null,
-                    newValue = billAuditValue(bill),
+                    newValue = billAuditValue(effectiveBill),
                     operator = "system",
                     createdAt = now
                 )
