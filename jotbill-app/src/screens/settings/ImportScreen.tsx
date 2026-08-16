@@ -126,7 +126,11 @@ export default function ImportScreen() {
     } catch (inspectError) {
       if (errorCode(inspectError) === 'IMPORT_CANCELLED') return;
       setError(errorMessage(inspectError));
-      setPhase('entry');
+      if (errorCode(inspectError) === 'IMPORT_PASSWORD_INVALID' && filePath) {
+        setPhase('password');
+      } else {
+        setPhase('entry');
+      }
     } finally {
       setBusy(false);
     }
