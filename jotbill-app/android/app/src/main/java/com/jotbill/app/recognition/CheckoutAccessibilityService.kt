@@ -1591,9 +1591,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
         val synchronizedCheckout = synchronized(this) {
             if (handoffForegroundPackage == paymentPackage) handoffStableCheckout else null
         }
-        val fallbackReference = synchronizedCheckout?.let {
-            null
-        } ?: snapshotCaptureCoordinator?.currentPaymentHandoffReference()
+        val fallbackReference = snapshotCaptureCoordinator?.currentPaymentHandoffReference()
         val stableCheckout = synchronizedCheckout ?: fallbackReference?.let { reference ->
             StableCheckoutPage(
                 observation = CheckoutPageObservation(
@@ -1622,7 +1620,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
                         it.pageFingerprint == observation.pageFingerprint
                 }
                 .singleOrNull()
-        }
+        } ?: fallbackReference
         return PaymentResultHandoffContext(
             stableCheckout = stableCheckout,
             reference = reference,
