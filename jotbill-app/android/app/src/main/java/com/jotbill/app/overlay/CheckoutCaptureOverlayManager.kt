@@ -609,7 +609,9 @@ internal class CheckoutCaptureOverlayManager(context: Context) {
     }
 
     private fun ensureView() {
-        if (overlayView?.isAttachedToWindow == true) {
+        // 只允许存在一个系统窗口。addView 后到首次 attach 之间 overlayView 已经非空，
+        // 此前用 isAttachedToWindow 判断会在连续刷新时重复 addView，导致关闭后残留旧窗口。
+        if (overlayView != null) {
             return
         }
         val manager = appContext.getSystemService(Context.WINDOW_SERVICE) as? WindowManager
