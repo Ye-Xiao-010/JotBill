@@ -209,12 +209,13 @@ async function runDownloadAndApplyUpdate(
         HotUpdate.markBundleApplied();
       }
 
-      // 强制更新则立即 reload
-      if (bundle.forceUpdate && HotUpdate?.reload) {
+      // 强制更新则立即 reload（先取出方法引用，避免闭包内可选调用报错）
+      const reload = HotUpdate?.reload;
+      if (bundle.forceUpdate && reload) {
         console.log('[HotUpdate] 强制更新，重新加载...');
         // 延迟一点确保文件写入完成
         setTimeout(() => {
-          HotUpdate.reload();
+          reload();
         }, 500);
       }
     }

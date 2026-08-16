@@ -4,7 +4,7 @@ import { useNavigation, usePreventRemove } from '@react-navigation/native';
 import { useQueryClient } from '@tanstack/react-query';
 import { Archive, CheckCircle2, ChevronLeft, Download, FileText, Trash2, X } from 'lucide-react-native';
 import { nativeBackup } from '../../native';
-import type { BackupSummary, RestorePreview } from '../../../docs/types/Native';
+import type { BackupSummary, RestorePreview } from '../../../../docs/types/Native';
 import { invalidateCache } from '../../lib/queryClient';
 import { borderRadius, borderWidth, spacing } from '../../theme/spacing';
 import { ThemeColors } from '../../theme/colors';
