@@ -1866,6 +1866,16 @@ class CheckoutAccessibilityService : AccessibilityService() {
     /** 悬浮按钮只调用现有手动截图入口，不直接接触截图资源或 AI。 */
     private fun requestManualCaptureFromOverlay() {
         val context = userRetryCaptureContext
+        if (context != null) {
+            Log.i(
+                TAG,
+                "手动截图上下文: role=${context.pageRole}, amountSignal=${context.observation.hasFinalAmountSignal}, " +
+                    "actionSignal=${context.observation.hasCheckoutActionSignal}, sensitive=${context.isSensitivePage}, " +
+                    "class=${context.observation.windowClass}"
+            )
+        } else {
+            Log.i(TAG, "手动截图上下文缺失")
+        }
         snapshotCaptureCoordinator?.requestManualCapture(SnapshotCaptureCallback { result ->
             if (context != null) {
                 triggerUserRetryAfterOverlayCapture(context, result)
