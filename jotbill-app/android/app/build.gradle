@@ -140,6 +140,9 @@ android {
 dependencies {
     // Local-first data layer.
     implementation("androidx.room:room-runtime:2.8.3")
+
+    // 阶段六 T2：官方账单加密压缩包解密（Apache-2.0，Maven Central）。
+    implementation("net.lingala.zip4j:zip4j:2.11.5")
     implementation("androidx.room:room-ktx:2.8.3")
     kapt("androidx.room:room-compiler:2.8.3")
     implementation("androidx.sqlite:sqlite-ktx:2.4.0")

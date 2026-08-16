@@ -10,6 +10,7 @@ import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
 import com.jotbill.app.data.JotBillDatabase
 import com.jotbill.app.data.JotBillDatabaseProvider
+import com.jotbill.app.importing.ImportFilePreparer
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -31,6 +32,7 @@ class BackupModule(
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val database: JotBillDatabase by lazy { JotBillDatabaseProvider.get(reactContext) }
     private val backupManager: BackupManager by lazy { BackupManager(database) }
+    private val importFilePreparer: ImportFilePreparer by lazy { ImportFilePreparer(reactContext) }
     private val pendingLock = Any()
     private var pendingOperation: PendingFileOperation? = null
 
@@ -38,6 +40,7 @@ class BackupModule(
         EXPORT_CSV,
         CREATE_BACKUP,
         RESTORE_PREVIEW,
+        IMPORT,
     }
 
     private data class PendingFileOperation(
@@ -169,9 +172,43 @@ class BackupModule(
         }
     }
 
+    /**
+     * 阶段六 T2：旧导入入口在 T5 执行引擎接入前先转发到文件预处理。
+     * filePath 为空时打开 SAF 文件选择器；处理后返回文件哈希、格式、编码与候选清单，
+     * 不写数据库。T5 会在此之上补齐 inspectImport/executeImport 完整语义。
+     */
     @ReactMethod
     fun importData(filePath: String, promise: Promise) {
-        promise.reject("NOT_IMPLEMENTED", "MVP 暂不支持 CSV 导入")
+        if (filePath.isBlank()) {
+            val activity = reactContext.currentActivity
+            if (activity == null) {
+                promise.reject("NOT_IMPLEMENTED", "当前没有可用的文件选择器")
+                return
+            }
+            if (isPending()) {
+                promise.reject("IMPORT_IN_PROGRESS", "已有文件操作正在等待完成")
+                return
+            }
+            val operation = PendingFileOperation(
+                kind = PendingKind.IMPORT,
+                promise = promise,
+            )
+            if (!reservePending(operation)) {
+                promise.reject("IMPORT_IN_PROGRESS", "已有文件操作正在等待完成")
+                return
+            }
+            try {
+                activity.startActivityForResult(openImportIntent(), REQUEST_OPEN_IMPORT)
+            } catch (error: Exception) {
+                clearPending(operation)
+                reject(promise, error, "IMPORT_FAILED", "无法打开账单文件选择器")
+            }
+            return
+        }
+
+        scope.launch {
+            processImportPreparation(filePath, password = null, promise)
+        }
     }
 
     @ReactMethod
@@ -242,6 +279,7 @@ class BackupModule(
             REQUEST_CREATE_CSV -> PendingKind.EXPORT_CSV
             REQUEST_CREATE_BACKUP -> PendingKind.CREATE_BACKUP
             REQUEST_OPEN_BACKUP -> PendingKind.RESTORE_PREVIEW
+            REQUEST_OPEN_IMPORT -> PendingKind.IMPORT
             else -> return
         }
         val operation = takePending(kind) ?: return
@@ -255,6 +293,7 @@ class BackupModule(
             PendingKind.EXPORT_CSV -> finishCsvExport(operation, uri)
             PendingKind.CREATE_BACKUP -> finishBackupCreation(operation, uri)
             PendingKind.RESTORE_PREVIEW -> finishRestoreSelection(operation, uri, data)
+            PendingKind.IMPORT -> finishImportSelection(operation, uri, data)
         }
     }
 
@@ -308,6 +347,34 @@ class BackupModule(
         takePersistableReadPermission(uri, data)
         scope.launch {
             processRestorePreview(uri.toString(), operation.promise)
+        }
+    }
+
+    private fun finishImportSelection(operation: PendingFileOperation, uri: Uri, data: Intent?) {
+        takePersistableReadPermission(uri, data)
+        scope.launch {
+            processImportPreparation(uri.toString(), password = null, operation.promise)
+        }
+    }
+
+    private suspend fun processImportPreparation(
+        filePath: String,
+        password: String?,
+        promise: Promise
+    ) {
+        var prepared: ImportFilePreparer.PreparedImport? = null
+        try {
+            prepared = importFilePreparer.prepare(filePath, password)
+            val result = importFilePreparer.candidateSummary(prepared)
+            result.put("status", "prepared")
+            result.put("filePath", filePath)
+            withContext(Dispatchers.Main) {
+                promise.resolve(result.toString())
+            }
+        } catch (error: Exception) {
+            rejectFromWorker(promise, error, "IMPORT_FAILED")
+        } finally {
+            prepared?.let { importFilePreparer.cleanup(it) }
         }
     }
 
@@ -408,6 +475,22 @@ class BackupModule(
         addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
     }
 
+    private fun openImportIntent(): Intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+        addCategory(Intent.CATEGORY_OPENABLE)
+        type = "*/*"
+        putExtra(
+            Intent.EXTRA_MIME_TYPES,
+            arrayOf(
+                "text/csv",
+                "application/vnd.ms-excel",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                "application/zip",
+                "application/octet-stream"
+            )
+        )
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
+    }
+
     private fun takePersistableReadPermission(uri: Uri, data: Intent?) {
         val flags = (data?.flags ?: 0) and Intent.FLAG_GRANT_READ_URI_PERMISSION
         if (flags == 0) return
@@ -446,6 +529,7 @@ class BackupModule(
     private fun cancelCode(kind: PendingKind): String = when (kind) {
         PendingKind.EXPORT_CSV -> "EXPORT_CANCELLED"
         PendingKind.CREATE_BACKUP, PendingKind.RESTORE_PREVIEW -> "BACKUP_CANCELLED"
+        PendingKind.IMPORT -> "IMPORT_CANCELLED"
     }
 
     private fun reject(promise: Promise, error: Exception, fallbackCode: String, fallbackMessage: String) {
@@ -499,6 +583,7 @@ class BackupModule(
         const val REQUEST_CREATE_CSV = 7101
         const val REQUEST_CREATE_BACKUP = 7102
         const val REQUEST_OPEN_BACKUP = 7103
+        const val REQUEST_OPEN_IMPORT = 7104
         const val STRATEGY_OVERWRITE = "overwrite"
         const val STRATEGY_MERGE = "merge"
         const val MAX_BACKUP_BYTES = 32 * 1024 * 1024
