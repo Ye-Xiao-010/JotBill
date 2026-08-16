@@ -779,6 +779,12 @@ export interface RuntimeHealth {
   accessibilityEnabled: boolean;
   notificationEnabled: boolean;
   overlayPermissionGranted: boolean;  // 悬浮窗权限
+  /** 阶段七 T6：应用是否已被加入电池优化白名单。 */
+  batteryOptimizationIgnored: boolean;
+  /** 阶段七 T3：数据库迁移失败回滚发生时间；未发生过为 null。 */
+  lastMigrationRecoveredAt?: string | null;
+  /** 阶段七 T6：仍处于 RUNNING 的孤儿导入批次数。 */
+  orphanImportBatches: number;
 }
 
 // ============================================================================
