@@ -32,7 +32,9 @@ data class ImportParseResult(
     val totalRecords: Int,
     val validRecords: Int,
     val filteredRecords: Int,
-    val errors: List<ImportParseError>
+    val errors: List<ImportParseError>,
+    /** 支付宝"交易关闭"等按来源规则跳过、不视为解析失败的行数。 */
+    val skippedRecords: Int = 0
 )
 
 /**
