@@ -12,6 +12,7 @@ import com.jotbill.app.data.JotBillDatabase
 import com.jotbill.app.data.JotBillDatabaseProvider
 import com.jotbill.app.importing.ImportEngine
 import com.jotbill.app.importing.ImportFilePreparer
+import com.jotbill.app.importing.ImportUndo
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -35,6 +36,7 @@ class BackupModule(
     private val backupManager: BackupManager by lazy { BackupManager(database) }
     private val importFilePreparer: ImportFilePreparer by lazy { ImportFilePreparer(reactContext) }
     private val importEngine: ImportEngine by lazy { ImportEngine(reactContext, database) }
+    private val importUndo: ImportUndo by lazy { ImportUndo(database, importEngine) }
     private val pendingLock = Any()
     private var pendingOperation: PendingFileOperation? = null
 
@@ -58,6 +60,10 @@ class BackupModule(
 
     init {
         reactContext.addActivityEventListener(this)
+        // 阶段六 T6：进程重启后孤儿 RUNNING 批次按失败处理并清理半批数据。
+        scope.launch {
+            runCatching { importUndo.recoverInterruptedBatches() }
+        }
     }
 
     override fun getName(): String = "Backup"
@@ -263,6 +269,28 @@ class BackupModule(
     fun cancelImport(promise: Promise) {
         importEngine.requestCancel()
         promise.resolve(null)
+    }
+
+    /**
+     * 阶段六 T6：撤销最近一批已完成的导入。
+     * 受用户保护的记录不自动删除/回滚，返回清单且批次状态为 UNDO_FAILED。
+     */
+    @ReactMethod
+    fun undoImport(batchId: String, promise: Promise) {
+        if (batchId.isBlank()) {
+            promise.reject("INVALID_ARGUMENT", "批次 ID 不能为空")
+            return
+        }
+        scope.launch {
+            try {
+                val result = importUndo.undoLatestCompleted(batchId)
+                withContext(Dispatchers.Main) {
+                    promise.resolve(importUndo.toJson(result).toString())
+                }
+            } catch (error: Exception) {
+                rejectFromWorker(promise, error, "IMPORT_UNDO_FAILED")
+            }
+        }
     }
 
     private fun openImportPicker(
@@ -675,9 +703,10 @@ class BackupModule(
     private fun reject(promise: Promise, error: Exception, fallbackCode: String, fallbackMessage: String) {
         val backupError = error as? BackupManager.BackupException
         val importError = error as? ImportEngine.ImportException
+        val undoError = error as? ImportUndo.UndoException
         promise.reject(
-            backupError?.code ?: importError?.code ?: fallbackCode,
-            backupError?.message ?: importError?.message ?: (error.message ?: fallbackMessage),
+            backupError?.code ?: importError?.code ?: undoError?.code ?: fallbackCode,
+            backupError?.message ?: importError?.message ?: undoError?.message ?: (error.message ?: fallbackMessage),
             error,
         )
     }
