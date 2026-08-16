@@ -664,6 +664,30 @@ internal class CheckoutSnapshotCaptureCoordinator(
         }
     }
 
+    /**
+     * 给支付结果页交接兜底：即使服务层 currentStableCheckout 因瞬时事件被清空，
+     * 截图协调器仍持有 activeCheckout/handoffCheckout 时，优先返回 buffer 中
+     * 的真实引用；buffer 已被清空时用页面元数据构造引用，供支付证据建立会话。
+     */
+    fun currentPaymentHandoffReference(): CheckoutSnapshotReference? {
+        if (closed) return null
+        val source = handoffCheckout?.activeCheckout ?: activeCheckout ?: return null
+        val observation = source.page.observation
+        val buffered = buffer.findReference(source.slotId, observation.pageFingerprint)
+        return buffered ?: CheckoutSnapshotReference(
+            snapshotId = "",
+            sessionId = source.sessionId,
+            slotId = source.slotId,
+            shoppingPackage = observation.shoppingPackage,
+            pageRole = observation.pageRole,
+            pageFingerprint = observation.pageFingerprint,
+            capturedAt = observation.observedAt,
+            expiresAt = observation.observedAt + 30_000L,
+            candidateRevision = 0,
+            sourceReason = SnapshotSourceReason.CHECKOUT_STABLE
+        )
+    }
+
     /** 服务中断时立即取消回调并清理当前购物包槽位。 */
     fun onServiceInterrupted() {
         val posted = try {

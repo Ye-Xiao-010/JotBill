@@ -1588,8 +1588,27 @@ class CheckoutAccessibilityService : AccessibilityService() {
     private fun capturePaymentResultHandoffContext(
         paymentPackage: String
     ): PaymentResultHandoffContext? {
-        val stableCheckout = synchronized(this) {
+        val synchronizedCheckout = synchronized(this) {
             if (handoffForegroundPackage == paymentPackage) handoffStableCheckout else null
+        }
+        val fallbackReference = synchronizedCheckout?.let {
+            null
+        } ?: snapshotCaptureCoordinator?.currentPaymentHandoffReference()
+        val stableCheckout = synchronizedCheckout ?: fallbackReference?.let { reference ->
+            StableCheckoutPage(
+                observation = CheckoutPageObservation(
+                    shoppingPackage = reference.shoppingPackage,
+                    pageRole = reference.pageRole,
+                    pageFingerprint = reference.pageFingerprint,
+                    hasFinalAmountSignal = false,
+                    hasCheckoutActionSignal = false,
+                    isSensitivePage = false,
+                    windowClass = "",
+                    normalizedTextHash = "",
+                    observedAt = reference.capturedAt
+                ),
+                stableAt = reference.capturedAt
+            )
         } ?: return null
         val observation = stableCheckout.observation
         val slotId = checkoutSnapshotSlotId(observation.shoppingPackage)
