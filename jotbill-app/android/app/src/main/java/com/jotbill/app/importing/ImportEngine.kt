@@ -239,6 +239,7 @@ internal class ImportEngine(
             put("encrypted", true)
             put("duplicateFile", duplicateBatch != null)
             put("candidates", JSONArray())
+            put("sampleErrors", JSONArray())
         }
     }
 
@@ -254,6 +255,7 @@ internal class ImportEngine(
             put("fileHash", prepared.fileHash)
             put("encrypted", prepared.encrypted)
             put("duplicateFile", duplicateBatch != null)
+            put("sampleErrors", JSONArray())
             put(
                 "candidates",
                 JSONArray().apply {
