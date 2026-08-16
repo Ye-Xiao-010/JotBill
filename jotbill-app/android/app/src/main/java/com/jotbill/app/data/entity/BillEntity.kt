@@ -18,7 +18,9 @@ import androidx.room.PrimaryKey
         Index(value = ["source_type"]),
         Index(value = ["source_type", "import_record_id"]),
         Index(value = ["original_transaction_id"]),
-        Index(value = ["occurred_at", "type"])
+        Index(value = ["occurred_at", "type"]),
+        Index(value = ["type", "occurred_at", "amount_minor"]),
+        Index(value = ["source_type", "order_id"])
     ],
     foreignKeys = [
         ForeignKey(
