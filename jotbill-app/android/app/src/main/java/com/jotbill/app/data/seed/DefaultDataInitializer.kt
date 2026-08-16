@@ -126,7 +126,9 @@ class DefaultDataInitializer(
             DefaultCategory("default-category-income-bonus", "奖金", "income", "🎁", "#FFB300", 16),
             DefaultCategory("default-category-income-red-packet", "红包", "income", "🧧", "#E91E63", 17),
             DefaultCategory("default-category-income-refund", "退款", "income", "↩️", "#546E7A", 18),
-            DefaultCategory("default-category-income-other", "其他", "income", "📦", "#2E7D32", 19)
+            DefaultCategory("default-category-income-other", "其他", "income", "📦", "#2E7D32", 19),
+            // 阶段五 T4：手续费独立分类（type=fee 计入支出，归属 expense 组）
+            DefaultCategory("default-category-expense-fee", "手续费", "expense", "🧾", "#8D6E63", 20)
         )
 
         val defaultAccounts = listOf(

@@ -29,6 +29,19 @@ data class PaymentEvidenceInput(
 )
 
 /**
+ * 阶段五 T4：手续费通知解析结果。
+ *
+ * 同一通知可能同时携带主交易（提现/转账/还款）与手续费两笔语义：
+ * - [feePart] 手续费证据：type=fee 独立进待确认；amountMinor=0 表示金额解析失败；
+ * - [mainPart] 主交易证据：非空时由调用方继续走 TransferClassifier 对应类型路径，
+ *   与手续费的 sourceEventKey 通过语义后缀（fee/main）互相区分。
+ */
+data class FeeNotificationParse(
+    val feePart: PaymentEvidenceInput,
+    val mainPart: PaymentEvidenceInput?
+)
+
+/**
  * 支付通知解析器。
  *
  * 负责把微信/支付宝的系统通知正文解析为结构化 [PaymentEvidenceInput]，
@@ -53,6 +66,9 @@ internal object PaymentResultNormalizer {
 
     /** 阶段五 T3：还款证据状态标记。 */
     const val PAYMENT_STATUS_REPAYMENT = "REPAYMENT"
+
+    /** 阶段五 T4：手续费证据状态标记。 */
+    const val PAYMENT_STATUS_FEE = "FEE"
 
     /** 支持的支付应用包名白名单 */
     val SUPPORTED_PACKAGES: Set<String> = setOf(WECHAT_PACKAGE, ALIPAY_PACKAGE)
@@ -173,6 +189,31 @@ internal object PaymentResultNormalizer {
     /** 他人转账收款人匹配正则：如"转账给张三""转给李四"；"付款给"是扫码消费语义，不在此列。 */
     private val RECIPIENT_PATTERNS = listOf(
         Regex("""(?:转账给|转给)\s*([^\s,，。；;(（]{1,20})""")
+    )
+
+    /**
+     * 阶段五 T4：手续费语义关键词。
+     * 手续费金额小、特征弱，一律进待确认，不自动入账。
+     */
+    private val FEE_KEYWORDS = listOf("手续费", "服务费", "提现费")
+
+    /**
+     * 手续费金额匹配正则：数字后不允许紧跟 %（排除"服务费率0.6%"类费率表述）。
+     * 覆盖"手续费1元""服务费：0.5""收取手续费¥1""1元手续费"等常见格式。
+     */
+    private val FEE_AMOUNT_PATTERNS = listOf(
+        Regex("""(?:手续费|服务费|提现费)\s*(?:为|是|共)?\s*[:：]?\s*(?:人民币|CNY)?\s*(?:¥|￥)?\s*([0-9]+\.?[0-9]*)(?!%)"""),
+        Regex("""(?:收取|扣收|代收)\s*(?:手续费|服务费|提现费)\s*(?:¥|￥)?\s*([0-9]+\.?[0-9]*)(?!%)"""),
+        Regex("""(?:¥|￥)\s*([0-9]+\.?[0-9]*)\s*(?:手续费|服务费|提现费)"""),
+        Regex("""([0-9]+\.?[0-9]*)\s*元?\s*(?:手续费|服务费|提现费)""")
+    )
+
+    /**
+     * 混合通知主交易金额匹配正则：动作词紧邻金额（如"提现1000元""还款2000"）。
+     * 与 [TRANSFER_AMOUNT_PATTERNS]（方向性表述优先）互补，回退时排除手续费金额。
+     */
+    private val MAIN_AMOUNT_PATTERNS = listOf(
+        Regex("""(?:提现|转出|转账|转至|转到|还款|偿还)\s*(?:人民币|CNY)?\s*(?:¥|￥)?\s*([0-9]+\.?[0-9]*)(?!%)""")
     )
 
     /** 交易时间匹配正则：HH:mm 或 HH:mm:ss（通知正文常见格式）。 */
@@ -447,6 +488,161 @@ internal object PaymentResultNormalizer {
             return parseAmountMinor(match.groupValues[1]) ?: continue
         }
         return extractAmountMinor(content)
+    }
+
+    /**
+     * 阶段五 T4：解析手续费通知正文，返回手续费与主交易的拆分结果；非手续费通知返回 null。
+     *
+     * 接管条件（防止"订单30元含服务费"类消费通知被误抢）：
+     * - 手续费关键词（手续费/服务费/提现费）命中，且满足其一：
+     *   a) 同时含转账/还款主交易语义（如"提现1000元，手续费1元"）→ 拆分为 fee + main；
+     *   b) 纯手续费通知（无任何消费支付关键词）→ 仅 fee；
+     * - 含消费支付关键词但无转账/还款语义的通知（消费含服务费）不强拆，返回 null 走消费路径。
+     *
+     * 拆分口径：
+     * - 手续费金额优先按手续费表述提取；解析失败时返回 amountMinor=0 的 feePart，
+     *   由 FeeExtractor 整条进待确认并标记解析失败（FEE_AMOUNT_UNPARSED），不强行入账；
+     * - 主交易金额按方向性表述 → 动作词紧邻金额 → 通用金额（排除手续费数值）提取，
+     *   提取失败则不生成 mainPart（只记录手续费）；
+     * - sourceEventKey 语义后缀区分：fee 键空间 fee-event|...|fee，
+     *   main 键空间 transfer-event|...|main，同一通知两笔互不冲突；
+     * - 主交易的金额解析复用 [normalizeTransfer] 同款字段（目标账户/收款人），
+     *   由调用方交给 TransferClassifier 走既有转账/还款路径。
+     */
+    fun normalizeFee(
+        sourcePackage: String,
+        title: String,
+        text: String,
+        bigText: String,
+        subText: String,
+        summaryText: String,
+        tickerText: String,
+        postTime: Long,
+        notificationKey: String?,
+        notificationId: Int,
+        titleBig: String = ""
+    ): FeeNotificationParse? {
+        if (sourcePackage !in SUPPORTED_PACKAGES) return null
+
+        val fullContent = listOf(title, titleBig, text, bigText, subText, summaryText, tickerText)
+            .filter { it.isNotBlank() }
+            .joinToString(" ")
+
+        if (fullContent.isBlank()) return null
+
+        // 必须命中手续费关键词
+        if (FEE_KEYWORDS.none { fullContent.contains(it) }) return null
+
+        // 排除失败/进行中语义
+        if (FAILURE_KEYWORDS.any { fullContent.contains(it) }) return null
+
+        // 主交易语义判定：还款优先，其次转账；先排除收入/入账语义
+        val hasIncomeSemantics = TRANSFER_INCOME_EXCLUDE_KEYWORDS.any { fullContent.contains(it) }
+        val hasMainSemantics = !hasIncomeSemantics && (
+            REPAYMENT_KEYWORDS.any { fullContent.contains(it) } ||
+                TRANSFER_KEYWORDS.any { fullContent.contains(it) }
+            )
+
+        // 消费支付关键词存在但无主交易语义：不强拆，走消费路径
+        val hasPaymentKeywords = PAYMENT_KEYWORDS.any { fullContent.contains(it) }
+        if (!hasMainSemantics && hasPaymentKeywords) return null
+
+        // ---- 手续费金额：解析失败返回 0 标记（待确认由 FeeExtractor 落解析失败原因）----
+        val feeAmountMinor = extractFeeAmountMinor(fullContent) ?: 0L
+
+        // ---- 主交易金额：方向性表述 > 动作词紧邻金额 > 通用金额（排除手续费数值）----
+        val mainAmountMinor = if (hasMainSemantics) {
+            extractMainAmountMinor(fullContent, excludeMinor = feeAmountMinor)
+        } else {
+            null
+        }
+
+        val occurredAt = extractOccurredAt(fullContent, postTime)
+        val orderId = extractField(fullContent, ORDER_ID_PATTERNS)
+
+        // ---- 手续费证据：fee-event 键空间 + fee 语义后缀 ----
+        val feeSourceEventKey = sha256(
+            "fee-event|$sourcePackage|${notificationKey.orEmpty()}|" +
+                "$notificationId|$postTime|$feeAmountMinor|${orderId.orEmpty()}|fee"
+        )
+        val feePart = PaymentEvidenceInput(
+            sourcePackage = sourcePackage,
+            amountMinor = feeAmountMinor,
+            occurredAt = occurredAt,
+            merchant = null,
+            orderId = orderId,
+            paymentStatus = PAYMENT_STATUS_FEE,
+            sourceEventKey = feeSourceEventKey,
+            rawTextHash = sha256(
+                "fee-raw|$sourcePackage|${sanitizeForHash(fullContent, orderId)}"
+            )
+        )
+        if (mainAmountMinor == null || mainAmountMinor <= 0L) {
+            return FeeNotificationParse(feePart, mainPart = null)
+        }
+
+        // ---- 主交易证据：还款优先判定，复用转账/还款字段提取 ----
+        val isRepayment = REPAYMENT_KEYWORDS.any { fullContent.contains(it) }
+        val targetAccountHint = if (isRepayment) {
+            extractField(fullContent, REPAY_TARGET_PATTERNS)
+        } else {
+            extractField(fullContent, TRANSFER_TARGET_PATTERNS)
+        }
+        val recipientName = if (isRepayment) null else extractField(fullContent, RECIPIENT_PATTERNS)
+
+        // transfer-event 键空间 + main 语义后缀，与纯转账通知键天然区分
+        val mainSourceEventKey = sha256(
+            "transfer-event|$sourcePackage|${notificationKey.orEmpty()}|" +
+                "$notificationId|$postTime|$mainAmountMinor|${orderId.orEmpty()}|main"
+        )
+
+        val mainPart = PaymentEvidenceInput(
+            sourcePackage = sourcePackage,
+            amountMinor = mainAmountMinor,
+            occurredAt = occurredAt,
+            merchant = null,
+            orderId = orderId,
+            paymentStatus = if (isRepayment) PAYMENT_STATUS_REPAYMENT else PAYMENT_STATUS_TRANSFER,
+            sourceEventKey = mainSourceEventKey,
+            rawTextHash = sha256(
+                "transfer-raw|$sourcePackage|${sanitizeForHash(fullContent, orderId)}"
+            ),
+            targetAccountHint = targetAccountHint,
+            recipientName = recipientName
+        )
+        return FeeNotificationParse(feePart, mainPart)
+    }
+
+    /** 手续费金额提取：只按手续费表述匹配，失败返回 null（不回退通用模式，防止误取主交易金额）。 */
+    private fun extractFeeAmountMinor(content: String): Long? {
+        for (pattern in FEE_AMOUNT_PATTERNS) {
+            val match = pattern.find(content) ?: continue
+            return parseAmountMinor(match.groupValues[1]) ?: continue
+        }
+        return null
+    }
+
+    /**
+     * 混合通知主交易金额提取：方向性表述 > 动作词紧邻金额 > 通用金额。
+     * 通用回退逐个检查命中的金额，跳过与手续费数值相同的匹配，防止把手续费当成主交易。
+     */
+    private fun extractMainAmountMinor(content: String, excludeMinor: Long): Long? {
+        for (pattern in TRANSFER_AMOUNT_PATTERNS) {
+            val match = pattern.find(content) ?: continue
+            return parseAmountMinor(match.groupValues[1]) ?: continue
+        }
+        for (pattern in MAIN_AMOUNT_PATTERNS) {
+            val match = pattern.find(content) ?: continue
+            return parseAmountMinor(match.groupValues[1]) ?: continue
+        }
+        // 通用回退：取第一个与手续费金额不同的有效金额
+        for (pattern in AMOUNT_PATTERNS) {
+            for (match in pattern.findAll(content)) {
+                val amount = parseAmountMinor(match.groupValues[1]) ?: continue
+                if (amount != excludeMinor) return amount
+            }
+        }
+        return null
     }
 
     /** 从文本中提取金额并转换为分（Long），无法提取时返回 null。 */

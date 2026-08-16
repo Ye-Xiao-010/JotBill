@@ -7,6 +7,7 @@ import android.util.Log
 import com.jotbill.app.data.JotBillDatabaseProvider
 import com.jotbill.app.recognition.CheckoutAccessibilityService
 import com.jotbill.app.recognition.CheckoutPaymentMatcher
+import com.jotbill.app.recognition.FeeExtractor
 import com.jotbill.app.recognition.PaymentNotificationFallbackSignal
 import com.jotbill.app.recognition.RefundLinker
 import com.jotbill.app.recognition.TransferClassifier
@@ -140,6 +141,33 @@ class PaymentNotificationService : NotificationListenerService() {
             Log.i(TAG, "解析到退款证据: 包名=${refundInput.sourcePackage}")
             scope.launch {
                 handleRefundEvidence(refundInput)
+            }
+            return
+        }
+
+        // 阶段五 T4：手续费语义识别（含主交易拆分）：手续费独立成 fee 待确认，
+        // 同通知携带的提现/转账/还款主交易继续走 T3 归属决策路径，两笔互不重复
+        val feeParse = PaymentResultNormalizer.normalizeFee(
+            sourcePackage = packageName,
+            title = title,
+            titleBig = titleBig,
+            text = text,
+            bigText = bigText,
+            subText = subText,
+            summaryText = summaryText,
+            tickerText = tickerText,
+            postTime = sbn.postTime,
+            notificationKey = sbn.key,
+            notificationId = sbn.id
+        )
+        if (feeParse != null) {
+            Log.i(
+                TAG,
+                "解析到手续费证据: 包名=${feeParse.feePart.sourcePackage}, " +
+                    "含主交易=${feeParse.mainPart != null}"
+            )
+            scope.launch {
+                handleFeeEvidence(feeParse)
             }
             return
         }
@@ -318,6 +346,51 @@ class PaymentNotificationService : NotificationListenerService() {
                 data = mapOf("package" to input.sourcePackage),
                 category = "transfer_evidence"
             )
+        }
+    }
+
+    /**
+     * 阶段五 T4：处理手续费证据（含同通知主交易拆分）。
+     *
+     * 手续费金额小、特征弱，一律进入待确认，不自动入账：
+     * - 手续费独立成 type=fee 待确认（计入支出，确认后扣减源账户余额）；
+     * - 伴随的提现/转账/还款主交易交回 TransferClassifier 走既有归属决策，
+     *   主账单已存在时由 FeeExtractor 关联（originalBillId），未入账时记提示，不阻塞确认；
+     * - 金额解析失败整条进待确认并标记 FEE_AMOUNT_UNPARSED，不强行入账。
+     *
+     * @param parse 手续费通知拆分结果（feePart 必有，mainPart 可空）
+     */
+    private suspend fun handleFeeEvidence(parse: FeeNotificationParse) {
+        try {
+            val database = JotBillDatabaseProvider.get(applicationContext)
+            val outcome = FeeExtractor(database).processFee(parse.feePart, parse.mainPart)
+            val outcomeInfo = mapOf(
+                "package" to parse.feePart.sourcePackage,
+                "outcome" to outcome.javaClass.simpleName
+            )
+            SentryLogger.addBreadcrumb(
+                "手续费证据处理完成",
+                data = outcomeInfo,
+                category = "fee_evidence"
+            )
+            Log.i(TAG, "手续费证据处理完成: $outcomeInfo")
+        } catch (error: RuntimeException) {
+            Log.w(TAG, "手续费证据处理失败", error)
+            SentryLogger.addBreadcrumb(
+                "手续费证据处理失败",
+                data = mapOf("package" to parse.feePart.sourcePackage),
+                category = "fee_evidence"
+            )
+        }
+
+        // 主交易与手续费是两笔独立语义：主交易继续走 T3 转账/还款归属决策，
+        // 两者的 sourceEventKey 已通过语义后缀（fee/main）互相区分，不会重复入账
+        parse.mainPart?.let { mainPart ->
+            try {
+                handleTransferEvidence(mainPart)
+            } catch (error: RuntimeException) {
+                Log.w(TAG, "手续费伴随主交易处理失败", error)
+            }
         }
     }
 
