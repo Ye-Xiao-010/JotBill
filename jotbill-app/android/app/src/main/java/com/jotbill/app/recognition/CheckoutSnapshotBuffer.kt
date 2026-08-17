@@ -128,6 +128,10 @@ class CheckoutSnapshotBuffer(
     private val snapshotIdFactory: () -> String = { UUID.randomUUID().toString() },
     private val expirationHandler: Handler = Handler(Looper.getMainLooper())
 ) {
+    private companion object {
+        private const val TAG = "CheckoutSnapshotBuffer"
+    }
+
     private data class SlotState(
         val sessionId: String,
         var manualCandidate: CheckoutSnapshot? = null,
@@ -428,8 +432,26 @@ class CheckoutSnapshotBuffer(
         val state = slots[slotId]
             ?: return CheckoutAiTriggerResult.Rejected(SnapshotConsumeRejection.NO_BUFFERED_SNAPSHOT)
 
+        state.consumedRequestKey?.let {
+            return CheckoutAiTriggerResult.AlreadyTriggered(it)
+        }
+
+        val candidates = candidateList(state)
+
+        // 支付交接栅栏只保护仍存在的候选：挂起快照过期被清理后栅栏失去保护对象，
+        // 不能继续拦截消费（否则槽残留会让后续请求永远得到 NO_MATCHING_PAGE_FINGERPRINT，
+        // 而真实语义是快照已不可用）。
         state.handoffPageFingerprint?.let { retainedFingerprint ->
-            if (pageFingerprint != retainedFingerprint) {
+            if (
+                pageFingerprint != retainedFingerprint &&
+                candidates.isNotEmpty()
+            ) {
+                android.util.Log.i(
+                    TAG,
+                    "快照消费被交接栅栏拒绝: requested=${pageFingerprint?.take(12)}, " +
+                        "barrier=${retainedFingerprint.take(12)}, " +
+                        "candidates=${candidates.joinToString(",") { it.pageFingerprint.take(12) }}"
+                )
                 return CheckoutAiTriggerResult.Rejected(
                     if (pageFingerprint == null) {
                         SnapshotConsumeRejection.AMBIGUOUS_CANDIDATES
@@ -439,12 +461,6 @@ class CheckoutSnapshotBuffer(
                 )
             }
         }
-
-        state.consumedRequestKey?.let {
-            return CheckoutAiTriggerResult.AlreadyTriggered(it)
-        }
-
-        val candidates = candidateList(state)
         if (candidates.isEmpty()) {
             if (
                 state.expiredPageFingerprints.isNotEmpty() &&
@@ -464,6 +480,13 @@ class CheckoutSnapshotBuffer(
                     state.expiredPageFingerprints.remove(pageFingerprint)
                     return CheckoutAiTriggerResult.Rejected(SnapshotConsumeRejection.SNAPSHOT_EXPIRED)
                 } else {
+                    android.util.Log.i(
+                        TAG,
+                        "快照指纹不匹配: requested=${pageFingerprint.take(12)}, " +
+                            "barrier=${state.handoffPageFingerprint?.take(12) ?: "null"}, " +
+                            "candidates=${candidates.joinToString(",") { it.pageFingerprint.take(12) }}, " +
+                            "expired=${state.expiredPageFingerprints.joinToString(",") { it.take(12) }}"
+                    )
                     return CheckoutAiTriggerResult.Rejected(
                         SnapshotConsumeRejection.NO_MATCHING_PAGE_FINGERPRINT
                     )
@@ -474,7 +497,15 @@ class CheckoutSnapshotBuffer(
                     SnapshotConsumeRejection.AMBIGUOUS_CANDIDATES
                 )
         }
-        if (snapshot.pageRole.canBufferUserRetrySnapshot() && intent != PurchaseIntent.USER_RETRY) {
+        // 页面角色守卫：只有 USER_RETRY（手动截图重试）允许消费非结算页快照；
+        // CHECKOUT 快照必须允许 SUBMIT_ACTION / PAYMENT_APP_HANDOFF 等真实购买意图
+        // 消费——此前误用 canBufferUserRetrySnapshot()（含 CHECKOUT），导致结算页
+        // 快照对自动购买意图一律被拒，AI 永远无法派发。
+        if (snapshot.pageRole != CheckoutPageRole.CHECKOUT && intent != PurchaseIntent.USER_RETRY) {
+            android.util.Log.i(
+                TAG,
+                "快照页面角色不可消费: role=${snapshot.pageRole}, intent=${intent.wireValue}"
+            )
             return CheckoutAiTriggerResult.Rejected(
                 SnapshotConsumeRejection.NO_MATCHING_PAGE_FINGERPRINT
             )

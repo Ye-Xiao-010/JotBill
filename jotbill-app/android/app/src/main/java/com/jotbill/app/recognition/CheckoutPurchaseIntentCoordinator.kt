@@ -151,15 +151,24 @@ internal class CheckoutPurchaseIntentCoordinator(
                             event.detail.reason == CheckoutInvalidationReason.PAYMENT_APP_HANDOFF &&
                                 event.detail.foregroundPackage
                                     ?.let(pageDetector::supportsPaymentPackage) == true
+                        // 同购物包内的非结算中间页（拼多多提交订单后的收银台）不清空
+                        // 购买上下文：保留 activeContext 等待切支付应用时由
+                        // PAYMENT_APP_HANDOFF 消费快照并预写 AI 会话。
+                        val isPaymentInterstitial =
+                            event.detail.reason == CheckoutInvalidationReason.NON_CHECKOUT_PAGE &&
+                                activeContext != null &&
+                                event.detail.shoppingPackage == activeContext?.shoppingPackage
                         if (isPaymentHandoff) {
                             val retained = activeContext ?: handoffContext
                             activeContext = null
                             handoffContext = retained
                             shouldTriggerHandoff = retained != null
-                            handoffFingerprint = event.detail.pageFingerprint
-                                ?.takeIf { it.isNotBlank() }
-                                ?: retained?.pageFingerprint
-                        } else {
+                            // 结算页指纹高频漂移（倒计时/控件刷新）时，稳定协调器转发的
+                            // 指纹可能是漂移中间态；消费必须使用挂起上下文对应的原始
+                            // 指纹，否则会撞上支付交接栅栏的 NO_MATCHING_PAGE_FINGERPRINT。
+                            handoffFingerprint = retained?.pageFingerprint
+                                ?: event.detail.pageFingerprint?.takeIf { it.isNotBlank() }
+                        } else if (!isPaymentInterstitial) {
                             clearContextsLocked()
                         }
                     }
@@ -402,7 +411,6 @@ internal class CheckoutPurchaseIntentCoordinator(
                 pageFingerprint = requestedFingerprint
             )
         }
-
         val candidateSessionId = findSelectedCandidateSessionId(
             slotId = context.slotId,
             pageFingerprint = requestedFingerprint
@@ -419,19 +427,22 @@ internal class CheckoutPurchaseIntentCoordinator(
             )
         }
 
-        if (intent == PurchaseIntent.PAYMENT_APP_HANDOFF) {
-            handoffAttempted = true
-        }
-        if (intent == PurchaseIntent.PAYMENT_NOTIFICATION_FALLBACK) {
-            notificationFallbackAttempted = true
-        }
-
         val consumeResult = try {
             // 显式传入 slotId；无指纹时交给 buffer 返回歧义，禁止协调器猜测候选。
+            // 支付交接时结算页指纹高频漂移（倒计时/控件刷新），意图上下文可能领先于
+            // 槽内实际快照；此时用槽内唯一候选的真实指纹消费，避免快照白白过期。
+            val effectiveFingerprint = if (
+                intent == PurchaseIntent.PAYMENT_APP_HANDOFF &&
+                requestedFingerprint != null
+            ) {
+                resolveHandoffFingerprint(context.slotId, requestedFingerprint)
+            } else {
+                requestedFingerprint
+            }
             buffer.consumeForAi(
                 slotId = context.slotId,
                 intent = intent,
-                pageFingerprint = requestedFingerprint
+                pageFingerprint = effectiveFingerprint
             )
         } catch (error: RuntimeException) {
             Log.w(TAG, "消费结算快照失败", error)
@@ -441,6 +452,21 @@ internal class CheckoutPurchaseIntentCoordinator(
                 slotId = context.slotId,
                 pageFingerprint = requestedFingerprint
             )
+        }
+
+        // 交接标记只在快照真正被消费（Ready/AlreadyTriggered）后置位：
+        // 指纹漂移等原因导致的 Rejected 不消耗重试机会，补发路径仍可再次消费。
+        if (
+            intent == PurchaseIntent.PAYMENT_APP_HANDOFF &&
+            consumeResult !is CheckoutAiTriggerResult.Rejected
+        ) {
+            handoffAttempted = true
+        }
+        if (
+            intent == PurchaseIntent.PAYMENT_NOTIFICATION_FALLBACK &&
+            consumeResult !is CheckoutAiTriggerResult.Rejected
+        ) {
+            notificationFallbackAttempted = true
         }
 
         return when (consumeResult) {
@@ -476,6 +502,40 @@ internal class CheckoutPurchaseIntentCoordinator(
                     slotId = context.slotId,
                     pageFingerprint = requestedFingerprint
                 )
+        }
+    }
+
+    /**
+     * 支付交接时的指纹校正：指纹漂移会让意图上下文领先于槽内实际快照。
+     *
+     * 槽内存在唯一未过期候选且指纹与意图指纹不一致时，返回候选的真实指纹；
+     * 该指纹仍指向槽内真实快照，不构成对页面指纹校验的弱化。其余情况保持
+     * 原指纹，由 buffer 的栅栏与指纹匹配逻辑做最终裁决。
+     */
+    private fun resolveHandoffFingerprint(slotId: String, requestedFingerprint: String): String {
+        val candidates = try {
+            buffer.currentCandidates(slotId)
+        } catch (_: RuntimeException) {
+            return requestedFingerprint
+        }
+        return try {
+            val selected = candidates.singleOrNull()
+            if (
+                selected != null &&
+                selected.pageFingerprint != requestedFingerprint
+            ) {
+                Log.i(
+                    TAG,
+                    "支付交接指纹校正: intent=${requestedFingerprint.take(12)}, " +
+                        "slotCandidate=${selected.pageFingerprint.take(12)}, " +
+                        "session=${selected.sessionId.take(8)}"
+                )
+                selected.pageFingerprint
+            } else {
+                requestedFingerprint
+            }
+        } finally {
+            candidates.forEach { it.release() }
         }
     }
 

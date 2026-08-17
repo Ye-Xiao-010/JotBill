@@ -97,6 +97,8 @@ internal class CheckoutSnapshotCaptureCoordinator(
         private const val JPEG_QUALITY = 85
         private const val MAX_ENCODED_SCREENSHOT_BYTES = 5 * 1024 * 1024
         private const val EVENT_DISPATCH_TIMEOUT_MILLIS = 5_000L
+        /** 支付中间页挂起后，同包指纹漂移尾波稳定事件被视为旧订单的时间窗口。 */
+        private const val HANDOFF_DRIFT_TAIL_WINDOW_MILLIS = 2_500L
         private const val MAIN_HANDLER_UNAVAILABLE = "MAIN_HANDLER_UNAVAILABLE"
         private const val EVENT_PROCESSING_FAILED = "EVENT_PROCESSING_FAILED"
         private const val SCREENSHOT_HANDLER_UNAVAILABLE = "SCREENSHOT_HANDLER_UNAVAILABLE"
@@ -815,6 +817,15 @@ internal class CheckoutSnapshotCaptureCoordinator(
             val isSameCheckout =
                 retained.page.observation.shoppingPackage == observation.shoppingPackage &&
                     retained.page.observation.pageFingerprint == observation.pageFingerprint
+            // 支付中间页挂起初期，结算页指纹漂移（倒计时/控件刷新）的迟到稳定事件
+            // 不代表新订单：保留挂起会话与快照，等待切支付应用消费。
+            val isDriftTail =
+                !isSameCheckout &&
+                    observation.shoppingPackage == retained.page.observation.shoppingPackage &&
+                    observation.observedAt - retained.page.stableAt < HANDOFF_DRIFT_TAIL_WINDOW_MILLIS
+            if (isDriftTail) {
+                return
+            }
             handoffCheckout = null
             if (isSameCheckout) {
                 if (closed) {
@@ -944,9 +955,17 @@ internal class CheckoutSnapshotCaptureCoordinator(
     private fun handleInvalidated(detail: CheckoutObservationInvalidation) {
         val current = activeCheckout
         val retained = handoffCheckout
+        // 同购物包内的非结算中间页（拼多多提交订单后的收银台）是支付旅程的一部分：
+        // 视作“预交接”挂起当前结算会话与快照，等待切支付应用或回到结算页恢复，
+        // 而不是立即清空槽位导致已 STORED 的截图再也关联不上支付证据。
+        val isPaymentInterstitial =
+            detail.reason == CheckoutInvalidationReason.NON_CHECKOUT_PAGE &&
+                current != null &&
+                detail.shoppingPackage == current.page.observation.shoppingPackage
         val handoffSource = current ?: retained?.activeCheckout
         val retainForHandoff =
-            detail.reason == CheckoutInvalidationReason.PAYMENT_APP_HANDOFF && handoffSource != null
+            (detail.reason == CheckoutInvalidationReason.PAYMENT_APP_HANDOFF || isPaymentInterstitial) &&
+                handoffSource != null
         val nextHandoff = if (!retainForHandoff) {
             null
         } else if (retained != null) {

@@ -51,6 +51,9 @@ class CheckoutAccessibilityService : AccessibilityService() {
         private val SENSITIVE_ASCII_PATTERN = Regex("""(?i)\b(password|pin|otp)\b""")
         private const val STABLE_DELAY_MILLIS = 500L
 
+        /** 支付交接补发节流窗口：同一支付包在该窗口内只补发一次交接事件。 */
+        private const val PAYMENT_HANDOFF_REDISPATCH_THROTTLE_MILLIS = 5_000L
+
         @Volatile
         private var observationListener: CheckoutObservationListener? = null
 
@@ -270,6 +273,17 @@ class CheckoutAccessibilityService : AccessibilityService() {
     private var handoffStableCheckout: StableCheckoutPage? = null
     @Volatile
     private var handoffForegroundPackage: String? = null
+    /** 支付交接补发的节流状态：同一支付包短时间内只补发一次 PAYMENT_APP_HANDOFF。 */
+    @Volatile
+    private var lastPaymentHandoffRedispatchFor: String? = null
+    @Volatile
+    private var lastPaymentHandoffRedispatchAt = 0L
+    /** 支付交接诊断日志的最近打印时间，按秒采样防止日志风暴。 */
+    @Volatile
+    private var lastHandoffDiagnosticsAt = 0L
+    /** 支付交接上下文日志的最近打印时间，按秒采样防止日志风暴。 */
+    @Volatile
+    private var lastHandoffContextLogAt = 0L
     private var submitActionTriggeredKey: StableCheckoutKey? = null
     @Volatile
     private var serviceConnected = false
@@ -285,10 +299,12 @@ class CheckoutAccessibilityService : AccessibilityService() {
             dispatchEvent(CheckoutObservationEvent.Stable(page))
         },
         onInvalidated = { detail ->
-            currentStableCheckout = null
-            if (detail.reason != CheckoutInvalidationReason.PAYMENT_APP_HANDOFF) {
-                handoffStableCheckout = null
-                handoffForegroundPackage = null
+            if (!shouldRetainCheckoutAcrossPaymentInterstitial(detail)) {
+                currentStableCheckout = null
+                if (detail.reason != CheckoutInvalidationReason.PAYMENT_APP_HANDOFF) {
+                    handoffStableCheckout = null
+                    handoffForegroundPackage = null
+                }
             }
             submitActionTriggeredKey = null
             dispatchEvent(CheckoutObservationEvent.Invalidated(detail))
@@ -583,12 +599,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
                     handoffStableCheckout = null
                     handoffForegroundPackage = null
                 }
-                Log.i(
-                    TAG,
-                    "支付交接诊断: payment=$shoppingPackage, currentStable=${currentStableCheckout != null}, " +
-                        "handoffStable=${handoffStableCheckout != null}, previousShopping=$previousShoppingPackage, " +
-                        "coordRef=${snapshotCaptureCoordinator?.currentPaymentHandoffReference()?.sessionId ?: "null"}"
-                )
+                logHandoffDiagnosticsSampled(shoppingPackage, previousShoppingPackage)
                 // 阶段四 T3：在支付应用中观察支付结果页，提取结构化证据
                 observePaymentResultIfApplicable(
                     event = event,
@@ -617,7 +628,14 @@ class CheckoutAccessibilityService : AccessibilityService() {
                 reason = invalidationReason,
                 shoppingPackage = shoppingPackage.ifBlank { null },
                 foregroundPackage = shoppingPackage.ifBlank { null }
-            )
+            ).also { dispatched ->
+                dispatchPaymentHandoffIfNeeded(
+                    dispatched = dispatched,
+                    reason = invalidationReason,
+                    shoppingPackage = previousShoppingPackage,
+                    foregroundPackage = shoppingPackage.ifBlank { null }
+                )
+            }
             return
         }
 
@@ -675,7 +693,14 @@ class CheckoutAccessibilityService : AccessibilityService() {
                         reason = CheckoutInvalidationReason.PAYMENT_APP_HANDOFF,
                         shoppingPackage = shoppingPackage,
                         foregroundPackage = rootPackage
-                    )
+                    ).also { dispatched ->
+                        dispatchPaymentHandoffIfNeeded(
+                            dispatched = dispatched,
+                            reason = CheckoutInvalidationReason.PAYMENT_APP_HANDOFF,
+                            shoppingPackage = shoppingPackage,
+                            foregroundPackage = rootPackage
+                        )
+                    }
                     observePaymentResultIfApplicable(
                         event = event,
                         paymentPackage = rootPackage,
@@ -723,11 +748,24 @@ class CheckoutAccessibilityService : AccessibilityService() {
                 }
 
                 is CheckoutPageDetection.Rejected -> {
-                    currentStableCheckout = null
-                    handoffStableCheckout = null
-                    handoffForegroundPackage = null
-                    submitActionTriggeredKey = null
                     val reason = invalidationReason(observation, detection.reason)
+                    // 同购物包内的非结算中间页（拼多多提交订单后的收银台）是支付旅程
+                    // 的一部分：保留稳定结算引用等待切支付应用，否则快照与会话上下文
+                    // 会被提前销毁，支付证据只能落 NO_ACTIVE_SESSION 孤儿待确认。
+                    val retainForPaymentInterstitial = shouldRetainCheckoutAcrossPaymentInterstitial(
+                        CheckoutObservationInvalidation(
+                            reason = reason,
+                            shoppingPackage = observation.shoppingPackage,
+                            pageFingerprint = observation.pageFingerprint,
+                            invalidatedAt = System.currentTimeMillis()
+                        )
+                    )
+                    if (!retainForPaymentInterstitial) {
+                        currentStableCheckout = null
+                        handoffStableCheckout = null
+                        handoffForegroundPackage = null
+                    }
+                    submitActionTriggeredKey = null
                     val userRetryCaptureAvailable = if (reason == CheckoutInvalidationReason.NON_CHECKOUT_PAGE) {
                         setUserRetryCaptureContext(observation)
                     } else {
@@ -1655,13 +1693,19 @@ class CheckoutAccessibilityService : AccessibilityService() {
                 }
                 .singleOrNull()
         } ?: fallbackReference
-        Log.i(
-            TAG,
-            "支付交接上下文: stable=${stableCheckout.observation.pageFingerprint.take(12)}, " +
-                "buffered=${bufferedReference != null}, aiRef=${reference != null && reference !== fallbackReference}, " +
-                "fallback=${fallbackReference?.sessionId ?: "null"}, " +
-                "finalRef=${reference?.sessionId ?: "null"}"
-        )
+        // 按秒采样：支付应用事件密集，避免交接上下文日志冲掉缓冲区关键日志。
+        val loggedAt = System.currentTimeMillis()
+        if (loggedAt - lastHandoffContextLogAt >= 1_000L) {
+            lastHandoffContextLogAt = loggedAt
+            Log.i(
+                TAG,
+                "支付交接上下文: stable=${stableCheckout.observation.pageFingerprint.take(12)}, " +
+                    "buffered=${bufferedReference != null}, " +
+                    "aiRef=${reference != null && reference !== fallbackReference}, " +
+                    "fallback=${fallbackReference?.sessionId ?: "null"}, " +
+                    "finalRef=${reference?.sessionId ?: "null"}"
+            )
+        }
         return PaymentResultHandoffContext(
             stableCheckout = stableCheckout,
             reference = reference,
@@ -1704,8 +1748,30 @@ class CheckoutAccessibilityService : AccessibilityService() {
                 at = handoffContext.handoffAt
             )?.takeIf { reference -> reference.capturedAt <= handoffContext.handoffAt }
             if (handoffReference == null) {
-                matcher.recordOrphanPaymentSignal(signal, sourceType = "ACCESSIBILITY")
-                Log.i(TAG, "支付结果页交接引用已失效，证据已转待确认")
+                // 交接引用失效不等于没有会话：AI 已派发的会话（AI_PENDING）仍可
+                // 通过最近活跃结算会话兜底关联，避免直接落 NO_ACTIVE_SESSION 孤儿。
+                val recentReference = matcher.findRecentCheckoutReferenceForPayment(
+                    occurredAt = evidence.occurredAt ?: System.currentTimeMillis()
+                )
+                if (recentReference != null) {
+                    val recentResult = matcher.recordPaymentEvidence(
+                        recentReference, signal, sourceType = "ACCESSIBILITY"
+                    )
+                    if (recentResult is CheckoutPaymentMatchResult.Rejected) {
+                        matcher.recordOrphanPaymentSignal(
+                            signal,
+                            sourceType = "ACCESSIBILITY",
+                            conflictReason = recentResult.reason
+                        )
+                    }
+                    Log.i(
+                        TAG,
+                        "支付结果页证据落库结果（最近活跃会话兜底）: ${formatMatchResult(recentResult)}"
+                    )
+                } else {
+                    matcher.recordOrphanPaymentSignal(signal, sourceType = "ACCESSIBILITY")
+                    Log.i(TAG, "支付结果页交接引用已失效，证据已转待确认")
+                }
                 return
             }
             val result = matcher.recordPaymentEvidence(
@@ -1758,9 +1824,31 @@ class CheckoutAccessibilityService : AccessibilityService() {
                 Log.i(TAG, "支付结果页命中并发会话(${resolution.sessionIds.size}个)，已转待确认")
             }
             PaymentSessionResolution.NoMatch -> {
-                // 无关联会话：证据不丢弃，转纯通知待确认（sessionId 为空，sourceType=accessibility）
-                matcher.recordOrphanPaymentSignal(signal, sourceType = "ACCESSIBILITY")
-                Log.i(TAG, "支付结果页无关联活跃会话，已转纯通知待确认")
+                // 交接引用缺失时先做最近活跃结算会话兜底：AI 已派发的会话
+                //（AI_PENDING）即使内存快照过期也应关联证据，而非直接落孤儿。
+                val recentReference = matcher.findRecentCheckoutReferenceForPayment(
+                    occurredAt = evidence.occurredAt ?: System.currentTimeMillis()
+                )
+                if (recentReference != null) {
+                    val result = matcher.recordPaymentEvidence(
+                        recentReference, signal, sourceType = "ACCESSIBILITY"
+                    )
+                    if (result is CheckoutPaymentMatchResult.Rejected) {
+                        matcher.recordOrphanPaymentSignal(
+                            signal,
+                            sourceType = "ACCESSIBILITY",
+                            conflictReason = result.reason
+                        )
+                    }
+                    Log.i(
+                        TAG,
+                        "支付结果页证据落库结果（最近活跃会话兜底）: ${formatMatchResult(result)}"
+                    )
+                } else {
+                    // 无关联会话：证据不丢弃，转纯通知待确认（sessionId 为空，sourceType=accessibility）
+                    matcher.recordOrphanPaymentSignal(signal, sourceType = "ACCESSIBILITY")
+                    Log.i(TAG, "支付结果页无关联活跃会话，已转纯通知待确认")
+                }
             }
         }
     }
@@ -1868,6 +1956,26 @@ class CheckoutAccessibilityService : AccessibilityService() {
                         pageFingerprint = observation.pageFingerprint
                     )
                 if (reference == null) {
+                    // 交接引用与 buffer 均失效时，尝试最近活跃结算会话兜底，
+                    // 避免 AI 已派发的会话被通知证据绕过而落 NO_ACTIVE_SESSION 孤儿。
+                    val recentReference = matcher.findRecentCheckoutReferenceForPayment(
+                        occurredAt = signal.occurredAt
+                    )
+                    if (recentReference != null) {
+                        val recentResult = matcher.recordPaymentEvidence(recentReference, signal)
+                        if (recentResult is CheckoutPaymentMatchResult.Rejected) {
+                            matcher.recordOrphanPaymentSignal(
+                                signal,
+                                sourceType = "NOTIFICATION",
+                                conflictReason = recentResult.reason
+                            )
+                        }
+                        Log.i(
+                            TAG,
+                            "支付通知证据落库结果（最近活跃会话兜底）: ${formatMatchResult(recentResult)}"
+                        )
+                        return@launch
+                    }
                     // 支付先到但无法关联任何结算会话：证据不丢弃，转纯通知待确认（sessionId 为空）
                     matcher.recordOrphanPaymentSignal(signal, sourceType = "NOTIFICATION")
                     Log.i(TAG, "支付通知无结算会话可匹配，已转纯通知待确认")
@@ -2046,6 +2154,120 @@ class CheckoutAccessibilityService : AccessibilityService() {
         }
     }
 
+    /**
+     * 稳定协调器被支付中间页复位后不再转发失效事件；支付交接必须手动补发，
+     * 否则购买意图协调器收不到 PAYMENT_APP_HANDOFF，挂起的结算快照无法消费、
+     * AI 会话无法预写，支付证据最终只能落 NO_ACTIVE_SESSION 孤儿待确认。
+     */
+    private fun dispatchPaymentHandoffIfNeeded(
+        dispatched: Boolean,
+        reason: CheckoutInvalidationReason,
+        shoppingPackage: String?,
+        foregroundPackage: String?
+    ) {
+        if (dispatched || reason != CheckoutInvalidationReason.PAYMENT_APP_HANDOFF) {
+            return
+        }
+        // 支付应用会以每秒数十条内容变化事件涌入；同一支付包短时间内只补发一次，
+        // 防止重复触发购买意图与诊断日志风暴。
+        val now = System.currentTimeMillis()
+        val lastForeground = lastPaymentHandoffRedispatchFor
+        if (
+            lastForeground == foregroundPackage &&
+            now - lastPaymentHandoffRedispatchAt < PAYMENT_HANDOFF_REDISPATCH_THROTTLE_MILLIS
+        ) {
+            return
+        }
+        lastPaymentHandoffRedispatchFor = foregroundPackage
+        lastPaymentHandoffRedispatchAt = now
+        val retainedFingerprint = handoffStableCheckout?.observation?.pageFingerprint
+            ?: currentStableCheckout?.observation?.pageFingerprint
+        Log.i(
+            TAG,
+            "支付交接事件补发: stable=${handoffStableCheckout != null || currentStableCheckout != null}, " +
+                "fingerprint=${retainedFingerprint?.take(12) ?: "null"}, foreground=$foregroundPackage"
+        )
+        dispatchEvent(
+            CheckoutObservationEvent.Invalidated(
+                CheckoutObservationInvalidation(
+                    reason = CheckoutInvalidationReason.PAYMENT_APP_HANDOFF,
+                    shoppingPackage = shoppingPackage,
+                    pageFingerprint = retainedFingerprint,
+                    invalidatedAt = System.currentTimeMillis(),
+                    foregroundPackage = foregroundPackage
+                )
+            )
+        )
+        ensureSessionForHandoffRedispatch(shoppingPackage)
+    }
+
+    /**
+     * 快照缺失（结算页指纹高频变化导致最后一张截图未完成）而 AI 无法派发时，
+     * 至少用交接引用预写结算会话，保证支付证据与通知始终有会话可关联，
+     * 而不是等证据到达时落入 NO_ACTIVE_SESSION 孤儿。
+     */
+    private fun ensureSessionForHandoffRedispatch(shoppingPackage: String?) {
+        if (shoppingPackage.isNullOrBlank()) {
+            return
+        }
+        val coordinator = snapshotCaptureCoordinator ?: return
+        val reference = coordinator.currentPaymentHandoffReference() ?: return
+        if (reference.shoppingPackage != shoppingPackage) {
+            return
+        }
+        val matcher = synchronized(aiLifecycleLock) { paymentMatcher } ?: return
+        val scope = synchronized(aiLifecycleLock) { matchingScope } ?: evidenceFallbackScope
+        scope.launch {
+            try {
+                val requestKey = CheckoutRequestKey.from(
+                    sessionId = reference.sessionId,
+                    shoppingPackage = reference.shoppingPackage,
+                    pageFingerprint = reference.pageFingerprint
+                )
+                matcher.ensureSession(reference, requestKey)
+                Log.i(TAG, "支付交接会话预写入: session=${reference.sessionId.take(8)}")
+            } catch (error: RuntimeException) {
+                Log.w(TAG, "支付交接会话预写入失败", error)
+            }
+        }
+    }
+
+    /**
+     * 按秒采样的支付交接诊断：支付应用每秒涌入数十条内容变化事件，
+     * 全量打印会冲掉缓冲区中更关键的截图与派发日志。
+     */
+    private fun logHandoffDiagnosticsSampled(paymentPackage: String, previousShoppingPackage: String?) {
+        val now = System.currentTimeMillis()
+        if (now - lastHandoffDiagnosticsAt < 1_000L) {
+            return
+        }
+        lastHandoffDiagnosticsAt = now
+        Log.i(
+            TAG,
+            "支付交接诊断: payment=$paymentPackage, currentStable=${currentStableCheckout != null}, " +
+                "handoffStable=${handoffStableCheckout != null}, previousShopping=$previousShoppingPackage, " +
+                "coordRef=${snapshotCaptureCoordinator?.currentPaymentHandoffReference()?.sessionId ?: "null"}"
+        )
+    }
+
+    /**
+     * 判断一次页面失效是否属于“同购物包内的支付中间页”（如拼多多提交订单后的收银台）。
+     *
+     * 此类页面虽不是结算页，却是结算 → 支付旅程的必经环节；稳定结算引用应挂起保留，
+     * 等待切支付应用交接或回到结算页，而不是立即销毁。
+     */
+    private fun shouldRetainCheckoutAcrossPaymentInterstitial(
+        detail: CheckoutObservationInvalidation
+    ): Boolean {
+        if (detail.reason != CheckoutInvalidationReason.NON_CHECKOUT_PAGE) {
+            return false
+        }
+        val stable = currentStableCheckout ?: return false
+        val invalidatedPackage = detail.shoppingPackage?.trim().orEmpty()
+        return invalidatedPackage.isNotBlank() &&
+            stable.observation.shoppingPackage == invalidatedPackage
+    }
+
     private fun invalidationReason(
         observation: CheckoutPageObservation,
         rejection: CheckoutDetectionRejection
@@ -2152,14 +2374,21 @@ internal class CheckoutStabilityCoordinator(
         handler.postDelayed(stableRunnable, stableDelayMillis)
     }
 
+    /**
+     * 失效即结束当前稳定观察周期。
+     *
+     * @return true 表示本次失效已分发给观察监听器；false 表示协调器已被复位
+     *（例如同包支付中间页先触发了 NON_CHECKOUT_PAGE），调用方需要自行补发事件，
+     * 否则下游截图/购买意图协调器会漏掉 PAYMENT_APP_HANDOFF 等关键交接信号。
+     */
     fun invalidate(
         reason: CheckoutInvalidationReason,
         shoppingPackage: String? = null,
         pageFingerprint: String? = null,
         foregroundPackage: String? = null
-    ) {
+    ): Boolean {
         if (disposed || !hasActiveCheckout) {
-            return
+            return false
         }
 
         handler.removeCallbacks(stableRunnable)
@@ -2176,6 +2405,7 @@ internal class CheckoutStabilityCoordinator(
         activeFingerprint = null
         lastStableFingerprint = null
         onInvalidated(detail)
+        return true
     }
 
     fun dispose() {

@@ -21,6 +21,9 @@ import org.json.JSONObject
 
 private const val PAYMENT_MATCH_WINDOW_MILLIS = 5 * 60 * 1000L
 internal const val CHECKOUT_PAYMENT_MATCH_WINDOW_MILLIS = PAYMENT_MATCH_WINDOW_MILLIS
+
+/** 同会话跨来源证据收敛窗口：与服务层结果页 2 分钟去重桶保持一致。 */
+private const val PAYMENT_EVIDENCE_MERGE_WINDOW_MILLIS = 2 * 60 * 1000L
 private const val PAYMENT_CONFIRMED_STATUS = "PAYMENT_CONFIRMED"
 private const val AI_PENDING_STATUS = "AI_PENDING"
 private const val WAITING_PAYMENT_STATUS = "WAITING_PAYMENT"
@@ -136,6 +139,33 @@ internal class CheckoutPaymentMatcher(
             candidateRevision = 0,
             sourceReason = SnapshotSourceReason.CHECKOUT_STABLE
         )
+    }
+
+    /**
+     * 页面指纹不可用时的最后兜底：在匹配时间窗内查找唯一可关联的活跃结算会话。
+     *
+     * 适用场景：AI 已派发、ensureSession 已落库（AI_PENDING），但内存交接引用与
+     * buffer 快照都已失效（如收银台停留超过截图 TTL），支付证据晚到时仍应关联
+     * 该会话生成 EVIDENCE_ONLY 候选，而不是落 NO_ACTIVE_SESSION 孤儿待确认。
+     * 窗口内存在多个候选会话时无法区分，返回 null 交由调用方走原有保守路径。
+     */
+    suspend fun findRecentCheckoutReferenceForPayment(
+        occurredAt: Long,
+        at: Long = nowMillis()
+    ): CheckoutSnapshotReference? {
+        val activeSessions = try {
+            database.checkoutSessionDao().getActiveSessions(at)
+        } catch (_: RuntimeException) {
+            return null
+        }
+        val candidates = activeSessions.filter { session ->
+            val shoppingPackage = session.shoppingPackage.orEmpty()
+            shoppingPackage in DEFAULT_SUPPORTED_SHOPPING_PACKAGES &&
+                CheckoutPageRole.fromStorageValue(session.pageRole) == CheckoutPageRole.CHECKOUT &&
+                abs(occurredAt - session.createdAt) <= PAYMENT_MATCH_WINDOW_MILLIS
+        }
+        val session = candidates.singleOrNull() ?: return null
+        return referenceForSession(session)
     }
 
     /**
@@ -508,8 +538,7 @@ internal class CheckoutPaymentMatcher(
                 capturedAt = now
             )
             val storedEvidence = if (existingEvidence == null) {
-                evidenceDao.insertIfAbsent(evidence)
-                evidenceDao.getById(evidence.id) ?: evidence
+                mergeSessionEvidence(reference.sessionId, evidence, now)
             } else {
                 if (evidence != existingEvidence) {
                     // DAO 未提供更新方法，在同一事务内按原主键替换证据。
@@ -569,6 +598,70 @@ internal class CheckoutPaymentMatcher(
                     sessionId = reference.sessionId,
                     status = session.status,
                     candidateId = persistedProvisional.id,
+                    evidenceId = storedEvidence.id,
+                    matched = false
+                )
+            }
+
+            if (isEvidenceOnlyProvisionalCandidate(candidate)) {
+                // 候选仍是"证据先到"占位（AI 未返回，aiOccurredAt 必为空）：
+                // 不能走 AI 候选评估，否则必然误报 TIME_MISSING 并把正常待确认
+                // 覆盖成"缺少时间信息"冲突。这里只做字段补齐与金额一致性校验。
+                val amountConsistent = storedEvidence.amountMinor == null ||
+                    candidate.amountMinor == null ||
+                    storedEvidence.amountMinor == candidate.amountMinor
+                if (!amountConsistent) {
+                    // 同会话两笔不同金额（真正的多证据冲突）：转待确认由用户裁决。
+                    val conflicted = candidate.copy(
+                        evidenceAmountMinor = storedEvidence.amountMinor,
+                        evidenceMerchant = storedEvidence.merchant,
+                        evidenceOrderId = storedEvidence.orderId,
+                        conflictReason = "EVIDENCE_AMOUNT_CONFLICT",
+                        matched = false,
+                        version = candidate.version + 1
+                    )
+                    database.transactionCandidateDao().update(conflicted)
+                    session = advanceStatus(session, NEEDS_CONFIRMATION_STATUS, now)
+                    pendingFromConflict(
+                        session = session,
+                        candidate = conflicted,
+                        evidence = storedEvidence,
+                        conflictReason = "EVIDENCE_AMOUNT_CONFLICT",
+                        now = now
+                    )?.let { upsertPendingForSession(it) }
+                    return@withTransaction CheckoutPaymentMatchResult.Accepted(
+                        sessionId = reference.sessionId,
+                        status = session.status,
+                        candidateId = conflicted.id,
+                        evidenceId = storedEvidence.id,
+                        matched = false
+                    )
+                }
+                val enriched = candidate.copy(
+                    amountMinor = storedEvidence.amountMinor ?: candidate.amountMinor,
+                    merchant = candidate.merchant
+                        ?: storedEvidence.merchant
+                        ?: shoppingPackageMerchant(session.shoppingPackage),
+                    evidenceAmountMinor = storedEvidence.amountMinor ?: candidate.evidenceAmountMinor,
+                    evidenceMerchant = storedEvidence.merchant ?: candidate.evidenceMerchant,
+                    evidenceOrderId = storedEvidence.orderId ?: candidate.evidenceOrderId,
+                    version = candidate.version + 1
+                )
+                if (enriched != candidate) {
+                    database.transactionCandidateDao().update(enriched)
+                }
+                session = session.copy(candidateId = enriched.id, updatedAt = now)
+                database.checkoutSessionDao().update(session)
+                pendingFromEvidenceOnly(
+                    session = session,
+                    evidence = storedEvidence,
+                    now = now,
+                    candidateId = enriched.id
+                )?.let { upsertPendingForSession(it) }
+                return@withTransaction CheckoutPaymentMatchResult.Accepted(
+                    sessionId = reference.sessionId,
+                    status = session.status,
+                    candidateId = enriched.id,
                     evidenceId = storedEvidence.id,
                     matched = false
                 )
@@ -1628,6 +1721,52 @@ internal class CheckoutPaymentMatcher(
         } else {
             EvidenceSelection(null, "PAYMENT_EVIDENCE_AMBIGUOUS")
         }
+    }
+
+    /**
+     * 跨来源证据收敛：同一笔支付常同时产生"截图 AI 兜底"与"无障碍结果页"两条证据，
+     * 两条路径的 sourceEventKey 生成规则不同，按主键查重挡不住，会在同一会话留下
+     * 两条同额证据，被前端展示成"两个金额"。
+     *
+     * 规则：会话内已存在"同金额 +（订单号一致或均空）+ 时间窗内"的证据时，
+     * 不再插入新行，而是把更全的字段（商户/订单号）合并回既有证据并提升
+     * capturedAt；金额或订单号真正冲突时不收敛，照常插入，由候选评估或用户裁决。
+     */
+    private suspend fun mergeSessionEvidence(
+        sessionId: String,
+        incoming: PaymentEvidenceEntity,
+        now: Long
+    ): PaymentEvidenceEntity {
+        val dao = database.paymentEvidenceDao()
+        val similar = dao.getBySession(sessionId).firstOrNull { existing ->
+            existing.amountMinor != null &&
+                existing.amountMinor == incoming.amountMinor &&
+                (existing.orderId.isNullOrBlank() && incoming.orderId.isNullOrBlank() ||
+                    existing.orderId == incoming.orderId) &&
+                existing.occurredAt != null &&
+                incoming.occurredAt != null &&
+                abs(incoming.occurredAt - existing.occurredAt) <=
+                    PAYMENT_EVIDENCE_MERGE_WINDOW_MILLIS
+        } ?: run {
+            dao.insertIfAbsent(incoming)
+            return dao.getById(incoming.id) ?: incoming
+        }
+        val merged = similar.copy(
+            merchant = similar.merchant ?: incoming.merchant,
+            orderId = similar.orderId ?: incoming.orderId,
+            sourceType = incoming.sourceType,
+            capturedAt = now
+        )
+        if (merged != similar) {
+            dao.delete(similar)
+            dao.insert(merged)
+        }
+        android.util.Log.i(
+            "CheckoutPaymentMatcher",
+            "支付证据跨来源收敛: session=${sessionId.take(8)}, amount=${merged.amountMinor}, " +
+                "sources=${similar.sourceType}+${incoming.sourceType}, evidenceId=${merged.id.take(12)}"
+        )
+        return merged
     }
 
     /**
