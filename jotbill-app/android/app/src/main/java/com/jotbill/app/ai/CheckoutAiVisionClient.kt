@@ -717,6 +717,7 @@ class CheckoutAiVisionClient(
         occurredAt 存在时必须是 ISO-8601 时间字符串；confidence 必须是 0 到 1 的数字。
         transferType 判定：页面是向个人（好友/联系人）转账（出现“转账给/已转账给”及收款人姓名，且无商户名与订单号）时为 PERSONAL_TRANSFER，此时 merchant 填收款人姓名；其余（扫码/商户消费/电商支付）一律为 MERCHANT_PAYMENT。
         只把“支付成功/付款成功/支付完成/转账成功”旁边的实付金额作为 amount；原价、优惠金额、单号数字都不要作为 amount。
+        重要：只把“支付应用当前展示的支付收银结果页”（页面顶部大标题即支付结果）判为 payment_result；若截图是账单详情页、交易列表、聊天消息等历史支付信息页面，screenType 返回 not_payment_result，其余字段按实际内容填写。
     """.trimIndent()
 
     private suspend fun executePaymentAttempt(

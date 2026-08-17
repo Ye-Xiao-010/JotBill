@@ -125,6 +125,13 @@ internal object PaymentResultParser {
     /** 个人转账弱语义关键词：配合"无商户且无订单号"共同判定。 */
     private val PERSONAL_TRANSFER_SOFT_KEYWORDS = listOf("转账", "已转账")
 
+    /**
+     * 结果页时效窗口：当次支付结果页显示的时间就是支付当刻，与观察时刻相差
+     * 应在几分钟内。用户翻看微信账单详情、聊天里的历史支付凭证时，页面同样
+     * 含"支付成功+金额+商户"，但显示时间是历史时间（如几天前），据此拒绝。
+     */
+    private const val RESULT_PAGE_FRESHNESS_MILLIS = 30 * 60 * 1000L
+
     /** 保留原有调用形状，仅把成功解析结果返回给支付匹配层。 */
     fun parse(
         pageText: String,
@@ -153,8 +160,18 @@ internal object PaymentResultParser {
             return PaymentResultParseResult.NotPaymentResult
         }
 
-        val occurredAt = parseOccurredAt(pageText, observedAt)
+        val occurredAtResolution = resolveOccurredAt(pageText, observedAt)
             ?: return PaymentResultParseResult.Failure(PaymentResultFailureReason.INVALID_OCCURRED_AT)
+        // 历史信息回放闸门：页面显示时间距观察时刻超过时效窗口，说明用户在
+        // 翻看历史账单详情或聊天里的支付凭证（页面同样含"支付成功+金额+商户"），
+        // 不是当次支付结果页；静默拒绝，避免落出"商户陌生、时间错乱"的证据。
+        if (
+            occurredAtResolution.fromPage &&
+            abs(occurredAtResolution.value - observedAt) > RESULT_PAGE_FRESHNESS_MILLIS
+        ) {
+            return PaymentResultParseResult.NotPaymentResult
+        }
+        val occurredAt = occurredAtResolution.value
         val amountMinor = extractAmountMinor(pageText)
             ?: return PaymentResultParseResult.Failure(PaymentResultFailureReason.INVALID_AMOUNT)
 
@@ -205,8 +222,14 @@ internal object PaymentResultParser {
         )
     }
 
-    /** 优先解析页面显示时间；页面缺失或格式非法时回退观察时间。 */
-    private fun parseOccurredAt(content: String, observedAt: Long): Long? {
+    /** 时间解析结果：fromPage 区分"页面显示时间"与"回退观察时间"。 */
+    private data class OccurredAtResolution(
+        val value: Long,
+        val fromPage: Boolean
+    )
+
+    /** 优先解析页面显示时间；页面缺失或格式非法时回退观察时间（fromPage=false）。 */
+    private fun resolveOccurredAt(content: String, observedAt: Long): OccurredAtResolution? {
         val normalized = content
             .replace('：', ':')
             .replace('年', '-')
@@ -219,13 +242,13 @@ internal object PaymentResultParser {
             .replace('.', '-')
 
         FULL_DATE_TIME_PATTERN.find(normalized)?.let { match ->
-            parseDateTime(match)?.let { return it }
+            parseDateTime(match)?.let { return OccurredAtResolution(it, fromPage = true) }
         }
         if (observedAt <= 0L) return null
         LABELED_TIME_PATTERN.find(normalized)?.let { match ->
-            parseClosestTime(match, observedAt)?.let { return it }
+            parseClosestTime(match, observedAt)?.let { return OccurredAtResolution(it, fromPage = true) }
         }
-        return observedAt
+        return OccurredAtResolution(observedAt, fromPage = false)
     }
 
     private fun parseDateTime(match: MatchResult): Long? = runCatching {

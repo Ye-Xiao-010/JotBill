@@ -119,4 +119,35 @@ class PaymentResultParserTest {
             (result as PaymentResultParseResult.Success).evidence.amountMinor
         )
     }
+
+    /** 历史账单详情页（显示时间远早于观察时刻）不得落证据。 */
+    @Test
+    fun historicalBillDetailPageIsRejected() {
+        val result = PaymentResultParser.parseResult(
+            pageText = "支付成功 网鱼网咖 实付 ¥39.60 2026-08-15 20:11",
+            sourcePackage = "com.tencent.mm",
+            pageFingerprint = "f".repeat(64),
+            observedAt = observedAt
+        )
+
+        assertTrue(result is PaymentResultParseResult.NotPaymentResult)
+    }
+
+    /** 页面时间接近观察时刻（当次支付结果页）正常落证据。 */
+    @Test
+    fun currentPageTimeStillProducesEvidence() {
+        // 动态取 observedAt 的本地时分，保证与时区无关地落在时效窗口内。
+        val localTime = java.time.Instant.ofEpochMilli(observedAt)
+            .atZone(java.time.ZoneId.systemDefault())
+        val hhmm = "%02d:%02d".format(localTime.hour, localTime.minute)
+
+        val result = PaymentResultParser.parseResult(
+            pageText = "支付成功 拼多多 实付 ¥39.60 支付时间: $hhmm",
+            sourcePackage = "com.tencent.mm",
+            pageFingerprint = "f".repeat(64),
+            observedAt = observedAt
+        )
+
+        assertTrue(result is PaymentResultParseResult.Success)
+    }
 }

@@ -1539,6 +1539,15 @@ class CheckoutAccessibilityService : AccessibilityService() {
                 null
             }
         } ?: System.currentTimeMillis()
+        // 截图 AI 时效闸门：AI 读到的显示时间距当前超过 30 分钟，说明截图是
+        // 历史账单详情/聊天凭证而非当次支付结果（AI 偶发误判时兜底），拒绝落证据。
+        if (kotlin.math.abs(occurredAt - System.currentTimeMillis()) > 30 * 60 * 1000L) {
+            Log.i(
+                TAG,
+                "支付结果页截图证据时间超出时效窗口，判定为历史信息回放: occurredAt=$occurredAt"
+            )
+            return
+        }
         // 与无障碍结果页共用同一个去重键：同包名、同一分钟、同金额、同订单号只落一次。
         val sourceEventKey = sha256(
             "result-event|$paymentPackage|${occurredAt / 120_000L}|${fields.amountMinor}|" +
