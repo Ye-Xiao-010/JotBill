@@ -667,8 +667,25 @@ internal class CheckoutPaymentMatcher(
                 )
             }
 
-            val evaluation = evaluate(candidate, storedEvidence)
-            val updatedCandidate = candidateAfterPayment(candidate, storedEvidence, evaluation)
+            // AI 先到但未识别到时间（结算页常无时间字段）：证据后到时用证据时间
+            // 回填候选 aiOccurredAt，避免 evaluate 双侧时间校验误报 TIME_MISSING。
+            val evalCandidate = if (candidate.aiOccurredAt == null && storedEvidence.occurredAt != null) {
+                val backfilled = candidate.copy(
+                    aiOccurredAt = storedEvidence.occurredAt,
+                    version = candidate.version + 1
+                )
+                database.transactionCandidateDao().update(backfilled)
+                android.util.Log.i(
+                    "CheckoutPaymentMatcher",
+                    "AI 未识别时间，证据后到回填: session=${reference.sessionId.take(8)}, " +
+                        "occurredAt=${storedEvidence.occurredAt}"
+                )
+                backfilled
+            } else {
+                candidate
+            }
+            val evaluation = evaluate(evalCandidate, storedEvidence)
+            val updatedCandidate = candidateAfterPayment(evalCandidate, storedEvidence, evaluation)
             if (updatedCandidate != candidate) {
                 database.transactionCandidateDao().update(updatedCandidate)
             }
@@ -951,7 +968,7 @@ internal class CheckoutPaymentMatcher(
 
                 is AiVisionResult.Succeeded -> {
                     val fields = result.fields
-                    val occurredAt = fields.occurredAt?.let(::parseTimestamp)
+                    var occurredAt = fields.occurredAt?.let(::parseTimestamp)
                     val candidateId = candidateIdFor(reference.sessionId)
                     val existing = existingCandidate
                     val candidate = candidateFromAi(
@@ -964,7 +981,7 @@ internal class CheckoutPaymentMatcher(
                     )
                     // 阶段五 T1 时机一：AI 候选落库前执行规则（补全字段 / ignore / 强制待确认）
                     val ruleAdjustedCandidate = applyRulesAtCandidate(candidate)
-                    val persistedCandidate = if (existing == null) {
+                    var persistedCandidate = if (existing == null) {
                         database.transactionCandidateDao().insertIfAbsent(ruleAdjustedCandidate)
                         database.transactionCandidateDao().getById(ruleAdjustedCandidate.id) ?: ruleAdjustedCandidate
                     } else {
@@ -990,6 +1007,30 @@ internal class CheckoutPaymentMatcher(
                             status = session.status,
                             candidateId = persistedCandidate.id
                         )
+                    }
+
+                    // 结算页截图通常不含时间字段，AI 识别不到时间是常态而非异常：
+                    // 此时候选 aiOccurredAt 为空，evaluate 双侧时间校验必然误报
+                    // TIME_MISSING。会话归属已由快照引用唯一确定，时间窗口仅是
+                    // 防止证据错配的辅助约束，因此用同会话支付成功证据的时间回填。
+                    if (occurredAt == null) {
+                        occurredAt = evidences.mapNotNull { it.occurredAt }.minOrNull()
+                        if (occurredAt != null && persistedCandidate.aiOccurredAt == null) {
+                            database.transactionCandidateDao().update(
+                                persistedCandidate.copy(
+                                    aiOccurredAt = occurredAt,
+                                    version = persistedCandidate.version + 1
+                                )
+                            )
+                            persistedCandidate = database.transactionCandidateDao()
+                                .getById(persistedCandidate.id)
+                                ?: persistedCandidate
+                            android.util.Log.i(
+                                "CheckoutPaymentMatcher",
+                                "AI 未识别时间，回填证据时间: session=${reference.sessionId.take(8)}, " +
+                                    "occurredAt=$occurredAt"
+                            )
+                        }
                     }
 
                     val selection = selectEvidence(persistedCandidate.aiOrderId, evidences)
