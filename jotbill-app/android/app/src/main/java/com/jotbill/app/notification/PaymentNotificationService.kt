@@ -209,12 +209,15 @@ class PaymentNotificationService : NotificationListenerService() {
             notificationKey = sbn.key,
             notificationId = sbn.id
         ) ?: run {
-            // 非消费通知或金额无效，只记录非敏感的过滤结果。
+            // 非消费通知或金额无效，只记录非敏感的过滤结果（title 一般为
+            // "微信支付"等平台名，不含金额与订单号，可安全用于诊断格式变化）。
             SentryLogger.addBreadcrumb(
                 "通知未通过解析（非消费或金额无效）",
                 data = mapOf(
                     "package_name" to packageName,
-                    "filter_reason" to "unsupported_or_invalid_payment"
+                    "filter_reason" to "unsupported_or_invalid_payment",
+                    "title_digest" to title.take(30),
+                    "title_big_digest" to (titleBig ?: "").take(30)
                 ),
                 category = "notification_filter"
             )

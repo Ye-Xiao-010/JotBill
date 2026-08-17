@@ -186,6 +186,12 @@ class CheckoutAiVisionClient(
         )
         private val AMOUNT_PATTERN = Regex("\\d{1,9}(\\.\\d{1,2})?")
 
+        /** 剥离模型输出外层 Markdown 代码围栏（```json ... ```），捕获组为正文。 */
+        private val CODE_FENCE_PATTERN = Regex("```(?:json)?\\s*([\\s\\S]*?)```", RegexOption.IGNORE_CASE)
+
+        /** 诊断日志脱敏：连续 6 位以上数字串（订单号/卡号片段）统一替换。 */
+        private val LONG_DIGITS_PATTERN = Regex("\\d{6,}")
+
     }
 
     private sealed class AttemptResult {
@@ -790,6 +796,10 @@ class CheckoutAiVisionClient(
         val payload = try {
             parsePaymentPayload(JSONObject(content))
         } catch (_: JSONException) {
+            logSchemaFailure("payment_result", content)
+            return PaymentAttemptResult(null, AiVisionFailureCode.JSON_SCHEMA_INVALID)
+        } catch (_: SchemaException) {
+            logSchemaFailure("payment_result", content)
             return PaymentAttemptResult(null, AiVisionFailureCode.JSON_SCHEMA_INVALID)
         }
         val usage = root.optJSONObject("usage")?.let(::parseUsage)
@@ -1141,6 +1151,10 @@ class CheckoutAiVisionClient(
         val payload = try {
             parseVisionPayload(JSONObject(content), relaxedSchema)
         } catch (_: JSONException) {
+            logSchemaFailure("checkout", content)
+            return AttemptResult.Failure(AiVisionFailureCode.JSON_SCHEMA_INVALID)
+        } catch (_: SchemaException) {
+            logSchemaFailure("checkout", content)
             return AttemptResult.Failure(AiVisionFailureCode.JSON_SCHEMA_INVALID)
         }
         val usage = root.optJSONObject("usage")?.let(::parseUsage)
@@ -1178,7 +1192,7 @@ class CheckoutAiVisionClient(
         val choice = root.optJSONArray("choices")?.optJSONObject(0) ?: return null
         val message = choice.optJSONObject("message") ?: return null
         val content = message.opt("content") ?: return null
-        return when (content) {
+        val raw = when (content) {
             is String -> content.trim().takeIf { it.isNotEmpty() }
             is JSONArray -> buildString {
                 for (index in 0 until content.length()) {
@@ -1187,7 +1201,22 @@ class CheckoutAiVisionClient(
                 }
             }.takeIf { it.isNotEmpty() }
             else -> null
-        }
+        } ?: return null
+        // 模型偶发用 Markdown 代码围栏包裹 JSON（```json ... ```），先剥离再交给
+        // JSONObject 解析，避免整段被误判 JSON_SCHEMA_INVALID。
+        return CODE_FENCE_PATTERN.find(raw)?.groupValues?.get(1)?.trim()?.takeIf { it.isNotEmpty() }
+            ?: raw
+    }
+
+    /**
+     * 记录 schema 校验失败的模型原始输出（截断 + 长数字串脱敏），便于定位
+     * 是提示词漂移、字段命名变化还是围栏/格式问题；不记录 API Key 等请求侧信息。
+     */
+    private fun logSchemaFailure(stage: String, content: String) {
+        val sanitized = content
+            .replace(LONG_DIGITS_PATTERN, "[digits]")
+            .take(200)
+        android.util.Log.w("CheckoutAiVisionClient", "AI 输出未通过 schema 校验: stage=$stage, content=$sanitized")
     }
 
     private fun parseVisionPayload(

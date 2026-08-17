@@ -95,6 +95,10 @@ class RuntimeModule(
 
     /** 检查结算页无障碍服务是否已在系统设置中启用。 */
     private fun isAccessibilityServiceEnabled(): Boolean {
+        // 优先看服务是否实际存活：部分 ROM 系统设置读取与真实状态不一致会误报未开启。
+        if (CheckoutAccessibilityService.isServiceRunning()) {
+            return true
+        }
         val enabledServices = Settings.Secure.getString(
             reactContext.contentResolver,
             Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES

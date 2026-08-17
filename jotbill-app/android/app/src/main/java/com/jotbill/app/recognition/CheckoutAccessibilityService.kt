@@ -66,6 +66,16 @@ class CheckoutAccessibilityService : AccessibilityService() {
             observationListener = listener
         }
 
+        /**
+         * 服务当前是否实际存活（onServiceConnected 后、onUnbind/onDestroy 前）。
+         *
+         * 部分 ROM（如 MIUI 部分版本）上 Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
+         * 读取结果与真实运行状态不一致（返回空或不含本服务），状态页会误报"未开启"。
+         * 判定服务开启时应优先使用本方法，再回退系统设置读取。
+         */
+        @JvmStatic
+        fun isServiceRunning(): Boolean = activeService != null
+
         /** 供悬浮按钮或 RN bridge 请求当前稳定结算页的手动截图。 */
         @JvmStatic
         fun requestManualCapture(callback: SnapshotCaptureCallback) {

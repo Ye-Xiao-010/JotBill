@@ -254,6 +254,10 @@ class RecognitionModule(
 
     /** 读取系统已启用的无障碍服务列表，确认本应用的服务是否已被用户开启。 */
     private fun isAccessibilityServiceEnabled(context: Context): Boolean {
+        // 优先看服务是否实际存活：部分 ROM 系统设置读取与真实状态不一致会误报未开启。
+        if (CheckoutAccessibilityService.isServiceRunning()) {
+            return true
+        }
         val enabledServices = Settings.Secure.getString(
             context.contentResolver,
             Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES

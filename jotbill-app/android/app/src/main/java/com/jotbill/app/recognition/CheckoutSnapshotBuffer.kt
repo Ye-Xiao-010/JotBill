@@ -4,7 +4,12 @@ import android.os.Handler
 import android.os.Looper
 import java.util.UUID
 
-private const val DEFAULT_SNAPSHOT_TTL_MILLIS = 30_000L
+/**
+ * 结算截图缓冲 TTL。结算页稳定截图后用户还需经过收银台、选支付方式、输密码等
+ * 环节，实际切到支付应用常超过 30 秒；过短会导致支付交接时快照已过期
+ * （NO_BUFFERED_SNAPSHOT），AI 无法派发。与支付证据收敛窗口对齐取 2 分钟。
+ */
+private const val DEFAULT_SNAPSHOT_TTL_MILLIS = 120_000L
 internal const val CHECKOUT_SNAPSHOT_SLOT_PREFIX = "shopping-package:"
 
 /** 结算截图和购买意图必须共用同一购物包槽位命名。 */
