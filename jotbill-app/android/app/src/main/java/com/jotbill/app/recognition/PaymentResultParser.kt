@@ -24,9 +24,22 @@ data class PaymentResultEvidence(
     val sourceEventKey: String
 )
 
+/**
+ * 个人转账事实：微信/支付宝向好友（个人）转账。
+ *
+ * 收款人是个人而非商户，不应记录为消费证据；由上层转待确认（type=transfer）。
+ */
+data class PaymentPersonalTransfer(
+    val recipient: String?,
+    val amountMinor: Long,
+    val occurredAt: Long?
+)
+
 /** 支付结果页解析的明确结果，区分失败页、非结果页和成功证据。 */
 internal sealed class PaymentResultParseResult {
     data class Success(val evidence: PaymentResultEvidence) : PaymentResultParseResult()
+
+    data class PersonalTransfer(val transfer: PaymentPersonalTransfer) : PaymentResultParseResult()
 
     data class Failure(val reason: PaymentResultFailureReason) : PaymentResultParseResult()
 
@@ -104,6 +117,14 @@ internal object PaymentResultParser {
         Regex("""于(.{2,30}?)消费""")
     )
 
+    /** 个人转账强语义："转账给/已转账给/转给 + 收款人"，命中即不作为消费证据。 */
+    private val PERSONAL_TRANSFER_RECIPIENT_PATTERNS = listOf(
+        Regex("""(?:已转账给|转账给|转给)\s*([^\s,，。；;￥¥0-9]{1,20})""")
+    )
+
+    /** 个人转账弱语义关键词：配合"无商户且无订单号"共同判定。 */
+    private val PERSONAL_TRANSFER_SOFT_KEYWORDS = listOf("转账", "已转账")
+
     /** 保留原有调用形状，仅把成功解析结果返回给支付匹配层。 */
     fun parse(
         pageText: String,
@@ -140,6 +161,28 @@ internal object PaymentResultParser {
         // 提取订单号和商户；结构化字段仍供核心匹配器使用，原文哈希不会包含其数字值。
         val orderId = extractField(pageText, ORDER_ID_PATTERNS)
         val merchant = extractField(pageText, MERCHANT_PATTERNS)
+
+        // 个人转账语义优先于消费证据：微信/支付宝向好友转账的成功页
+        // （"转账给张三 ¥29.75"）收款人是个人而非商户，若落消费证据会把
+        // 好友名当商户。强语义（转账给+收款人）直接判定；弱语义（仅"转账"
+        // 关键词）需同时满足无商户且无订单号才判定，避免误伤电商支付。
+        val recipient = extractField(pageText, PERSONAL_TRANSFER_RECIPIENT_PATTERNS)
+        val isPersonalTransfer = recipient != null ||
+            (
+                PERSONAL_TRANSFER_SOFT_KEYWORDS.any { pageText.contains(it) } &&
+                    merchant == null &&
+                    orderId == null
+                )
+        if (isPersonalTransfer) {
+            return PaymentResultParseResult.PersonalTransfer(
+                PaymentPersonalTransfer(
+                    recipient = recipient,
+                    amountMinor = amountMinor,
+                    occurredAt = occurredAt
+                )
+            )
+        }
+
         val hashableText = sanitizeForHash(pageText, orderId)
         val rawTextHash = sha256("result|$sourcePackage|$hashableText")
 

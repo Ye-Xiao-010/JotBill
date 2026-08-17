@@ -286,6 +286,62 @@ internal class CheckoutPaymentMatcher(
     }
 
     /**
+     * 记录个人转账（微信/支付宝向好友转账）为待确认转账。
+     *
+     * 收款人是个人而非商户，不作为消费证据参与会话匹配；文本解析与截图
+     * AI 两条路径识别到同一笔转账时，由确定性 ID（包名+2 分钟桶+金额+收款人）
+     * 幂等收敛为一条，避免"同一笔转账出现两个金额"。
+     */
+    suspend fun recordPersonalTransfer(
+        amountMinor: Long,
+        paymentPackage: String,
+        recipient: String?,
+        occurredAt: Long?
+    ) {
+        if (amountMinor <= 0L) return
+        val now = nowMillis()
+        val effectiveOccurredAt = occurredAt ?: now
+        val pendingId = stableId(
+            "personal-transfer",
+            paymentPackage,
+            amountMinor.toString(),
+            (effectiveOccurredAt / 120_000L).toString(),
+            recipient.orEmpty()
+        )
+        val dao = database.pendingTransactionDao()
+        if (dao.getById(pendingId) != null) {
+            return
+        }
+        database.withTransaction {
+            dao.insertIfAbsent(
+                PendingTransactionEntity(
+                    id = pendingId,
+                    candidateId = null,
+                    sessionId = null,
+                    amountMinor = amountMinor,
+                    type = "transfer",
+                    occurredAt = effectiveOccurredAt,
+                    platform = paymentPackage,
+                    merchant = recipient,
+                    productDescription = null,
+                    orderId = null,
+                    accountId = null,
+                    categoryId = null,
+                    conflictReason = null,
+                    sourceType = "accessibility_transfer",
+                    createdAt = now,
+                    version = 1
+                )
+            )
+        }
+        android.util.Log.i(
+            "CheckoutPaymentMatcher",
+            "个人转账已转待确认: amount=$amountMinor, recipient=${recipient ?: "未知"}, " +
+                "package=$paymentPackage, pendingId=${pendingId.take(12)}"
+        )
+    }
+
+    /**
      * 阶段四审查修复：记录无会话可关联的孤儿支付信号。
      *
      * 支付先到但没有任何结算会话可匹配时（无障碍服务未连接、无活跃结算页、

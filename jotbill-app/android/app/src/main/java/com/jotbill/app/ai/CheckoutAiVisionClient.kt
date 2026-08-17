@@ -192,6 +192,12 @@ class CheckoutAiVisionClient(
         /** 诊断日志脱敏：连续 6 位以上数字串（订单号/卡号片段）统一替换。 */
         private val LONG_DIGITS_PATTERN = Regex("\\d{6,}")
 
+        /** 支付结果页交易类型：向个人转账。 */
+        const val TRANSFER_TYPE_PERSONAL = "PERSONAL_TRANSFER"
+
+        /** 支付结果页交易类型：商户消费（默认，兼容未返回 transferType 的旧输出）。 */
+        const val TRANSFER_TYPE_MERCHANT_PAYMENT = "MERCHANT_PAYMENT"
+
     }
 
     private sealed class AttemptResult {
@@ -401,7 +407,9 @@ class CheckoutAiVisionClient(
         val amountMinor: Long,
         val merchant: String?,
         val orderId: String?,
-        val occurredAt: String?
+        val occurredAt: String?,
+        /** PERSONAL_TRANSFER（向好友转账）或 MERCHANT_PAYMENT（默认消费）。 */
+        val transferType: String = TRANSFER_TYPE_MERCHANT_PAYMENT
     )
 
     sealed class PaymentResultVisionResult {
@@ -702,12 +710,13 @@ class CheckoutAiVisionClient(
     private fun buildPaymentPrompt(requestId: String, sourceEventKey: String): String = """
         你是 JotBill 的支付结果页识别器。只分析截图中的微信/支付宝支付成功页事实，不推断、不创建账单。
         只返回一个 JSON 对象，禁止 Markdown、解释文字和额外字段。
-        promptVersion=payment-result-v1；requestId=$requestId；sourceEventKey=$sourceEventKey。
-        必须返回字段：screenType、paymentStatus、amount、merchant、orderId、occurredAt、confidence。
+        promptVersion=payment-result-v2；requestId=$requestId；sourceEventKey=$sourceEventKey。
+        必须返回字段：screenType、paymentStatus、amount、merchant、orderId、occurredAt、confidence、transferType。
         screenType 必须为 payment_result；paymentStatus 只能是 SUCCESS 或 FAILED；
         amount 必须是正数十进制字符串，最多两位小数；缺失的 merchant、orderId、occurredAt 使用 null，不要使用空字符串；
         occurredAt 存在时必须是 ISO-8601 时间字符串；confidence 必须是 0 到 1 的数字。
-        只把“支付成功/付款成功/支付完成”旁边的实付金额作为 amount；原价、优惠金额、单号数字都不要作为 amount。
+        transferType 判定：页面是向个人（好友/联系人）转账（出现“转账给/已转账给”及收款人姓名，且无商户名与订单号）时为 PERSONAL_TRANSFER，此时 merchant 填收款人姓名；其余（扫码/商户消费/电商支付）一律为 MERCHANT_PAYMENT。
+        只把“支付成功/付款成功/支付完成/转账成功”旁边的实付金额作为 amount；原价、优惠金额、单号数字都不要作为 amount。
     """.trimIndent()
 
     private suspend fun executePaymentAttempt(
@@ -828,11 +837,18 @@ class CheckoutAiVisionClient(
             }
         }
         if (requiredNumber(root, "confidence") !in 0.0..1.0) throw SchemaException()
+        // transferType 宽松解析：未知或缺失一律按商户消费处理，不因模型
+        // 漏返回新字段而整单失败（v1 输出兼容）。
+        val transferType = root.optString(
+            "transferType",
+            TRANSFER_TYPE_MERCHANT_PAYMENT
+        ).takeIf { it == TRANSFER_TYPE_PERSONAL } ?: TRANSFER_TYPE_MERCHANT_PAYMENT
         return PaymentResultVisionFields(
             amountMinor = amountMinor,
             merchant = merchant,
             orderId = orderId,
-            occurredAt = occurredAt
+            occurredAt = occurredAt,
+            transferType = transferType
         )
     }
 

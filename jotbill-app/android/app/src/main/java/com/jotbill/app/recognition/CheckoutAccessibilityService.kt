@@ -1308,6 +1308,20 @@ class CheckoutAccessibilityService : AccessibilityService() {
                     )
                     val evidence = when (parseResult) {
                         is PaymentResultParseResult.Success -> parseResult.evidence
+                        is PaymentResultParseResult.PersonalTransfer -> {
+                            // 个人转账（好友收款）不落消费证据：直接转待确认转账，
+                            // 避免 AI/文本两条路径各落一条消费金额。
+                            Log.i(
+                                TAG,
+                                "支付结果页识别为个人转账: 金额=${parseResult.transfer.amountMinor}分, " +
+                                    "收款人=${parseResult.transfer.recipient ?: "未知"}"
+                            )
+                            val transfer = parseResult.transfer
+                            evidenceFallbackScope.launch {
+                                recordPersonalTransferFromResultPage(transfer, paymentPackage)
+                            }
+                            return
+                        }
                         is PaymentResultParseResult.Failure -> {
                             Log.i(TAG, "支付结果页未生成成功证据: reason=${parseResult.reason}")
                             maybeCapturePaymentResultScreenshot(paymentPackage, handoffContext)
@@ -1454,6 +1468,32 @@ class CheckoutAccessibilityService : AccessibilityService() {
         }
     }
 
+    /**
+     * 个人转账转待确认（文本解析与截图 AI 两条路径共用）。
+     *
+     * 由 Matcher 按包名+2 分钟桶+金额+收款人幂等收敛，重复识别不产生第二条。
+     */
+    private suspend fun recordPersonalTransferFromResultPage(
+        transfer: PaymentPersonalTransfer,
+        paymentPackage: String
+    ) {
+        val matcher = synchronized(aiLifecycleLock) { paymentMatcher }
+            ?: run {
+                val database = JotBillDatabaseProvider.get(applicationContext)
+                CheckoutPaymentMatcher(database)
+            }
+        try {
+            matcher.recordPersonalTransfer(
+                amountMinor = transfer.amountMinor,
+                paymentPackage = paymentPackage,
+                recipient = transfer.recipient,
+                occurredAt = transfer.occurredAt
+            )
+        } catch (error: Exception) {
+            Log.w(TAG, "个人转账待确认落库失败", error)
+        }
+    }
+
     private suspend fun consumePaymentResultScreenshot(
         client: CheckoutAiVisionClient,
         imageBytes: ByteArray,
@@ -1474,6 +1514,24 @@ class CheckoutAccessibilityService : AccessibilityService() {
             return
         }
         val fields = result.fields
+        // 个人转账（好友收款）不落消费证据：直接转待确认转账，收款人即 merchant。
+        // 与文本解析路径共用 Matcher 确定性 ID，两条路径识别同一笔只落一条。
+        if (fields.transferType == CheckoutAiVisionClient.TRANSFER_TYPE_PERSONAL) {
+            Log.i(
+                TAG,
+                "支付结果页截图识别为个人转账: 金额=${fields.amountMinor}分, " +
+                    "收款人=${fields.merchant ?: "未知"}"
+            )
+            recordPersonalTransferFromResultPage(
+                PaymentPersonalTransfer(
+                    recipient = fields.merchant,
+                    amountMinor = fields.amountMinor,
+                    occurredAt = null
+                ),
+                paymentPackage
+            )
+            return
+        }
         val occurredAt = fields.occurredAt?.let {
             try {
                 Instant.parse(it).toEpochMilli()
