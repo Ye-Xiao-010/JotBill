@@ -496,7 +496,7 @@ internal class CheckoutSnapshotCaptureCoordinator(
                     } == true
                     if (!sameContext || resolvedContext?.isComplete() != true) {
                         activeCheckout = null
-                        buffer.discard(current.slotId)
+                        buffer.discard(current.slotId, reason = "USER_RETRY_CONTEXT_CHANGED")
                     } else if (resolvedContext != null) {
                         activeCheckout = current.copy(
                             page = StableCheckoutPage(
@@ -517,7 +517,10 @@ internal class CheckoutSnapshotCaptureCoordinator(
                     }
                     val nextKey = resolvedContext.shoppingPackage to resolvedContext.pageFingerprint
                     if (previousKey != nextKey) {
-                        buffer.discard(checkoutSnapshotSlotId(resolvedContext.shoppingPackage))
+                        buffer.discard(
+                            checkoutSnapshotSlotId(resolvedContext.shoppingPackage),
+                            reason = "USER_RETRY_NEW_PAGE"
+                        )
                     }
                     activeCheckout = ActiveCheckout(
                         sessionId = sessionId,
@@ -882,7 +885,7 @@ internal class CheckoutSnapshotCaptureCoordinator(
             }
 
             // 返回到不同页面时，旧交接会话和其槽位不能被新订单复用。
-            buffer.discard(retained.slotId)
+            buffer.discard(retained.slotId, reason = "HANDOFF_RETURNED_TO_OTHER_CHECKOUT")
             attemptedAutomaticCaptures.clear()
         }
 
@@ -909,7 +912,7 @@ internal class CheckoutSnapshotCaptureCoordinator(
             queuedAutomatic = null
             previous?.let { oldCheckout ->
                 // 新指纹代表新的订单边界；先释放旧槽位，避免旧图片或消费墓碑阻塞新会话。
-                buffer.discard(oldCheckout.slotId)
+                buffer.discard(oldCheckout.slotId, reason = "NEW_CHECKOUT_SESSION")
                 attemptedAutomaticCaptures.removeAll { it.sessionId == oldCheckout.sessionId }
             }
             ActiveCheckout(
@@ -1037,6 +1040,18 @@ internal class CheckoutSnapshotCaptureCoordinator(
             )
         }
 
+        // 失效决策链路诊断：retainForHandoff=false 即代表本次会清空全部图片候选。
+        // current/retained 的组合可区分"首次进入中间页"与"中间页后续事件"。
+        Log.i(
+            TAG,
+            "观察失效: reason=${detail.reason.wireValue}, " +
+                "current=${current?.sessionId?.take(8) ?: "null"}, " +
+                "retained=${retained?.activeCheckout?.sessionId?.take(8) ?: "null"}, " +
+                "interstitial=$isPaymentInterstitial, retainForHandoff=$retainForHandoff, " +
+                "detailPkg=${detail.shoppingPackage ?: "null"}, " +
+                "detailFingerprint=${detail.pageFingerprint?.take(12) ?: "null"}"
+        )
+
         // 先摘除请求和排队项，再建立交接栅栏并清空旧状态，最后才允许旧回调重入。
         val pendingToNotify = detachPendingCapture()
         val queuedManualToNotify = queuedManual
@@ -1045,7 +1060,12 @@ internal class CheckoutSnapshotCaptureCoordinator(
         userRetryContext = null
         // 只有明确的支付交接保留快照；普通离开和其他失效原因都清理槽位，避免旧图误用。
         if (!retainForHandoff) {
-            buffer.clear()
+            buffer.clear(
+                reason = "INVALIDATED_${detail.reason.wireValue}" +
+                    "(current=${current != null},retained=${retained != null}," +
+                    "interstitial=$isPaymentInterstitial," +
+                    "pkg=${detail.shoppingPackage ?: "null"})"
+            )
         } else {
             handoffSource?.let { retainedCheckout ->
                 buffer.retainForPaymentHandoff(

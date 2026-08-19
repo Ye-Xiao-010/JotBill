@@ -2,6 +2,7 @@ package com.jotbill.app.recognition
 
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import java.util.UUID
 
 /**
@@ -276,6 +277,13 @@ class CheckoutSnapshotBuffer(
             SnapshotSourceReason.CHECKOUT_STABLE -> state.automaticCandidate = snapshot
         }
         state.expiredPageFingerprints.remove(request.pageFingerprint)
+        Log.i(
+            TAG,
+            "候选已写入: slot=${request.slotId}, session=${request.sessionId.take(8)}, " +
+                "fingerprint=${request.pageFingerprint.take(12)}, " +
+                "source=${request.sourceReason.wireValue}, revision=$candidateRevision, " +
+                "replaced=${replacedSnapshotId?.take(8) ?: "none"}"
+        )
         return SnapshotStoreResult.Stored(
             snapshot = snapshot.copyForConsumer(),
             replacedSnapshotId = replacedSnapshotId,
@@ -364,9 +372,32 @@ class CheckoutSnapshotBuffer(
         if (closed || slotId.isBlank() || sessionId.isBlank() || pageFingerprint.isBlank()) {
             return
         }
-        val state = slots[slotId] ?: return
+        val state = slots[slotId]
+        if (state == null) {
+            // 槽位已被清理：交接元数据仍在但图片候选已丢失，后续必然 NO_BUFFERED_SNAPSHOT。
+            Log.w(
+                TAG,
+                "交接栅栏设置失败(槽位不存在): slot=$slotId, " +
+                    "session=${sessionId.take(8)}, fingerprint=${pageFingerprint.take(12)}"
+            )
+            return
+        }
         if (state.sessionId == sessionId) {
             state.handoffPageFingerprint = pageFingerprint
+            Log.i(
+                TAG,
+                "交接栅栏已设置: slot=$slotId, session=${sessionId.take(8)}, " +
+                    "fingerprint=${pageFingerprint.take(12)}, " +
+                    "candidates=${describeCandidates(state)}"
+            )
+        } else {
+            Log.w(
+                TAG,
+                "交接栅栏设置失败(会话不匹配): slot=$slotId, " +
+                    "slotSession=${state.sessionId.take(8)}, " +
+                    "requestSession=${sessionId.take(8)}, " +
+                    "candidates=${describeCandidates(state)}"
+            )
         }
     }
 
@@ -435,7 +466,17 @@ class CheckoutSnapshotBuffer(
         val now = nowMillis()
         purgeExpired(now)
         val state = slots[slotId]
-            ?: return CheckoutAiTriggerResult.Rejected(SnapshotConsumeRejection.NO_BUFFERED_SNAPSHOT)
+            ?: run {
+                // 槽位整体不存在：图片候选连同槽位一起被 discard/clear 移除。
+                // 与"槽内无候选"区分，用于判定是会话切换清理还是失效清理。
+                Log.w(
+                    TAG,
+                    "快照消费失败(槽位不存在): slot=$slotId, intent=${intent.name}, " +
+                        "requested=${pageFingerprint?.take(12) ?: "null"}, " +
+                        "liveSlots=${slots.keys.joinToString(",").ifBlank { "none" }}"
+                )
+                return CheckoutAiTriggerResult.Rejected(SnapshotConsumeRejection.NO_BUFFERED_SNAPSHOT)
+            }
 
         state.consumedRequestKey?.let {
             return CheckoutAiTriggerResult.AlreadyTriggered(it)
@@ -474,8 +515,20 @@ class CheckoutSnapshotBuffer(
             ) {
                 state.expiredPageFingerprints.clear()
                 slots.remove(slotId)
+                Log.i(
+                    TAG,
+                    "快照消费失败(已过期): slot=$slotId, session=${state.sessionId.take(8)}, " +
+                        "requested=${pageFingerprint?.take(12) ?: "null"}"
+                )
                 return CheckoutAiTriggerResult.Rejected(SnapshotConsumeRejection.SNAPSHOT_EXPIRED)
             }
+            // 槽位存在但候选为空：说明图片已被 discard/clear 释放，而非 TTL 过期。
+            Log.w(
+                TAG,
+                "快照消费失败(槽内无候选): slot=$slotId, session=${state.sessionId.take(8)}, " +
+                    "requested=${pageFingerprint?.take(12) ?: "null"}, " +
+                    "barrier=${state.handoffPageFingerprint?.take(12) ?: "null"}"
+            )
             return CheckoutAiTriggerResult.Rejected(SnapshotConsumeRejection.NO_BUFFERED_SNAPSHOT)
         }
 
@@ -538,16 +591,52 @@ class CheckoutSnapshotBuffer(
         )
     }
 
-    /** 页面回到非结算角色或会话取消时调用，确保旧图片不能被后续事件消费。 */
+    /**
+     * 页面回到非结算角色或会话取消时调用，确保旧图片不能被后续事件消费。
+     *
+     * @param slotId 目标槽位。
+     * @param reason 清理原因，仅用于诊断日志；调用方须传入可区分分支的稳定字符串。
+     */
     @Synchronized
-    fun discard(slotId: String) {
-        slots.remove(slotId)?.let { releaseCandidates(it) }
+    fun discard(slotId: String, reason: String = "UNSPECIFIED") {
+        val removed = slots.remove(slotId)
+        if (removed != null) {
+            Log.i(
+                TAG,
+                "槽位丢弃: reason=$reason, slot=$slotId, " +
+                    "session=${removed.sessionId.take(8)}, " +
+                    "candidates=${describeCandidates(removed)}, " +
+                    "handoffFingerprint=${removed.handoffPageFingerprint?.take(12) ?: "null"}, " +
+                    "consumed=${removed.consumedRequestKey != null}"
+            )
+            releaseCandidates(removed)
+        } else {
+            Log.i(TAG, "槽位丢弃(空槽位): reason=$reason, slot=$slotId")
+        }
         scheduleNextExpirationLocked(nowMillis())
     }
 
-    /** 服务中断或销毁时清理所有槽位，确保没有遗漏的图片字节继续留在内存中。 */
+    /**
+     * 服务中断或销毁时清理所有槽位，确保没有遗漏的图片字节继续留在内存中。
+     *
+     * @param reason 清理原因，仅用于诊断日志；调用方须传入可区分分支的稳定字符串。
+     */
     @Synchronized
-    fun clear() {
+    fun clear(reason: String = "UNSPECIFIED") {
+        if (slots.isEmpty()) {
+            Log.i(TAG, "缓冲清空(无槽位): reason=$reason")
+        } else {
+            slots.forEach { (slotId, state) ->
+                Log.i(
+                    TAG,
+                    "缓冲清空: reason=$reason, slot=$slotId, " +
+                        "session=${state.sessionId.take(8)}, " +
+                        "candidates=${describeCandidates(state)}, " +
+                        "handoffFingerprint=${state.handoffPageFingerprint?.take(12) ?: "null"}, " +
+                        "consumed=${state.consumedRequestKey != null}"
+                )
+            }
+        }
         slots.values.forEach(::releaseCandidates)
         slots.clear()
         expirationHandler.removeCallbacks(expirationRunnable)
@@ -608,6 +697,17 @@ class CheckoutSnapshotBuffer(
                 expirationRunnable,
                 (expiresAt - now).coerceAtLeast(0L)
             )
+        }
+    }
+
+    /** 汇总槽内候选的来源与指纹，供生命周期日志定位丢失的具体快照。 */
+    private fun describeCandidates(state: SlotState): String {
+        val candidates = candidateList(state)
+        if (candidates.isEmpty()) {
+            return "none"
+        }
+        return candidates.joinToString(",") { candidate ->
+            "${candidate.sourceReason.wireValue}@${candidate.pageFingerprint.take(12)}"
         }
     }
 
