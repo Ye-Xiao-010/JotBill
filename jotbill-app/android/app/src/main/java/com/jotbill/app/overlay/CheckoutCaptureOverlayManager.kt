@@ -242,8 +242,15 @@ internal class CheckoutCaptureOverlayManager(context: Context) {
             currentSensitivePage = false
             currentCheckout = false
             currentUserRetryContext = userRetryCaptureAvailable
+            // 非结算页只有在手动重试上下文真正就绪时才可截图（服务侧要求
+            // activeCheckout 已建立）。此前无条件置 READY，导致按钮显示"截图"
+            // 但点击必然被 NO_ACTIVE_CHECKOUT 拒绝，用户看到的是无响应。
             updateState(
-                status = CheckoutOverlayStatus.READY,
+                status = if (userRetryCaptureAvailable) {
+                    CheckoutOverlayStatus.READY
+                } else {
+                    CheckoutOverlayStatus.UNAVAILABLE
+                },
                 visible = canShowOnCurrentPage(),
                 reasonCode = CheckoutInvalidationReason.NON_CHECKOUT_PAGE.wireValue,
                 clearSnapshotMetadata = true
