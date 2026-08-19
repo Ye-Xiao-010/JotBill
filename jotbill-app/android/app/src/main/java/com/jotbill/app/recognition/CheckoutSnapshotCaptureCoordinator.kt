@@ -1119,7 +1119,10 @@ internal class CheckoutSnapshotCaptureCoordinator(
                     "pkg=${detail.shoppingPackage ?: "null"})"
             )
         } else {
-            handoffSource?.let { retainedCheckout ->
+            // 栅栏必须落在真正被挂起的那个会话上（nextHandoff），而不是 handoffSource。
+            // 二次交接时 handoffSource 取的是当前会话，若它并非挂起会话，会用错误的
+            // sessionId/指纹设置栅栏，真机上表现为"交接栅栏设置失败(槽位不存在)"。
+            nextHandoff?.activeCheckout?.let { retainedCheckout ->
                 buffer.retainForPaymentHandoff(
                     slotId = retainedCheckout.slotId,
                     sessionId = retainedCheckout.sessionId,
