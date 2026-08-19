@@ -1625,7 +1625,9 @@ class CheckoutAccessibilityService : AccessibilityService() {
             amountMinor = fields.amountMinor,
             merchant = fields.merchant,
             orderId = fields.orderId,
-            paymentStatus = "SUCCESS",
+            // 截图 AI 只看到一张图，无法证明支付真的完成：标记为未证实状态，
+            // 由 Matcher 强制转待确认，不允许自动写入账本。
+            paymentStatus = PAYMENT_STATUS_AI_UNVERIFIED,
             occurredAt = occurredAt,
             rawTextHash = sha256(
                 "payment-result-screenshot|$paymentPackage|${fields.amountMinor}|" +
@@ -1633,7 +1635,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
             ),
             sourceEventKey = sourceEventKey
         )
-        Log.i(TAG, "支付结果页截图兜底解析到证据: 金额=${evidence.amountMinor}分")
+        Log.i(TAG, "支付结果页截图兜底解析到证据（未证实，需用户确认）: 金额=${evidence.amountMinor}分")
         val matcher = synchronized(aiLifecycleLock) { paymentMatcher }
             ?: run {
                 val database = JotBillDatabaseProvider.get(applicationContext)
@@ -1644,7 +1646,8 @@ class CheckoutAccessibilityService : AccessibilityService() {
                 matcher = matcher,
                 paymentPackage = paymentPackage,
                 evidence = evidence,
-                handoffContext = handoffContext
+                handoffContext = handoffContext,
+                aiUnverified = true
             )
         } catch (error: Exception) {
             Log.w(TAG, "支付结果页截图兜底证据落库失败", error)
@@ -1867,7 +1870,8 @@ class CheckoutAccessibilityService : AccessibilityService() {
         matcher: CheckoutPaymentMatcher,
         paymentPackage: String,
         evidence: PaymentResultEvidence,
-        handoffContext: PaymentResultHandoffContext?
+        handoffContext: PaymentResultHandoffContext?,
+        aiUnverified: Boolean = false
     ) {
         val signal = PaymentNotificationFallbackSignal(
             paymentPackage = paymentPackage,
@@ -1894,7 +1898,10 @@ class CheckoutAccessibilityService : AccessibilityService() {
                 )
                 if (recentReference != null) {
                     val recentResult = matcher.recordPaymentEvidence(
-                        recentReference, signal, sourceType = "ACCESSIBILITY"
+                        recentReference,
+                        signal,
+                        sourceType = "ACCESSIBILITY",
+                        aiUnverified = aiUnverified
                     )
                     if (recentResult is CheckoutPaymentMatchResult.Rejected) {
                         matcher.recordOrphanPaymentSignal(
@@ -1914,7 +1921,10 @@ class CheckoutAccessibilityService : AccessibilityService() {
                 return
             }
             val result = matcher.recordPaymentEvidence(
-                handoffReference, signal, sourceType = "ACCESSIBILITY"
+                handoffReference,
+                signal,
+                sourceType = "ACCESSIBILITY",
+                aiUnverified = aiUnverified
             )
             if (result is CheckoutPaymentMatchResult.Rejected) {
                 matcher.recordOrphanPaymentSignal(
@@ -1936,7 +1946,10 @@ class CheckoutAccessibilityService : AccessibilityService() {
         )) {
             is PaymentSessionResolution.Matched -> {
                 val result = matcher.recordPaymentEvidence(
-                    resolution.reference, signal, sourceType = "ACCESSIBILITY"
+                    resolution.reference,
+                    signal,
+                    sourceType = "ACCESSIBILITY",
+                    aiUnverified = aiUnverified
                 )
                 if (result is CheckoutPaymentMatchResult.Rejected) {
                     matcher.recordOrphanPaymentSignal(
@@ -1970,7 +1983,10 @@ class CheckoutAccessibilityService : AccessibilityService() {
                 )
                 if (recentReference != null) {
                     val result = matcher.recordPaymentEvidence(
-                        recentReference, signal, sourceType = "ACCESSIBILITY"
+                        recentReference,
+                        signal,
+                        sourceType = "ACCESSIBILITY",
+                        aiUnverified = aiUnverified
                     )
                     if (result is CheckoutPaymentMatchResult.Rejected) {
                         matcher.recordOrphanPaymentSignal(

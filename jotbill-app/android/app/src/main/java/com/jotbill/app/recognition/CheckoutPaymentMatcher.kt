@@ -34,6 +34,47 @@ private const val COMPLETED_STATUS = "COMPLETED"
 private const val AUTO_COMMIT_OPERATOR = "auto_commit"
 private const val AI_RECOGNITION_FAILED_REASON = "AI_RECOGNITION_FAILED"
 private const val EVIDENCE_ONLY_DECISION = "EVIDENCE_ONLY"
+
+/**
+ * 仅由截图 AI 视觉推断出的支付结果状态。
+ *
+ * 与 "SUCCESS" 的区别：截图 AI 只看到一张图，无法证明支付真的完成
+ *（历史账单详情、聊天转发凭证、未提交的收银台都可能被读出金额）。
+ * 该状态的证据仍参与匹配与待确认展示，但一律不得触发自动入账。
+ */
+internal const val PAYMENT_STATUS_AI_UNVERIFIED = "SUCCESS_AI_UNVERIFIED"
+
+/** 截图 AI 未经证实的支付结果转待确认时的冲突原因，供前端提示用户核对。 */
+internal const val AI_UNVERIFIED_PAYMENT_REASON = "AI_UNVERIFIED_PAYMENT"
+
+/**
+ * 该证据是否代表"支付已发生"。
+ *
+ * 包含已证实的 SUCCESS 与截图 AI 推断的 [PAYMENT_STATUS_AI_UNVERIFIED]：
+ * 两者都应参与候选关联与待确认展示，差异只体现在能否自动入账。
+ */
+internal fun PaymentEvidenceEntity.indicatesPaidOutcome(): Boolean =
+    paymentStatus == "SUCCESS" || paymentStatus == PAYMENT_STATUS_AI_UNVERIFIED
+
+/**
+ * 在原有冲突判定之上叠加"截图 AI 未证实"守卫。
+ *
+ * 截图 AI 只凭一张图推断支付完成，可能把历史账单、聊天凭证或未提交的
+ * 收银台读成本次支付。即使金额/订单号/时间三项校验全部通过，也不允许
+ * 自动写入账本，必须转待确认由用户确认。
+ *
+ * @param conflictReason 原有评估得出的冲突原因，非空时直接沿用。
+ * @param paymentStatus 参与本次匹配的支付证据状态。
+ * @return 应生效的冲突原因；null 表示允许自动入账。
+ */
+internal fun resolveConflictWithAiUnverifiedGuard(
+    conflictReason: String?,
+    paymentStatus: String?
+): String? = when {
+    conflictReason != null -> conflictReason
+    paymentStatus == PAYMENT_STATUS_AI_UNVERIFIED -> AI_UNVERIFIED_PAYMENT_REASON
+    else -> null
+}
 private val TERMINAL_SESSION_STATUSES = setOf(
     "COMPLETED",
     "CANCELLED",
@@ -474,11 +515,15 @@ internal class CheckoutPaymentMatcher(
      *
      * @param sourceType 证据来源：NOTIFICATION（通知监听）或 ACCESSIBILITY（支付结果页），
      * 供前端区分展示，不再把结果页证据误记为通知。
+     * @param aiUnverified true 表示该证据仅由截图 AI 视觉推断得出，未经页面文本
+     * 语义或支付通知证实。此类证据落库为 [PAYMENT_STATUS_AI_UNVERIFIED]，
+     * 不参与自动入账，只能转待确认由用户核对。
      */
     suspend fun recordPaymentEvidence(
         reference: CheckoutSnapshotReference,
         signal: PaymentNotificationFallbackSignal,
-        sourceType: String = "NOTIFICATION"
+        sourceType: String = "NOTIFICATION",
+        aiUnverified: Boolean = false
     ): CheckoutPaymentMatchResult {
         val validationError = validatePayment(reference, signal)
         if (validationError != null) {
@@ -579,7 +624,7 @@ internal class CheckoutPaymentMatcher(
                 platform = signal.paymentPackage,
                 orderId = signal.orderId,
                 paymentMethod = null,
-                paymentStatus = "SUCCESS",
+                paymentStatus = if (aiUnverified) PAYMENT_STATUS_AI_UNVERIFIED else "SUCCESS",
                 occurredAt = signal.occurredAt,
                 rawTextHash = signal.rawTextHash ?: stableId(
                     "payment-source",
@@ -750,7 +795,11 @@ internal class CheckoutPaymentMatcher(
                 updatedAt = now
             )
             database.checkoutSessionDao().update(session)
-            val outcome = if (evaluation.conflictReason == null) {
+            val effectiveConflictReason = resolveConflictWithAiUnverifiedGuard(
+                evaluation.conflictReason,
+                storedEvidence.paymentStatus
+            )
+            val outcome = if (effectiveConflictReason == null) {
                 // 阶段四 T5：匹配成功且无冲突，自动入账（写 Bill + 余额更新 + 会话 AUTO_COMMITTED）
                 autoCommitMatchedCandidate(session, updatedCandidate, storedEvidence, now)
             } else {
@@ -759,7 +808,7 @@ internal class CheckoutPaymentMatcher(
                     session = session,
                     candidate = updatedCandidate,
                     evidence = storedEvidence,
-                    conflictReason = evaluation.conflictReason,
+                    conflictReason = effectiveConflictReason,
                     now = now
                 )?.let { upsertPendingForSession(it) }
                 AutoCommitOutcome(advanceStatus(session, NEEDS_CONFIRMATION_STATUS, now), null)
@@ -798,7 +847,7 @@ internal class CheckoutPaymentMatcher(
                 }
                 val evidence = database.paymentEvidenceDao()
                     .getBySession(session.id)
-                    .firstOrNull { it.paymentStatus == "SUCCESS" && (it.amountMinor ?: 0L) > 0L }
+                    .firstOrNull { it.indicatesPaidOutcome() && (it.amountMinor ?: 0L) > 0L }
                     ?: continue
                 val provisionalCandidate = TransactionCandidateEntity(
                     id = candidateIdFor(session.id),
@@ -906,7 +955,7 @@ internal class CheckoutPaymentMatcher(
                 is AiVisionResult.Failed -> {
                     val successEvidences = database.paymentEvidenceDao()
                         .getBySession(reference.sessionId)
-                        .filter { it.paymentStatus == "SUCCESS" }
+                        .filter { it.indicatesPaidOutcome() }
                     // 审查修复：AI 失败也创建占位候选，保证 retryAiRecognition 链路可用；
                     // 否则用户无法重试识别，会话会卡死在 WAITING_PAYMENT
                     val placeholderCandidateId = candidateIdFor(reference.sessionId)
@@ -1050,7 +1099,7 @@ internal class CheckoutPaymentMatcher(
 
                     val evidences = database.paymentEvidenceDao()
                         .getBySession(reference.sessionId)
-                        .filter { it.paymentStatus == "SUCCESS" }
+                        .filter { it.indicatesPaidOutcome() }
                     if (evidences.isEmpty()) {
                         session = session.copy(
                             candidateId = persistedCandidate.id,
@@ -1143,7 +1192,11 @@ internal class CheckoutPaymentMatcher(
                         updatedAt = now
                     )
                     database.checkoutSessionDao().update(session)
-                    val outcome = if (evaluation.conflictReason == null) {
+                    val effectiveConflictReason = resolveConflictWithAiUnverifiedGuard(
+                        evaluation.conflictReason,
+                        selection.evidence.paymentStatus
+                    )
+                    val outcome = if (effectiveConflictReason == null) {
                         // 阶段四 T5：匹配成功且无冲突，自动入账（写 Bill + 余额更新 + 会话 AUTO_COMMITTED）
                         autoCommitMatchedCandidate(session, updatedCandidate, selection.evidence, now)
                     } else {
@@ -1152,7 +1205,7 @@ internal class CheckoutPaymentMatcher(
                             session = session,
                             candidate = updatedCandidate,
                             evidence = selection.evidence,
-                            conflictReason = evaluation.conflictReason,
+                            conflictReason = effectiveConflictReason,
                             now = now
                         )?.let { upsertPendingForSession(it) }
                         AutoCommitOutcome(advanceStatus(session, NEEDS_CONFIRMATION_STATUS, now), null)

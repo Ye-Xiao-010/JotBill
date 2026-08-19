@@ -1018,6 +1018,7 @@ const CONFLICT_LABELS: Record<string, string> = {
   SUSPECTED_DUPLICATE: '疑似重复交易（同金额/时间/账户/商户相近），请核对后再确认',
   DEDUP_CHECK_FAILED: '去重检查异常，请人工核对是否重复',
   FEE_AMOUNT_UNPARSED: '手续费金额解析失败，请补填金额',
+  AI_UNVERIFIED_PAYMENT: '支付结果由截图识别推断，未获得支付凭证，请确认是否已实际支付',
 };
 
 /** 冲突原因可能为逗号拼接的多个代码，逐个翻译后合并展示。 */
