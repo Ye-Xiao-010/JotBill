@@ -62,6 +62,17 @@ class CheckoutAccessibilityService : AccessibilityService() {
          */
         private const val SENSITIVE_PAGE_SCREENSHOT_BLOCK_MILLIS = 60_000L
 
+        /**
+         * 系统 UI 包名：这些窗口（状态栏、通知、输入法）的内容变化不代表购物页变化。
+         *
+         * 它们仍参与悬浮按钮的归属推断，但不应驱动结算页整树重采集。
+         */
+        private val SYSTEM_UI_PACKAGES = setOf(
+            "com.android.systemui",
+            "com.miui.systemui",
+            "com.android.inputmethod.latin"
+        )
+
         @Volatile
         private var observationListener: CheckoutObservationListener? = null
 
@@ -589,6 +600,33 @@ class CheckoutAccessibilityService : AccessibilityService() {
         return lastWindowPackage.orEmpty()
     }
 
+    /**
+     * 判断是否应跳过本次事件的整树重采集。
+     *
+     * 自身悬浮层（`com.jotbill.app`）与系统 UI 的内容变化事件会被
+     * [resolveEffectiveShoppingPackage] 按活动根窗口归属为购物包，用于维持悬浮
+     * 按钮状态。但这类事件并不代表购物页真的发生变化，一旦驱动重采集，结算页
+     * 轮播文案等动态内容就会生成新指纹，被下游误判为新订单并反复截图。
+     *
+     * 仅在已有稳定结算页时跳过：尚未识别出结算页时仍需正常采集，避免漏检。
+     *
+     * @param eventPackage 事件原始包名。
+     * @param shoppingPackage 归属推断后的购物包名。
+     * @return true 表示本次事件不应触发采集。
+     */
+    private fun shouldSkipForeignEventCollection(
+        eventPackage: String,
+        shoppingPackage: String
+    ): Boolean {
+        if (eventPackage.isBlank() || eventPackage == shoppingPackage) {
+            return false
+        }
+        if (eventPackage != packageName && eventPackage !in SYSTEM_UI_PACKAGES) {
+            return false
+        }
+        return currentStableCheckout != null
+    }
+
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (!serviceConnected || event == null) {
             return
@@ -745,6 +783,14 @@ class CheckoutAccessibilityService : AccessibilityService() {
                     reason = CheckoutInvalidationReason.NODE_TREE_UNAVAILABLE,
                     shoppingPackage = shoppingPackage
                 )
+                return
+            }
+
+            // P1 事件隔离：自身悬浮层与系统 UI 的内容变化事件只是"顺带唤醒"，
+            // 页面本身没有变化。这类事件被归属为购物包后会驱动整树重采集，
+            // 动态文案（轮播/倒计时）一旦落入指纹就会被误判为新订单并重复截图。
+            // 已有稳定结算页时直接跳过采集，保留悬浮按钮与会话状态不受影响。
+            if (shouldSkipForeignEventCollection(eventPackage, shoppingPackage)) {
                 return
             }
 
