@@ -54,6 +54,14 @@ class CheckoutAccessibilityService : AccessibilityService() {
         /** 支付交接补发节流窗口：同一支付包在该窗口内只补发一次交接事件。 */
         private const val PAYMENT_HANDOFF_REDISPATCH_THROTTLE_MILLIS = 5_000L
 
+        /**
+         * 敏感支付页面的截图禁止锁存窗口。
+         *
+         * 支付密码页停留期间，无障碍会交替收到"敏感页"与"空节点树"两类帧；
+         * 空树帧无法自行判定敏感，需靠锁存窗口保证整个密码输入过程都不截图。
+         */
+        private const val SENSITIVE_PAGE_SCREENSHOT_BLOCK_MILLIS = 60_000L
+
         @Volatile
         private var observationListener: CheckoutObservationListener? = null
 
@@ -275,6 +283,15 @@ class CheckoutAccessibilityService : AccessibilityService() {
     private var paymentScreenshotFallbackInFlight = false
     @Volatile
     private var lastSuccessfulPaymentEvidenceAt = 0L
+    /**
+     * 最近一次在支付应用中观察到敏感页面的时间。
+     *
+     * 支付密码页与随后的空节点树帧交替出现：空树帧自身无法判定敏感，
+     * 若只按单轮结果拦截，兜底截图仍会在密码页停留期间被触发。
+     * 因此把敏感状态锁存一个短窗口，窗口内一律禁止截图 AI 兜底。
+     */
+    @Volatile
+    private var lastSensitivePaymentPageAt = 0L
     private val recentPaymentResultEventKeys = mutableMapOf<String, Long>()
     private val screenshotCallbackExecutor = Executor { runnable -> mainHandler.post(runnable) }
     @Volatile
@@ -1245,11 +1262,14 @@ class CheckoutAccessibilityService : AccessibilityService() {
                 "支付结果页无可用节点树: pkg=$paymentPackage, " +
                     "type=${AccessibilityEvent.eventTypeToString(event.eventType)}, class=${event.className}"
             )
-            maybeCapturePaymentResultScreenshot(paymentPackage, handoffContext)
+            maybeCapturePaymentResultScreenshot(paymentPackage, handoffContext, sensitivePageSeen = false)
             return
         }
 
         var sawResultPage = false
+        // 本轮扫描中只要有任一窗口被判定为敏感（支付密码/付款码/人脸识别等），
+        // 整轮都不得走截图 AI 兜底：截图会把密码键盘、付款码一并发往外部模型。
+        var sawSensitivePage = false
         try {
             for (root in roots) {
                 try {
@@ -1260,6 +1280,20 @@ class CheckoutAccessibilityService : AccessibilityService() {
                         observedAt = observedAt,
                         includeHiddenContentDescriptions = true
                     )
+
+                    // 敏感判定必须先于页面角色分支：微信支付密码页常被分类为
+                    // UNKNOWN，若沿用“先判角色再判敏感”的顺序，敏感页会从
+                    // role != PAYMENT_RESULT 的 continue 分支溜走，最终触发截图兜底。
+                    if (observation.isSensitivePage) {
+                        sawSensitivePage = true
+                        lastSensitivePaymentPageAt = System.currentTimeMillis()
+                        Log.i(
+                            TAG,
+                            "支付包页面为敏感页面，跳过证据提取与截图兜底: " +
+                                "pkg=$paymentPackage, role=${observation.pageRole}, class=${observation.windowClass}"
+                        )
+                        continue
+                    }
 
                     if (observation.pageRole == CheckoutPageRole.PAYMENT_RESULT) {
                         sawResultPage = true
@@ -1292,13 +1326,8 @@ class CheckoutAccessibilityService : AccessibilityService() {
                         continue
                     }
 
-                    // 敏感页面（密码/付款码等）不提取任何证据
-                    if (observation.isSensitivePage) {
-                        Log.d(TAG, "支付结果页为敏感页面，跳过证据提取")
-                        return
-                    }
-
                     // 从节点文本和 contentDescription 提取结构化证据
+                    // （敏感页已在角色判断前统一拦截并 continue，此处无需重复判定）
                     val pageText = collectPageText(root)
                     val parseResult = PaymentResultParser.parseResult(
                         pageText = pageText,
@@ -1324,12 +1353,20 @@ class CheckoutAccessibilityService : AccessibilityService() {
                         }
                         is PaymentResultParseResult.Failure -> {
                             Log.i(TAG, "支付结果页未生成成功证据: reason=${parseResult.reason}")
-                            maybeCapturePaymentResultScreenshot(paymentPackage, handoffContext)
+                            maybeCapturePaymentResultScreenshot(
+                                paymentPackage,
+                                handoffContext,
+                                sensitivePageSeen = sawSensitivePage
+                            )
                             return
                         }
                         PaymentResultParseResult.NotPaymentResult -> {
                             Log.d(TAG, "支付结果页未命中可确认的结果语义")
-                            maybeCapturePaymentResultScreenshot(paymentPackage, handoffContext)
+                            maybeCapturePaymentResultScreenshot(
+                                paymentPackage,
+                                handoffContext,
+                                sensitivePageSeen = sawSensitivePage
+                            )
                             return
                         }
                     }
@@ -1401,15 +1438,40 @@ class CheckoutAccessibilityService : AccessibilityService() {
             }
         }
         if (!sawResultPage) {
-            maybeCapturePaymentResultScreenshot(paymentPackage, handoffContext)
+            maybeCapturePaymentResultScreenshot(
+                paymentPackage,
+                handoffContext,
+                sensitivePageSeen = sawSensitivePage
+            )
         }
     }
-    /** 微信 LiteApp 成功页对无障碍服务暴露空树时，用系统截图 + AI 视觉兜底提取证据。 */
+
+    /**
+     * 微信 LiteApp 成功页对无障碍服务暴露空树时，用系统截图 + AI 视觉兜底提取证据。
+     *
+     * @param sensitivePageSeen 本轮观察是否见过敏感页面；为 true 时禁止截图，
+     * 避免支付密码键盘、付款码、人脸识别画面被编码后发往外部 AI 服务。
+     */
     private fun maybeCapturePaymentResultScreenshot(
         paymentPackage: String,
-        handoffContext: PaymentResultHandoffContext?
+        handoffContext: PaymentResultHandoffContext?,
+        sensitivePageSeen: Boolean
     ) {
+        // P0 隐私红线：敏感支付页面一律禁止截图 AI 兜底，且不受节流状态影响。
+        if (sensitivePageSeen) {
+            Log.i(TAG, "支付结果页截图兜底已禁止: 本轮观察到敏感页面 pkg=$paymentPackage")
+            return
+        }
         val now = System.currentTimeMillis()
+        // 空节点树帧无法自行判定敏感，用锁存窗口覆盖密码页与空树帧交替的场景。
+        if (now - lastSensitivePaymentPageAt < SENSITIVE_PAGE_SCREENSHOT_BLOCK_MILLIS) {
+            Log.i(
+                TAG,
+                "支付结果页截图兜底已禁止: 敏感页面锁存窗口内 pkg=$paymentPackage, " +
+                    "elapsed=${now - lastSensitivePaymentPageAt}ms"
+            )
+            return
+        }
         if (
             paymentScreenshotFallbackInFlight ||
             now - lastPaymentScreenshotFallbackAt < 15_000L ||
