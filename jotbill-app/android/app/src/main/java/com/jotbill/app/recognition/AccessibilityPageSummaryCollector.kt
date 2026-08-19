@@ -48,6 +48,22 @@ internal object AccessibilityPageSummaryCollector {
         """(?i)(广告|推荐商品|猜你喜欢|loading|加载中|骨架屏|占位符|动画中|轮播|刷新中|请稍候|carousel|placeholder)"""
     )
 
+    /**
+     * 轮播/翻页类控件的简单类名。
+     *
+     * 拼多多结算页用 ViewSwitcher/ViewFlipper 滚动展示"N 人已拼""还剩 N 件"等
+     * 动态文案。这类文本不含噪声关键词，会原样进入指纹并每隔数秒生成新哈希，
+     * 被下游误判为新订单边界。因此整棵子树的文本都不纳入指纹，只保留控件语义标记。
+     */
+    private val rotatingWidgetClassNames = setOf(
+        "ViewSwitcher",
+        "ViewFlipper",
+        "TextSwitcher",
+        "AdapterViewFlipper",
+        "Marquee",
+        "MarqueeTextView"
+    )
+
     private val finalAmountTerms = listOf(
         "应付",
         "实付",
@@ -119,6 +135,20 @@ internal object AccessibilityPageSummaryCollector {
         "支付未完成"
     )
 
+    /**
+     * 判断控件类名是否属于轮播/翻页容器。
+     *
+     * 提取为独立方法便于单测覆盖：真机节点树无法在 JVM 单测中构造，
+     * 但类名判定是指纹稳定性的关键分支，必须可验证。
+     *
+     * @param className 完整类名（含包名）或简单类名。
+     * @return true 表示该控件及其子树的文本不应纳入指纹。
+     */
+    internal fun isRotatingWidgetClass(className: String?): Boolean {
+        val simpleName = className?.trim()?.substringAfterLast('.').orEmpty()
+        return simpleName.isNotBlank() && simpleName in rotatingWidgetClassNames
+    }
+
     fun collect(
         shoppingPackage: String,
         windowClass: String?,
@@ -175,7 +205,8 @@ internal object AccessibilityPageSummaryCollector {
         accumulator: NodeSummaryAccumulator,
         depth: Int,
         sensitiveAncestor: Boolean = false,
-        includeHiddenContentDescriptions: Boolean = false
+        includeHiddenContentDescriptions: Boolean = false,
+        rotatingAncestor: Boolean = false
     ) {
         if (depth > MAX_DEPTH || accumulator.visitedNodes >= MAX_NODE_COUNT) {
             return
@@ -200,12 +231,17 @@ internal object AccessibilityPageSummaryCollector {
         if (nodeSensitive) {
             accumulator.sensitive = true
         }
+        // 轮播容器自身及其整棵子树的文本都不纳入指纹，避免滚动文案造成指纹漂移；
+        // 容器的类名语义标记仍然保留，页面结构变化依旧能被指纹感知。
+        val nodeRotating = rotatingAncestor || isRotatingWidgetClass(className)
         if (visible && !nodeSensitive) {
-            node.text?.toString()?.let(accumulator::addText)
-            node.contentDescription?.toString()?.let(accumulator::addText)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                node.hintText?.toString()?.let(accumulator::addText)
-                node.tooltipText?.toString()?.let(accumulator::addText)
+            if (!nodeRotating) {
+                node.text?.toString()?.let(accumulator::addText)
+                node.contentDescription?.toString()?.let(accumulator::addText)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    node.hintText?.toString()?.let(accumulator::addText)
+                    node.tooltipText?.toString()?.let(accumulator::addText)
+                }
             }
 
             className.takeIf { it.isNotBlank() }?.let { className ->
@@ -232,7 +268,8 @@ internal object AccessibilityPageSummaryCollector {
                     accumulator,
                     depth + 1,
                     nodeSensitive,
-                    includeHiddenContentDescriptions
+                    includeHiddenContentDescriptions,
+                    nodeRotating
                 )
                 } finally {
                     child.recycle()

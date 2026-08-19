@@ -787,6 +787,38 @@ internal class CheckoutSnapshotCaptureCoordinator(
         }
     }
 
+    /**
+     * 判断旧结算会话的截图是否值得跨指纹漂移保留。
+     *
+     * 只有同一购物包内的指纹变化才可能是轮播/倒计时造成的漂移；切换购物应用
+     * 一定是新订单，旧图必须释放，否则会把上一单的截图关联到本单支付证据。
+     *
+     * 另外要求旧槽位确实存在未过期、未消费的候选，避免为空槽位保留消费墓碑
+     * 而阻塞新会话截图。
+     *
+     * @param previous 漂移前的结算会话。
+     * @param observation 新的稳定页面观察结果。
+     * @return true 表示旧槽位应保留，不执行 discard。
+     */
+    private fun hasRetainableCandidate(
+        previous: ActiveCheckout,
+        observation: CheckoutPageObservation
+    ): Boolean {
+        if (previous.page.observation.shoppingPackage != observation.shoppingPackage) {
+            return false
+        }
+        if (previous.captureTarget != SnapshotCaptureTarget.CHECKOUT) {
+            return false
+        }
+        return try {
+            buffer.currentCandidates(previous.slotId).any { candidate ->
+                candidate.sessionId == previous.sessionId
+            }
+        } catch (_: RuntimeException) {
+            false
+        }
+    }
+
     private fun handleStable(page: StableCheckoutPage) {
         val transitionGeneration = eventGeneration
         val observation = page.observation
@@ -855,9 +887,18 @@ internal class CheckoutSnapshotCaptureCoordinator(
         }
 
         val previous = activeCheckout
+        // 同一购物包内的指纹变化可能只是轮播/倒计时造成的漂移，而非新订单。
+        // 若旧会话已有未消费且未过期的截图，沿用旧会话与槽位：既避免把"已截到的图"
+        // 在提交订单前清零（真机上曾导致支付交接只剩 NO_BUFFERED_SNAPSHOT），
+        // 也让后续截图落在同一会话内由 buffer 按指纹去重。
+        val driftWithinSameCheckout = previous != null &&
+            previous.page.observation.shoppingPackage == observation.shoppingPackage &&
+            previous.page.observation.pageFingerprint != observation.pageFingerprint &&
+            hasRetainableCandidate(previous, observation)
         val startsNewSession = previous == null ||
             previous.page.observation.shoppingPackage != observation.shoppingPackage ||
-            previous.page.observation.pageFingerprint != observation.pageFingerprint
+            (previous.page.observation.pageFingerprint != observation.pageFingerprint &&
+                !driftWithinSameCheckout)
         var pendingToNotify: PendingCapture? = null
         var queuedManualToNotify: QueuedManualCapture? = null
         val current = if (startsNewSession) {
@@ -878,7 +919,14 @@ internal class CheckoutSnapshotCaptureCoordinator(
                 captureTarget = SnapshotCaptureTarget.CHECKOUT
             )
         } else {
-            previous.copy(page = page)
+            if (driftWithinSameCheckout) {
+                Log.i(
+                    TAG,
+                    "结算页指纹漂移沿用原会话: slot=${previous!!.slotId}, " +
+                        "session=${previous.sessionId.take(8)}"
+                )
+            }
+            previous!!.copy(page = page)
         }
         activeCheckout = current
 
@@ -916,6 +964,15 @@ internal class CheckoutSnapshotCaptureCoordinator(
 
         val key = current.key
         if (key in attemptedAutomaticCaptures) {
+            return
+        }
+
+        // 指纹漂移沿用原会话时，槽内已有本会话的可用截图：结算页内容并未真正改变，
+        // 不必为每一次漂移重复截图（真机上曾在 8 秒内连截 6 张并互相覆盖）。
+        // 后续支付交接会按槽内真实指纹消费这张已有截图。
+        if (driftWithinSameCheckout) {
+            attemptedAutomaticCaptures += key
+            publish(duplicateResult(current, SnapshotSourceReason.CHECKOUT_STABLE))
             return
         }
 
