@@ -218,7 +218,11 @@ class CheckoutAiVisionClient(
         val tokensOut: Int?
     )
 
-    private class SchemaException : Exception()
+    /**
+     * 仅用于诊断模型输出为何未通过本地 Schema；不会改变失败码、重试或业务流程。
+     * 原始字段值不写入异常，避免将订单或支付敏感信息带入日志。
+     */
+    private class SchemaException(message: String) : Exception(message)
 
     private class ResponseTooLargeException : Exception()
 
@@ -805,11 +809,11 @@ class CheckoutAiVisionClient(
             ?: return PaymentAttemptResult(null, AiVisionFailureCode.PROTOCOL_ERROR)
         val payload = try {
             parsePaymentPayload(JSONObject(content))
-        } catch (_: JSONException) {
-            logSchemaFailure("payment_result", content)
+        } catch (error: JSONException) {
+            logSchemaFailure("payment_result", content, "payload_not_json:${error.message.orEmpty()}")
             return PaymentAttemptResult(null, AiVisionFailureCode.JSON_SCHEMA_INVALID)
-        } catch (_: SchemaException) {
-            logSchemaFailure("payment_result", content)
+        } catch (error: SchemaException) {
+            logSchemaFailure("payment_result", content, error.message.orEmpty())
             return PaymentAttemptResult(null, AiVisionFailureCode.JSON_SCHEMA_INVALID)
         }
         val usage = root.optJSONObject("usage")?.let(::parseUsage)
@@ -818,26 +822,34 @@ class CheckoutAiVisionClient(
     }
 
     private fun parsePaymentPayload(root: JSONObject): PaymentResultVisionFields {
-        if (requiredString(root, "screenType") != "payment_result") throw SchemaException()
-        if (requiredString(root, "paymentStatus") != "SUCCESS") throw SchemaException()
+        val screenType = requiredString(root, "screenType")
+        if (screenType != "payment_result") {
+            throw SchemaException("field=screenType, expected=payment_result, actual=$screenType")
+        }
+        val paymentStatus = requiredString(root, "paymentStatus")
+        if (paymentStatus != "SUCCESS") {
+            throw SchemaException("field=paymentStatus, expected=SUCCESS, actual=$paymentStatus")
+        }
         val amountText = requiredString(root, "amount")
-        if (!AMOUNT_PATTERN.matches(amountText)) throw SchemaException()
+        if (!AMOUNT_PATTERN.matches(amountText)) {
+            throw SchemaException("field=amount, expected=positive_decimal_with_at_most_2_fraction_digits")
+        }
         val amountMinor = try {
             BigDecimal(amountText).movePointRight(2).longValueExact()
         } catch (_: ArithmeticException) {
-            throw SchemaException()
+            throw SchemaException("field=amount, reason=minor_unit_conversion_failed")
         }
-        if (amountMinor <= 0) throw SchemaException()
+        if (amountMinor <= 0) throw SchemaException("field=amount, expected=positive")
         val merchant = requiredNullableString(root, "merchant", MAX_MERCHANT_LENGTH)
         val orderId = requiredNullableString(root, "orderId", MAX_ORDER_ID_LENGTH)
         val occurredAt = requiredNullableString(root, "occurredAt", MAX_TIMESTAMP_LENGTH)?.also {
             try {
                 Instant.parse(it)
             } catch (_: Exception) {
-                throw SchemaException()
+                throw SchemaException("field=occurredAt, expected=iso_8601_or_null")
             }
         }
-        if (requiredNumber(root, "confidence") !in 0.0..1.0) throw SchemaException()
+        requiredNumber(root, "confidence")
         // transferType 宽松解析：未知或缺失一律按商户消费处理，不因模型
         // 漏返回新字段而整单失败（v1 输出兼容）。
         val transferType = root.optString(
@@ -1167,11 +1179,11 @@ class CheckoutAiVisionClient(
             ?: return AttemptResult.Failure(AiVisionFailureCode.PROTOCOL_ERROR)
         val payload = try {
             parseVisionPayload(JSONObject(content), relaxedSchema)
-        } catch (_: JSONException) {
-            logSchemaFailure("checkout", content)
+        } catch (error: JSONException) {
+            logSchemaFailure("checkout", content, "payload_not_json:${error.message.orEmpty()}")
             return AttemptResult.Failure(AiVisionFailureCode.JSON_SCHEMA_INVALID)
-        } catch (_: SchemaException) {
-            logSchemaFailure("checkout", content)
+        } catch (error: SchemaException) {
+            logSchemaFailure("checkout", content, error.message.orEmpty())
             return AttemptResult.Failure(AiVisionFailureCode.JSON_SCHEMA_INVALID)
         }
         val usage = root.optJSONObject("usage")?.let(::parseUsage)
@@ -1229,11 +1241,22 @@ class CheckoutAiVisionClient(
      * 记录 schema 校验失败的模型原始输出（截断 + 长数字串脱敏），便于定位
      * 是提示词漂移、字段命名变化还是围栏/格式问题；不记录 API Key 等请求侧信息。
      */
-    private fun logSchemaFailure(stage: String, content: String) {
+    private fun logSchemaFailure(stage: String, content: String, reason: String) {
         val sanitized = content
             .replace(LONG_DIGITS_PATTERN, "[digits]")
             .take(200)
-        android.util.Log.w("CheckoutAiVisionClient", "AI 输出未通过 schema 校验: stage=$stage, content=$sanitized")
+        val keys = runCatching {
+            JSONObject(content).let { payload ->
+                buildSet {
+                    val iterator = payload.keys()
+                    while (iterator.hasNext()) add(iterator.next())
+                }.sorted().joinToString(",")
+            }
+        }.getOrDefault("unavailable")
+        android.util.Log.w(
+            "CheckoutAiVisionClient",
+            "AI 输出未通过 schema 校验: stage=$stage, reason=$reason, keys=[$keys], content=$sanitized"
+        )
     }
 
     private fun parseVisionPayload(
@@ -1241,7 +1264,7 @@ class CheckoutAiVisionClient(
         relaxedSchema: Boolean
     ): AiVisionFields {
         if (!relaxedSchema) {
-            requireExactKeys(root, RESULT_KEYS)
+            requireExactKeys(root, RESULT_KEYS, "root")
         }
         val screenType = requiredString(root, "screenType")
         val screenTypeAccepted = if (relaxedSchema) {
@@ -1249,7 +1272,9 @@ class CheckoutAiVisionClient(
         } else {
             screenType == "checkout"
         }
-        if (!screenTypeAccepted) throw SchemaException()
+        if (!screenTypeAccepted) {
+            throw SchemaException("field=screenType, expected=checkout, actual=$screenType")
+        }
         val platform = nullableString(root, "platform", MAX_PLATFORM_LENGTH, relaxedSchema)
         val merchant = nullableString(root, "merchant", MAX_MERCHANT_LENGTH, relaxedSchema)
         val productDescription = nullableString(
@@ -1258,32 +1283,40 @@ class CheckoutAiVisionClient(
             MAX_PRODUCT_LENGTH,
             relaxedSchema
         )
-        val amountValue = root.opt("amount") ?: throw SchemaException()
+        val amountValue = root.opt("amount")
+            ?: throw SchemaException("field=amount, reason=missing")
         val amountText = when (amountValue) {
             is String -> amountValue.trim()
             is Number -> amountValue.toString()
-            else -> throw SchemaException()
+            else -> throw SchemaException("field=amount, expected=string_or_number, actual=${valueType(amountValue)}")
         }
-        if (!AMOUNT_PATTERN.matches(amountText)) throw SchemaException()
+        if (!AMOUNT_PATTERN.matches(amountText)) {
+            throw SchemaException("field=amount, expected=positive_decimal_with_at_most_2_fraction_digits")
+        }
         val amountMinor = try {
             BigDecimal(amountText).movePointRight(2).longValueExact()
         } catch (_: ArithmeticException) {
-            throw SchemaException()
+            throw SchemaException("field=amount, reason=minor_unit_conversion_failed")
         }
-        if (amountMinor <= 0) throw SchemaException()
+        if (amountMinor <= 0) throw SchemaException("field=amount, expected=positive")
         val amountSemantic = if (relaxedSchema) {
             root.optString("amountSemantic", "FINAL_PAYABLE")
                 .takeIf { it in SAFE_AMOUNT_SEMANTICS }
                 ?: "FINAL_PAYABLE"
         } else {
             requiredString(root, "amountSemantic").also {
-                if (it !in SAFE_AMOUNT_SEMANTICS) throw SchemaException()
+                if (it !in SAFE_AMOUNT_SEMANTICS) {
+                    throw SchemaException("field=amountSemantic, expected=known_semantic, actual=$it")
+                }
             }
         }
         val currency = if (relaxedSchema) {
             root.optString("currency", "CNY").takeIf { it == "CNY" } ?: "CNY"
         } else {
-            if (requiredString(root, "currency") != "CNY") throw SchemaException()
+            val currency = requiredString(root, "currency")
+            if (currency != "CNY") {
+                throw SchemaException("field=currency, expected=CNY, actual=$currency")
+            }
             "CNY"
         }
         val orderId = nullableString(root, "orderId", MAX_ORDER_ID_LENGTH, relaxedSchema)
@@ -1302,7 +1335,7 @@ class CheckoutAiVisionClient(
             try {
                 Instant.parse(it)
             } catch (_: Exception) {
-                throw SchemaException()
+                throw SchemaException("field=occurredAt, expected=iso_8601_or_null")
             }
         }
         val confidence = if (relaxedSchema) {
@@ -1310,7 +1343,6 @@ class CheckoutAiVisionClient(
         } else {
             requiredNumber(root, "confidence")
         }
-        if (confidence !in 0.0..1.0) throw SchemaException()
         val fieldConfidence = if (relaxedSchema && root.optJSONObject("fieldConfidence") == null) {
             emptyMap()
         } else {
@@ -1333,8 +1365,10 @@ class CheckoutAiVisionClient(
     }
 
     private fun parseFieldConfidence(source: JSONObject?): Map<String, Double> {
-        if (source == null) throw SchemaException()
-        requireExactKeys(source, FIELD_CONFIDENCE_KEYS)
+        if (source == null) {
+            throw SchemaException("field=fieldConfidence, expected=object")
+        }
+        requireExactKeys(source, FIELD_CONFIDENCE_KEYS, "fieldConfidence")
         return FIELD_CONFIDENCE_KEYS.associateWith { key -> requiredNumber(source, key) }
     }
 
@@ -1350,9 +1384,13 @@ class CheckoutAiVisionClient(
     }
 
     private fun requiredString(root: JSONObject, key: String): String {
-        if (!root.has(key) || root.isNull(key)) throw SchemaException()
-        val value = root.get(key) as? String ?: throw SchemaException()
-        return value.trim().takeIf { it.isNotEmpty() } ?: throw SchemaException()
+        if (!root.has(key)) throw SchemaException("field=$key, reason=missing")
+        if (root.isNull(key)) throw SchemaException("field=$key, expected=non_null_string, actual=null")
+        val rawValue = root.get(key)
+        val value = rawValue as? String
+            ?: throw SchemaException("field=$key, expected=string, actual=${valueType(rawValue)}")
+        return value.trim().takeIf { it.isNotEmpty() }
+            ?: throw SchemaException("field=$key, expected=non_blank_string")
     }
 
     private fun nullableString(
@@ -1375,27 +1413,46 @@ class CheckoutAiVisionClient(
     }
 
     private fun requiredNullableString(root: JSONObject, key: String, maxLength: Int): String? {
-        if (!root.has(key)) throw SchemaException()
+        if (!root.has(key)) throw SchemaException("field=$key, reason=missing")
         if (root.isNull(key)) return null
-        val value = root.get(key) as? String ?: throw SchemaException()
+        val rawValue = root.get(key)
+        val value = rawValue as? String
+            ?: throw SchemaException("field=$key, expected=string_or_null, actual=${valueType(rawValue)}")
         val normalized = value.trim()
-        if (normalized.isEmpty() || normalized.length > maxLength) throw SchemaException()
+        if (normalized.isEmpty()) throw SchemaException("field=$key, expected=non_blank_string_or_null")
+        if (normalized.length > maxLength) {
+            throw SchemaException("field=$key, reason=length_exceeds_$maxLength")
+        }
         return normalized
     }
 
     private fun requiredNumber(root: JSONObject, key: String): Double {
-        if (!root.has(key) || root.isNull(key)) throw SchemaException()
-        val value = (root.get(key) as? Number)?.toDouble() ?: throw SchemaException()
-        if (!value.isFinite() || value !in 0.0..1.0) throw SchemaException()
+        if (!root.has(key)) throw SchemaException("field=$key, reason=missing")
+        if (root.isNull(key)) throw SchemaException("field=$key, expected=number_0_to_1, actual=null")
+        val rawValue = root.get(key)
+        val value = (rawValue as? Number)?.toDouble()
+            ?: throw SchemaException("field=$key, expected=number_0_to_1, actual=${valueType(rawValue)}")
+        if (!value.isFinite() || value !in 0.0..1.0) {
+            throw SchemaException("field=$key, expected=number_0_to_1")
+        }
         return value
     }
 
-    private fun requireExactKeys(root: JSONObject, allowed: Set<String>) {
+    private fun requireExactKeys(root: JSONObject, allowed: Set<String>, scope: String) {
         val actual = buildSet {
             val keys = root.keys()
             while (keys.hasNext()) add(keys.next())
         }
-        if (actual != allowed) throw SchemaException()
+        if (actual != allowed) {
+            val missing = (allowed - actual).sorted().joinToString(",")
+            val unexpected = (actual - allowed).sorted().joinToString(",")
+            throw SchemaException("scope=$scope, missing=[$missing], unexpected=[$unexpected]")
+        }
+    }
+
+    private fun valueType(value: Any?): String = when (value) {
+        null, JSONObject.NULL -> "null"
+        else -> value::class.java.simpleName
     }
 
     private fun imageMimeType(bytes: ByteArray): String? = when {
