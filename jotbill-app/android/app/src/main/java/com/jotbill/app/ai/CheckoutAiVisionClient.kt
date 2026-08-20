@@ -124,6 +124,39 @@ private fun flattenDescriptiveValueInternal(value: Any?, depth: Int): String? {
     }
 }
 
+/**
+ * 从 fieldConfidence 对象中提取可用置信度，缺项与非法值一律忽略。
+ *
+ * 真机故障回归：模型在 orderId 为 null 时省略了它的置信度，而客户端要求
+ * fieldConfidence 精确包含 5 个键，导致整份已正确识别的结果
+ * （商品、商户、金额 75.60、FINAL_PAYABLE）被拒收，会话落 FAILED。
+ *
+ * 该字段全链路无消费方，仅作诊断参考，不参与金额校验、匹配与自动入账判定，
+ * 因此不应具备否决整份结果的能力。
+ *
+ * @param source fieldConfidence 对象；null 表示模型未返回。
+ * @param knownKeys 协议关注的键集合。
+ * @return 实际提供且落在 0..1 区间内的置信度映射，可能为空。
+ */
+internal fun extractFieldConfidence(
+    source: JSONObject?,
+    knownKeys: Set<String>
+): Map<String, Double> {
+    if (source == null) {
+        return emptyMap()
+    }
+    return knownKeys.mapNotNull { key ->
+        if (!source.has(key) || source.isNull(key)) {
+            return@mapNotNull null
+        }
+        val value = (source.opt(key) as? Number)?.toDouble() ?: return@mapNotNull null
+        if (value !in 0.0..1.0) {
+            return@mapNotNull null
+        }
+        key to value
+    }.toMap()
+}
+
 /** 视觉客户端的稳定失败码；不把服务商原始响应暴露给上层或日志。 */
 enum class AiVisionFailureCode(val wireValue: String) {
     AI_CONFIG_MISSING("AI_CONFIG_MISSING"),
@@ -256,6 +289,16 @@ class CheckoutAiVisionClient(
             "occurredAt",
             "confidence",
             "fieldConfidence"
+        )
+        /**
+         * 结算页结果中必须存在的核心键。
+         *
+         * 这些字段直接决定金额语义与入账判定，缺失即无法安全使用，必须拒收。
+         * RESULT_KEYS 中的其余键属于补充信息，缺失只降低完整度，不影响正确性。
+         */
+        private val REQUIRED_RESULT_KEYS = setOf(
+            "screenType",
+            "amount"
         )
         private val FIELD_CONFIDENCE_KEYS = setOf(
             "platform",
@@ -1169,7 +1212,8 @@ class CheckoutAiVisionClient(
         amountSemantic 只能是 FINAL_PAYABLE、ACTUAL_PAYABLE、DISCOUNTED_TOTAL 或 ORDER_TOTAL；
         原价、单价、优惠金额、运费、积分抵扣和未知金额语义都不能作为 amount，遇到这些情况返回不确定且不要猜测。
         occurredAt 必须是 ISO-8601 时间字符串或 null。confidence 和 fieldConfidence 中的值必须是 0 到 1 的数字。
-        fieldConfidence 至少包含 platform、merchant、productDescription、amount、orderId 这五个字段。
+        fieldConfidence 建议包含 platform、merchant、productDescription、amount、orderId 这五个字段；
+        无法评估时可以省略对应键或整体省略 fieldConfidence，不要编造数值。
     """.trimIndent()
 
     private suspend fun executeAttempt(
@@ -1349,7 +1393,10 @@ class CheckoutAiVisionClient(
         relaxedSchema: Boolean
     ): AiVisionFields {
         if (!relaxedSchema) {
-            requireExactKeys(root, RESULT_KEYS, "root")
+            // 只强制核心字段齐备：多返回的额外键与缺失的非核心键都不应否决整份
+            // 结果。此前用 requireExactKeys 精确比对全部 12 个键，模型少返回一个
+            // paymentMethod 或多返回一个说明字段就会使已正确识别的金额一起作废。
+            requireRequiredKeys(root, REQUIRED_RESULT_KEYS, RESULT_KEYS, "root")
         }
         val screenType = requiredString(root, "screenType")
         val screenTypeAccepted = if (relaxedSchema) {
@@ -1387,7 +1434,12 @@ class CheckoutAiVisionClient(
             throw SchemaException("field=amount, reason=minor_unit_conversion_failed")
         }
         if (amountMinor <= 0) throw SchemaException("field=amount, expected=positive")
-        val amountSemantic = if (relaxedSchema) {
+        // amountSemantic 决定金额语义，必须落在白名单内；但"未返回该键"与
+        // "返回了未知语义"性质不同：前者按最终应付处理即可，后者说明模型对
+        // 金额含义没有把握，必须拒收以免把原价或优惠额记成实付。
+        val amountSemantic = if (!root.has("amountSemantic") || root.isNull("amountSemantic")) {
+            "FINAL_PAYABLE"
+        } else if (relaxedSchema) {
             root.optString("amountSemantic", "FINAL_PAYABLE")
                 .takeIf { it in SAFE_AMOUNT_SEMANTICS }
                 ?: "FINAL_PAYABLE"
@@ -1398,7 +1450,10 @@ class CheckoutAiVisionClient(
                 }
             }
         }
-        val currency = if (relaxedSchema) {
+        // currency 缺失按 CNY 处理；显式返回非 CNY 时仍拒收，避免币种错记。
+        val currency = if (!root.has("currency") || root.isNull("currency")) {
+            "CNY"
+        } else if (relaxedSchema) {
             root.optString("currency", "CNY").takeIf { it == "CNY" } ?: "CNY"
         } else {
             val currency = requiredString(root, "currency")
@@ -1426,16 +1481,10 @@ class CheckoutAiVisionClient(
                 throw SchemaException("field=occurredAt, expected=iso_8601_or_null")
             }
         }
-        val confidence = if (relaxedSchema) {
-            optionalNumber(root, "confidence") ?: 0.0
-        } else {
-            requiredNumber(root, "confidence")
-        }
-        val fieldConfidence = if (relaxedSchema && root.optJSONObject("fieldConfidence") == null) {
-            emptyMap()
-        } else {
-            parseFieldConfidence(root.optJSONObject("fieldConfidence"))
-        }
+        // confidence 与 fieldConfidence 都只作诊断参考，不参与任何入账判定：
+        // 缺失或非法时按 0 与空表处理，不再否决整份结果。
+        val confidence = optionalNumber(root, "confidence")?.takeIf { it in 0.0..1.0 } ?: 0.0
+        val fieldConfidence = parseFieldConfidence(root.optJSONObject("fieldConfidence"))
         return AiVisionFields(
             screenType = screenType,
             platform = platform,
@@ -1452,12 +1501,31 @@ class CheckoutAiVisionClient(
         )
     }
 
+    /**
+     * 解析各字段置信度，缺项与非法值一律忽略而不否决整份结果。
+     *
+     * fieldConfidence 是诊断用的辅助信息，不参与金额校验、匹配与自动入账判定。
+     * 此前要求精确包含 platform/merchant/productDescription/amount/orderId
+     * 五个键，模型少返回任意一个（例如 orderId 为 null 时省略其置信度）就会
+     * 使整份已正确识别的结果作废，真机上表现为 JSON_SCHEMA_INVALID 且会话落
+     * FAILED。这里改为只收集实际提供且落在 0..1 区间内的数值。
+     *
+     * @param source fieldConfidence 对象；为 null 时返回空表。
+     * @return 已知字段的置信度映射，可能为空。
+     */
     private fun parseFieldConfidence(source: JSONObject?): Map<String, Double> {
         if (source == null) {
-            throw SchemaException("field=fieldConfidence, expected=object")
+            return emptyMap()
         }
-        requireExactKeys(source, FIELD_CONFIDENCE_KEYS, "fieldConfidence")
-        return FIELD_CONFIDENCE_KEYS.associateWith { key -> requiredNumber(source, key) }
+        val parsed = extractFieldConfidence(source, FIELD_CONFIDENCE_KEYS)
+        val missing = FIELD_CONFIDENCE_KEYS - parsed.keys
+        if (missing.isNotEmpty()) {
+            android.util.Log.i(
+                "CheckoutAiVisionClient",
+                "fieldConfidence 缺少可用置信度，按缺省处理: missing=[${missing.sorted().joinToString(",")}]"
+            )
+        }
+        return parsed
     }
 
     private fun parseUsage(root: JSONObject): ResponseUsage = ResponseUsage(
@@ -1487,10 +1555,15 @@ class CheckoutAiVisionClient(
         maxLength: Int,
         relaxedSchema: Boolean
     ): String? {
+        // 非核心可空字段缺失时按 null 处理：模型少返回一个 platform 或
+        // paymentMethod 不应使整份已识别结果作废。字段存在但类型非法时，
+        // 严格模式仍报错以暴露真实协议问题。
+        if (!root.has(key) || root.isNull(key)) {
+            return null
+        }
         if (!relaxedSchema) {
             return requiredNullableString(root, key, maxLength)
         }
-        if (!root.has(key) || root.isNull(key)) return null
         val value = root.get(key) as? String ?: return null
         return value.trim().takeIf { it.isNotEmpty() && it.length <= maxLength }
     }
@@ -1516,10 +1589,8 @@ class CheckoutAiVisionClient(
         relaxedSchema: Boolean
     ): String? {
         if (!root.has(key)) {
-            if (relaxedSchema) {
-                return null
-            }
-            throw SchemaException("field=$key, reason=missing")
+            // 描述字段缺失一律按 null 处理，不区分宽松与严格模式：它只用于展示。
+            return null
         }
         if (root.isNull(key)) {
             return null
@@ -1565,6 +1636,46 @@ class CheckoutAiVisionClient(
             throw SchemaException("field=$key, expected=number_0_to_1")
         }
         return value
+    }
+
+    /**
+     * 校验核心键齐备，并对额外键与缺失的非核心键只做诊断记录。
+     *
+     * 与 [requireExactKeys] 的区别：不要求键集合完全相等。模型输出的键集合
+     * 天然存在波动（少返回 paymentMethod、多返回说明性字段），这类差异不应
+     * 使已正确识别的金额与商品信息整份作废。
+     *
+     * @param root 待校验对象。
+     * @param required 必须存在且非空的键；缺失即抛 [SchemaException]。
+     * @param known 协议已知键，用于识别额外键并记录诊断日志。
+     * @param scope 诊断用作用域名称。
+     */
+    private fun requireRequiredKeys(
+        root: JSONObject,
+        required: Set<String>,
+        known: Set<String>,
+        scope: String
+    ) {
+        val actual = buildSet {
+            val keys = root.keys()
+            while (keys.hasNext()) add(keys.next())
+        }
+        val missingRequired = required - actual
+        if (missingRequired.isNotEmpty()) {
+            throw SchemaException(
+                "scope=$scope, missingRequired=[${missingRequired.sorted().joinToString(",")}]"
+            )
+        }
+        val unexpected = actual - known
+        val missingOptional = known - actual
+        if (unexpected.isNotEmpty() || missingOptional.isNotEmpty()) {
+            android.util.Log.i(
+                "CheckoutAiVisionClient",
+                "AI 输出键集合与协议存在差异但核心字段齐备: scope=$scope, " +
+                    "unexpected=[${unexpected.sorted().joinToString(",")}], " +
+                    "missingOptional=[${missingOptional.sorted().joinToString(",")}]"
+            )
+        }
     }
 
     private fun requireExactKeys(root: JSONObject, allowed: Set<String>, scope: String) {
