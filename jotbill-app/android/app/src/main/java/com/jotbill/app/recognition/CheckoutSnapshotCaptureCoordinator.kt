@@ -77,19 +77,25 @@ fun interface SnapshotCaptureCallback {
 /**
  * 判定普通页手动重试上下文能否接管截图槽位。
  *
- * 提取为纯函数以便单测覆盖：真机上曾因交接挂起期间 `activeCheckout` 被置空，
- * 手动重试上下文误判"无人占用"并 discard 掉正在交接的结算截图，
- * 导致支付交接必然 NO_BUFFERED_SNAPSHOT。
+ * 提取为纯函数以便单测覆盖。两类回归都由该判据统一收口：
+ * 1. 交接挂起期间 `activeCheckout` 被置空，若只看"无人占用"就接管，会 discard
+ *    掉正在交接的结算截图（拼多多回归）；
+ * 2. 交接会话本身没有快照可保护时（结算截图在飞行中被中间页取消），若仍一律
+ *    拒绝接管，空壳交接会长期霸占槽位，用户手动截图全部被 NO_ACTIVE_CHECKOUT
+ *    拒绝（京东回归）。
  *
- * @param handoffSuspended 是否存在挂起的交接会话（含同包中间页预交接）。
+ * 因此判据是"交接会话是否真的有快照需要保护"，而非"是否存在交接会话"。
+ *
+ * @param handoffHasSnapshot 挂起的交接会话在缓冲中是否仍有可消费候选；
+ * 无挂起会话时传 false。
  * @param activeCaptureTarget 当前活跃会话的截图目标；null 表示无活跃会话。
  * @return true 表示允许手动重试上下文接管槽位。
  */
 internal fun canUserRetryTakeOverSlot(
-    handoffSuspended: Boolean,
+    handoffHasSnapshot: Boolean,
     activeCaptureTarget: SnapshotCaptureTarget?
 ): Boolean = when {
-    handoffSuspended -> false
+    handoffHasSnapshot -> false
     activeCaptureTarget == SnapshotCaptureTarget.CHECKOUT -> false
     else -> true
 }
@@ -481,6 +487,27 @@ internal class CheckoutSnapshotCaptureCoordinator(
     }
 
     /**
+     * 挂起的交接会话在缓冲中是否仍有可消费候选。
+     *
+     * 用于区分两种交接状态：
+     * - 有快照：槽位承载着等待支付交接消费的结算截图，必须保护；
+     * - 无快照：结算截图在飞行中被中间页取消，或已过期被清理，此时交接只剩
+     *   元数据外壳，继续独占槽位会让手动截图一直被 NO_ACTIVE_CHECKOUT 拒绝。
+     *
+     * @return true 表示存在挂起会话且其槽位内仍有该会话的候选。
+     */
+    private fun handoffCheckoutHasSnapshot(): Boolean {
+        val retained = handoffCheckout?.activeCheckout ?: return false
+        return try {
+            buffer.currentCandidates(retained.slotId).any { candidate ->
+                candidate.sessionId == retained.sessionId
+            }
+        } catch (_: RuntimeException) {
+            false
+        }
+    }
+
+    /**
      * 按秒采样输出"交接挂起期间跳过手动重试接管"，避免中间页高频事件刷屏。
      *
      * @param contextPackage 被跳过的手动重试上下文所属购物包，仅用于诊断。
@@ -527,13 +554,13 @@ internal class CheckoutSnapshotCaptureCoordinator(
                 }
                 val previous = userRetryContext
                 userRetryContext = resolvedContext
-                // 支付交接挂起期间（含同包中间页预交接）槽位属于挂起会话，其快照正等待
-                // 切支付应用后被消费。此时 activeCheckout 已被置空，若继续走下面的
-                // "activeCheckout == null 即可接管"分支，普通页手动重试上下文会把正在
-                // 交接的结算截图 discard 掉，导致支付交接必然 NO_BUFFERED_SNAPSHOT。
-                val handoffSuspended = handoffCheckout != null
-                if (!canUserRetryTakeOverSlot(handoffSuspended, current?.captureTarget)) {
-                    if (handoffSuspended) {
+                // 支付交接挂起期间槽位属于挂起会话，其快照正等待切支付应用后被消费，
+                // 此时 activeCheckout 已被置空，不能让手动重试上下文接管并 discard。
+                // 但若挂起会话本身已无快照（结算截图在飞行中被中间页取消），继续拒绝
+                // 只会让空壳交接长期霸占槽位、手动截图一直失败，此时应允许接管。
+                val handoffHasSnapshot = handoffCheckoutHasSnapshot()
+                if (!canUserRetryTakeOverSlot(handoffHasSnapshot, current?.captureTarget)) {
+                    if (handoffHasSnapshot) {
                         logHandoffRetrySkipSampled(resolvedContext?.shoppingPackage)
                     }
                     return@post
