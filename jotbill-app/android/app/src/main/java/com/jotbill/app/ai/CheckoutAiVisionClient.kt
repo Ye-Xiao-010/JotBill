@@ -44,6 +44,86 @@ private fun defaultCheckoutAiVisionHttpClient(): OkHttpClient = OkHttpClient.Bui
     .callTimeout(20, TimeUnit.SECONDS)
     .build()
 
+/**
+ * 把 AI 返回的描述型字段值归一化为单行字符串。
+ *
+ * 真机故障回归：模型有时把 productDescription 返回成结构化对象
+ * （如 `{"name":"加厚垃圾袋","details":[...]}`）或字符串数组，而协议只接受
+ * 字符串或 null。此前严格校验直接抛异常，导致整份已成功识别的结果（含金额、
+ * 商户）被全部丢弃。这里改为尽力扁平化提取可读文本。
+ *
+ * 提取规则：
+ * - 字符串/数字/布尔：直接取字面值；
+ * - 数组：按顺序递归扁平化后用空格连接；
+ * - 对象：优先取 name/title/text/value/description 等常见键，
+ *   若均不存在则递归扁平化所有值；
+ * - null 或提取结果为空白：返回 null。
+ *
+ * @param value 原始 JSON 值。
+ * @param maxLength 归一化结果的最大长度，超出即截断。
+ * @return 归一化后的非空字符串；无可用文本时返回 null。
+ */
+internal fun flattenDescriptiveValue(value: Any?, maxLength: Int): String? {
+    val flattened = flattenDescriptiveValueInternal(value, depth = 0) ?: return null
+    val normalized = flattened
+        .replace(Regex("""\s+"""), " ")
+        .trim()
+    if (normalized.isEmpty()) {
+        return null
+    }
+    return normalized.take(maxLength)
+}
+
+/** 描述型字段扁平化时优先采用的键名，按优先级排列。 */
+private val DESCRIPTIVE_PREFERRED_KEYS = listOf(
+    "name",
+    "title",
+    "text",
+    "value",
+    "description",
+    "productName",
+    "spec",
+    "specification"
+)
+
+private const val DESCRIPTIVE_MAX_DEPTH = 4
+
+private fun flattenDescriptiveValueInternal(value: Any?, depth: Int): String? {
+    if (depth > DESCRIPTIVE_MAX_DEPTH) {
+        return null
+    }
+    return when (value) {
+        null, JSONObject.NULL -> null
+        is String -> value.takeIf { it.isNotBlank() }
+        is Number, is Boolean -> value.toString()
+        is JSONArray -> (0 until value.length())
+            .mapNotNull { index ->
+                flattenDescriptiveValueInternal(value.opt(index), depth + 1)
+            }
+            .joinToString(" ")
+            .takeIf { it.isNotBlank() }
+
+        is JSONObject -> {
+            val preferred = DESCRIPTIVE_PREFERRED_KEYS
+                .asSequence()
+                .filter { value.has(it) && !value.isNull(it) }
+                .mapNotNull { flattenDescriptiveValueInternal(value.opt(it), depth + 1) }
+                .joinToString(" ")
+            if (preferred.isNotBlank()) {
+                preferred
+            } else {
+                value.keys()
+                    .asSequence()
+                    .mapNotNull { flattenDescriptiveValueInternal(value.opt(it), depth + 1) }
+                    .joinToString(" ")
+                    .takeIf { it.isNotBlank() }
+            }
+        }
+
+        else -> null
+    }
+}
+
 /** 视觉客户端的稳定失败码；不把服务商原始响应暴露给上层或日志。 */
 enum class AiVisionFailureCode(val wireValue: String) {
     AI_CONFIG_MISSING("AI_CONFIG_MISSING"),
@@ -840,7 +920,9 @@ class CheckoutAiVisionClient(
             throw SchemaException("field=amount, reason=minor_unit_conversion_failed")
         }
         if (amountMinor <= 0) throw SchemaException("field=amount, expected=positive")
-        val merchant = requiredNullableString(root, "merchant", MAX_MERCHANT_LENGTH)
+        // 商户名同样只用于展示与匹配辅助，模型偶发返回结构化对象；
+        // 扁平化提取而非整单作废，避免丢掉已识别出的金额。
+        val merchant = descriptiveField(root, "merchant", MAX_MERCHANT_LENGTH, relaxedSchema = false)
         val orderId = requiredNullableString(root, "orderId", MAX_ORDER_ID_LENGTH)
         val occurredAt = requiredNullableString(root, "occurredAt", MAX_TIMESTAMP_LENGTH)?.also {
             try {
@@ -1070,6 +1152,7 @@ class CheckoutAiVisionClient(
         promptVersion=checkout-manual-v1；requestId=$requestId；sessionId=${metadata.sessionId}。
         必须返回字段：screenType、amount；screenType 可以是 checkout 或 order_confirm。
         推荐返回：merchant、productDescription、platform、orderId，缺失时使用 null。
+        merchant 和 productDescription 必须是单行纯字符串，禁止返回对象或数组。
         可选返回：amountSemantic、currency、occurredAt、confidence、fieldConfidence。
         amount 必须是正数十进制字符串或数字，最多两位小数；只取最终需要支付的金额，
         原价、单价、优惠金额、运费、积分抵扣都不要作为 amount。
@@ -1080,6 +1163,8 @@ class CheckoutAiVisionClient(
         必须返回字段：screenType、platform、merchant、productDescription、amount、amountSemantic、currency、
         orderId、paymentMethod、occurredAt、confidence、fieldConfidence。
         screenType 必须为 checkout；缺失的文本字段使用 null，不要使用空字符串。
+        merchant 和 productDescription 必须是单行纯字符串，禁止返回对象或数组；
+        商品有多个规格或多件时，在同一个字符串里用空格连接。
         amount 必须是正数十进制字符串，最多两位小数；currency 必须为 CNY。
         amountSemantic 只能是 FINAL_PAYABLE、ACTUAL_PAYABLE、DISCOUNTED_TOTAL 或 ORDER_TOTAL；
         原价、单价、优惠金额、运费、积分抵扣和未知金额语义都不能作为 amount，遇到这些情况返回不确定且不要猜测。
@@ -1276,8 +1361,11 @@ class CheckoutAiVisionClient(
             throw SchemaException("field=screenType, expected=checkout, actual=$screenType")
         }
         val platform = nullableString(root, "platform", MAX_PLATFORM_LENGTH, relaxedSchema)
-        val merchant = nullableString(root, "merchant", MAX_MERCHANT_LENGTH, relaxedSchema)
-        val productDescription = nullableString(
+        val merchant = descriptiveField(root, "merchant", MAX_MERCHANT_LENGTH, relaxedSchema)
+        // productDescription 是纯展示字段，模型偶发返回结构化对象或数组。
+        // 它不参与金额匹配与自动入账判定，因此类型不符时扁平化提取文本即可，
+        // 不能因为它而丢弃整份已识别出金额与商户的结果。
+        val productDescription = descriptiveField(
             root,
             "productDescription",
             MAX_PRODUCT_LENGTH,
@@ -1405,6 +1493,47 @@ class CheckoutAiVisionClient(
         if (!root.has(key) || root.isNull(key)) return null
         val value = root.get(key) as? String ?: return null
         return value.trim().takeIf { it.isNotEmpty() && it.length <= maxLength }
+    }
+
+    /**
+     * 读取描述型字段（商户名、商品描述）并容忍非字符串结构。
+     *
+     * 与 [nullableString] 的区别：严格模式下遇到对象或数组不再抛
+     * [SchemaException]，而是扁平化提取可读文本。这类字段只用于展示，
+     * 不参与金额校验与自动入账判定，不应因格式差异使整份结果作废。
+     * 字段缺失仍按协议要求在严格模式下报错。
+     *
+     * @param root AI 返回的 JSON 根对象。
+     * @param key 字段名。
+     * @param maxLength 最大长度，超出即截断而非报错。
+     * @param relaxedSchema 是否为宽松模式（手动截图路径）。
+     * @return 归一化文本；无可用内容时返回 null。
+     */
+    private fun descriptiveField(
+        root: JSONObject,
+        key: String,
+        maxLength: Int,
+        relaxedSchema: Boolean
+    ): String? {
+        if (!root.has(key)) {
+            if (relaxedSchema) {
+                return null
+            }
+            throw SchemaException("field=$key, reason=missing")
+        }
+        if (root.isNull(key)) {
+            return null
+        }
+        val rawValue = root.get(key)
+        val flattened = flattenDescriptiveValue(rawValue, maxLength)
+        if (flattened == null && rawValue !is String) {
+            android.util.Log.i(
+                "CheckoutAiVisionClient",
+                "描述字段类型非字符串且无法提取文本，按 null 处理: " +
+                    "field=$key, actual=${valueType(rawValue)}"
+            )
+        }
+        return flattened
     }
 
     private fun optionalNumber(root: JSONObject, key: String): Double? {
