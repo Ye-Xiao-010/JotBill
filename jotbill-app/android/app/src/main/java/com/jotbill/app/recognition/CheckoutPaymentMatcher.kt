@@ -423,14 +423,31 @@ internal class CheckoutPaymentMatcher(
         val now = nowMillis()
         database.withTransaction {
             if (!signal.isValid()) {
+                android.util.Log.w(
+                    "CheckoutPaymentMatcher",
+                    "孤立支付证据未落待确认(信号非法): pkg=${signal.paymentPackage}, " +
+                        "amount=${signal.amountMinor}, reason=$conflictReason"
+                )
                 return@withTransaction
             }
             val normalizedSourceType = normalizePaymentEvidenceSourceType(sourceType)
-                ?: return@withTransaction
+                ?: run {
+                    android.util.Log.w(
+                        "CheckoutPaymentMatcher",
+                        "孤立支付证据未落待确认(来源类型非法): sourceType=$sourceType, " +
+                            "amount=${signal.amountMinor}"
+                    )
+                    return@withTransaction
+                }
             val sourceEventKey = sourceEventKey(signal)
             val pendingId = stableId("pending-orphan", sourceEventKey)
             val dao = database.pendingTransactionDao()
             if (dao.getById(pendingId) != null) {
+                android.util.Log.i(
+                    "CheckoutPaymentMatcher",
+                    "孤立支付证据已存在待确认(幂等跳过): pending=${pendingId.take(16)}, " +
+                        "amount=${signal.amountMinor}, reason=$conflictReason"
+                )
                 return@withTransaction
             }
             // 阶段五 T1 时机一：纯通知待确认创建前执行规则；
@@ -447,6 +464,11 @@ internal class CheckoutPaymentMatcher(
             )
             if (ruleDecision is RuleEngine.Decision.Ignored) {
                 recordRuleDecisionAudit(pendingId, "ignore", ruleDecision.hits)
+                android.util.Log.i(
+                    "CheckoutPaymentMatcher",
+                    "孤立支付证据被规则忽略: pending=${pendingId.take(16)}, " +
+                        "amount=${signal.amountMinor}, hits=${ruleDecision.hits.size}"
+                )
                 return@withTransaction
             }
             val rulePatch = ruleEngine.sanitizePatch(
@@ -527,9 +549,22 @@ internal class CheckoutPaymentMatcher(
                   if (!insertedAmbiguousPending) {
                       dao.insertIfAbsent(pending)
                   }
+                android.util.Log.i(
+                    "CheckoutPaymentMatcher",
+                    "孤立支付证据已落待确认(并发会话): pending=${pendingId.take(16)}, " +
+                        "amount=${signal.amountMinor}, sessions=${sessionIds.size}, " +
+                        "ambiguous=$insertedAmbiguousPending, reason=$effectiveConflictReason"
+                )
                 return@withTransaction
             }
-            dao.insertIfAbsent(pending)
+            val inserted = dao.insertIfAbsent(pending)
+            android.util.Log.i(
+                "CheckoutPaymentMatcher",
+                "孤立支付证据已落待确认: pending=${pendingId.take(16)}, " +
+                    "amount=${signal.amountMinor}, merchant=${resolvedMerchant ?: "null"}, " +
+                    "account=${resolvedAccountId ?: "null"}, reason=$effectiveConflictReason, " +
+                    "inserted=${inserted != -1L}"
+            )
         }
     }
 
