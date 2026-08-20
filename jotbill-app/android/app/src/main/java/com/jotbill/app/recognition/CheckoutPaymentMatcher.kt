@@ -75,6 +75,29 @@ internal fun resolveConflictWithAiUnverifiedGuard(
     paymentStatus == PAYMENT_STATUS_AI_UNVERIFIED -> AI_UNVERIFIED_PAYMENT_REASON
     else -> null
 }
+/**
+ * 购物应用包名到平台展示名的权威映射。
+ *
+ * 包名由系统无障碍事件提供，可靠性远高于 AI 视觉识别：真机上 AI 曾把
+ * platform 读成"手机应用"这类无意义文字，导致账单来源无法体现购物平台。
+ * 因此 platform 一律由该映射推导，不采用 AI 返回值。
+ *
+ * @param shoppingPackage 结算会话记录的购物应用包名。
+ * @return 平台展示名；未收录的包名返回 null。
+ */
+internal fun shoppingPlatformName(shoppingPackage: String?): String? =
+    when (shoppingPackage?.trim()) {
+        "com.xunmeng.pinduoduo" -> "拼多多"
+        "com.taobao.taobao" -> "淘宝"
+        "com.tmall.wireless" -> "天猫"
+        "com.jingdong.app.mall" -> "京东"
+        "com.sankuai.meituan" -> "美团"
+        "com.sdu.didi.psnger" -> "滴滴"
+        "com.ss.android.ugc.aweme" -> "抖音"
+        "com.xingin.xhs" -> "小红书"
+        else -> null
+    }
+
 private val TERMINAL_SESSION_STATUSES = setOf(
     "COMPLETED",
     "CANCELLED",
@@ -586,9 +609,9 @@ internal class CheckoutPaymentMatcher(
                 database.transactionCandidateDao().update(
                     candidate.copy(
                         amountMinor = signal.amountMinor,
-                        merchant = signal.merchant
-                            ?: candidate.merchant
-                            ?: shoppingPackageMerchant(existingSession.shoppingPackage),
+                        // merchant 只保留真实商户名（支付通知提供），不再用购物平台兜底：
+                        // 平台已由 platform 字段独立承载。
+                        merchant = signal.merchant ?: candidate.merchant,
                         evidenceAmountMinor = signal.amountMinor,
                         evidenceMerchant = signal.merchant,
                         evidenceOrderId = signal.orderId,
@@ -660,9 +683,9 @@ internal class CheckoutPaymentMatcher(
                     id = candidateIdFor(reference.sessionId),
                     sessionId = reference.sessionId,
                     amountMinor = storedEvidence.amountMinor,
-                    platform = storedEvidence.platform,
-                    merchant = storedEvidence.merchant
-                        ?: shoppingPackageMerchant(session.shoppingPackage),
+                    // platform 固定为购物平台；证据里的 platform 是支付包名，不能混用。
+                    platform = shoppingPlatformName(session.shoppingPackage),
+                    merchant = storedEvidence.merchant,
                     productDescription = null,
                     evidenceAmountMinor = storedEvidence.amountMinor,
                     evidenceMerchant = storedEvidence.merchant,
@@ -740,9 +763,8 @@ internal class CheckoutPaymentMatcher(
                 }
                 val enriched = candidate.copy(
                     amountMinor = storedEvidence.amountMinor ?: candidate.amountMinor,
-                    merchant = candidate.merchant
-                        ?: storedEvidence.merchant
-                        ?: shoppingPackageMerchant(session.shoppingPackage),
+                    // merchant 只保留真实商户名，不再用购物平台兜底。
+                    merchant = candidate.merchant ?: storedEvidence.merchant,
                     evidenceAmountMinor = storedEvidence.amountMinor ?: candidate.evidenceAmountMinor,
                     evidenceMerchant = storedEvidence.merchant ?: candidate.evidenceMerchant,
                     evidenceOrderId = storedEvidence.orderId ?: candidate.evidenceOrderId,
@@ -853,9 +875,9 @@ internal class CheckoutPaymentMatcher(
                     id = candidateIdFor(session.id),
                     sessionId = session.id,
                     amountMinor = evidence.amountMinor,
-                    platform = evidence.platform,
-                    merchant = evidence.merchant
-                        ?: shoppingPackageMerchant(session.shoppingPackage),
+                    // platform 固定为购物平台，不写入支付包名。
+                    platform = shoppingPlatformName(session.shoppingPackage),
+                    merchant = evidence.merchant,
                     productDescription = null,
                     evidenceAmountMinor = evidence.amountMinor,
                     evidenceMerchant = evidence.merchant,
@@ -1459,11 +1481,13 @@ internal class CheckoutPaymentMatcher(
             categoryId = rulePatch.categoryId,
             accountId = accountId,
             targetAccountId = null,
-            platform = rulePatch.platform ?: candidate.platform,
+            // platform 语义固定为"购物平台"，且只信任系统提供的包名：
+            // AI 视觉识别曾把它读成"手机应用"这类无意义文字。规则显式设置的
+            // platform 优先级最高（用户意图），其余一律按包名映射推导。
+            platform = rulePatch.platform ?: shoppingPlatformName(session.shoppingPackage),
             merchant = rulePatch.merchant
                 ?: candidate.merchant
-                ?: evidence.merchant
-                ?: shoppingPackageMerchant(session.shoppingPackage),
+                ?: evidence.merchant,
             productDescription = candidate.productDescription,
             sourceType = "ai_vision",
             originalTransactionId = session.id,
@@ -1603,8 +1627,9 @@ internal class CheckoutPaymentMatcher(
             amountMinor = amountMinor,
             type = "expense",
             occurredAt = evidence.occurredAt ?: now,
-            platform = evidence.platform,
-            merchant = evidence.merchant ?: shoppingPackageMerchant(session.shoppingPackage),
+            // platform 展示购物平台；账户判定仍用支付包名（evidence.platform）。
+            platform = shoppingPlatformName(session.shoppingPackage),
+            merchant = evidence.merchant,
             productDescription = null,
             orderId = evidence.orderId,
             accountId = defaultAccountIdForPayment(evidence.platform),
@@ -1650,10 +1675,9 @@ internal class CheckoutPaymentMatcher(
             amountMinor = amountMinor,
             type = "expense",
             occurredAt = evidence?.occurredAt ?: candidate.aiOccurredAt ?: now,
-            platform = candidate.platform ?: evidence?.platform,
-            merchant = candidate.merchant
-                ?: evidence?.merchant
-                ?: shoppingPackageMerchant(session.shoppingPackage),
+            // platform 展示购物平台；账户判定仍用支付包名（evidence.platform）。
+            platform = candidate.platform ?: shoppingPlatformName(session.shoppingPackage),
+            merchant = candidate.merchant ?: evidence?.merchant,
             productDescription = candidate.productDescription,
             orderId = evidence?.orderId ?: candidate.aiOrderId,
             accountId = defaultAccountIdForPayment(evidence?.platform),
@@ -1735,12 +1759,18 @@ internal class CheckoutPaymentMatcher(
         now: Long
     ): TransactionCandidateEntity {
         val fields = result.fields
+        // 结算页 AI 不再提供 platform 与 merchant：
+        // - platform 由系统包名权威推导（AI 曾读成"手机应用"这类无意义文字）；
+        // - merchant 在结算页上实际读到的是商品品牌（如"金桂白牡丹"），
+        //   把它当商户会污染账单与查重因子；真实商户名由支付通知链路提供。
+        // 商品信息完整保留在 productDescription，由详情页描述栏展示。
+        val aiPlatform = shoppingPlatformName(reference.shoppingPackage)
         val candidate = (existing ?: TransactionCandidateEntity(
             id = id,
             sessionId = reference.sessionId,
             amountMinor = fields.amountMinor,
-            platform = fields.platform,
-            merchant = fields.merchant,
+            platform = aiPlatform,
+            merchant = null,
             productDescription = fields.productDescription,
             evidenceAmountMinor = null,
             evidenceMerchant = null,
@@ -1754,8 +1784,8 @@ internal class CheckoutPaymentMatcher(
             version = 1
         )).copy(
             amountMinor = if (existing?.matched == true) existing.amountMinor else fields.amountMinor,
-            platform = fields.platform ?: existing?.platform,
-            merchant = fields.merchant ?: existing?.merchant,
+            platform = aiPlatform ?: existing?.platform,
+            merchant = existing?.merchant,
             productDescription = fields.productDescription ?: existing?.productDescription,
             aiOrderId = fields.orderId ?: existing?.aiOrderId,
             aiOccurredAt = occurredAt ?: existing?.aiOccurredAt,
@@ -2002,19 +2032,6 @@ internal class CheckoutPaymentMatcher(
     )
 
     private fun candidateIdFor(sessionId: String): String = stableId("candidate", sessionId)
-
-    /** 结算会话的购物包名兜底成中文商户名，避免支付证据无商户时账单只显示时间。 */
-    private fun shoppingPackageMerchant(shoppingPackage: String?): String? = when (shoppingPackage) {
-        "com.xunmeng.pinduoduo" -> "拼多多"
-        "com.taobao.taobao" -> "淘宝"
-        "com.tmall.wireless" -> "天猫"
-        "com.jingdong.app.mall" -> "京东"
-        "com.sankuai.meituan" -> "美团"
-        "com.sdu.didi.psnger" -> "滴滴"
-        "com.ss.android.ugc.aweme" -> "抖音"
-        "com.xingin.xhs" -> "小红书"
-        else -> null
-    }
 
     private fun parseTimestamp(value: String): Long? = runCatching {
         Instant.parse(value).toEpochMilli()

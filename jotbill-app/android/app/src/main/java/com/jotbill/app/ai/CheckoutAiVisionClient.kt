@@ -1194,8 +1194,9 @@ class CheckoutAiVisionClient(
         只返回一个 JSON 对象，禁止 Markdown、解释文字和额外字段。
         promptVersion=checkout-manual-v1；requestId=$requestId；sessionId=${metadata.sessionId}。
         必须返回字段：screenType、amount；screenType 可以是 checkout 或 order_confirm。
-        推荐返回：merchant、productDescription、platform、orderId，缺失时使用 null。
-        merchant 和 productDescription 必须是单行纯字符串，禁止返回对象或数组。
+        推荐返回：productDescription、orderId，缺失时使用 null。
+        productDescription 必须是单行纯字符串，禁止返回对象或数组。
+        platform 与 merchant 已由客户端根据购物应用包名确定，可以直接填 null。
         可选返回：amountSemantic、currency、occurredAt、confidence、fieldConfidence。
         amount 必须是正数十进制字符串或数字，最多两位小数；只取最终需要支付的金额，
         原价、单价、优惠金额、运费、积分抵扣都不要作为 amount。
@@ -1206,8 +1207,10 @@ class CheckoutAiVisionClient(
         必须返回字段：screenType、platform、merchant、productDescription、amount、amountSemantic、currency、
         orderId、paymentMethod、occurredAt、confidence、fieldConfidence。
         screenType 必须为 checkout；缺失的文本字段使用 null，不要使用空字符串。
-        merchant 和 productDescription 必须是单行纯字符串，禁止返回对象或数组；
+        productDescription 必须是单行纯字符串，禁止返回对象或数组；
         商品有多个规格或多件时，在同一个字符串里用空格连接。
+        platform 与 merchant 已由客户端根据购物应用包名确定，你返回的值不会被采用，
+        可以直接填 null；请把精力放在 amount 与 productDescription 的准确性上。
         amount 必须是正数十进制字符串，最多两位小数；currency 必须为 CNY。
         amountSemantic 只能是 FINAL_PAYABLE、ACTUAL_PAYABLE、DISCOUNTED_TOTAL 或 ORDER_TOTAL；
         原价、单价、优惠金额、运费、积分抵扣和未知金额语义都不能作为 amount，遇到这些情况返回不确定且不要猜测。

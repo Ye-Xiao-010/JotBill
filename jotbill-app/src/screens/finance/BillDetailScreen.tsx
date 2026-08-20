@@ -160,14 +160,12 @@ export default function BillDetailScreen() {
             <Text style={styles.detailLabel}>时间</Text>
             <Text style={styles.detailValueCourier}>{`${formatDate(bill.occurredAt)} ${formatTime(bill.occurredAt)}`}</Text>
           </View>
-          {(bill.merchant || bill.productDescription || bill.platform) && (
+          {bill.platform && (
             <>
               <View style={styles.divider} />
               <View style={styles.detailRow}>
                 <Text style={styles.detailLabel}>来源</Text>
-                <Text style={styles.detailValue}>
-                  {[bill.platform, bill.merchant, bill.productDescription].filter(Boolean).join(' / ')}
-                </Text>
+                <Text style={styles.detailValue}>{bill.platform}</Text>
               </View>
             </>
           )}
