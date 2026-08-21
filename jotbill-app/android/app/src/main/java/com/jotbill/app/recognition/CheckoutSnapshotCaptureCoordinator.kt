@@ -75,6 +75,37 @@ fun interface SnapshotCaptureCallback {
 }
 
 /**
+ * 判断一次页面失效是否属于“同购物包内的支付中间页”。
+ *
+ * 中间页（拼多多提交订单后的收银台、京东提交后的加载页）不是结算页，却是
+ * 结算 → 支付旅程的必经环节：应按预交接挂起会话与快照，而非清空槽位。
+ *
+ * 提取为纯函数以便单测覆盖——该分支判错会静默销毁唯一的结算截图，
+ * 只能靠真机日志事后追查。
+ *
+ * 判据取“当前会话或已挂起会话”的包名：预交接已把 activeCheckout 置空，
+ * 挂起期间同包内的每个非结算页事件都会让当前会话为空。若只看当前会话，
+ * 这些后续事件会被误判为普通离开并清空槽位。
+ *
+ * @param reason 本次失效原因；只有 NON_CHECKOUT_PAGE 才可能是中间页。
+ * @param invalidatedPackage 触发失效的页面所属购物包名。
+ * @param handoffSourcePackage 当前会话或已挂起会话的购物包名；两者皆无时为 null。
+ * @return true 表示应按预交接挂起处理，保留槽位与快照。
+ */
+internal fun isSamePackagePaymentInterstitial(
+    reason: CheckoutInvalidationReason,
+    invalidatedPackage: String?,
+    handoffSourcePackage: String?
+): Boolean {
+    if (reason != CheckoutInvalidationReason.NON_CHECKOUT_PAGE) {
+        return false
+    }
+    val invalidated = invalidatedPackage?.trim().orEmpty()
+    val source = handoffSourcePackage?.trim().orEmpty()
+    return invalidated.isNotBlank() && invalidated == source
+}
+
+/**
  * 判定普通页手动重试上下文能否接管截图槽位。
  *
  * 提取为纯函数以便单测覆盖。两类回归都由该判据统一收口：
@@ -1097,11 +1128,19 @@ internal class CheckoutSnapshotCaptureCoordinator(
         // 同购物包内的非结算中间页（拼多多提交订单后的收银台）是支付旅程的一部分：
         // 视作“预交接”挂起当前结算会话与快照，等待切支付应用或回到结算页恢复，
         // 而不是立即清空槽位导致已 STORED 的截图再也关联不上支付证据。
-        val isPaymentInterstitial =
-            detail.reason == CheckoutInvalidationReason.NON_CHECKOUT_PAGE &&
-                current != null &&
-                detail.shoppingPackage == current.page.observation.shoppingPackage
+        //
+        // 判定必须同时接受已挂起会话（retained）：预交接已把 activeCheckout 置空，
+        // 此后同包内的每一个非结算页事件都会让 current==null。若只看 current，
+        // 挂起期间的后续事件就会被当成"普通离开"而清空槽位——真机上京东在
+        // 10:54:27 正确设置交接栅栏后，10:54:57 的同包事件即以
+        // current=null,retained=3c91b93b,consumed=false 把唯一快照清空，
+        // 随后支付证据只能落 NO_BUFFERED_SNAPSHOT / CHECKOUT_REFERENCE_INVALID。
         val handoffSource = current ?: retained?.activeCheckout
+        val isPaymentInterstitial = isSamePackagePaymentInterstitial(
+            reason = detail.reason,
+            invalidatedPackage = detail.shoppingPackage,
+            handoffSourcePackage = handoffSource?.page?.observation?.shoppingPackage
+        )
         val retainForHandoff =
             (detail.reason == CheckoutInvalidationReason.PAYMENT_APP_HANDOFF || isPaymentInterstitial) &&
                 handoffSource != null
