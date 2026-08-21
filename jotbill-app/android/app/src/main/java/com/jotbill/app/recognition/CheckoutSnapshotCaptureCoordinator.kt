@@ -1132,7 +1132,25 @@ internal class CheckoutSnapshotCaptureCoordinator(
         )
 
         // 先摘除请求和排队项，再建立交接栅栏并清空旧状态，最后才允许旧回调重入。
-        val pendingToNotify = detachPendingCapture()
+        // 例外：支付交接（含同包中间页预交接）且截图仍在飞行中时不摘除请求。
+        // 京东这类"结算页稳定后数百毫秒即跳中间页"的时序下，摘除等于把唯一一次
+        // 结算截图取消，槽位永远为空，支付证据只能落 CHECKOUT_REFERENCE_INVALID。
+        // 保留请求可让它落盘到挂起会话的槽位，交接时正常被消费。
+        val keepPendingForHandoff = retainForHandoff &&
+            pendingCapture != null &&
+            pendingCapture?.sourceReason == SnapshotSourceReason.CHECKOUT_STABLE &&
+            pendingCapture?.activeCheckout?.sessionId == nextHandoff?.activeCheckout?.sessionId
+        val pendingToNotify = if (keepPendingForHandoff) {
+            Log.i(
+                TAG,
+                "交接期间保留飞行中的结算截图: " +
+                    "session=${pendingCapture?.activeCheckout?.sessionId?.take(8)}, " +
+                    "reason=${detail.reason.wireValue}"
+            )
+            null
+        } else {
+            detachPendingCapture()
+        }
         val queuedManualToNotify = queuedManual
         queuedManual = null
         queuedAutomatic = null
@@ -1379,7 +1397,11 @@ internal class CheckoutSnapshotCaptureCoordinator(
         }
         pendingCapture = null
 
-        if (pending.cancelled.get() || closed || activeCheckout?.key != pending.activeCheckout.key) {
+        // 交接挂起期间 activeCheckout 已被置空，但该请求属于挂起会话时仍应落盘：
+        // 京东"结算页稳定后即跳中间页"的时序下，这是唯一一次结算截图。
+        val belongsToHandoff = handoffCheckout?.activeCheckout?.key == pending.activeCheckout.key
+        val keyMatches = activeCheckout?.key == pending.activeCheckout.key || belongsToHandoff
+        if (pending.cancelled.get() || closed || !keyMatches) {
             imageBytes?.fill(0)
             pending.cancelled.set(true)
             publishPendingResult(
@@ -1437,6 +1459,25 @@ internal class CheckoutSnapshotCaptureCoordinator(
         } finally {
             // 缓冲区在成功时已复制字节；失败、拒绝和取消都在这里清零入口数组。
             capturedBytes.fill(0)
+        }
+        // 交接挂起期间落盘的结算截图，其栅栏在 handleInvalidated 时因槽位仍为空而
+        // 设置失败，必须在此补设，否则支付交接消费时仍会 NO_BUFFERED_SNAPSHOT。
+        if (belongsToHandoff && result.status == SnapshotCaptureStatus.STORED) {
+            try {
+                buffer.retainForPaymentHandoff(
+                    slotId = pending.activeCheckout.slotId,
+                    sessionId = pending.activeCheckout.sessionId,
+                    pageFingerprint = pending.activeCheckout.page.observation.pageFingerprint
+                )
+                Log.i(
+                    TAG,
+                    "交接后落盘已补设栅栏: " +
+                        "session=${pending.activeCheckout.sessionId.take(8)}, " +
+                        "fingerprint=${pending.activeCheckout.page.observation.pageFingerprint.take(12)}"
+                )
+            } catch (error: RuntimeException) {
+                Log.w(TAG, "交接后补设栅栏失败", error)
+            }
         }
         publishPendingResult(pending, result)
         drainQueuedCapture()
