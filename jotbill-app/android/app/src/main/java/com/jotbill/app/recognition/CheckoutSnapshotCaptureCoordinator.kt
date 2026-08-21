@@ -75,6 +75,24 @@ fun interface SnapshotCaptureCallback {
 }
 
 /**
+ * 生成观察事件的诊断名称，用于熔断与分发失败日志。
+ *
+ * 只输出事件类型、购物包名与截断指纹：页面文本、金额、订单号一律不进日志，
+ * 与"页面指纹不得保留敏感原值"的既有约束保持一致。
+ *
+ * @return 形如 `Stable(pkg=com.jingdong.app.mall,fp=4dc69b730966)` 的短标识。
+ */
+private fun CheckoutObservationEvent.diagnosticName(): String = when (this) {
+    is CheckoutObservationEvent.Stable ->
+        "Stable(pkg=${page.observation.shoppingPackage}," +
+            "fp=${page.observation.pageFingerprint.take(12)})"
+    is CheckoutObservationEvent.Invalidated ->
+        "Invalidated(reason=${detail.reason.wireValue}," +
+            "pkg=${detail.shoppingPackage ?: "null"}," +
+            "fp=${detail.pageFingerprint?.take(12) ?: "null"})"
+}
+
+/**
  * 判断一次页面失效是否属于“同购物包内的支付中间页”。
  *
  * 中间页（拼多多提交订单后的收银台、京东提交后的加载页）不是结算页，却是
@@ -156,6 +174,8 @@ internal class CheckoutSnapshotCaptureCoordinator(
         private const val EVENT_DISPATCH_TIMEOUT_MILLIS = 5_000L
         /** 支付中间页挂起后，同包指纹漂移尾波稳定事件被视为旧订单的时间窗口。 */
         private const val HANDOFF_DRIFT_TAIL_WINDOW_MILLIS = 2_500L
+        /** 熔断后"跳过观察事件"日志的采样间隔，兼顾可观测与防刷屏。 */
+        private const val CLOSED_EVENT_SKIP_LOG_INTERVAL_MILLIS = 5_000L
         private const val MAIN_HANDLER_UNAVAILABLE = "MAIN_HANDLER_UNAVAILABLE"
         private const val EVENT_PROCESSING_FAILED = "EVENT_PROCESSING_FAILED"
         private const val SCREENSHOT_HANDLER_UNAVAILABLE = "SCREENSHOT_HANDLER_UNAVAILABLE"
@@ -250,6 +270,14 @@ internal class CheckoutSnapshotCaptureCoordinator(
     private var userRetryContext: UserRetryCaptureContext? = null
     /** "交接挂起期间跳过手动重试接管"日志的最近打印时间，按秒采样防止刷屏。 */
     private var lastHandoffRetrySkipLogAt = 0L
+
+    /**
+     * "协调器已关闭跳过事件"日志的最近打印时间。
+     *
+     * 熔断后每个无障碍事件都会命中该分支（真机每秒可达数十次），
+     * 必须采样；但完全不打印会让"自动截图 0 次"变成无据可查的黑盒。
+     */
+    private var lastClosedEventSkipLogAt = 0L
     private var resultListener: SnapshotCaptureResultListener? = null
     /** fallback 可能在截图线程设置，主线程路径需要可靠观察关闭状态。 */
     @Volatile
@@ -265,6 +293,7 @@ internal class CheckoutSnapshotCaptureCoordinator(
         }
 
         val dispatch = MainThreadDispatch()
+        val postedAt = nowMillis()
         val posted = try {
             mainHandler.post {
                 try {
@@ -288,16 +317,37 @@ internal class CheckoutSnapshotCaptureCoordinator(
         val completed = try {
             dispatch.completed.await(EVENT_DISPATCH_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS)
         } catch (_: InterruptedException) {
+            Log.w(
+                TAG,
+                "结算观察事件分发被中断: event=${event.diagnosticName()}, " +
+                    "waited=${nowMillis() - postedAt}ms, thread=${Thread.currentThread().name}"
+            )
             requestFailClosedFromAnyThread(reason = EVENT_PROCESSING_FAILED)
             Thread.currentThread().interrupt()
             throw eventDispatchFailure(EVENT_PROCESSING_FAILED)
         }
         if (!completed) {
+            // 主线程在超时窗口内未能处理该事件：这是熔断最常见的真实起因
+            // （真机上伴随 Choreographer Skipped frames / Davey! 卡顿）。
+            // 记录等待耗时可区分"主线程卡顿"与"处理逻辑本身异常"。
+            Log.w(
+                TAG,
+                "结算观察事件分发超时，即将熔断协调器: event=${event.diagnosticName()}, " +
+                    "waited=${nowMillis() - postedAt}ms, " +
+                    "timeout=${EVENT_DISPATCH_TIMEOUT_MILLIS}ms, " +
+                    "thread=${Thread.currentThread().name}"
+            )
             requestFailClosedFromAnyThread(reason = EVENT_PROCESSING_FAILED)
             throw eventDispatchFailure(EVENT_PROCESSING_FAILED)
         }
 
         dispatch.failure?.let { error ->
+            Log.w(
+                TAG,
+                "结算观察事件在主线程处理失败: event=${event.diagnosticName()}, " +
+                    "waited=${nowMillis() - postedAt}ms",
+                error
+            )
             if (!emergencyClosed.get()) {
                 requestFailClosedFromAnyThread(reason = EVENT_PROCESSING_FAILED)
             }
@@ -319,6 +369,18 @@ internal class CheckoutSnapshotCaptureCoordinator(
 
     private fun handleEventOnMainThread(event: CheckoutObservationEvent) {
         if (isClosedOnMainThread()) {
+            // 协调器熔断后自动链路在此静默 return，真机表现为"自动截图 0 次"。
+            // 无障碍事件每秒可达数十次，因此按时间采样打印，避免刷屏。
+            val now = nowMillis()
+            if (now - lastClosedEventSkipLogAt >= CLOSED_EVENT_SKIP_LOG_INTERVAL_MILLIS) {
+                lastClosedEventSkipLogAt = now
+                Log.w(
+                    TAG,
+                    "协调器已关闭，跳过结算观察事件: event=${event.diagnosticName()}, " +
+                        "closed=$closed, failClosedRequested=${failClosedRequested.get()}, " +
+                        "emergencyClosed=${emergencyClosed.get()}"
+                )
+            }
             return
         }
         eventGeneration += 1
@@ -346,9 +408,28 @@ internal class CheckoutSnapshotCaptureCoordinator(
         failClosedRequested.set(true)
         // 与主线程不可用 fallback 竞争关闭所有权，避免双方交叉清理协调器状态。
         if (!emergencyClosed.compareAndSet(false, true)) {
+            Log.w(
+                TAG,
+                "协调器熔断请求被忽略(关闭所有权已被占用): reason=$reason, " +
+                    "thread=${Thread.currentThread().name}"
+            )
             return
         }
         closed = true
+        // 熔断不可逆：下面会 quitSafely() 退出截图线程，此后所有手动截图返回
+        // SERVICE_NOT_CONNECTED、自动链路在 handleEventOnMainThread 入口静默 return，
+        // 只有服务重建才能恢复。必须留下原因与现场，否则真机上只能看到
+        // "按钮点了没反应"而查不到任何关闭记录。
+        Log.w(
+            TAG,
+            "协调器已熔断(不可逆，截图功能将持续不可用): reason=$reason, " +
+                "thread=${Thread.currentThread().name}, " +
+                "pendingCapture=${pendingCapture?.sourceReason?.wireValue ?: "none"}, " +
+                "activeSession=${activeCheckout?.sessionId?.take(8) ?: "null"}, " +
+                "handoffSession=${handoffCheckout?.activeCheckout?.sessionId?.take(8) ?: "null"}, " +
+                "eventGeneration=$eventGeneration",
+            Throwable("熔断调用栈")
+        )
         try {
             buffer.close()
         } catch (error: RuntimeException) {
@@ -418,9 +499,25 @@ internal class CheckoutSnapshotCaptureCoordinator(
         failClosedRequested.set(true)
         // 只有取得关闭所有权的一方可以清理普通协调器字段，避免覆盖主线程正常收口。
         if (!emergencyClosed.compareAndSet(false, true)) {
+            Log.w(
+                TAG,
+                "主线程不可用兜底关闭被忽略(关闭所有权已被占用): " +
+                    "thread=${Thread.currentThread().name}"
+            )
             return
         }
         closed = true
+        // 该路径不发布任何回调，调用方拿不到结果只会一直等待或静默失败，
+        // 因此这里是唯一的现场记录点。
+        Log.w(
+            TAG,
+            "协调器已紧急关闭(主线程不可用，不发布回调): " +
+                "thread=${Thread.currentThread().name}, " +
+                "pendingCapture=${pendingCapture?.sourceReason?.wireValue ?: "none"}, " +
+                "queuedManual=${queuedManual != null}, " +
+                "eventGeneration=$eventGeneration",
+            Throwable("紧急关闭调用栈")
+        )
 
         val pendingToRelease = pendingCapture
         val queuedToDrop = queuedManual
@@ -470,6 +567,18 @@ internal class CheckoutSnapshotCaptureCoordinator(
         }
 
         failClosedRequested.set(true)
+        // 该标记先于主线程投递生效：isClosedOnMainThread() 立即返回 true，
+        // 因此从此刻起手动截图就会返回 SERVICE_NOT_CONNECTED，
+        // 而真正的 failClosedOnMainThread 可能还排在阻塞的主线程队列里。
+        // 真机故障（主线程卡顿 4.8 秒后事件分发超时）正是走这条路径，
+        // 此处不记录就无法解释"点击受理后数秒才批量失败"。
+        Log.w(
+            TAG,
+            "已请求协调器熔断(跨线程，判定即刻生效): reason=$reason, " +
+                "thread=${Thread.currentThread().name}, " +
+                "pending=${pending?.sourceReason?.wireValue ?: "none"}",
+            Throwable("熔断请求调用栈")
+        )
         val dispatch = MainThreadDispatch()
         val posted = try {
             mainHandler.post {
@@ -657,6 +766,15 @@ internal class CheckoutSnapshotCaptureCoordinator(
         val posted = try {
             mainHandler.post {
                 if (closed) {
+                    // 悬浮按钮此时仍显示 READY 并受理点击，用户只会看到"点了没反应"。
+                    // 打印三个关闭标志位以区分：正常 close(SERVICE_DESTROYED)、
+                    // 跨线程熔断请求、以及主线程不可用的紧急关闭。
+                    Log.w(
+                        TAG,
+                        "手动截图被拒(协调器已关闭): closed=$closed, " +
+                            "failClosedRequested=${failClosedRequested.get()}, " +
+                            "emergencyClosed=${emergencyClosed.get()}"
+                    )
                     publish(
                         unavailableResult(
                             sourceReason = SnapshotSourceReason.MANUAL_CAPTURE,

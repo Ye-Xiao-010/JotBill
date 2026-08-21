@@ -372,6 +372,14 @@ class CheckoutAccessibilityService : AccessibilityService() {
     override fun onServiceConnected() {
         super.onServiceConnected()
 
+        // 每次系统重连都会 close 旧协调器并新建一个：若真机上出现"截图突然全部
+        // 不可用"，需要据此区分是协调器熔断还是服务被反复重连。
+        Log.i(
+            TAG,
+            "无障碍服务开始连接: 旧协调器=${if (snapshotCaptureCoordinator != null) "存在(将关闭)" else "无"}, " +
+                "previouslyConnected=$serviceConnected"
+        )
+
         // 重连时先结束旧观察旅程，避免旧指纹阻止新服务发出稳定事件。
         stabilityCoordinator.invalidate(CheckoutInvalidationReason.SERVICE_INTERRUPTED)
         currentStableCheckout = null
@@ -933,6 +941,9 @@ class CheckoutAccessibilityService : AccessibilityService() {
     }
 
     override fun onDestroy() {
+        // 与协调器熔断相区分：本路径会把 snapshotCaptureCoordinator 置空，
+        // 悬浮按钮回调走空引用；熔断则保留引用并返回 SERVICE_NOT_CONNECTED。
+        Log.i(TAG, "结算页无障碍观察服务开始销毁: previouslyConnected=$serviceConnected")
         serviceConnected = false
         lastWindowPackage = null
         lastWindowClass = null
