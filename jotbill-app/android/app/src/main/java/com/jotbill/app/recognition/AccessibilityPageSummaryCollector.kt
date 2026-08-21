@@ -1,9 +1,28 @@
 package com.jotbill.app.recognition
 
 import android.os.Build
+import android.util.Log
 import android.view.accessibility.AccessibilityNodeInfo
 import java.security.MessageDigest
 import java.util.Locale
+
+/**
+ * 容量配额的只读视图，供单测校验配额之间的数量关系。
+ *
+ * 节点树无法在 JVM 单测中构造，但"文本配额必须显著大于语义配额"是页面角色
+ * 判定的关键不变量（京东结算页故障即源于二者共用同一上限），必须可验证。
+ */
+internal object AccessibilityPageSummaryCollectorBudget {
+    /** 节点遍历数量上限。 */
+    val maxNodeCount: Int get() = AccessibilityPageSummaryCollector.maxNodeCountForTest
+
+    /** 语义标记容量配额。 */
+    val semanticBudget: Int get() = AccessibilityPageSummaryCollector.semanticBudgetForTest
+
+    /** tokens 总容量上限。 */
+    val totalTokenCapacity: Int
+        get() = AccessibilityPageSummaryCollector.totalTokenCapacityForTest
+}
 
 /**
  * 从无障碍节点树生成结算页观察摘要。
@@ -15,8 +34,35 @@ internal object AccessibilityPageSummaryCollector {
     private const val MAX_DEPTH = 24
     private const val MAX_TOKEN_LENGTH = 240
     private const val MAX_NORMALIZED_TEXT_LENGTH = 8_000
-    private const val FINGERPRINT_VERSION = "checkout-page-v1"
+    /**
+     * 指纹版本。
+     *
+     * v2：文本与语义标记拆分独立容量配额后，token 集合与顺序均发生变化，
+     * 同一页面的指纹与 v1 不同。升版本号使新旧指纹显式隔离，避免升级后
+     * 残留的历史会话指纹与新指纹意外匹配。
+     */
+    private const val FINGERPRINT_VERSION = "checkout-page-v2"
     private const val HEX = "0123456789abcdef"
+
+    /**
+     * 语义标记（node:类名 / view:资源id）的容量配额。
+     *
+     * 语义标记只服务于指纹的结构感知，不参与页面角色判定，数量却是文本的数倍
+     * （每个节点最多贡献 2 个）。限制在此配额内，为文本留出充足槽位。
+     */
+    private const val MAX_SEMANTIC_TOKEN_BUDGET = 320
+
+    /**
+     * tokens 总容量上限，文本可用到该上限。
+     *
+     * 京东结算页 154 个节点即可产生约 308 个语义标记，若文本与语义共用 320 的
+     * 上限，排在后半段的"立即支付"必然被挤掉。文本配额必须显著大于语义配额。
+     */
+    private const val MAX_TOTAL_TOKEN_COUNT = 900
+
+    internal val maxNodeCountForTest: Int get() = MAX_NODE_COUNT
+    internal val semanticBudgetForTest: Int get() = MAX_SEMANTIC_TOKEN_BUDGET
+    internal val totalTokenCapacityForTest: Int get() = MAX_TOTAL_TOKEN_COUNT
 
     private val whitespacePattern = Regex("\\s+")
     private val countdownPattern = Regex(
@@ -168,6 +214,14 @@ internal object AccessibilityPageSummaryCollector {
         val lowerText = normalizedText.lowercase(Locale.ROOT)
         val hasFinalAmountSignal = hasFinalAmountSignal(lowerText)
         val hasCheckoutActionSignal = containsAny(lowerText, checkoutActionTerms)
+        if (accumulator.textDropped) {
+            Log.w(
+                "PageSummaryCollector",
+                "页面文本因容量上限被截断: pkg=$shoppingPackage, " +
+                    "nodes=${accumulator.visitedNodes}, tokens=${accumulator.tokens.size}, " +
+                    "amountSignal=$hasFinalAmountSignal, actionSignal=$hasCheckoutActionSignal"
+            )
+        }
         val isSensitivePage = accumulator.sensitive || containsSensitiveSignal(lowerText)
         val pageRole = classifyPageRole(
             lowerText = lowerText,
@@ -381,6 +435,24 @@ internal object AccessibilityPageSummaryCollector {
         var visitedNodes: Int = 0
         var sensitive: Boolean = false
 
+        /**
+         * 文本 token 是否曾因容量上限被丢弃。
+         *
+         * 京东结算页故障根因：addText 与 addSemantic 共用 tokens 容量上限，
+         * 154 个节点最多产生 308 个语义 token，容量在 320 处封顶后，排在
+         * 第 151 位的"立即支付"文本被静默丢弃，actionSignal 恒为 false，
+         * 页面永远判定为 UNKNOWN。文本是语义判定的唯一依据，必须优先保留。
+         */
+        var textDropped: Boolean = false
+
+        /**
+         * 写入节点文本。
+         *
+         * 文本承载页面语义（金额、动作按钮），优先级高于类名/资源 id 语义标记，
+         * 因此使用独立的更大容量上限，不与语义标记争抢槽位。
+         *
+         * @param value 节点的 text/contentDescription/hintText/tooltipText 之一。
+         */
         fun addText(value: String) {
             if (sensitiveTerms.any { value.contains(it, ignoreCase = true) } ||
                 sensitiveAsciiPattern.containsMatchIn(value)
@@ -389,15 +461,25 @@ internal object AccessibilityPageSummaryCollector {
                 return
             }
             if (value.isNotBlank()) {
-                if (tokens.size < MAX_NODE_COUNT) {
+                if (tokens.size < MAX_TOTAL_TOKEN_COUNT) {
                     tokens += sensitiveNumberPattern.replace(value, " number ")
                         .take(MAX_TOKEN_LENGTH)
+                } else {
+                    textDropped = true
                 }
             }
         }
 
+        /**
+         * 写入类名或资源 id 的语义标记。
+         *
+         * 语义标记只服务于指纹的结构感知，数量远多于文本且不参与角色判定，
+         * 因此限制在较小的配额内，避免挤占文本槽位。
+         *
+         * @param value 形如 `node:类名` 或 `view:资源id` 的语义标记。
+         */
         fun addSemantic(value: String) {
-            if (tokens.size < MAX_NODE_COUNT) {
+            if (tokens.size < MAX_SEMANTIC_TOKEN_BUDGET) {
                 tokens += value.take(MAX_TOKEN_LENGTH)
             }
         }
