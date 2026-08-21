@@ -55,8 +55,8 @@ internal object AccessibilityPageSummaryCollector {
     /**
      * tokens 总容量上限，文本可用到该上限。
      *
-     * 京东结算页 154 个节点即可产生约 308 个语义标记，若文本与语义共用 320 的
-     * 上限，排在后半段的"立即支付"必然被挤掉。文本配额必须显著大于语义配额。
+     * 京东结算页 154 个节点中仅 34 个带文本，900 的容量对文本而言绰绰有余；
+     * 该上限的作用是防御异常巨大的节点树，而非日常裁剪。
      */
     private const val MAX_TOTAL_TOKEN_COUNT = 900
 
@@ -195,19 +195,26 @@ internal object AccessibilityPageSummaryCollector {
         return simpleName.isNotBlank() && simpleName in rotatingWidgetClassNames
     }
 
+    /**
+     * 采集页面观察摘要。
+     *
+     * @param includeHiddenText 是否把 isVisibleToUser=false 但带文本的节点纳入
+     * 语义判定。弹窗式结算页与微信支付结果页的关键节点都会间歇上报不可见，
+     * 关闭该开关会导致动作信号丢失、页面角色抖动，因此默认开启。
+     */
     fun collect(
         shoppingPackage: String,
         windowClass: String?,
         root: AccessibilityNodeInfo,
         observedAt: Long,
-        includeHiddenContentDescriptions: Boolean = false
+        includeHiddenText: Boolean = true
     ): CheckoutPageObservation {
         val accumulator = NodeSummaryAccumulator()
         collectNode(
             node = root,
             accumulator = accumulator,
             depth = 0,
-            includeHiddenContentDescriptions = includeHiddenContentDescriptions
+            includeHiddenText = includeHiddenText
         )
 
         val normalizedText = normalizeTokens(accumulator.tokens)
@@ -259,7 +266,7 @@ internal object AccessibilityPageSummaryCollector {
         accumulator: NodeSummaryAccumulator,
         depth: Int,
         sensitiveAncestor: Boolean = false,
-        includeHiddenContentDescriptions: Boolean = false,
+        includeHiddenText: Boolean = false,
         rotatingAncestor: Boolean = false
     ) {
         if (depth > MAX_DEPTH || accumulator.visitedNodes >= MAX_NODE_COUNT) {
@@ -268,10 +275,14 @@ internal object AccessibilityPageSummaryCollector {
 
         accumulator.visitedNodes += 1
         val hasContentDescription = !node.contentDescription.isNullOrBlank()
-        // 微信支付成功页的语义节点在无障碍服务视角可能 isVisibleToUser=false，
-        // 但 uiautomator 与用户可见；支付结果观察允许把这些 contentDescription 纳入分类。
+        val hasAnyText = !node.text.isNullOrBlank() || hasContentDescription
+        // isVisibleToUser 在弹窗式结算页上不可靠：京东 PopupNewFillOrderActivity
+        // 的底部"立即支付"按钮会间歇上报 false，导致该节点整体被跳过、
+        // actionSignal 时真时假、页面角色在 CHECKOUT 与 SHOPPING_HOME 之间抖动。
+        // 因此允许把带文本的不可见节点也纳入语义判定（includeHiddenText），
+        // 微信支付成功页的隐藏 contentDescription 同样依赖该开关。
         val visible = depth == 0 || node.isVisibleToUser ||
-            (includeHiddenContentDescriptions && hasContentDescription)
+            (includeHiddenText && hasAnyText)
         val className = node.className?.toString().orEmpty()
         val viewId = node.viewIdResourceName.orEmpty()
         val nodeSensitive = sensitiveAncestor ||
@@ -322,7 +333,7 @@ internal object AccessibilityPageSummaryCollector {
                     accumulator,
                     depth + 1,
                     nodeSensitive,
-                    includeHiddenContentDescriptions,
+                    includeHiddenText,
                     nodeRotating
                 )
                 } finally {
@@ -438,10 +449,9 @@ internal object AccessibilityPageSummaryCollector {
         /**
          * 文本 token 是否曾因容量上限被丢弃。
          *
-         * 京东结算页故障根因：addText 与 addSemantic 共用 tokens 容量上限，
-         * 154 个节点最多产生 308 个语义 token，容量在 320 处封顶后，排在
-         * 第 151 位的"立即支付"文本被静默丢弃，actionSignal 恒为 false，
-         * 页面永远判定为 UNKNOWN。文本是语义判定的唯一依据，必须优先保留。
+         * 文本是页面角色判定的唯一依据，被静默丢弃会导致 amountSignal /
+         * actionSignal 无声失效、页面判定漂移。保留该标记与配套 WARN 日志，
+         * 使这类容量问题在真机上可被立即发现。
          */
         var textDropped: Boolean = false
 

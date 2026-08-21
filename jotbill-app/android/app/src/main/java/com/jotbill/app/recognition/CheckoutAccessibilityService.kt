@@ -1324,7 +1324,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
                         windowClass = event.className?.toString()?.trim()?.takeIf { it.isNotBlank() },
                         root = root,
                         observedAt = observedAt,
-                        includeHiddenContentDescriptions = true
+                        includeHiddenText = true
                     )
 
                     // 敏感判定必须先于页面角色分支：微信支付密码页常被分类为
