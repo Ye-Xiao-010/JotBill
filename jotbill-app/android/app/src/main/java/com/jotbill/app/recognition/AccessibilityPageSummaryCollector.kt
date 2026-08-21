@@ -142,6 +142,23 @@ internal object AccessibilityPageSummaryCollector {
     private val cartTerms = listOf("购物车", "购物袋", "去结算", "全选")
     private val productTerms = listOf("商品详情", "加入购物车", "立即购买", "选择规格")
     private val browsingTerms = listOf("搜索", "推荐", "首页", "分类", "猜你喜欢")
+
+    /**
+     * 结算/下单流程的窗口类名特征词（小写）。
+     *
+     * 词条只取真机实测类名中稳定出现的模块段，不做推测：
+     * - settlement / fillorder：京东 PopupNewFillOrderActivity 所在结算模块；
+     * - checkout / confirmorder / placeorder：主流电商结算页通用命名。
+     * 不收录 order 单词本身——订单列表 OrderListActivityTaro、订单详情
+     * OrderDetailActivityTaro 都会命中，会把已完成订单页误判成结算页。
+     */
+    private val checkoutClassTerms = listOf(
+        "settlement",
+        "fillorder",
+        "checkout",
+        "confirmorder",
+        "placeorder"
+    )
     private val sensitiveTerms = listOf(
         "密码",
         "验证码",
@@ -196,6 +213,22 @@ internal object AccessibilityPageSummaryCollector {
     }
 
     /**
+     * 判断窗口类名是否具备结算页语义。
+     *
+     * 提取为独立方法便于单测覆盖。京东结算页
+     * （com.jd.lib.settlement.fillorder.activity.PopupNewFillOrderActivity）
+     * 含「猜你喜欢」推荐位，会命中 browsingTerms 兜底而被判为 SHOPPING_HOME。
+     * 类名中的 settlement/fillorder 是比推荐位文案强得多的结算证据，
+     * 应优先于文本词表兜底。
+     *
+     * @param normalizedWindowClass 已小写归一化的窗口类名。
+     * @return true 表示类名指向结算或下单流程页面。
+     */
+    internal fun hasCheckoutClassSemantic(normalizedWindowClass: String): Boolean =
+        normalizedWindowClass.isNotBlank() &&
+            checkoutClassTerms.any { normalizedWindowClass.contains(it) }
+
+    /**
      * 采集页面观察摘要。
      *
      * @param includeHiddenText 是否把 isVisibleToUser=false 但带文本的节点纳入
@@ -230,13 +263,15 @@ internal object AccessibilityPageSummaryCollector {
             )
         }
         val isSensitivePage = accumulator.sensitive || containsSensitiveSignal(lowerText)
+        val normalizedWindowClass = normalizeWindowClass(windowClass)
+        val checkoutClassSemantic = hasCheckoutClassSemantic(normalizedWindowClass)
         val pageRole = classifyPageRole(
             lowerText = lowerText,
             hasFinalAmountSignal = hasFinalAmountSignal,
             hasCheckoutActionSignal = hasCheckoutActionSignal,
-            isSensitivePage = isSensitivePage
+            isSensitivePage = isSensitivePage,
+            hasCheckoutClassSemantic = checkoutClassSemantic
         )
-        val normalizedWindowClass = normalizeWindowClass(windowClass)
         val normalizedTextHash = sha256(normalizedText)
         val pageFingerprint = sha256(
             listOf(
@@ -257,7 +292,8 @@ internal object AccessibilityPageSummaryCollector {
             isSensitivePage = isSensitivePage,
             windowClass = normalizedWindowClass,
             normalizedTextHash = normalizedTextHash,
-            observedAt = observedAt
+            observedAt = observedAt,
+            hasCheckoutClassSemantic = checkoutClassSemantic
         )
     }
 
@@ -393,11 +429,30 @@ internal object AccessibilityPageSummaryCollector {
             (text.contains("订单") || text.contains("收货") || text.contains("优惠后"))
     }
 
+    /**
+     * 判定页面角色。
+     *
+     * 判定次序体现证据强弱：支付交接/结果页关键词最强（涉及敏感页与状态终态），
+     * 其次是「金额 + 动作」双信号，最后才是购物车/详情/浏览类文本兜底。
+     *
+     * @param hasCheckoutClassSemantic 窗口类名是否指向结算流程。京东弹窗结算页
+     * （PopupNewFillOrderActivity）的「立即支付」按钮会间歇上报不可见，
+     * actionSignal 因此时真时假；页面又含「猜你喜欢」推荐位，一旦动作信号缺失
+     * 就被 browsingTerms 兜底判成 SHOPPING_HOME，触发
+     * INVALIDATED_NON_CHECKOUT_PAGE 清空刚存入的快照。
+     * 注意：改判 UNKNOWN 无法解决该问题——CheckoutPageDetector 把一切非
+     * CHECKOUT 角色统一拒为 NOT_CHECKOUT_PAGE，UNKNOWN 与 SHOPPING_HOME
+     * 在失效链路上完全等价。因此这里用「类名结算语义 + 金额信号」替代
+     * 缺失的动作信号，直接判定 CHECKOUT，让角色在抖动期间保持稳定。
+     * 金额信号是必要条件：结算类名下若连应付金额都读不到，说明页面尚未渲染
+     * 完成，此时不应进入结算态触发采集。
+     */
     private fun classifyPageRole(
         lowerText: String,
         hasFinalAmountSignal: Boolean,
         hasCheckoutActionSignal: Boolean,
-        isSensitivePage: Boolean
+        isSensitivePage: Boolean,
+        hasCheckoutClassSemantic: Boolean
     ): CheckoutPageRole {
         if (containsAny(lowerText, paymentHandoffTerms)) {
             return CheckoutPageRole.PAYMENT_HANDOFF
@@ -407,7 +462,9 @@ internal object AccessibilityPageSummaryCollector {
         if (containsAny(lowerText, paymentResultTerms)) {
             return CheckoutPageRole.PAYMENT_RESULT
         }
-        if (!isSensitivePage && hasFinalAmountSignal && hasCheckoutActionSignal) {
+        if (!isSensitivePage && hasFinalAmountSignal &&
+            (hasCheckoutActionSignal || hasCheckoutClassSemantic)
+        ) {
             return CheckoutPageRole.CHECKOUT
         }
         if (containsAny(lowerText, cartTerms)) {

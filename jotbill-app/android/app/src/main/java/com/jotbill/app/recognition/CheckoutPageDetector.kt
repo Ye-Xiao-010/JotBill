@@ -32,7 +32,15 @@ data class CheckoutPageObservation(
     val isSensitivePage: Boolean,
     val windowClass: String = "",
     val normalizedTextHash: String = "",
-    val observedAt: Long = 0L
+    val observedAt: Long = 0L,
+    /**
+     * 窗口类名是否指向结算/下单流程。
+     *
+     * 弹窗式结算页（京东 PopupNewFillOrderActivity）的提交按钮会间歇上报
+     * isVisibleToUser=false，hasCheckoutActionSignal 随之丢失。该标记让检测器
+     * 在动作信号缺失时仍能凭类名证据放行，避免页面角色在结算态与浏览态之间抖动。
+     */
+    val hasCheckoutClassSemantic: Boolean = false
 )
 
 enum class CheckoutDetectionRejection(val wireValue: String) {
@@ -113,7 +121,9 @@ class CheckoutPageDetector {
         if (!observation.hasFinalAmountSignal) {
             return CheckoutPageDetection.Rejected(CheckoutDetectionRejection.MISSING_FINAL_AMOUNT)
         }
-        if (!observation.hasCheckoutActionSignal) {
+        // 动作信号缺失时允许类名结算语义替代：弹窗结算页的提交按钮会间歇不可见，
+        // 与 classifyPageRole 保持同一放行条件，否则角色判为 CHECKOUT 仍会被此处拒掉。
+        if (!observation.hasCheckoutActionSignal && !observation.hasCheckoutClassSemantic) {
             return CheckoutPageDetection.Rejected(CheckoutDetectionRejection.MISSING_CHECKOUT_ACTION)
         }
         if (observation.isSensitivePage) {
