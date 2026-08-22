@@ -812,7 +812,18 @@ class CheckoutAccessibilityService : AccessibilityService() {
             )
             when (val detection = pageDetector.detect(observation)) {
                 is CheckoutPageDetection.Accepted -> {
-                    clearUserRetryCaptureContext()
+                    // 结算页也必须具备手动截图上下文。
+                    //
+                    // 真机数据：结算态（activeCheckout）从建立到转入交接挂起仅存活
+                    // 469ms（京东 a23f589b）~5.5s（京东 e3b01a29），拼多多同样只有
+                    // 2067ms。挂起后 activeCheckout 被置空，用户在结算页上的每一次
+                    // 点击都返回 NO_ACTIVE_CHECKOUT——本轮日志中连续失败 14 次。
+                    // 此前这里调用 clearUserRetryCaptureContext()，等于在唯一真正
+                    // 需要手动补截的页面上主动移除了兜底能力。
+                    // 改为建立上下文：用户随时可手动补截，不再受那不足一秒的窗口限制。
+                    // 该上下文只承载脱敏元数据，且 CHECKOUT 角色本就在
+                    // canBufferUserRetrySnapshot() 允许集合内；敏感页已在更前面拦截。
+                    setUserRetryCaptureContext(observation)
                     val stable = currentStableCheckout
                     val sameStableCheckout = stable?.let { stablePage ->
                         stablePage.observation.shoppingPackage == observation.shoppingPackage &&
