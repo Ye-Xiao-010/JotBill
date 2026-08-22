@@ -123,4 +123,72 @@ class UserRetrySlotTakeoverTest {
             )
         )
     }
+
+    /**
+     * 跨购物包时交接保护不得生效。
+     *
+     * 真机回归：京东挂起会话 e3b01a29 拦下了
+     * contextPkg=com.xunmeng.pinduoduo 的手动截图，
+     * 用户在拼多多页面连续点击全部 NO_ACTIVE_CHECKOUT 失败。
+     * 截图槽位按购物包划分，京东会话无权保护拼多多的槽位——
+     * 跨包拦截纯属越权，没有任何快照因此获得保护。
+     */
+    @Test
+    fun 跨购物包时交接保护不生效() {
+        assertTrue(
+            "京东挂起会话不得拦截拼多多页面的手动截图",
+            canUserRetryTakeOverSlot(
+                handoffHasSnapshot = true,
+                activeCaptureTarget = null,
+                handoffHasFence = true,
+                handoffSharesPackage = false
+            )
+        )
+    }
+
+    /**
+     * 同购物包时快照与栅栏保护仍须生效。
+     *
+     * 这是跨包放宽后的对照：不能因为修跨包越权而把同包保护一起丢掉，
+     * 否则会重新引入"交接栅栏被抢占、自动截图长期不触发"的回归。
+     */
+    @Test
+    fun 同购物包时交接保护仍然生效() {
+        assertFalse(
+            "同包内仍有快照时必须拦截",
+            canUserRetryTakeOverSlot(
+                handoffHasSnapshot = true,
+                activeCaptureTarget = null,
+                handoffHasFence = false,
+                handoffSharesPackage = true
+            )
+        )
+        assertFalse(
+            "同包内仍有栅栏时必须拦截",
+            canUserRetryTakeOverSlot(
+                handoffHasSnapshot = false,
+                activeCaptureTarget = null,
+                handoffHasFence = true,
+                handoffSharesPackage = true
+            )
+        )
+    }
+
+    /**
+     * 跨包放宽不得绕过"存在真实结算会话"这道门禁。
+     *
+     * 活跃的 CHECKOUT 会话属于当前页面自身，与挂起会话归属无关，
+     * 无论是否同包都必须继续拦截，否则会 discard 掉正在进行的结算截图。
+     */
+    @Test
+    fun 跨包放宽不得绕过活跃结算会话门禁() {
+        assertFalse(
+            canUserRetryTakeOverSlot(
+                handoffHasSnapshot = false,
+                activeCaptureTarget = SnapshotCaptureTarget.CHECKOUT,
+                handoffHasFence = false,
+                handoffSharesPackage = false
+            )
+        )
+    }
 }

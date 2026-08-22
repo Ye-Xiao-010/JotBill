@@ -149,7 +149,7 @@ internal fun shouldReplaceHandoffCheckout(
 /**
  * 判定普通页手动重试上下文能否接管截图槽位。
  *
- * 提取为纯函数以便单测覆盖。三类回归都由该判据统一收口：
+ * 提取为纯函数以便单测覆盖。四类回归都由该判据统一收口：
  * 1. 交接挂起期间 `activeCheckout` 被置空，若只看"无人占用"就接管，会 discard
  *    掉正在交接的结算截图（拼多多回归）；
  * 2. 交接会话本身没有快照、也没有交接栅栏时（真空壳），若仍一律拒绝接管，
@@ -158,11 +158,15 @@ internal fun shouldReplaceHandoffCheckout(
  * 3. 交接栅栏已设置但截图仍在飞行中：槽位候选此刻为空，仅凭"有无快照"判断
  *    会误判为真空壳并放行抢占。栅栏被 discard 后 handoffCheckout 仍指向该会话，
  *    形成永久残留，真机表现为"交接栅栏设置失败(槽位不存在)"反复出现、
- *    自动截图长期不触发（京东弹窗结算页回归）。
+ *    自动截图长期不触发（京东弹窗结算页回归）；
+ * 4. 保护必须限定在同一购物包内：截图槽位按购物包划分，京东的挂起会话
+ *    与拼多多的槽位互不相干。真机日志中京东会话 e3b01a29 曾拦下
+ *    contextPkg=com.xunmeng.pinduoduo 的手动截图，导致用户在拼多多页面
+ *    连续点击全部失败——跨包拦截纯属越权，没有任何快照因此被保护。
  *
- * 因此判据是"交接会话是否有快照或栅栏需要保护"，而非"是否存在交接会话"。
- * 拼多多结算页停留较久、截图能在挂起前落盘，所以 handoffHasSnapshot 即可拦住；
- * 京东弹窗页数百毫秒即跳转，必须靠 handoffHasFence 才能覆盖落盘空窗。
+ * 判据因此是"同一购物包内的交接会话是否有快照或栅栏需要保护"。
+ * 拼多多结算页停留较久、截图能在挂起前落盘，靠 handoffHasSnapshot 即可拦住；
+ * 京东弹窗页数百毫秒即跳转，必须靠 handoffHasFence 覆盖落盘空窗。
  *
  * @param handoffHasSnapshot 挂起的交接会话在缓冲中是否仍有可消费候选；
  * 无挂起会话时传 false。
@@ -170,15 +174,18 @@ internal fun shouldReplaceHandoffCheckout(
  * @param handoffHasFence 挂起的交接会话是否已设置支付交接栅栏；
  * 无挂起会话时传 false。栅栏存在即代表该会话正等待支付交接消费，
  * 无论截图是否已落盘都不得被抢占。
+ * @param handoffSharesPackage 挂起会话与本次手动重试上下文是否属于同一购物包。
+ * 为 false 时（含无挂起会话、上下文包名缺失）交接保护一律不生效。
  * @return true 表示允许手动重试上下文接管槽位。
  */
 internal fun canUserRetryTakeOverSlot(
     handoffHasSnapshot: Boolean,
     activeCaptureTarget: SnapshotCaptureTarget?,
-    handoffHasFence: Boolean = false
+    handoffHasFence: Boolean = false,
+    handoffSharesPackage: Boolean = true
 ): Boolean = when {
-    handoffHasSnapshot -> false
-    handoffHasFence -> false
+    handoffSharesPackage && handoffHasSnapshot -> false
+    handoffSharesPackage && handoffHasFence -> false
     activeCaptureTarget == SnapshotCaptureTarget.CHECKOUT -> false
     else -> true
 }
@@ -703,9 +710,19 @@ internal class CheckoutSnapshotCaptureCoordinator(
     /**
      * 按秒采样输出"交接挂起期间跳过手动重试接管"，避免中间页高频事件刷屏。
      *
+     * 同时标明保护来源与包名：真机上该日志曾连续出现数十次，
+     * 但无法区分"同包内保护真实快照"（正确）与"跨包越权拦截"（缺陷），
+     * 排查时只能靠人工比对会话归属。
+     *
      * @param contextPackage 被跳过的手动重试上下文所属购物包，仅用于诊断。
+     * @param bySnapshot 是否因挂起会话仍有候选而拦截。
+     * @param byFence 是否因挂起会话仍持有交接栅栏而拦截。
      */
-    private fun logHandoffRetrySkipSampled(contextPackage: String?) {
+    private fun logHandoffRetrySkipSampled(
+        contextPackage: String?,
+        bySnapshot: Boolean,
+        byFence: Boolean
+    ) {
         val now = nowMillis()
         if (now - lastHandoffRetrySkipLogAt < 1_000L) {
             return
@@ -715,7 +732,11 @@ internal class CheckoutSnapshotCaptureCoordinator(
             TAG,
             "交接挂起期间跳过手动重试接管: " +
                 "handoffSession=${handoffCheckout?.activeCheckout?.sessionId?.take(8) ?: "null"}, " +
-                "contextPkg=${contextPackage ?: "null"}"
+                "handoffPkg=${
+                    handoffCheckout?.activeCheckout?.page?.observation?.shoppingPackage ?: "null"
+                }, " +
+                "contextPkg=${contextPackage ?: "null"}, " +
+                "bySnapshot=$bySnapshot, byFence=$byFence"
         )
     }
 
@@ -753,16 +774,28 @@ internal class CheckoutSnapshotCaptureCoordinator(
                 // 长期霸占槽位、手动截图一直失败，此时应允许接管。
                 // 栅栏必须单独判断：京东弹窗结算页在截图落盘前就跳中间页，
                 // 那段空窗里候选为空但栅栏已设，只看快照会误放行并毁掉交接。
-                val handoffHasSnapshot = handoffCheckoutHasSnapshot()
-                val handoffHasFence = handoffCheckoutHasFence()
+                // 保护还必须限定同购物包：槽位按购物包划分，京东挂起会话无权
+                // 拦截拼多多页面的手动截图（真机曾因此让拼多多连续点击全部失败）。
+                val handoffPackage = handoffCheckout?.activeCheckout
+                    ?.page?.observation?.shoppingPackage?.trim()
+                val contextPackage = resolvedContext?.shoppingPackage?.trim()
+                val handoffSharesPackage = !handoffPackage.isNullOrBlank() &&
+                    handoffPackage == contextPackage
+                val handoffHasSnapshot = handoffSharesPackage && handoffCheckoutHasSnapshot()
+                val handoffHasFence = handoffSharesPackage && handoffCheckoutHasFence()
                 if (!canUserRetryTakeOverSlot(
                         handoffHasSnapshot = handoffHasSnapshot,
                         activeCaptureTarget = current?.captureTarget,
-                        handoffHasFence = handoffHasFence
+                        handoffHasFence = handoffHasFence,
+                        handoffSharesPackage = handoffSharesPackage
                     )
                 ) {
                     if (handoffHasSnapshot || handoffHasFence) {
-                        logHandoffRetrySkipSampled(resolvedContext?.shoppingPackage)
+                        logHandoffRetrySkipSampled(
+                            contextPackage = contextPackage,
+                            bySnapshot = handoffHasSnapshot,
+                            byFence = handoffHasFence
+                        )
                     }
                     return@post
                 }
