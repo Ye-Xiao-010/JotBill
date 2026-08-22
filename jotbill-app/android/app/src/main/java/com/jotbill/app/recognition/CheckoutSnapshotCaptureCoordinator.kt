@@ -124,27 +124,61 @@ internal fun isSamePackagePaymentInterstitial(
 }
 
 /**
+ * 判定是否应当用当前会话替换已挂起的交接会话。
+ *
+ * 旧实现无条件沿用已挂起会话，导致挂起会话一旦失去快照与栅栏就永久滞留：
+ * 真机京东日志中 8941f58a / c02b4e5b 反复出现在 retained 位置，
+ * 其间 current 已换成 170c28f7、c221b97d、2b103eca 等有效新会话却全被丢弃，
+ * "交接栅栏设置失败(槽位不存在)"随之重复出现，自动截图长期无法完成交接。
+ *
+ * 替换条件要求旧会话确实已无价值（既无快照也无栅栏），且存在可接替的当前会话。
+ * 只要旧会话仍持有其一，就必须继续保留——它的快照正等待支付交接消费，
+ * 替换会让已截到的图与支付证据失去关联。
+ *
+ * @param hasCurrentCheckout 是否存在可接替的当前活跃会话。
+ * @param retainedHasSnapshot 已挂起会话在缓冲中是否仍有候选。
+ * @param retainedHasFence 已挂起会话是否仍持有交接栅栏。
+ * @return true 表示应改用当前会话作为新的挂起会话。
+ */
+internal fun shouldReplaceHandoffCheckout(
+    hasCurrentCheckout: Boolean,
+    retainedHasSnapshot: Boolean,
+    retainedHasFence: Boolean
+): Boolean = hasCurrentCheckout && !retainedHasSnapshot && !retainedHasFence
+
+/**
  * 判定普通页手动重试上下文能否接管截图槽位。
  *
- * 提取为纯函数以便单测覆盖。两类回归都由该判据统一收口：
+ * 提取为纯函数以便单测覆盖。三类回归都由该判据统一收口：
  * 1. 交接挂起期间 `activeCheckout` 被置空，若只看"无人占用"就接管，会 discard
  *    掉正在交接的结算截图（拼多多回归）；
- * 2. 交接会话本身没有快照可保护时（结算截图在飞行中被中间页取消），若仍一律
- *    拒绝接管，空壳交接会长期霸占槽位，用户手动截图全部被 NO_ACTIVE_CHECKOUT
- *    拒绝（京东回归）。
+ * 2. 交接会话本身没有快照、也没有交接栅栏时（真空壳），若仍一律拒绝接管，
+ *    空壳交接会长期霸占槽位，用户手动截图全部被 NO_ACTIVE_CHECKOUT
+ *    拒绝（京东回归）；
+ * 3. 交接栅栏已设置但截图仍在飞行中：槽位候选此刻为空，仅凭"有无快照"判断
+ *    会误判为真空壳并放行抢占。栅栏被 discard 后 handoffCheckout 仍指向该会话，
+ *    形成永久残留，真机表现为"交接栅栏设置失败(槽位不存在)"反复出现、
+ *    自动截图长期不触发（京东弹窗结算页回归）。
  *
- * 因此判据是"交接会话是否真的有快照需要保护"，而非"是否存在交接会话"。
+ * 因此判据是"交接会话是否有快照或栅栏需要保护"，而非"是否存在交接会话"。
+ * 拼多多结算页停留较久、截图能在挂起前落盘，所以 handoffHasSnapshot 即可拦住；
+ * 京东弹窗页数百毫秒即跳转，必须靠 handoffHasFence 才能覆盖落盘空窗。
  *
  * @param handoffHasSnapshot 挂起的交接会话在缓冲中是否仍有可消费候选；
  * 无挂起会话时传 false。
  * @param activeCaptureTarget 当前活跃会话的截图目标；null 表示无活跃会话。
+ * @param handoffHasFence 挂起的交接会话是否已设置支付交接栅栏；
+ * 无挂起会话时传 false。栅栏存在即代表该会话正等待支付交接消费，
+ * 无论截图是否已落盘都不得被抢占。
  * @return true 表示允许手动重试上下文接管槽位。
  */
 internal fun canUserRetryTakeOverSlot(
     handoffHasSnapshot: Boolean,
-    activeCaptureTarget: SnapshotCaptureTarget?
+    activeCaptureTarget: SnapshotCaptureTarget?,
+    handoffHasFence: Boolean = false
 ): Boolean = when {
     handoffHasSnapshot -> false
+    handoffHasFence -> false
     activeCaptureTarget == SnapshotCaptureTarget.CHECKOUT -> false
     else -> true
 }
@@ -648,6 +682,25 @@ internal class CheckoutSnapshotCaptureCoordinator(
     }
 
     /**
+     * 挂起的交接会话是否已设置支付交接栅栏。
+     *
+     * 与 handoffCheckoutHasSnapshot 互补：栅栏在"结算页稳定 → 跳中间页"时即已
+     * 设置，而截图可能还在飞行中尚未落盘。京东弹窗结算页数百毫秒即跳转，
+     * 这段落盘空窗内槽位候选为空，只看快照会把正在交接的会话误判为空壳并放行
+     * 抢占，栅栏随即被 discard，handoffCheckout 却仍指向该会话形成永久残留。
+     *
+     * @return true 表示存在挂起会话且其槽位仍持有该会话的交接栅栏。
+     */
+    private fun handoffCheckoutHasFence(): Boolean {
+        val retained = handoffCheckout?.activeCheckout ?: return false
+        return try {
+            buffer.hasPaymentHandoffFence(retained.slotId, retained.sessionId)
+        } catch (_: RuntimeException) {
+            false
+        }
+    }
+
+    /**
      * 按秒采样输出"交接挂起期间跳过手动重试接管"，避免中间页高频事件刷屏。
      *
      * @param contextPackage 被跳过的手动重试上下文所属购物包，仅用于诊断。
@@ -696,11 +749,19 @@ internal class CheckoutSnapshotCaptureCoordinator(
                 userRetryContext = resolvedContext
                 // 支付交接挂起期间槽位属于挂起会话，其快照正等待切支付应用后被消费，
                 // 此时 activeCheckout 已被置空，不能让手动重试上下文接管并 discard。
-                // 但若挂起会话本身已无快照（结算截图在飞行中被中间页取消），继续拒绝
-                // 只会让空壳交接长期霸占槽位、手动截图一直失败，此时应允许接管。
+                // 但若挂起会话既无快照也无交接栅栏（真空壳），继续拒绝只会让空壳交接
+                // 长期霸占槽位、手动截图一直失败，此时应允许接管。
+                // 栅栏必须单独判断：京东弹窗结算页在截图落盘前就跳中间页，
+                // 那段空窗里候选为空但栅栏已设，只看快照会误放行并毁掉交接。
                 val handoffHasSnapshot = handoffCheckoutHasSnapshot()
-                if (!canUserRetryTakeOverSlot(handoffHasSnapshot, current?.captureTarget)) {
-                    if (handoffHasSnapshot) {
+                val handoffHasFence = handoffCheckoutHasFence()
+                if (!canUserRetryTakeOverSlot(
+                        handoffHasSnapshot = handoffHasSnapshot,
+                        activeCaptureTarget = current?.captureTarget,
+                        handoffHasFence = handoffHasFence
+                    )
+                ) {
+                    if (handoffHasSnapshot || handoffHasFence) {
                         logHandoffRetrySkipSampled(resolvedContext?.shoppingPackage)
                     }
                     return@post
@@ -1262,12 +1323,26 @@ internal class CheckoutSnapshotCaptureCoordinator(
         val retainForHandoff =
             (detail.reason == CheckoutInvalidationReason.PAYMENT_APP_HANDOFF || isPaymentInterstitial) &&
                 handoffSource != null
+        // 已挂起会话失去快照与栅栏后不能继续独占交接位，否则新会话永远无法交接。
+        val replaceRetainedHandoff = retained != null && shouldReplaceHandoffCheckout(
+            hasCurrentCheckout = current != null,
+            retainedHasSnapshot = handoffCheckoutHasSnapshot(),
+            retainedHasFence = handoffCheckoutHasFence()
+        )
         val nextHandoff = if (!retainForHandoff) {
             null
-        } else if (retained != null) {
+        } else if (retained != null && !replaceRetainedHandoff) {
             retained
         } else {
             val activeForHandoff = checkNotNull(handoffSource)
+            if (replaceRetainedHandoff) {
+                Log.i(
+                    TAG,
+                    "挂起交接会话已无快照与栅栏，改用当前会话接替: " +
+                        "旧=${retained?.activeCheckout?.sessionId?.take(8) ?: "null"}, " +
+                        "新=${activeForHandoff.sessionId.take(8)}"
+                )
+            }
             HandoffCheckout(
                 activeCheckout = activeForHandoff,
                 attemptedAutomaticCaptures = attemptedAutomaticCaptures
@@ -1277,13 +1352,16 @@ internal class CheckoutSnapshotCaptureCoordinator(
         }
 
         // 失效决策链路诊断：retainForHandoff=false 即代表本次会清空全部图片候选。
-        // current/retained 的组合可区分"首次进入中间页"与"中间页后续事件"。
+        // current/retained 的组合可区分"首次进入中间页"与"中间页后续事件"；
+        // nextHandoff 则暴露挂起会话是否被当前会话接替，用于识别残留会话。
         Log.i(
             TAG,
             "观察失效: reason=${detail.reason.wireValue}, " +
                 "current=${current?.sessionId?.take(8) ?: "null"}, " +
                 "retained=${retained?.activeCheckout?.sessionId?.take(8) ?: "null"}, " +
                 "interstitial=$isPaymentInterstitial, retainForHandoff=$retainForHandoff, " +
+                "nextHandoff=${nextHandoff?.activeCheckout?.sessionId?.take(8) ?: "null"}, " +
+                "replacedHandoff=$replaceRetainedHandoff, " +
                 "detailPkg=${detail.shoppingPackage ?: "null"}, " +
                 "detailFingerprint=${detail.pageFingerprint?.take(12) ?: "null"}"
         )

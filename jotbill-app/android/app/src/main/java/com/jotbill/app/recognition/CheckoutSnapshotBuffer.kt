@@ -136,6 +136,9 @@ class CheckoutSnapshotBuffer(
 ) {
     private companion object {
         private const val TAG = "CheckoutSnapshotBuffer"
+
+        /** "槽位丢弃(空槽位)"按 reason 的日志采样间隔。 */
+        private const val EMPTY_DISCARD_LOG_INTERVAL_MILLIS = 5_000L
     }
 
     private data class SlotState(
@@ -149,6 +152,12 @@ class CheckoutSnapshotBuffer(
     )
 
     private val slots = mutableMapOf<String, SlotState>()
+
+    /** 各 reason 最近一次输出"槽位丢弃(空槽位)"的时间，用于日志采样。 */
+    private val lastEmptyDiscardLogAt = mutableMapOf<String, Long>()
+
+    /** 采样间隔内被抑制的空槽位丢弃次数，随下次输出一并汇报，避免静默丢信息。 */
+    private val suppressedEmptyDiscardCount = mutableMapOf<String, Int>()
     private var closed = false
     private val expirationRunnable = Runnable {
         synchronized(this) {
@@ -360,6 +369,35 @@ class CheckoutSnapshotBuffer(
         val candidate = state.manualCandidate ?: return false
         return candidate.pageRole.canBufferUserRetrySnapshot() &&
             candidate.pageFingerprint == pageFingerprint
+    }
+
+    /**
+     * 判断槽位是否已为指定会话设置支付交接栅栏。
+     *
+     * 与 hasCandidate 的区别是本方法不关心图片是否已落盘：栅栏一旦设置，
+     * 说明该会话正处于"等待切支付应用消费"的交接态，即使截图仍在飞行中，
+     * 槽位也不允许被手动重试上下文抢占。
+     *
+     * 京东弹窗结算页在稳定后数百毫秒即跳中间页，截图常常来不及落盘；
+     * 此时槽位候选为空，若仅凭"有无候选"判断就会放行抢占，
+     * 交接栅栏被 discard 后 handoffCheckout 仍指向该会话，形成永久残留会话，
+     * 真机表现为"交接栅栏设置失败(槽位不存在)"反复出现、自动截图长期不触发。
+     *
+     * 有意不调用 purgeExpired：栅栏的职责就是保护尚未落盘的会话，
+     * 若因过期清理而返回 false，保护就失去了意义。过期回收仍由
+     * consumeForAi / currentCandidates 等正常路径负责。
+     *
+     * @param slotId 购物包槽位标识。
+     * @param sessionId 期望持有栅栏的会话标识。
+     * @return true 表示该会话已设置交接栅栏，槽位不得被抢占。
+     */
+    @Synchronized
+    fun hasPaymentHandoffFence(slotId: String, sessionId: String): Boolean {
+        if (closed || slotId.isBlank() || sessionId.isBlank()) {
+            return false
+        }
+        val state = slots[slotId] ?: return false
+        return state.sessionId == sessionId && state.handoffPageFingerprint != null
     }
 
     /** 支付交接期间只允许原页面指纹消费，避免无指纹请求误取旧会话快照。 */
@@ -611,7 +649,25 @@ class CheckoutSnapshotBuffer(
             )
             releaseCandidates(removed)
         } else {
-            Log.i(TAG, "槽位丢弃(空槽位): reason=$reason, slot=$slotId")
+            // 空槽位丢弃没有实际影响，但真机上手动重试上下文每秒可触发数次
+            // （USER_RETRY_CONTEXT_CHANGED / USER_RETRY_NEW_PAGE 成对出现），
+            // 曾在 40 秒内刷出数百行、严重淹没真正的候选写入与栅栏日志。
+            // 按 reason 分别采样：既保留"该分支仍在发生"的可见性，
+            // 又不会让某个高频原因掩盖其他原因。真实丢弃始终逐次打印。
+            val now = nowMillis()
+            val lastAt = lastEmptyDiscardLogAt[reason]
+            if (lastAt == null || now - lastAt >= EMPTY_DISCARD_LOG_INTERVAL_MILLIS) {
+                lastEmptyDiscardLogAt[reason] = now
+                val suppressed = suppressedEmptyDiscardCount.remove(reason) ?: 0
+                Log.i(
+                    TAG,
+                    "槽位丢弃(空槽位): reason=$reason, slot=$slotId" +
+                        if (suppressed > 0) ", 期间已抑制${suppressed}次" else ""
+                )
+            } else {
+                suppressedEmptyDiscardCount[reason] =
+                    (suppressedEmptyDiscardCount[reason] ?: 0) + 1
+            }
         }
         scheduleNextExpirationLocked(nowMillis())
     }
@@ -639,6 +695,9 @@ class CheckoutSnapshotBuffer(
         }
         slots.values.forEach(::releaseCandidates)
         slots.clear()
+        // 清空是一次明确的状态边界：重置采样，避免清空后的首次空槽位丢弃被误抑制。
+        lastEmptyDiscardLogAt.clear()
+        suppressedEmptyDiscardCount.clear()
         expirationHandler.removeCallbacks(expirationRunnable)
     }
 
