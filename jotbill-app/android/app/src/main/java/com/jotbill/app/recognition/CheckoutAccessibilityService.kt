@@ -51,6 +51,9 @@ class CheckoutAccessibilityService : AccessibilityService() {
         private val SENSITIVE_ASCII_PATTERN = Regex("""(?i)\b(password|pin|otp)\b""")
         private const val STABLE_DELAY_MILLIS = 500L
 
+        /** 结算页门禁日志按"包名+拒绝码"的采样间隔。 */
+        private const val CHECKOUT_GATE_LOG_INTERVAL_MILLIS = 3_000L
+
         /** 支付交接补发节流窗口：同一支付包在该窗口内只补发一次交接事件。 */
         private const val PAYMENT_HANDOFF_REDISPATCH_THROTTLE_MILLIS = 5_000L
 
@@ -322,6 +325,14 @@ class CheckoutAccessibilityService : AccessibilityService() {
     /** 支付交接上下文日志的最近打印时间，按秒采样防止日志风暴。 */
     @Volatile
     private var lastHandoffContextLogAt = 0L
+
+    /**
+     * 结算页门禁日志的最近打印时间，键为"包名|拒绝码"。
+     *
+     * 按组合采样而非全局采样：否则高频的某一种拒绝原因会把其他原因全部掩盖，
+     * 无法看出页面究竟卡在哪个信号上。仅在主线程访问，无需同步。
+     */
+    private val lastCheckoutGateLogAt = mutableMapOf<String, Long>()
     private var submitActionTriggeredKey: StableCheckoutKey? = null
     @Volatile
     private var serviceConnected = false
@@ -812,6 +823,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
             )
             when (val detection = pageDetector.detect(observation)) {
                 is CheckoutPageDetection.Accepted -> {
+                    logCheckoutGateSampled(observation, rejection = null)
                     // 结算页也必须具备手动截图上下文。
                     //
                     // 真机数据：结算态（activeCheckout）从建立到转入交接挂起仅存活
@@ -840,6 +852,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
                 }
 
                 is CheckoutPageDetection.Rejected -> {
+                    logCheckoutGateSampled(observation, rejection = detection.reason)
                     val reason = invalidationReason(observation, detection.reason)
                     // 同购物包内的非结算中间页（拼多多提交订单后的收银台）是支付旅程
                     // 的一部分：保留稳定结算引用等待切支付应用，否则快照与会话上下文
@@ -2325,6 +2338,44 @@ class CheckoutAccessibilityService : AccessibilityService() {
         return true
     }
 
+    /**
+     * 按"包名+拒绝码"采样输出结算页门禁判定结果。
+     *
+     * 自动截图（CHECKOUT_STABLE）必须先通过该门禁、再熬过稳定窗口才会触发。
+     * 此前只有 Rejected 分支间接打印"手动截图上下文"，Accepted 分支完全静默，
+     * 导致"自动截图难触发"无法归因：既分不清是门禁没过还是稳定窗口没熬够，
+     * 也分不清究竟卡在哪个信号上。
+     *
+     * 每个组合首次出现时立即打印，之后按间隔采样，既保证每种失败原因都留痕，
+     * 又不会被高频事件刷屏。
+     *
+     * @param observation 本次页面观察摘要，只输出信号位与截断指纹，不含页面文本。
+     * @param rejection 门禁拒绝码；null 表示本次判定通过。
+     */
+    private fun logCheckoutGateSampled(
+        observation: CheckoutPageObservation,
+        rejection: CheckoutDetectionRejection?
+    ) {
+        val key = observation.shoppingPackage + "|" + (rejection?.wireValue ?: "ACCEPTED")
+        val now = System.currentTimeMillis()
+        val lastAt = lastCheckoutGateLogAt[key]
+        if (lastAt != null && now - lastAt < CHECKOUT_GATE_LOG_INTERVAL_MILLIS) {
+            return
+        }
+        lastCheckoutGateLogAt[key] = now
+        Log.i(
+            TAG,
+            "结算页门禁: ${rejection?.wireValue ?: "ACCEPTED"}, " +
+                "pkg=${observation.shoppingPackage}, role=${observation.pageRole}, " +
+                "amountSignal=${observation.hasFinalAmountSignal}, " +
+                "actionSignal=${observation.hasCheckoutActionSignal}, " +
+                "classSemantic=${observation.hasCheckoutClassSemantic}, " +
+                "sensitive=${observation.isSensitivePage}, " +
+                "fp=${observation.pageFingerprint.take(12)}, " +
+                "class=${observation.windowClass}"
+        )
+    }
+
     /** AI 回调只传递结构化结果，运行在 IO 协程中且不携带图片。 */
     private fun notifyAiResult(result: com.jotbill.app.ai.AiVisionResult) {
         val callback = synchronized(aiLifecycleLock) { aiResultCallback }
@@ -2540,6 +2591,28 @@ class CheckoutAccessibilityService : AccessibilityService() {
 }
 
 /**
+ * 判定结算候选是否已超过最长等待上限，必须强制确认稳定。
+ *
+ * 提取为纯函数以便单测覆盖：CheckoutStabilityCoordinator 依赖 Android Handler，
+ * 无法在 JVM 单测中构造，但该判据决定了自动截图能否在指纹漂移页面上触发。
+ *
+ * 去抖策略是"每来一个新指纹就把去抖计时器归零"。京东弹窗结算页的推荐位与
+ * 优惠券文案会持续改写指纹，只要漂移间隔小于去抖窗口，稳定确认就被无限推迟，
+ * 自动截图（CHECKOUT_STABLE）因此极难触发。达到上限后必须放行一次，
+ * 宁可确认一帧略旧的结算页，也不能一张都截不到。
+ *
+ * @param firstPendingAt 当前候选序列首次出现的时间戳；0 表示尚无候选。
+ * @param now 当前时间戳。
+ * @param maxStableWaitMillis 最长等待上限。
+ * @return true 表示应立即强制确认，不再重置去抖计时器。
+ */
+internal fun shouldForceStableConfirm(
+    firstPendingAt: Long,
+    now: Long,
+    maxStableWaitMillis: Long
+): Boolean = firstPendingAt > 0L && now - firstPendingAt >= maxStableWaitMillis
+
+/**
  * 在主线程上等待页面无新事件后再确认稳定状态。
  *
  * 该协调器只以页面指纹和时间作为去抖依据，不使用无障碍事件次数。
@@ -2549,7 +2622,17 @@ internal class CheckoutStabilityCoordinator(
     private val stableDelayMillis: Long,
     private val nowMillis: () -> Long,
     private val onStable: (StableCheckoutPage) -> Unit,
-    private val onInvalidated: (CheckoutObservationInvalidation) -> Unit
+    private val onInvalidated: (CheckoutObservationInvalidation) -> Unit,
+    /**
+     * 单个结算候选从首次出现到必须确认稳定的最长等待时间。
+     *
+     * 去抖策略是"每来一个新指纹就把 stableDelayMillis 计时器归零"，
+     * 这在指纹持续漂移的页面上会导致稳定窗口永远无法完成——京东弹窗结算页
+     * 的推荐位、优惠券文案会不断改写指纹，自动截图因此极难触发。
+     * 超过该上限即用最近一次候选强制确认一次，宁可截到一帧略旧的结算页，
+     * 也不能一张都截不到。
+     */
+    private val maxStableWaitMillis: Long = 2_000L
 ) {
     private var pendingObservation: CheckoutPageObservation? = null
     private var lastStableFingerprint: String? = null
@@ -2558,9 +2641,17 @@ internal class CheckoutStabilityCoordinator(
     private var hasActiveCheckout: Boolean = false
     private var disposed: Boolean = false
 
+    /** 当前结算候选序列首次出现的时间；用于判断是否已超过最长等待上限。 */
+    private var firstPendingAt: Long = 0L
+
+    /** 是否已有稳定确认在 Handler 队列中排队等待执行。 */
+    private var stableConfirmScheduled: Boolean = false
+
     private val stableRunnable = Runnable {
+        stableConfirmScheduled = false
         val observation = pendingObservation ?: return@Runnable
         pendingObservation = null
+        firstPendingAt = 0L
         if (!hasActiveCheckout || observation.pageFingerprint == lastStableFingerprint) {
             return@Runnable
         }
@@ -2588,13 +2679,46 @@ internal class CheckoutStabilityCoordinator(
         activeFingerprint = observation.pageFingerprint
         if (observation.pageFingerprint == lastStableFingerprint) {
             pendingObservation = null
+            firstPendingAt = 0L
             handler.removeCallbacks(stableRunnable)
             return
         }
 
+        val now = nowMillis()
+        val hadPending = pendingObservation != null
+        // 始终保留最新观察：强制确认时也应该用最近一帧，而不是最早那一帧。
         pendingObservation = observation
+        if (!hadPending || firstPendingAt == 0L) {
+            firstPendingAt = now
+            scheduleStableConfirm(stableDelayMillis)
+            return
+        }
+
+        // 已超过最长等待上限：不再重置计时器，让已排定的确认按时执行。
+        // 否则指纹持续漂移的页面（京东弹窗结算页的推荐位/优惠券文案）
+        // 会把 500ms 去抖窗口无限推迟，自动截图永远等不到稳定确认。
+        if (shouldForceStableConfirm(firstPendingAt, now, maxStableWaitMillis)) {
+            if (!stableConfirmScheduled) {
+                scheduleStableConfirm(0L)
+            }
+            return
+        }
+
+        scheduleStableConfirm(stableDelayMillis)
+    }
+
+    /**
+     * 排定一次稳定确认，覆盖此前尚未执行的排定。
+     *
+     * 用自维护标志替代 Handler.hasCallbacks（该 API 需要 API 29+），
+     * 以便在最低支持版本上也能判断"是否已有确认在排队"。
+     *
+     * @param delayMillis 延迟毫秒；0 表示尽快执行。
+     */
+    private fun scheduleStableConfirm(delayMillis: Long) {
         handler.removeCallbacks(stableRunnable)
-        handler.postDelayed(stableRunnable, stableDelayMillis)
+        stableConfirmScheduled = true
+        handler.postDelayed(stableRunnable, delayMillis)
     }
 
     /**
@@ -2615,7 +2739,9 @@ internal class CheckoutStabilityCoordinator(
         }
 
         handler.removeCallbacks(stableRunnable)
+        stableConfirmScheduled = false
         pendingObservation = null
+        firstPendingAt = 0L
         hasActiveCheckout = false
         val detail = CheckoutObservationInvalidation(
             reason = reason,
@@ -2637,7 +2763,9 @@ internal class CheckoutStabilityCoordinator(
         }
         invalidate(CheckoutInvalidationReason.SERVICE_DESTROYED)
         handler.removeCallbacks(stableRunnable)
+        stableConfirmScheduled = false
         pendingObservation = null
+        firstPendingAt = 0L
         disposed = true
     }
 }
