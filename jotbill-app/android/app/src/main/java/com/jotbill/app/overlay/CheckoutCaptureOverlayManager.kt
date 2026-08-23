@@ -40,6 +40,26 @@ internal enum class CheckoutOverlayMode(val wireValue: String) {
 }
 
 /**
+ * 判定"已捕获"状态是否处于保持窗口内，应忽略同包非结算页的状态回退。
+ *
+ * 京东结算页在 STORED 之后数十毫秒即抛出 NON_CHECKOUT_PAGE
+ * （真机 .tmp-device-capture-20260823-163623 中 5 次 STORED 全部如此），
+ * 若立刻把状态改回 READY，用户根本看不到"已捕获"反馈。
+ *
+ * @param isCapturedState 当前状态是否为 CAPTURED_WAITING_PAYMENT。
+ * @param capturedAt 进入"已捕获"状态的时间戳；0 表示从未捕获。
+ * @param now 当前时间戳。
+ * @param holdMillis 保持窗口时长。
+ * @return true 表示应保持"已捕获"，不执行状态回退。
+ */
+internal fun shouldHoldCapturedState(
+    isCapturedState: Boolean,
+    capturedAt: Long,
+    now: Long,
+    holdMillis: Long
+): Boolean = isCapturedState && capturedAt > 0L && now - capturedAt < holdMillis
+
+/**
  * 判定一次截图结果是否应更新悬浮按钮状态。
  *
  * 成功类结果（STORED / PROTECTED / DUPLICATE）代表快照确已写入缓冲，
@@ -170,6 +190,15 @@ internal class CheckoutCaptureOverlayManager(context: Context) {
         private const val MANUAL_CAPTURE_MIN_INTERVAL_MILLIS = 800L
 
         /**
+         * "已捕获"状态的最短保持时间。
+         *
+         * 京东结算页在 STORED 之后数十毫秒即抛出 NON_CHECKOUT_PAGE，
+         * 若立刻把状态改回 READY，用户根本看不到"已捕获"反馈。
+         * 保持窗口内忽略同包非结算页的状态回退，窗口结束后自然恢复。
+         */
+        private const val CAPTURED_STATE_HOLD_MILLIS = 3_000L
+
+        /**
          * 结算页内容变化会短暂把页面判成普通页/节点不可读，立即移除按钮会造成
          * 高频 addView/removeView 闪烁。隐藏前保留一段时间，若期间页面重新稳定为
          * 可展示状态，则取消隐藏并继续复用同一个系统窗口。
@@ -247,6 +276,12 @@ internal class CheckoutCaptureOverlayManager(context: Context) {
 
     /** 最近一次受理手动截图点击的时间，用于节流重复提交。 */
     private var lastManualCaptureRequestAt = 0L
+
+    /** 最近一次进入"已捕获"状态的时间，用于保持窗口判定。 */
+    private var currentCapturedAt = 0L
+
+    /** 时间源，便于单测替换。 */
+    private val systemClock: () -> Long = { System.currentTimeMillis() }
 
     private val pendingHideRunnable = Runnable {
         hideScheduled = false
@@ -355,12 +390,22 @@ internal class CheckoutCaptureOverlayManager(context: Context) {
             when (result.status) {
                 SnapshotCaptureStatus.STORED,
                 SnapshotCaptureStatus.PROTECTED,
-                SnapshotCaptureStatus.DUPLICATE -> updateState(
-                    status = CheckoutOverlayStatus.CAPTURED_WAITING_PAYMENT,
-                    visible = canShowOnCurrentPage(),
-                    reasonCode = result.reasonCode,
-                    result = result
-                )
+                SnapshotCaptureStatus.DUPLICATE -> {
+                    // "已捕获"是既成事实：快照已在缓冲中等待支付交接消费。
+                    // 不能用 canShowOnCurrentPage() 决定可见性——该判据依赖
+                    // currentCheckout，而结算页在抖动中会立刻被 NON_CHECKOUT_PAGE
+                    // 覆盖成 false。真机 .tmp-device-capture-20260823-163623 中
+                    // 5 次 STORED 全部没能把按钮更新为"已捕获"，
+                    // 按钮全程停在 checkout=false 的 READY 上下文。
+                    // 只要仍在受支持的购物应用内且非敏感页，就应把结果告知用户。
+                    currentCapturedAt = systemClock()
+                    updateState(
+                        status = CheckoutOverlayStatus.CAPTURED_WAITING_PAYMENT,
+                        visible = canShowCapturedState(),
+                        reasonCode = result.reasonCode,
+                        result = result
+                    )
+                }
 
                 SnapshotCaptureStatus.EXPIRED -> updateState(
                     status = CheckoutOverlayStatus.EXPIRED_RETRY,
@@ -567,6 +612,20 @@ internal class CheckoutCaptureOverlayManager(context: Context) {
             currentSensitivePage = false
             currentCheckout = false
             currentUserRetryContext = false
+            // 刚捕获成功后的短暂窗口内不把状态改回 READY：京东结算页在
+            // STORED 之后数十毫秒即抛出 NON_CHECKOUT_PAGE，若立刻覆盖，
+            // 用户根本看不到"已捕获"。保持窗口结束后自然回到 READY。
+            if (shouldHoldCapturedState(
+                    isCapturedState =
+                        state.status == CheckoutOverlayStatus.CAPTURED_WAITING_PAYMENT,
+                    capturedAt = currentCapturedAt,
+                    now = systemClock(),
+                    holdMillis = CAPTURED_STATE_HOLD_MILLIS
+                )
+            ) {
+                refreshVisibility()
+                return
+            }
             updateState(
                 status = CheckoutOverlayStatus.READY,
                 visible = canShowOnCurrentPage(),
@@ -659,6 +718,21 @@ internal class CheckoutCaptureOverlayManager(context: Context) {
                 ) &&
             hasOverlayPermission(appContext)
 
+    /**
+     * "已捕获"状态是否可展示。
+     *
+     * 与 canShowOnCurrentPage() 的关键区别是不依赖 currentCheckout：
+     * 快照已写入缓冲是既成事实，而结算页在抖动中会立刻被 NON_CHECKOUT_PAGE
+     * 覆盖成 checkout=false，若沿用同一判据则"已捕获"永远无法显示给用户。
+     * 仍然保留敏感页、总开关、模式与悬浮窗权限这几道约束。
+     */
+    private fun canShowCapturedState(): Boolean =
+        configuredEnabled &&
+            mode != CheckoutOverlayMode.OFF &&
+            !currentSensitivePage &&
+            currentSupportedShoppingApp &&
+            hasOverlayPermission(appContext)
+
     private fun canManualCapture(): Boolean =
         canShowOnCurrentPage() &&
             !currentSensitivePage &&
@@ -725,7 +799,14 @@ internal class CheckoutCaptureOverlayManager(context: Context) {
     }
 
     private fun refreshVisibility() {
-        val shouldShow = state.visible && canShowOnCurrentPage()
+        // "已捕获"用独立判据：它不依赖 currentCheckout，否则结算页抖动会
+        // 立刻把刚显示出来的"已捕获"重新隐藏，用户根本看不到反馈。
+        val shouldShow = state.visible &&
+            if (state.status == CheckoutOverlayStatus.CAPTURED_WAITING_PAYMENT) {
+                canShowCapturedState()
+            } else {
+                canShowOnCurrentPage()
+            }
         if (shouldShow) {
             cancelPendingHide()
             ensureView()

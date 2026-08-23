@@ -142,4 +142,72 @@ class OverlayCaptureResultAcceptanceTest {
             )
         )
     }
+
+    /**
+     * 保持窗口内必须维持"已捕获"，不被同包非结算页覆盖。
+     *
+     * 真机 .tmp-device-capture-20260823-163623 中 5 次 STORED 之后
+     * 数十毫秒即抛出 NON_CHECKOUT_PAGE，若立刻回退用户看不到反馈。
+     */
+    @Test
+    fun 保持窗口内维持已捕获状态() {
+        assertTrue(
+            "STORED 后 100ms 内不应回退状态",
+            shouldHoldCapturedState(
+                isCapturedState = true,
+                capturedAt = 1_000L,
+                now = 1_100L,
+                holdMillis = 3_000L
+            )
+        )
+    }
+
+    /**
+     * 保持窗口结束后应允许状态回退。
+     *
+     * 否则按钮会永久停在"已捕获"，无法回到可再次截图的 READY。
+     */
+    @Test
+    fun 保持窗口结束后允许状态回退() {
+        assertFalse(
+            shouldHoldCapturedState(
+                isCapturedState = true,
+                capturedAt = 1_000L,
+                now = 4_000L,
+                holdMillis = 3_000L
+            )
+        )
+    }
+
+    /**
+     * 非"已捕获"状态不受保持窗口影响。
+     */
+    @Test
+    fun 非已捕获状态不受保持窗口影响() {
+        assertFalse(
+            shouldHoldCapturedState(
+                isCapturedState = false,
+                capturedAt = 1_000L,
+                now = 1_100L,
+                holdMillis = 3_000L
+            )
+        )
+    }
+
+    /**
+     * 从未捕获过时不得进入保持窗口。
+     *
+     * capturedAt=0 与当前时间的差值必然远超窗口，需显式排除以免误判。
+     */
+    @Test
+    fun 从未捕获时不进入保持窗口() {
+        assertFalse(
+            shouldHoldCapturedState(
+                isCapturedState = true,
+                capturedAt = 0L,
+                now = 1_100L,
+                holdMillis = 3_000L
+            )
+        )
+    }
 }
