@@ -57,6 +57,9 @@ class CheckoutAccessibilityService : AccessibilityService() {
         /** 截图协调器重建的最小间隔，避免重建失败时形成每事件重试风暴。 */
         private const val COORDINATOR_RECOVERY_THROTTLE_MILLIS = 10_000L
 
+        /** "截图兜底已禁止"日志按原因的采样间隔。 */
+        private const val SCREENSHOT_FALLBACK_BLOCK_LOG_INTERVAL_MILLIS = 3_000L
+
         /** 支付交接补发节流窗口：同一支付包在该窗口内只补发一次交接事件。 */
         private const val PAYMENT_HANDOFF_REDISPATCH_THROTTLE_MILLIS = 5_000L
 
@@ -340,6 +343,12 @@ class CheckoutAccessibilityService : AccessibilityService() {
     /** 最近一次尝试重建截图协调器的时间，用于抑制重建风暴。 */
     @Volatile
     private var lastCoordinatorRecoveryAt = 0L
+
+    /** "截图兜底已禁止"日志按原因的最近打印时间。 */
+    private val lastScreenshotFallbackBlockLogAt = mutableMapOf<String, Long>()
+
+    /** 采样间隔内被抑制的"截图兜底已禁止"次数，随下次输出一并汇报。 */
+    private val suppressedScreenshotFallbackBlockCount = mutableMapOf<String, Int>()
     private var submitActionTriggeredKey: StableCheckoutKey? = null
     @Volatile
     private var serviceConnected = false
@@ -1552,16 +1561,16 @@ class CheckoutAccessibilityService : AccessibilityService() {
     ) {
         // P0 隐私红线：敏感支付页面一律禁止截图 AI 兜底，且不受节流状态影响。
         if (sensitivePageSeen) {
-            Log.i(TAG, "支付结果页截图兜底已禁止: 本轮观察到敏感页面 pkg=$paymentPackage")
+            logScreenshotFallbackBlockedSampled("本轮观察到敏感页面", paymentPackage)
             return
         }
         val now = System.currentTimeMillis()
         // 空节点树帧无法自行判定敏感，用锁存窗口覆盖密码页与空树帧交替的场景。
         if (now - lastSensitivePaymentPageAt < SENSITIVE_PAGE_SCREENSHOT_BLOCK_MILLIS) {
-            Log.i(
-                TAG,
-                "支付结果页截图兜底已禁止: 敏感页面锁存窗口内 pkg=$paymentPackage, " +
-                    "elapsed=${now - lastSensitivePaymentPageAt}ms"
+            logScreenshotFallbackBlockedSampled(
+                "敏感页面锁存窗口内",
+                paymentPackage,
+                extra = "elapsed=${now - lastSensitivePaymentPageAt}ms"
             )
             return
         }
@@ -2454,6 +2463,40 @@ class CheckoutAccessibilityService : AccessibilityService() {
             Log.w(TAG, "重建截图协调器失败，截图能力仍不可用", error)
             false
         }
+    }
+
+    /**
+     * 按原因采样输出"支付结果页截图兜底已禁止"，并汇报期间抑制次数。
+     *
+     * 敏感页停留期间该分支每 10ms 即可命中，真机
+     * .tmp-device-capture-20260823-154942 中两条原因各刷出数百行，
+     * 把"支付结果页解析到证据""AI 结果匹配落库"等关键链路日志完全淹没。
+     * 该日志是隐私红线（敏感页禁止截图）的证据，不能删除，只能限流。
+     *
+     * @param reason 禁止原因，用作采样分组键。
+     * @param paymentPackage 支付应用包名。
+     * @param extra 附加诊断信息，可为空。
+     */
+    private fun logScreenshotFallbackBlockedSampled(
+        reason: String,
+        paymentPackage: String,
+        extra: String? = null
+    ) {
+        val now = System.currentTimeMillis()
+        val lastAt = lastScreenshotFallbackBlockLogAt[reason]
+        if (lastAt != null && now - lastAt < SCREENSHOT_FALLBACK_BLOCK_LOG_INTERVAL_MILLIS) {
+            suppressedScreenshotFallbackBlockCount[reason] =
+                (suppressedScreenshotFallbackBlockCount[reason] ?: 0) + 1
+            return
+        }
+        lastScreenshotFallbackBlockLogAt[reason] = now
+        val suppressed = suppressedScreenshotFallbackBlockCount.remove(reason) ?: 0
+        Log.i(
+            TAG,
+            "支付结果页截图兜底已禁止: $reason pkg=$paymentPackage" +
+                (extra?.let { ", $it" } ?: "") +
+                if (suppressed > 0) ", 期间已抑制${suppressed}次" else ""
+        )
     }
 
     /** AI 回调只传递结构化结果，运行在 IO 协程中且不携带图片。 */

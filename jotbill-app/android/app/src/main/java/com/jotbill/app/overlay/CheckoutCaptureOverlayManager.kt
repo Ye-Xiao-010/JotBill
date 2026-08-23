@@ -39,6 +39,60 @@ internal enum class CheckoutOverlayMode(val wireValue: String) {
     }
 }
 
+/**
+ * 判定一次截图结果是否应更新悬浮按钮状态。
+ *
+ * 成功类结果（STORED / PROTECTED / DUPLICATE）代表快照确已写入缓冲，
+ * 只需确认购物包一致即可采纳：自动截图用的是稳定确认时刻的指纹，
+ * 而页面指纹在结算页上持续漂移，若要求指纹相等则必然被丢弃。
+ * 真机 .tmp-device-capture-20260823-154942 中自动截图 6 次 STORED
+ * 却无一次更新按钮，用户因此反馈"明明已捕获但显示没有变化"。
+ *
+ * 失败类结果仍需指纹与会话严格匹配，否则旧页面的拒绝原因会覆盖
+ * 当前页面的可用状态，把本可点击的按钮显示成不可用。
+ *
+ * @param isSuccessResult 是否为成功类结果。
+ * @param currentFingerprint 悬浮层当前记录的页面指纹。
+ * @param resultFingerprint 结果携带的页面指纹。
+ * @param currentPackage 悬浮层当前记录的购物包名。
+ * @param resultPackage 结果携带的购物包名。
+ * @param currentSessionId 悬浮层当前记录的会话标识。
+ * @param resultSessionId 结果携带的会话标识。
+ * @return true 表示应采纳该结果并更新按钮状态。
+ */
+internal fun shouldAcceptOverlayCaptureResult(
+    isSuccessResult: Boolean,
+    currentFingerprint: String?,
+    resultFingerprint: String?,
+    currentPackage: String?,
+    resultPackage: String?,
+    currentSessionId: String?,
+    resultSessionId: String?
+): Boolean {
+    // 跨购物包的结果一律不采纳：槽位按购物包划分，互不代表。
+    if (currentPackage != null && resultPackage != null && currentPackage != resultPackage) {
+        return false
+    }
+    if (isSuccessResult) {
+        return true
+    }
+    if (currentFingerprint == null && resultFingerprint != null) {
+        return false
+    }
+    if (
+        currentFingerprint != null &&
+        resultFingerprint != null &&
+        currentFingerprint != resultFingerprint
+    ) {
+        return false
+    }
+    return !(
+        currentSessionId != null &&
+            resultSessionId != null &&
+            currentSessionId != resultSessionId
+        )
+}
+
 /** 悬浮按钮对 RN 暴露的无图片状态。 */
 internal enum class CheckoutOverlayStatus(val wireValue: String) {
     HIDDEN("HIDDEN"),
@@ -105,6 +159,15 @@ internal class CheckoutCaptureOverlayManager(context: Context) {
         private const val KEY_ENABLED = "manual_capture_enabled"
         private const val KEY_MODE = "manual_capture_mode"
         private const val DEFAULT_MODE = "checkout_only"
+
+        /**
+         * 手动截图点击的最小间隔。
+         *
+         * 截图结果最长可延迟约 2 秒返回，空窗期内用户看不到反馈会反复点击
+         * （真机曾 2 秒内堆积 6 次请求）。取 800ms 既能挡住连点，
+         * 也不会让用户觉得按钮迟钝。
+         */
+        private const val MANUAL_CAPTURE_MIN_INTERVAL_MILLIS = 800L
 
         /**
          * 结算页内容变化会短暂把页面判成普通页/节点不可读，立即移除按钮会造成
@@ -181,6 +244,9 @@ internal class CheckoutCaptureOverlayManager(context: Context) {
     private var currentUserRetryContext = false
     private var closed = false
     private var hideScheduled = false
+
+    /** 最近一次受理手动截图点击的时间，用于节流重复提交。 */
+    private var lastManualCaptureRequestAt = 0L
 
     private val pendingHideRunnable = Runnable {
         hideScheduled = false
@@ -263,27 +329,25 @@ internal class CheckoutCaptureOverlayManager(context: Context) {
             if (closed) {
                 return@runOnMain
             }
-            if (currentFingerprint == null && result.pageFingerprint != null) {
-                return@runOnMain
-            }
-            if (
-                currentFingerprint != null &&
-                result.pageFingerprint != null &&
-                currentFingerprint != result.pageFingerprint
-            ) {
-                return@runOnMain
-            }
-            if (
-                currentPackage != null &&
-                result.shoppingPackage != null &&
-                currentPackage != result.shoppingPackage
-            ) {
-                return@runOnMain
-            }
-            if (
-                state.sessionId != null &&
-                result.sessionId != null &&
-                state.sessionId != result.sessionId
+            // 成功类结果（STORED / PROTECTED / DUPLICATE）证明快照确实已写入缓冲，
+            // 不能因指纹或会话已推进而丢弃——否则按钮永远停在"未捕获"。
+            // 真机 .tmp-device-capture-20260823-154942：自动截图 6 次 STORED
+            // 却无一次更新按钮状态，用户反馈"明明已捕获但显示没有变化"。
+            // 原因是自动截图用的是稳定确认时的指纹，而页面指纹在持续漂移，
+            // currentFingerprint 早已是新值，相等过滤必然失败。
+            // 失败类结果仍需严格匹配，避免旧页面的拒绝原因覆盖当前页面状态。
+            val isSuccessResult = result.status == SnapshotCaptureStatus.STORED ||
+                result.status == SnapshotCaptureStatus.PROTECTED ||
+                result.status == SnapshotCaptureStatus.DUPLICATE
+            if (!shouldAcceptOverlayCaptureResult(
+                    isSuccessResult = isSuccessResult,
+                    currentFingerprint = currentFingerprint,
+                    resultFingerprint = result.pageFingerprint,
+                    currentPackage = currentPackage,
+                    resultPackage = result.shoppingPackage,
+                    currentSessionId = state.sessionId,
+                    resultSessionId = result.sessionId
+                )
             ) {
                 return@runOnMain
             }
@@ -357,6 +421,22 @@ internal class CheckoutCaptureOverlayManager(context: Context) {
                 )
                 return@runOnMain
             }
+            // 截图结果最长可延迟约 2 秒返回（真机 15:50:25.235 点击 →
+            // 15:50:27.383 才收到 NO_ACTIVE_CHECKOUT）。这段空窗内用户看不到
+            // 反馈会反复点击，日志中曾 2 秒内堆积 6 次请求，
+            // 后续结果连续回灌成多条 NO_ACTIVE_CHECKOUT / SCREENSHOT_BUSY。
+            // 节流只挡住重复提交，不改变 CAPTURING 期间允许点击的既有语义
+            // （该语义保证自动截图进行时用户仍能手动触发）。
+            val now = System.currentTimeMillis()
+            if (now - lastManualCaptureRequestAt < MANUAL_CAPTURE_MIN_INTERVAL_MILLIS) {
+                android.util.Log.d(
+                    TAG,
+                    "手动截图点击被节流: 距上次${now - lastManualCaptureRequestAt}ms, " +
+                        "status=${state.status}"
+                )
+                return@runOnMain
+            }
+            lastManualCaptureRequestAt = now
             android.util.Log.d(TAG, "手动截图点击已受理: status=${state.status}, reason=${state.reasonCode}")
             updateState(
                 status = CheckoutOverlayStatus.CAPTURING,
