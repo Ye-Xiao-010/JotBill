@@ -2671,6 +2671,40 @@ class CheckoutAccessibilityService : AccessibilityService() {
 }
 
 /**
+ * 判定一次失效是否应保留结算候选与累计等待时间。
+ *
+ * 京东弹窗结算页在 ACCEPTED 与 NOT_CHECKOUT_PAGE 之间高频抖动，
+ * 真机 .tmp-device-capture-20260823-144208 中相邻两次判定最短仅隔 16ms：
+ *   14:42:42.432 ACCEPTED  → 14:42:43.099 NOT_CHECKOUT_PAGE (667ms)
+ *   14:43:11.881 ACCEPTED  → 14:43:11.897 NOT_CHECKOUT_PAGE (16ms)
+ *   14:43:23.194 ACCEPTED  → 14:43:23.222 NOT_CHECKOUT_PAGE (28ms)
+ * invalidate() 此前会把 pendingObservation 与 firstPendingAt 一并清零，
+ * 导致最长等待上限永远攒不满：京东 6 次 ACCEPTED 只换来 1 次自动截图，
+ * 而拼多多因 ACCEPTED 能连续出现（3.4 秒内两次）故 2/2 成功。
+ *
+ * 只有同购物包内的 NON_CHECKOUT_PAGE 才视为抖动：离开购物应用、敏感页、
+ * 支付交接、节点树不可用、服务中断都是明确的旅程终止，必须清空候选，
+ * 否则会把过期候选带入下一段旅程。
+ *
+ * @param reason 本次失效原因。
+ * @param invalidatedPackage 触发失效的页面所属购物包名。
+ * @param pendingPackage 当前待确认候选所属购物包名；无候选时为 null。
+ * @return true 表示保留候选与累计等待，让强制确认仍有机会达成。
+ */
+internal fun shouldKeepPendingAcrossInvalidation(
+    reason: CheckoutInvalidationReason,
+    invalidatedPackage: String?,
+    pendingPackage: String?
+): Boolean {
+    if (reason != CheckoutInvalidationReason.NON_CHECKOUT_PAGE) {
+        return false
+    }
+    val invalidated = invalidatedPackage?.trim().orEmpty()
+    val pending = pendingPackage?.trim().orEmpty()
+    return pending.isNotBlank() && invalidated == pending
+}
+
+/**
  * 判定结算候选是否已超过最长等待上限，必须强制确认稳定。
  *
  * 提取为纯函数以便单测覆盖：CheckoutStabilityCoordinator 依赖 Android Handler，
@@ -2727,12 +2761,27 @@ internal class CheckoutStabilityCoordinator(
     /** 是否已有稳定确认在 Handler 队列中排队等待执行。 */
     private var stableConfirmScheduled: Boolean = false
 
+    /**
+     * 当前候选是否为"抖动期间保留"的候选。
+     *
+     * 同包非结算页失效会把 hasActiveCheckout 置 false，但候选被有意保留以便
+     * 凑足最长等待上限。该标记让确认逻辑区分"候选仍有效但页面在抖动"与
+     * "旅程已真正终止"，避免保留的候选被 hasActiveCheckout 检查一律拦掉。
+     */
+    private var pendingKeptAcrossInvalidation: Boolean = false
+
     private val stableRunnable = Runnable {
         stableConfirmScheduled = false
         val observation = pendingObservation ?: return@Runnable
+        val keptAcrossInvalidation = pendingKeptAcrossInvalidation
         pendingObservation = null
         firstPendingAt = 0L
-        if (!hasActiveCheckout || observation.pageFingerprint == lastStableFingerprint) {
+        pendingKeptAcrossInvalidation = false
+        // 抖动期间保留的候选不受 hasActiveCheckout 限制：该标志已被 invalidate
+        // 置为 false，若一律拦下则保留候选毫无意义，最长等待上限仍然形同虚设。
+        if ((!hasActiveCheckout && !keptAcrossInvalidation) ||
+            observation.pageFingerprint == lastStableFingerprint
+        ) {
             return@Runnable
         }
 
@@ -2757,10 +2806,13 @@ internal class CheckoutStabilityCoordinator(
         hasActiveCheckout = true
         activePackage = observation.shoppingPackage
         activeFingerprint = observation.pageFingerprint
+        // 重新收到结算观察说明抖动已结束，候选回归正常生命周期。
+        pendingKeptAcrossInvalidation = false
         if (observation.pageFingerprint == lastStableFingerprint) {
             pendingObservation = null
             firstPendingAt = 0L
             handler.removeCallbacks(stableRunnable)
+            stableConfirmScheduled = false
             return
         }
 
@@ -2818,10 +2870,27 @@ internal class CheckoutStabilityCoordinator(
             return false
         }
 
+        // 同包内的非结算页判定多为页面渲染抖动而非真正离开：京东弹窗结算页
+        // 相邻判定最短仅隔 16ms。此处若把候选与累计等待一起清零，
+        // 最长等待上限永远攒不满，自动截图只能靠 ACCEPTED 恰好连续出现的运气。
+        // 保留候选让强制确认仍有机会达成；真正的旅程终止（离开应用、敏感页、
+        // 支付交接、服务中断）仍按原逻辑清空。
+        val keepPending = shouldKeepPendingAcrossInvalidation(
+            reason = reason,
+            invalidatedPackage = activePackage ?: shoppingPackage,
+            pendingPackage = pendingObservation?.shoppingPackage
+        )
         handler.removeCallbacks(stableRunnable)
         stableConfirmScheduled = false
-        pendingObservation = null
-        firstPendingAt = 0L
+        if (!keepPending) {
+            pendingObservation = null
+            firstPendingAt = 0L
+            pendingKeptAcrossInvalidation = false
+        } else {
+            // 抖动期间仍需继续推进确认，否则候选会一直悬着无人处理。
+            pendingKeptAcrossInvalidation = true
+            scheduleStableConfirm(stableDelayMillis)
+        }
         hasActiveCheckout = false
         val detail = CheckoutObservationInvalidation(
             reason = reason,
@@ -2846,6 +2915,7 @@ internal class CheckoutStabilityCoordinator(
         stableConfirmScheduled = false
         pendingObservation = null
         firstPendingAt = 0L
+        pendingKeptAcrossInvalidation = false
         disposed = true
     }
 }

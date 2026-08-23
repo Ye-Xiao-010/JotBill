@@ -313,16 +313,25 @@ internal class CheckoutCaptureOverlayManager(context: Context) {
         }
     }
 
-    /** AI 已接管快照所有权后隐藏按钮，避免继续操作同一结算旅程。 */
+    /**
+     * AI 已接管快照所有权后收起按钮，避免对同一结算旅程重复派发。
+     *
+     * 只清理快照元数据与"本页已可截图"标记，不清理页面上下文
+     * （currentPackage / currentSupportedShoppingApp / currentSensitivePage）。
+     * 此前把页面上下文一并清空，导致用户仍停在结算页时按钮直接消失、
+     * 且要等下一个无障碍事件重建上下文才会回来——真机上表现为
+     * "点一下显示处理中，然后按钮就没了"：
+     *   14:42:38.154 截图状态 STORED, 来源=MANUAL_CAPTURE
+     *   14:42:38.156 悬浮按钮进入隐藏宽限: status=HIDDEN, reason=AI_DISPATCHED
+     *   14:42:39.160 悬浮按钮按下: status=READY（1 秒后才恢复）
+     * 保留页面上下文后，按钮可在同一页面的后续判定中正常恢复可用状态。
+     */
     fun onAiDispatched() {
         runOnMain {
             if (closed) {
                 return@runOnMain
             }
-            currentPackage = null
-            currentFingerprint = null
-            currentSupportedShoppingApp = false
-            currentSensitivePage = false
+            // 快照已交给 AI，本次结算引用不再可用；页面上下文保持不变。
             currentCheckout = false
             currentUserRetryContext = false
             updateState(
