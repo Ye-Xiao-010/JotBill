@@ -75,6 +75,65 @@ fun interface SnapshotCaptureCallback {
 }
 
 /**
+ * 事件分发或处理失败的类别，用于区分暂时性故障与不可恢复故障。
+ */
+internal enum class DispatchFailureKind {
+    /** 主线程在超时窗口内未处理完事件（卡顿），任务仍会稍后执行。 */
+    MAIN_THREAD_TIMEOUT,
+
+    /** 单个事件处理抛出 RuntimeException，属该事件自身的问题。 */
+    EVENT_RUNTIME_ERROR,
+
+    /** 主线程 Handler 无法投递，协调器已无法维持状态机。 */
+    MAIN_HANDLER_UNAVAILABLE,
+
+    /** OutOfMemoryError 等 Error，运行时已不可信。 */
+    FATAL_ERROR,
+
+    /** 服务销毁，需正常收口释放截图字节。 */
+    SERVICE_DESTROYED
+}
+
+/**
+ * 判定某类失败是否应当熔断协调器。
+ *
+ * 熔断不可逆（screenshotThread 已 quitSafely），代价是截图能力永久失效，
+ * 因此只有真正无法继续维持状态机的故障才应触发。
+ * 真机 .tmp-device-capture-20260823-123024 显示，此前把主线程卡顿也判为熔断，
+ * 导致一次 5 秒卡顿就让 12 次手动截图全部 SERVICE_NOT_CONNECTED、
+ * 自动截图归零，而门禁其实已正确识别到结算页。
+ *
+ * @param kind 失败类别。
+ * @return true 表示必须熔断收口；false 表示放弃本次事件、保留协调器。
+ */
+internal fun shouldFailClosedForDispatchFailure(kind: DispatchFailureKind): Boolean = when (kind) {
+    DispatchFailureKind.MAIN_THREAD_TIMEOUT -> false
+    DispatchFailureKind.EVENT_RUNTIME_ERROR -> false
+    DispatchFailureKind.MAIN_HANDLER_UNAVAILABLE -> true
+    DispatchFailureKind.FATAL_ERROR -> true
+    DispatchFailureKind.SERVICE_DESTROYED -> true
+}
+
+/**
+ * 判定协调器是否需要重建。
+ *
+ * 三个关闭标志由不同路径设置，必须全部覆盖：
+ * closed 由主线程收口置真、failClosedRequested 由跨线程请求先行置真、
+ * emergencyClosed 由主线程不可用的兜底路径设置。
+ * 漏掉任一者都会遗留"已不可用但判定为健康"的中间态。
+ *
+ * @param closed 主线程收口标志。
+ * @param failClosedRequested 跨线程熔断请求标志。
+ * @param emergencyClosed 紧急关闭标志。
+ * @return true 表示该实例已不可用，应当重建。
+ */
+internal fun shouldRecoverCoordinator(
+    closed: Boolean,
+    failClosedRequested: Boolean,
+    emergencyClosed: Boolean
+): Boolean = closed || failClosedRequested || emergencyClosed
+
+/**
  * 生成观察事件的诊断名称，用于熔断与分发失败日志。
  *
  * 只输出事件类型、购物包名与截断指纹：页面文本、金额、订单号一律不进日志，
@@ -368,30 +427,34 @@ internal class CheckoutSnapshotCaptureCoordinator(
             throw eventDispatchFailure(EVENT_PROCESSING_FAILED)
         }
         if (!completed) {
-            // 主线程在超时窗口内未能处理该事件：这是熔断最常见的真实起因
-            // （真机上伴随 Choreographer Skipped frames / Davey! 卡顿）。
-            // 记录等待耗时可区分"主线程卡顿"与"处理逻辑本身异常"。
+            // 主线程在超时窗口内未能处理该事件：这在真机上多为暂时性卡顿
+            // （伴随 Choreographer Skipped frames / Davey!），而非协调器损坏。
+            // 此前这里直接熔断，代价极不对称：一次 5 秒卡顿就让截图能力永久失效，
+            // 手动截图恒返回 SERVICE_NOT_CONNECTED、自动截图静默归零。
+            // 改为放弃本次事件、保留协调器：投递到主线程的任务仍会稍后执行，
+            // 后续事件可继续正常处理。真正不可恢复的故障
+            // （handler 不可用、截图线程异常）仍走熔断路径。
             Log.w(
                 TAG,
-                "结算观察事件分发超时，即将熔断协调器: event=${event.diagnosticName()}, " +
+                "结算观察事件分发超时，放弃本次事件但保留协调器: " +
+                    "event=${event.diagnosticName()}, " +
                     "waited=${nowMillis() - postedAt}ms, " +
                     "timeout=${EVENT_DISPATCH_TIMEOUT_MILLIS}ms, " +
                     "thread=${Thread.currentThread().name}"
             )
-            requestFailClosedFromAnyThread(reason = EVENT_PROCESSING_FAILED)
             throw eventDispatchFailure(EVENT_PROCESSING_FAILED)
         }
 
         dispatch.failure?.let { error ->
+            // 单个事件处理失败不再熔断整个协调器：具体的关闭决策已在
+            // runEventOnMainThread 内按异常类型区分（RuntimeException 保留协调器，
+            // Error 才熔断），此处只需把失败上抛给调用方。
             Log.w(
                 TAG,
                 "结算观察事件在主线程处理失败: event=${event.diagnosticName()}, " +
                     "waited=${nowMillis() - postedAt}ms",
                 error
             )
-            if (!emergencyClosed.get()) {
-                requestFailClosedFromAnyThread(reason = EVENT_PROCESSING_FAILED)
-            }
             throw eventDispatchFailure(EVENT_PROCESSING_FAILED, error)
         }
     }
@@ -399,8 +462,16 @@ internal class CheckoutSnapshotCaptureCoordinator(
     private fun runEventOnMainThread(event: CheckoutObservationEvent): Throwable? = try {
         handleEventOnMainThread(event)
         null
+    } catch (error: RuntimeException) {
+        // 单个事件的业务异常（节点树读取失败、状态不一致等）是可恢复的：
+        // 熔断会让截图能力永久失效，代价远大于放弃这一个事件。
+        // 保留协调器，后续事件继续正常处理。
+        Log.w(TAG, "结算观察事件处理失败，已放弃该事件但保留协调器", error)
+        error
     } catch (error: Throwable) {
-        Log.w(TAG, "结算观察事件处理失败，已关闭截图协调器", error)
+        // Error（OutOfMemoryError 等）表明运行时已不可信，必须熔断收口，
+        // 避免继续持有截图字节与缓冲状态。
+        Log.w(TAG, "结算观察事件处理发生严重错误，已关闭截图协调器", error)
         failClosedOnMainThread(reason = EVENT_PROCESSING_FAILED)
         error
     }
@@ -433,6 +504,21 @@ internal class CheckoutSnapshotCaptureCoordinator(
 
     private fun isClosedOnMainThread(): Boolean =
         closed || failClosedRequested.get() || emergencyClosed.get()
+
+    /**
+     * 协调器是否已进入不可逆的关闭状态。
+     *
+     * 熔断后 screenshotThread 已 quitSafely()，手动截图恒返回
+     * SERVICE_NOT_CONNECTED、自动链路在事件入口静默 return，只有重建实例才能恢复。
+     * 服务侧据此在事件入口自愈重建，避免"截图功能静默失效直到用户重启无障碍服务"。
+     *
+     * @return true 表示该实例已不可用，调用方应当重建协调器。
+     */
+    fun isPermanentlyClosed(): Boolean = shouldRecoverCoordinator(
+        closed = closed,
+        failClosedRequested = failClosedRequested.get(),
+        emergencyClosed = emergencyClosed.get()
+    )
 
     /** 仅在主线程摘除状态、关闭缓冲并发布取消结果。 */
     private fun failClosedOnMainThread(

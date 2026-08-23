@@ -54,6 +54,9 @@ class CheckoutAccessibilityService : AccessibilityService() {
         /** 结算页门禁日志按"包名+拒绝码"的采样间隔。 */
         private const val CHECKOUT_GATE_LOG_INTERVAL_MILLIS = 3_000L
 
+        /** 截图协调器重建的最小间隔，避免重建失败时形成每事件重试风暴。 */
+        private const val COORDINATOR_RECOVERY_THROTTLE_MILLIS = 10_000L
+
         /** 支付交接补发节流窗口：同一支付包在该窗口内只补发一次交接事件。 */
         private const val PAYMENT_HANDOFF_REDISPATCH_THROTTLE_MILLIS = 5_000L
 
@@ -333,6 +336,10 @@ class CheckoutAccessibilityService : AccessibilityService() {
      * 无法看出页面究竟卡在哪个信号上。仅在主线程访问，无需同步。
      */
     private val lastCheckoutGateLogAt = mutableMapOf<String, Long>()
+
+    /** 最近一次尝试重建截图协调器的时间，用于抑制重建风暴。 */
+    @Volatile
+    private var lastCoordinatorRecoveryAt = 0L
     private var submitActionTriggeredKey: StableCheckoutKey? = null
     @Volatile
     private var serviceConnected = false
@@ -650,6 +657,11 @@ class CheckoutAccessibilityService : AccessibilityService() {
         if (!serviceConnected || event == null) {
             return
         }
+
+        // 协调器熔断后截图能力不可逆失效，且系统不会因此回调 onServiceConnected，
+        // 此前只能靠用户手动重启无障碍服务恢复。在事件入口自愈重建，
+        // 使截图能力最迟在下一个无障碍事件到来时恢复。
+        recoverSnapshotCoordinatorIfClosed()
 
         // 部分购物页会发出 packageName 为空的内容变化事件（WebView/系统窗口）。
         // 空包名不代表已经离开购物应用；同时兼容视频通话悬浮窗等第三方窗口事件
@@ -2374,6 +2386,74 @@ class CheckoutAccessibilityService : AccessibilityService() {
                 "fp=${observation.pageFingerprint.take(12)}, " +
                 "class=${observation.windowClass}"
         )
+    }
+
+    /**
+     * 协调器熔断后重建截图链路，恢复自动与手动截图能力。
+     *
+     * 熔断（fail-closed）会 quitSafely() 退出截图线程并置 closed=true，
+     * 此后手动截图恒返回 SERVICE_NOT_CONNECTED、自动链路在事件入口静默 return。
+     * 该状态不可逆，此前只能靠用户手动重启无障碍服务恢复——真机日志
+     * .tmp-device-capture-20260823-123024 中协调器在采集开始前就已熔断，
+     * 整个 100 秒窗口内 12 次手动截图全失败、自动截图 0 次，
+     * 期间门禁其实已在 12:30:45 正确识别到结算页（ACCEPTED）。
+     *
+     * 只重建截图相关组件（buffer / 截图协调器 / 购买意图协调器 / 悬浮层），
+     * 不触碰 AI 客户端与支付匹配器：它们与熔断无关，重建会打断进行中的
+     * 支付匹配与待确认收敛。
+     *
+     * @return true 表示已重建；false 表示服务不可用或协调器仍健康，无需重建。
+     */
+    private fun recoverSnapshotCoordinatorIfClosed(): Boolean {
+        if (!serviceConnected) {
+            return false
+        }
+        val coordinator = snapshotCaptureCoordinator
+        if (coordinator != null && !coordinator.isPermanentlyClosed()) {
+            return false
+        }
+        val now = System.currentTimeMillis()
+        // 重建自身需要新建截图线程与缓冲，失败时不应变成每事件一次的重试风暴。
+        if (now - lastCoordinatorRecoveryAt < COORDINATOR_RECOVERY_THROTTLE_MILLIS) {
+            return false
+        }
+        lastCoordinatorRecoveryAt = now
+        Log.w(
+            TAG,
+            "检测到截图协调器已熔断，开始重建截图链路: " +
+                "coordinator=${if (coordinator == null) "null" else "closed"}"
+        )
+        return try {
+            setObservationListener(null)
+            purchaseIntentCoordinator?.setReadyDispatcher(null)
+            purchaseIntentCoordinator?.setResultConsumer(null)
+            purchaseIntentCoordinator?.close()
+            coordinator?.close()
+            checkoutCaptureOverlayManager?.setManualCaptureRequestHandler(null)
+            checkoutCaptureOverlayManager?.close()
+
+            currentStableCheckout = null
+            handoffStableCheckout = null
+            handoffForegroundPackage = null
+            submitActionTriggeredKey = null
+            userRetryCaptureContext = null
+
+            val sharedBuffer = CheckoutSnapshotBuffer()
+            checkoutSnapshotBuffer = sharedBuffer
+            snapshotCaptureCoordinator = CheckoutSnapshotCaptureCoordinator(this, sharedBuffer)
+            purchaseIntentCoordinator = CheckoutPurchaseIntentCoordinator(sharedBuffer)
+            checkoutCaptureOverlayManager = CheckoutCaptureOverlayManager(this).also { manager ->
+                manager.setManualCaptureRequestHandler { requestManualCaptureFromOverlay() }
+            }
+            configureSnapshotCaptureResultListener()
+            configurePurchaseIntentResultConsumer()
+            setObservationListener(snapshotCaptureCoordinator)
+            Log.i(TAG, "截图协调器重建完成，截图能力已恢复")
+            true
+        } catch (error: RuntimeException) {
+            Log.w(TAG, "重建截图协调器失败，截图能力仍不可用", error)
+            false
+        }
     }
 
     /** AI 回调只传递结构化结果，运行在 IO 协程中且不携带图片。 */
