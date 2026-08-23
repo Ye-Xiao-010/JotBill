@@ -206,6 +206,38 @@ internal fun shouldReplaceHandoffCheckout(
 ): Boolean = hasCurrentCheckout && !retainedHasSnapshot && !retainedHasFence
 
 /**
+ * 判定手动重试上下文能否建立 USER_RETRY 会话。
+ *
+ * 结算页角色（CHECKOUT）的上下文只作兜底记录，绝不可建立 USER_RETRY 会话，
+ * 否则会把结算会话降级：自动截图再也找不到 CHECKOUT 会话，
+ * 且指纹变化时把刚存的快照自毁。真机 .tmp-device-capture-20260823-131138：
+ *   13:13:17.164 候选已写入 source=MANUAL_CAPTURE
+ *   13:13:17.165 槽位丢弃 USER_RETRY_CONTEXT_CHANGED, consumed=false（1ms 后自毁）
+ *   13:13:17.797 截图状态 REJECTED, 来源=CHECKOUT_STABLE, 原因=NOT_CHECKOUT_PAGE
+ * 该时段门禁 7 次 ACCEPTED，自动截图候选却为 0，最终落孤儿待确认。
+ *
+ * 结算页的自动截图链路由 handleStable 负责建立 CHECKOUT 会话；
+ * 手动补截在结算态挂起（activeCheckout=null）后仍可正常建立。
+ *
+ * @param contextRole 手动重试上下文的页面角色；null 表示无上下文。
+ * @param contextUsable 上下文是否完整且具备安全展示条件。
+ * @param activeCaptureTarget 当前活跃会话的截图目标；null 表示无活跃会话。
+ * @return true 表示允许建立 USER_RETRY 会话。
+ */
+internal fun canEstablishUserRetrySession(
+    contextRole: CheckoutPageRole?,
+    contextUsable: Boolean,
+    activeCaptureTarget: SnapshotCaptureTarget?
+): Boolean = when {
+    !contextUsable -> false
+    contextRole == null -> false
+    contextRole == CheckoutPageRole.CHECKOUT -> false
+    activeCaptureTarget == null -> true
+    activeCaptureTarget == SnapshotCaptureTarget.USER_RETRY -> true
+    else -> false
+}
+
+/**
  * 判定普通页手动重试上下文能否接管截图槽位。
  *
  * 提取为纯函数以便单测覆盖。四类回归都由该判据统一收口：
@@ -378,6 +410,9 @@ internal class CheckoutSnapshotCaptureCoordinator(
      * 必须采样；但完全不打印会让"自动截图 0 次"变成无据可查的黑盒。
      */
     private var lastClosedEventSkipLogAt = 0L
+
+    /** "结算页上下文仅作兜底"日志的最近打印时间，按秒采样防止刷屏。 */
+    private var lastCheckoutContextFallbackLogAt = 0L
     private var resultListener: SnapshotCaptureResultListener? = null
     /** fallback 可能在截图线程设置，主线程路径需要可靠观察关闭状态。 */
     @Volatile
@@ -775,6 +810,45 @@ internal class CheckoutSnapshotCaptureCoordinator(
     }
 
     /**
+     * 按秒采样记录"结算页上下文仅作兜底、不建立会话"。
+     *
+     * 该分支是本轮回归的修复点：结算页上下文若建立 USER_RETRY 会话，
+     * 会把结算会话降级并使自动截图失效。留痕便于复测确认修复生效。
+     *
+     * @param shoppingPackage 上下文所属购物包，仅用于诊断。
+     */
+    private fun logCheckoutContextKeptAsFallback(shoppingPackage: String?) {
+        val now = nowMillis()
+        if (now - lastCheckoutContextFallbackLogAt < 5_000L) {
+            return
+        }
+        lastCheckoutContextFallbackLogAt = now
+        Log.i(
+            TAG,
+            "结算页手动上下文仅作兜底，不建立手动会话: pkg=${shoppingPackage ?: "null"}, " +
+                "activeTarget=${activeCheckout?.captureTarget?.name ?: "null"}"
+        )
+    }
+
+    /**
+     * 指定槽位内是否存在自动截图（CHECKOUT_STABLE）候选。
+     *
+     * 自动候选是结算页快照，正等待支付交接消费，任何手动重试路径都不得清理。
+     * 与 handoffCheckoutHasSnapshot 的区别是本方法不要求存在挂起会话：
+     * 结算态尚未挂起时自动候选同样需要保护。
+     *
+     * @param slotId 购物包槽位标识。
+     * @return true 表示槽位内已有自动截图候选。
+     */
+    private fun hasAutomaticCandidate(slotId: String): Boolean = try {
+        buffer.currentCandidates(slotId).any { candidate ->
+            candidate.sourceReason == SnapshotSourceReason.CHECKOUT_STABLE
+        }
+    } catch (_: RuntimeException) {
+        false
+    }
+
+    /**
      * 挂起的交接会话是否已设置支付交接栅栏。
      *
      * 与 handoffCheckoutHasSnapshot 互补：栅栏在"结算页稳定 → 跳中间页"时即已
@@ -895,7 +969,12 @@ internal class CheckoutSnapshotCaptureCoordinator(
                     } == true
                     if (!sameContext || resolvedContext?.isComplete() != true) {
                         activeCheckout = null
-                        buffer.discard(current.slotId, reason = "USER_RETRY_CONTEXT_CHANGED")
+                        // 同样不得清掉自动截图候选：真机日志中该 discard 曾在手动截图
+                        // 成功后 1ms 就把 candidates=MANUAL_CAPTURE@... 连同槽位一起
+                        // 丢弃（consumed=false），使支付交接无图可用。
+                        if (!hasAutomaticCandidate(current.slotId)) {
+                            buffer.discard(current.slotId, reason = "USER_RETRY_CONTEXT_CHANGED")
+                        }
                     } else if (resolvedContext != null) {
                         activeCheckout = current.copy(
                             page = StableCheckoutPage(
@@ -906,24 +985,49 @@ internal class CheckoutSnapshotCaptureCoordinator(
                     }
                 }
 
-                if (resolvedContext?.hasSafeDisplayContext() == true &&
-                    resolvedContext.isComplete() &&
-                    (activeCheckout == null || activeCheckout?.captureTarget == SnapshotCaptureTarget.USER_RETRY)
+                // 只有"当前无会话"或"已是手动重试会话"时才可建立 USER_RETRY 会话。
+                //
+                // 关键约束：结算页角色（CHECKOUT）的上下文只作兜底记录，绝不可在此
+                // 篡夺会话。59a41b9 让结算页也建立手动上下文以支持停留期间补截，
+                // 但当时未排除 CHECKOUT 角色，导致真机上出现连锁故障：
+                //   13:13:17.164 候选已写入 source=MANUAL_CAPTURE
+                //   13:13:17.165 槽位丢弃 USER_RETRY_CONTEXT_CHANGED, consumed=false
+                //   13:13:17.797 截图状态 REJECTED, 来源=CHECKOUT_STABLE,
+                //                原因=NOT_CHECKOUT_PAGE
+                // 结算会话被降级为 USER_RETRY 后，自动截图再也找不到 CHECKOUT 会话，
+                // 且指纹一变就把刚存的快照自毁，最终 CHECKOUT_REFERENCE_INVALID
+                // 落孤儿待确认。
+                // 结算页的自动截图链路自有 handleStable 负责建立 CHECKOUT 会话；
+                // 手动补截在结算态挂起（activeCheckout=null）后仍可正常建立。
+                val contextIsCheckoutRole =
+                    resolvedContext?.pageRole == CheckoutPageRole.CHECKOUT
+                if (contextIsCheckoutRole) {
+                    // 结算页上下文只作兜底记录，不建立会话；日志留痕便于复测确认。
+                    logCheckoutContextKeptAsFallback(resolvedContext?.shoppingPackage)
+                }
+                if (canEstablishUserRetrySession(
+                        contextRole = resolvedContext?.pageRole,
+                        contextUsable = resolvedContext?.hasSafeDisplayContext() == true &&
+                            resolvedContext.isComplete(),
+                        activeCaptureTarget = activeCheckout?.captureTarget
+                    ) && resolvedContext != null
                 ) {
                     val sessionId = resolvedContext.sessionId ?: sessionIdFactory()
                     val previousKey = previous?.let {
                         it.shoppingPackage to it.pageFingerprint
                     }
                     val nextKey = resolvedContext.shoppingPackage to resolvedContext.pageFingerprint
-                    if (previousKey != nextKey) {
-                        buffer.discard(
-                            checkoutSnapshotSlotId(resolvedContext.shoppingPackage),
-                            reason = "USER_RETRY_NEW_PAGE"
-                        )
+                    // 换页时清理旧的手动候选，避免把上一页的图误配给新页面。
+                    // 但绝不能清掉自动截图（CHECKOUT_STABLE）候选：那是结算页快照，
+                    // 正等待支付交接消费。真机上该 discard 每秒可触发数次
+                    // （日志"期间已抑制 14 次"），一旦误清就只能落孤儿待确认。
+                    val slotId = checkoutSnapshotSlotId(resolvedContext.shoppingPackage)
+                    if (previousKey != nextKey && !hasAutomaticCandidate(slotId)) {
+                        buffer.discard(slotId, reason = "USER_RETRY_NEW_PAGE")
                     }
                     activeCheckout = ActiveCheckout(
                         sessionId = sessionId,
-                        slotId = checkoutSnapshotSlotId(resolvedContext.shoppingPackage),
+                        slotId = slotId,
                         page = StableCheckoutPage(
                             observation = resolvedContext.observation,
                             stableAt = nowMillis()
