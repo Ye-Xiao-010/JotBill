@@ -1389,10 +1389,14 @@ class CheckoutAccessibilityService : AccessibilityService() {
                     if (observation.isSensitivePage) {
                         sawSensitivePage = true
                         lastSensitivePaymentPageAt = System.currentTimeMillis()
-                        Log.i(
-                            TAG,
-                            "支付包页面为敏感页面，跳过证据提取与截图兜底: " +
-                                "pkg=$paymentPackage, role=${observation.pageRole}, class=${observation.windowClass}"
+                        // 该分支在支付页每帧命中，真机 .tmp-device-capture-20260824-142754
+                        // 中一次支付即刷出数百行，把"支付结果页解析到证据"
+                        // "AI 结果匹配落库"等关键链路日志完全淹没。
+                        // 该日志是隐私红线（敏感页禁止提取与截图）的证据，不可删除，只能限流。
+                        logScreenshotFallbackBlockedSampled(
+                            reason = "支付包页面为敏感页面，跳过证据提取与截图兜底",
+                            paymentPackage = paymentPackage,
+                            extra = "role=${observation.pageRole}, class=${observation.windowClass}"
                         )
                         continue
                     }

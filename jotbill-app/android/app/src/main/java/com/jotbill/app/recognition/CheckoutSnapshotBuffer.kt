@@ -121,6 +121,31 @@ sealed class CheckoutAiTriggerResult {
 }
 
 /**
+ * 解析支付交接栅栏应当采用的页面指纹。
+ *
+ * 调用方传入的是结算会话建立时的观察指纹，而槽位候选的指纹是截图那一刻写入的。
+ * 京东与拼多多结算页的指纹持续漂移，两者几乎必然不同。若栅栏直接采用调用方指纹，
+ * 消费端按候选指纹请求时就会与栅栏对不上，快照被自己的栅栏永久锁死，
+ * 表现为支付证据一直停在 WAITING_ENRICHMENT、无法自动入账。
+ *
+ * @param requestedFingerprint 调用方传入的会话观察指纹。
+ * @param candidateFingerprints 槽位内现存候选的指纹列表，按写入顺序排列。
+ * @return 栅栏应采用的指纹：候选中存在同名则沿用，否则取最新候选；无候选时保持原值。
+ */
+internal fun resolveHandoffFenceFingerprint(
+    requestedFingerprint: String,
+    candidateFingerprints: List<String>
+): String {
+    if (candidateFingerprints.isEmpty()) {
+        return requestedFingerprint
+    }
+    if (candidateFingerprints.contains(requestedFingerprint)) {
+        return requestedFingerprint
+    }
+    return candidateFingerprints.last()
+}
+
+/**
  * 按槽位保存当前结算页快照的短生命周期缓冲区。
  *
  * 每个槽位最多保留一个手动保护候选和一个最新自动候选；30 秒后自动失效并清零图片。
@@ -421,11 +446,29 @@ class CheckoutSnapshotBuffer(
             return
         }
         if (state.sessionId == sessionId) {
-            state.handoffPageFingerprint = pageFingerprint
+            // 栅栏必须落在候选实际持有的指纹上。调用方传入的是会话建立时的
+            // 观察指纹，而候选是截图那一刻写入的；京东/拼多多结算页指纹持续
+            // 漂移，两者几乎必然不同。若直接采用调用方指纹，消费端
+            // （requested=候选指纹）与栅栏（barrier=观察指纹）永远对不上，
+            // 快照被自己的栅栏永久锁死。真机 .tmp-device-capture-20260824-142754：
+            //   交接栅栏已设置: fingerprint=0b64b3afe9ce, candidates=...@1286a1e87671
+            //   快照消费被交接栅栏拒绝: requested=1286a1e87671, barrier=0b64b3afe9ce
+            // 后果是所有支付停在 WAITING_ENRICHMENT，无一笔自动入账。
+            val candidates = candidateList(state)
+            val effectiveFingerprint = resolveHandoffFenceFingerprint(
+                requestedFingerprint = pageFingerprint,
+                candidateFingerprints = candidates.map { it.pageFingerprint }
+            )
+            state.handoffPageFingerprint = effectiveFingerprint
             Log.i(
                 TAG,
                 "交接栅栏已设置: slot=$slotId, session=${sessionId.take(8)}, " +
-                    "fingerprint=${pageFingerprint.take(12)}, " +
+                    "fingerprint=${effectiveFingerprint.take(12)}, " +
+                    (if (effectiveFingerprint != pageFingerprint) {
+                        "requested=${pageFingerprint.take(12)}(已按候选校正), "
+                    } else {
+                        ""
+                    }) +
                     "candidates=${describeCandidates(state)}"
             )
         } else {
