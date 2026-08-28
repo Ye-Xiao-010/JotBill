@@ -42,3 +42,15 @@ coverage/
 # Local Gradle cache and temporary build directory
 .tmp-gradle-build/
 .tmp-gradle-tmp/
+
+# Roadmap baseline (2026-08-28): 真机诊断临时件/构建缓存/工具残留,一律不进仓库
+.tmp-*
+.gradle-build-home-*/
+.gradle-project-cache-*/
+.workbuddy/
+/ui*.xml
+/tmp-*.xml
+/commit-msg.txt
+
+# 隐私兜底:任何真实数据库文件(adb run-as 拉取件等)不得入库
+*.db
