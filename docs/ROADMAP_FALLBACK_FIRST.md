@@ -160,8 +160,8 @@
 
 | 批次 | 内容 | 大小 | 出包验收线 |
 |---|---|---|---|
-| 0 | 安全网(buffer/门禁/matcher 测试 + 黄金脚本) | 3-5 天 | 特征测试全绿,脚本成文 |
-| 1 | 兜底闭环补全 #2+#7 | 3-5 天 | 付款码被扫(仅通知)→pending;扫商户码回归不回退;off 态等同现状 |
+| 0 | 安全网(buffer/门禁/matcher 测试 + 黄金脚本) | 4-6 天 | 特征测试全绿,脚本成文 |
+| 1 | 兜底闭环补全 #2+#7 | 约 1 周 | 付款码被扫(仅通知)→pending;扫商户码回归不回退;off 态等同现状 |
 | 2 | 导入验收 + 核销 #9 | 1 周 | T9 矩阵填实;核销可撤销 |
 | 3 | 红包/转账方案 #3 | 方案 2-3 天 | DECISIONS 拍板后才编码 |
 | 4 | journey 重构 #1 | 2-3 周(含浸泡) | 特征测试全绿+矩阵全过+浸泡 1 周 |
@@ -169,3 +169,77 @@
 | 插队 | 子分类 #6 | 2-3 天 | 迁移单测 + 备份演练 |
 
 **需要用户提前准备**:T8 官方账单样本(批 2 前置);#3 产品决策(批 3 前置);#8 的定义(决定是否占用批 0 插队位)。
+
+---
+
+## 十一、代码审计修正(2026-08-28,三路源码核查后)
+
+### 批 0(安全网)——方案成立,三个实现细节修正
+1. buffer 的三个构造参数已是现成接缝(`nowMillis`/`snapshotIdFactory`/`expirationHandler`,
+   `CheckoutSnapshotBuffer.kt:157-160`),真正阻断 JVM 测试的只有 `Handler(Looper.getMainLooper())`
+   默认值与 14 处内联 `android.util.Log`(部分日志状态如 `lastEmptyDiscardLogAt` 本身是决策状态)。
+   抽取时需注入日志 sink;"零行为变化"指决策结果等价,日志流经 sink 保持等价。
+2. `CheckoutPurchaseIntentCoordinator` 的 buffer 依赖是具体类(无接口),routeLocked 单测
+   需先给 buffer 抽最小接口(`consumeForAi`/`currentCandidates`);另需处理测试环境的
+   `android.util.Log`(returnDefaultValues 或日志 shim)。
+3. matcher 测试改为 **Robolectric + Room 内存库**:matcher 构造接收具体 `JotBillDatabase`
+   且内部自建 LedgerRepository/RuleEngine/DuplicateGuard,接口化成本过高;项目已有
+   androidTest DAO 基建,Robolectric 内存库是最小路径(需新增 test 依赖)。
+
+### 批 1(兜底闭环)——范围修正:数据面不变,UX 面新增两个硬项、删掉一个已完成项
+4. **#7 基本已存在**:一键确认(空 input)与类型选择芯片(expense/income/transfer/
+   repayment/refund/fee,预填 pending.type)已在 ReviewScreen/PendingEditPanel 实现,
+   孤儿 pending 固定 type="expense"。#7 缩水为一个待拍板项:无会话通知孤儿是否需要
+   更聪明的类型默认(按 transfer/refund 信号分流)。
+5. **pending 创建推送是净新增**:现有 5 族创建点(matcher 孤儿/matcher 冲突路径/
+   RefundLinker/TransferClassifier/FeeExtractor/ImportEngine)均无 ReactApplicationContext,
+   且 JS 侧目前**零事件监听**、待确认中心仅手动+焦点刷新、无角标。实现:单例
+   PendingChangeHub(仿 `CheckoutCaptureOverlayStateHub`,CheckoutCaptureOverlayManager.kt:144-168)
+   + DataModule 补 `addListener`/`removeListeners` no-op(照抄 OverlayModule.kt:112-117)
+   + JS 监听器(照抄 `native/overlay.ts:103-108`)+ invalidateQueries。
+6. **本地通知渠道是净新增**:全应用目前不 post 任何通知、无 NotificationChannel、
+   无 POST_NOTIFICATIONS 权限(清单已核)。批 1 v1 需含:权限(API 33+)、渠道创建、设置开关。
+7. **v2 浮条模板换源**:不改造 CheckoutCaptureOverlayManager(绑死结算状态机、单例),
+   克隆休眠的 `PaymentOverlayManager.createLayoutParams`(:624-645)做独立小浮条。
+
+### 批 2(导入核销)——两个新发现
+8. `PendingTransactionDao` 无金额/日期/方向查询(仅分页/count/id/session),核销匹配
+   需新增 DAO 方法 + (amount_minor, occurred_at, status) 索引。
+9. 撤销衔接:ImportUndo 只认 import_create/import_merge 两类审计动作;导入产生的
+   pending 会被撤销无条件删除(ImportUndo.kt:92-99);但"核销确认"走
+   confirmPendingTransaction 写 operator="system" 审计,不在撤销覆盖内——v1 用
+   "报告→用户逐条确认"天然规避;若做自动核销且要可撤销,需新增 reconcile_close
+   审计动作(写入侧 + 撤销 when 分支同步加)。
+10. **顺带发现疑似存量 bug**:`ImportEngine.REFUND_PENDING_THRESHOLD_MINOR =
+    100_000_00L`(ImportEngine.kt:983)= **¥100,000**;若原意 ¥10,000 应为
+    10_000_00L。待确认意图后单独修复,不混入批次。
+
+### 批 3(红包/转账)——骨架比预想更完整
+11. TransferClassifier/RefundLinker 已接入通知分发管线(phase5),outcome 封顶、
+    幂等 id、pending 创建、规则评估脚手架齐全;红包 = PaymentResultNormalizer 新增条目
+    (现为排除关键词,PaymentResultNormalizer.kt:85-87)+ 仿 FeeExtractor 的小分类器
+    + 分发挂线。决策记录落 docs/DECISIONS.md 第五节;**kickoff 文档 :159/:951 的
+    "排除收款/红包"条款需同步修订**,避免规范自相矛盾。个人转账已有 transfer 类型
+    孤儿先例(sourceType "accessibility_transfer")。
+
+### 批 4(journey)——工作量下调:状态机已存在且是活的
+12. `CheckoutJourneyState`(16 态 + canTransitionTo,journey_state 已落库)已上线:
+    matcher.ensureSession 创建、advanceStatus 推进。批 4 应**扩展它**而非新造,并顺手修
+    三个缺口:advanceStatus 非法迁移静默 no-op(CheckoutPaymentMatcher.kt:1343-1362)、
+    LedgerRepository 绕过状态机直写 COMPLETED/DISMISSED(:424-433/:511-520)、
+    从未实例化的 CheckoutJourney 包装类(CheckoutContract.kt:329-364,删除候选)。
+
+### 批 6(子分类)——方案修正:parentId 应挂在 categories 而非 bills
+13. bills 已有 category_id FK;bills 上加 parentId 语义怪且统计无受益。正确做法:
+    categories 加 parentId(SQLite 不能 ALTER 加 FK,走 3→4 的表重建迁移先例)+
+    统计 rollup 适配(getCategoryStats、预算 sumExpenses DataModule.kt:564)。
+    迁移成本高于原文估计,仍单独短迭代。
+
+### 审计中确认无误的关键事实
+- 敏感页 7 层防线、AI 未验证永不自动落账、内存快照抹零、每会话预算 2 次、
+  被拒不扣预算——全部核实成立。
+- 无会话通知入口黑洞(:2175)、支付结果页孤儿路径不要求会话——核实成立(批 1 数据面)。
+- phase6/phase7 T9 两份矩阵全部"未执行/阻塞"——核实成立。
+- "批 1-3 零改动三个核心文件"——经调用点核查成立(核销只碰 importing+DAO,
+  红包转账只碰 normalizer+classifier)。
+- kickoff 的 #5"预留设计"仅一句话(:687),批 5 需补完整设计。
