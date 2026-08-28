@@ -44,24 +44,47 @@
 
 ---
 
-## 三、批 1:万能兜底闭环(#2+#7,纯增量,预计 1-2 周)
+## 三、批 1:兜底闭环补全(#2+#7,纯增量,预计 3-5 天)
 
-**目标:所有识别不确定的钱都能进待确认、一键确认落账。应用可用底线大幅抬高。**
+**现状核查(2026-08-28,对照源码,修正初稿的"纯黑洞"说法):**
+- **支付结果页可读的场景已覆盖**:文本证据 + 截图 AI 双保险,`recordPaymentResultEvidence`
+  直达 matcher,不要求结算会话,全分支终局为"落账或孤儿待确认"(扫商户码即属此类,
+  phase7 真机已验证)。
+- **有结算会话时通知证据也已覆盖**:即使 buffer 引用失效,仍有"最近活跃会话兜底"与
+  "支付通知无结算会话可匹配,已转纯通知待确认"两级兜底(`:2228` 起)。
+- **真黑洞只有一个**:无结算会话 + 无可读结果页 + 只有支付通知(典型:付款码被扫,
+  用户手机上不会出现结果页)。通知回退入口在 `:2175` 因 `NO_CHECKOUT_CONTEXT`
+  直接拒绝,证据丢弃。
+- 其余缺口属于后续批次:转账/红包关键词(#3)、购物 App 内置收银台结果页(#4)、
+  小众 App(#5)。
 
-### 方案(两段式)
-- **v1(必做)**:孤儿支付/pending 创建 → 经 `bridge/NativeEventEmitter.kt`(通道已存在)推 JS → 新增系统通知渠道"待确认提醒",点击深链进 `ReviewScreen`(复用已有 PendingEditPanel)。不做跨应用弹窗,风险最低。
-- **v2(可选,flag 控制)**:原生轻量浮条"检测到 ¥X 支付,点击记录",复用 `overlay/CheckoutCaptureOverlayManager` 的窗口模式;仅当敏感页 60 秒锁存未激活时显示。
-- **引导策略独立成纯 Kotlin `PendingPromptPolicy`**(可单测):去重键(金额+商户+时间窗)、频控上限(次/小时)、金额下限、勿扰时段;**必须继承 `lastSensitivePaymentPageAt` 锁存与 `isSensitivePage` 门禁**——新 UI 表面绝不允许出现在密码页上方。
-- **#7 类型策略**:`send_to_review` 动作已存在(`RuleEngine.kt:130`),仅补:PendingEditPanel 增加类型选择器 + 智能默认;"类型不确定→send_to_review"作为设置项,默认开启。
+### 方案
+- **数据面(补黑洞,必做)**:通知回退入口允许无会话时走孤儿路径落 pending;前置条件
+  保持 `signal.isValid()` + 支付包白名单不变,孤儿永为待确认、永不自动落账。
+- **提醒面 v1(必做)**:pending 创建 → `bridge/NativeEventEmitter.kt`(通道已存在)推 JS →
+  新增系统通知渠道"待确认提醒",点击深链进 `ReviewScreen`(复用已有 PendingEditPanel)。
+  不做跨应用弹窗,风险最低。
+- **提醒面 v2(可选,flag 控制)**:原生轻量浮条"检测到 ¥X 支付,点击记录",复用
+  `overlay/CheckoutCaptureOverlayManager` 的窗口模式;仅当敏感页 60 秒锁存未激活时显示。
+- **引导策略独立成纯 Kotlin `PendingPromptPolicy`**(可单测):去重键(金额+商户+时间窗)、
+  频控上限(次/小时)、金额下限、勿扰时段;**必须继承 `lastSensitivePaymentPageAt` 锁存与
+  `isSensitivePage` 门禁**——新 UI 表面绝不允许出现在密码页上方。
+- **#7 类型策略**:`send_to_review` 动作已存在(`RuleEngine.kt:130`),仅补:PendingEditPanel
+  增加类型选择器 + 智能默认;"类型不确定→send_to_review"作为设置项,默认开启。
 
 ### 改动范围
 - 新文件:`PendingPromptPolicy.kt`、pending 提醒通知器、(v2)轻浮条。
-- 触及:`CheckoutPaymentMatcher.recordOrphanPaymentSignal`(只加事件钩子,不改判定)、`bridge/DataModule.kt`(事件注册)、`AndroidManifest.xml`+`notification/`(渠道)、JS `ReviewScreen.tsx`/PendingEditPanel。
+- 触及:`CheckoutAccessibilityService` 通知回退入口(仅放宽无会话前置,不改信号校验)、
+  `CheckoutPaymentMatcher.recordOrphanPaymentSignal`(只加事件钩子,不改判定)、
+  `bridge/DataModule.kt`(事件注册)、`AndroidManifest.xml`+`notification/`(渠道)、
+  JS `ReviewScreen.tsx`/PendingEditPanel。
 - **明确不碰**:CaptureCoordinator、Buffer、Collector、Detector、指纹。
 
 ### 回归保障
-- 总开关默认关闭首发,验证 off 态行为等同现状;开启后跑黄金脚本 + 新增真机用例:扫码支付→pending→确认→落账全链路。
-- 策略单测:去重、频控、敏感锁存、金额下限。
+- 总开关默认关闭首发,验证 off 态行为等同现状;开启后跑黄金脚本 + 真机用例:
+  **付款码被扫(仅通知)→ pending**(补黑洞);**扫商户码 → pending**(回归确认
+  已有行为不回退);确认 → 落账全链路。
+- 策略单测:去重、频控、敏感锁存、金额下限、无会话通知孤儿入口。
 
 ---
 
@@ -138,7 +161,7 @@
 | 批次 | 内容 | 大小 | 出包验收线 |
 |---|---|---|---|
 | 0 | 安全网(buffer/门禁/matcher 测试 + 黄金脚本) | 3-5 天 | 特征测试全绿,脚本成文 |
-| 1 | 兜底闭环 #2+#7 | 1-2 周 | 扫码→pending→落账真机全链路;off 态等同现状 |
+| 1 | 兜底闭环补全 #2+#7 | 3-5 天 | 付款码被扫(仅通知)→pending;扫商户码回归不回退;off 态等同现状 |
 | 2 | 导入验收 + 核销 #9 | 1 周 | T9 矩阵填实;核销可撤销 |
 | 3 | 红包/转账方案 #3 | 方案 2-3 天 | DECISIONS 拍板后才编码 |
 | 4 | journey 重构 #1 | 2-3 周(含浸泡) | 特征测试全绿+矩阵全过+浸泡 1 周 |
