@@ -21,12 +21,13 @@
 
 **目标:把"现在能用"变成"可验证的能用"。这是后面所有批次的安全带,也是批 4 的硬前置。**
 
-> **进度(2026-08-29)**:0.1 完成——buffer 接缝化改造(日志 sink + 过期调度器注入,
-> 默认 Android 行为不变,构造器降为 internal)+ 26 例特征测试全绿(全量 172/172)。
-> 特征测试已钉出两个此前未记录的真实行为:①不同指纹的自动候选**不并存**,新自动
-> 候选无条件替换旧候选(类 KDoc 与实现不符,以实现为准);②`retainForPaymentHandoff`
-> 不做过期清理,过期候选仍在槽内时栅栏会校正到过期候选的指纹。0.2/0.3 待做,
-> 其中 0.3(matcher Robolectric)需网络下载测试依赖。
+> **进度(2026-08-29,批 0 全部完成)**:0.1——buffer 接缝化(日志 sink + 过期调度器
+> 注入,默认 Android 行为不变)+ 26 例特征测试;0.2——`CheckoutBufferGateway` 最小接口
+> 依赖倒置 + routeLocked 门禁序列 17 例(门禁次序/一次性标记被拒不烧/预算耗尽/异常
+> 收敛/交接指纹校正/用户重试内部通道);0.3——matcher Robolectric 集成 4 例(孤儿
+> 幂等与 sourceType 归一化、会话窗口恢复、**AI 未验证证据永不自动落账**)。
+> 全量 193/193。Robolectric 需 `@Config(application=Application::class)` 规避
+> RN MainApplication 在 JVM 启动。批 4 重构的安全网就位。
 
 ### 0.1 CheckoutSnapshotBuffer 可测化 + 特征测试
 - 现状:846 行,栅栏/TTL/tombstone 是回归重灾区,零直接 JVM 测试。

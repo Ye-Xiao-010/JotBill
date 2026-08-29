@@ -148,6 +148,8 @@ android {
         // pending 事件链(hub/notifier)与后续协调器门禁测试依赖日志旁路。
         unitTests {
             returnDefaultValues = true
+            // Robolectric matcher 集成测试需要资源与 Manifest 元数据
+            includeAndroidResources = true
         }
     }
 }
@@ -193,6 +195,9 @@ dependencies {
     testImplementation("junit:junit:4.13.2")
     // 阶段七 T1：本地 JVM 单元测试使用真实 org.json，避免 android.jar 未 mock 实现。
     testImplementation("org.json:json:20180813")
+    // 批 0 安全网:matcher 证据链需要 Room 内存库,Robolectric 提供 JVM 上的 Android 环境
+    testImplementation("org.robolectric:robolectric:4.14.1")
+    testImplementation("androidx.test:core:1.6.1")
 
     // 阶段七 T2：Room 迁移与 androidTest DAO 集成测试。
     androidTestImplementation("androidx.test:runner:1.7.0")

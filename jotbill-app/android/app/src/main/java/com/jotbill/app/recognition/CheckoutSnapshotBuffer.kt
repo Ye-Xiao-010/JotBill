@@ -206,7 +206,7 @@ class CheckoutSnapshotBuffer internal constructor(
     private val snapshotIdFactory: () -> String = { UUID.randomUUID().toString() },
     private val expirationScheduler: SnapshotExpirationScheduler = MainLooperSnapshotExpirationScheduler(),
     private val logSink: SnapshotBufferLogSink = AndroidSnapshotBufferLogSink
-) {
+) : CheckoutBufferGateway {
     private companion object {
         private const val TAG = "CheckoutSnapshotBuffer"
 
@@ -389,7 +389,7 @@ class CheckoutSnapshotBuffer internal constructor(
 
     /** 返回当前未过期候选的副本；多个候选时交给协调器或待确认界面选择。 */
     @Synchronized
-    fun currentCandidates(slotId: String): List<CheckoutSnapshot> {
+    override fun currentCandidates(slotId: String): List<CheckoutSnapshot> {
         if (closed) {
             return emptyList()
         }
@@ -584,10 +584,10 @@ logSink.w(
      * 消费当前快照并生成唯一请求键。该方法只接受明确的购买意图，消费后立即清空内部图片。
      */
     @Synchronized
-    fun consumeForAi(
+    override fun consumeForAi(
         slotId: String,
         intent: PurchaseIntent,
-        pageFingerprint: String? = null
+        pageFingerprint: String?
     ): CheckoutAiTriggerResult {
         if (closed) {
             return CheckoutAiTriggerResult.Rejected(SnapshotConsumeRejection.NO_BUFFERED_SNAPSHOT)

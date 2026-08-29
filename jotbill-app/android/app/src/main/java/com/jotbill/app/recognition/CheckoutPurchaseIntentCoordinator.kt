@@ -2,6 +2,24 @@ package com.jotbill.app.recognition
 
 import android.util.Log
 
+/**
+ * 协调器视角的缓冲区最小视图。
+ *
+ * 抽象只为 JVM 单测服务:routeLocked 的门禁序列测试需要注入受控的消费结果,
+ * 而 CheckoutSnapshotBuffer 因默认 Android 调度器无法在 JVM 直接实例化。
+ * 生产路径唯一实现是 CheckoutSnapshotBuffer;接口保持 public 以便
+ * public 类实现时不产生可见性冲突。
+ */
+interface CheckoutBufferGateway {
+    fun consumeForAi(
+        slotId: String,
+        intent: PurchaseIntent,
+        pageFingerprint: String? = null
+    ): CheckoutAiTriggerResult
+
+    fun currentCandidates(slotId: String): List<CheckoutSnapshot>
+}
+
 /** 购买意图在进入 AI 调度前可能遇到的页面、生命周期或预算门禁结果。 */
 enum class PurchaseIntentGateRejection(val wireValue: String) {
     SERVICE_NOT_CONNECTED("SERVICE_NOT_CONNECTED"),
@@ -105,7 +123,7 @@ internal fun interface PurchaseIntentReadyDispatcher {
  * 指纹选择和 checkoutRequestKey 幂等检查，本类只负责触发门禁、请求预算和结果所有权。
  */
 internal class CheckoutPurchaseIntentCoordinator(
-    private val buffer: CheckoutSnapshotBuffer,
+    private val buffer: CheckoutBufferGateway,
     private val maxRequestsPerSession: Int = DEFAULT_MAX_REQUESTS_PER_SESSION
 ) : CheckoutObservationListener {
     companion object {
