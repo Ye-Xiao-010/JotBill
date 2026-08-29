@@ -21,6 +21,7 @@ import com.jotbill.app.runtime.RuntimePackage
 import com.jotbill.app.backup.BackupPackage
 import com.jotbill.app.overlay.OverlayPackage
 import com.jotbill.app.bridge.RecognitionPackage
+import com.jotbill.app.pending.PendingReminderNotifier
 import com.facebook.react.ReactInstanceManager
 import com.facebook.react.bridge.JSBundleLoader
 import java.io.File
@@ -132,6 +133,8 @@ class MainApplication : Application(), ReactApplication {
 
   override fun onCreate() {
     super.onCreate()
+    // 待确认提醒先于 RN 初始化:通知监听/无障碍路径在 RN 未启动时也要能发系统通知
+    PendingReminderNotifier.init(this)
     HotUpdateModule.recoverInterruptedSwap(this)
     loadReactNative(this)
     initializeSentry()

@@ -1,5 +1,6 @@
 package com.jotbill.app.bridge
 
+import android.util.Log
 import androidx.room.withTransaction
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
@@ -21,6 +22,9 @@ import com.jotbill.app.data.entity.RuleEntity
 import com.jotbill.app.data.model.CategoryStatRow
 import com.jotbill.app.data.model.PlatformStatRow
 import com.jotbill.app.data.model.TrendRow
+import com.jotbill.app.pending.PendingChangeHub
+import com.jotbill.app.pending.PendingChangeInfo
+import com.jotbill.app.pending.PendingReminderNotifier
 import com.jotbill.app.rules.RuleEngine
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -37,6 +41,10 @@ import java.util.UUID
 /**
  * 本地优先的数据桥接层。方法使用 JSON 字符串作为边界，保持 JS 封装层的稳定契约。
  */
+
+/** JS 事件名:待确认创建/更新(DataModule → RN)。 */
+internal const val PENDING_CREATED_EVENT = "onPendingCreated"
+
 class DataModule(
     private val reactContext: ReactApplicationContext
 ) : ReactContextBaseJavaModule(reactContext) {
@@ -53,6 +61,33 @@ class DataModule(
     }
 
     override fun getName(): String = "Data"
+
+    init {
+        // 待确认创建/更新事件 → JS 推送。数据落库在各自创建点完成,本监听只是提醒旁路;
+        // 落库与提醒解耦的设计见 pending/PendingChangeHub。
+        PendingChangeHub.addListener(::onPendingChangeFromHub)
+    }
+
+    override fun onCatalystInstanceDestroy() {
+        PendingChangeHub.removeListener(::onPendingChangeFromHub)
+    }
+
+    private fun onPendingChangeFromHub(info: PendingChangeInfo) {
+        try {
+            events.emit(
+                PENDING_CREATED_EVENT,
+                JSONObject()
+                    .put("pendingId", info.pendingId)
+                    .put("type", info.type)
+                    .put("amountMinor", info.amountMinor)
+                    .put("sourceType", info.sourceType)
+                    .put("conflictReason", info.conflictReason ?: JSONObject.NULL)
+                    .put("isNew", info.isNew)
+            )
+        } catch (error: RuntimeException) {
+            Log.w("DataModule", "pending 事件推送 JS 失败(RN 可能未就绪)", error)
+        }
+    }
 
     @ReactMethod
     fun getBills(filterJson: String?, promise: Promise) = launch(promise) {
@@ -759,6 +794,25 @@ class DataModule(
             throw BridgeException("VERSION_CONFLICT", "Pending transaction $id has changed")
         }
         events.emit("onPendingChanged", JSONObject().put("pendingId", pending.id).put("ignored", true))
+        null
+    }
+
+    /** React Native 新版事件发射器要求模块提供这两个订阅计数方法。 */
+    @ReactMethod
+    fun addListener(eventName: String) = Unit
+
+    @ReactMethod
+    fun removeListeners(count: Int) = Unit
+
+    /** 待确认提醒开关(仅控制系统通知;JS 事件与数据落库不受影响)。默认开启。 */
+    @ReactMethod
+    fun isPendingReminderEnabled(promise: Promise) = launch(promise) {
+        PendingReminderNotifier.isEnabled(reactContext.applicationContext)
+    }
+
+    @ReactMethod
+    fun setPendingReminderEnabled(enabled: Boolean, promise: Promise) = launch(promise) {
+        PendingReminderNotifier.setEnabled(reactContext.applicationContext, enabled)
         null
     }
 

@@ -95,8 +95,8 @@ android {
         applicationId "com.jotbill.app"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 74
-        versionName "0.0.74"
+        versionCode 75
+        versionName "0.0.75"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
     }
     signingConfigs {
@@ -140,6 +140,14 @@ android {
             if (project.findProperty("enableReleaseDebuggable") == "true") {
                 debuggable true
             }
+        }
+    }
+
+    testOptions {
+        // JVM 单测中 android.util.Log 等框架方法返回默认值而非抛异常:
+        // pending 事件链(hub/notifier)与后续协调器门禁测试依赖日志旁路。
+        unitTests {
+            returnDefaultValues = true
         }
     }
 }

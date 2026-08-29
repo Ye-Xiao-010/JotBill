@@ -26,6 +26,7 @@ import { paymentNotificationService } from '../services/paymentNotification';
 import { useStyles } from '../hooks';
 import { useAlert } from '../providers';
 import { aiService } from '../services/ai';
+import { nativePendingReminder } from '../native/pendingReminder';
 import type {
   AIModelConfig,
   AIProvider,
@@ -611,6 +612,9 @@ export default function GeneralSettingsScreen({ navigation: _navigation }: Gener
   const [loadingApps, setLoadingApps] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
 
+  // 待确认提醒开关(仅控制系统通知;数据落库与 JS 事件不受影响,默认开启)
+  const [pendingReminderEnabled, setPendingReminderEnabled] = useState(true);
+
   // 加载配置
   useEffect(() => {
     loadConfig();
@@ -639,6 +643,26 @@ export default function GeneralSettingsScreen({ navigation: _navigation }: Gener
       console.error('加载 AI 配置失败:', error);
     } finally {
       setLoadingAiConfigs(false);
+    }
+  };
+
+  // 加载提醒开关初始状态
+  useEffect(() => {
+    nativePendingReminder
+      .isReminderEnabled()
+      .then(setPendingReminderEnabled)
+      .catch(() => undefined);
+  }, []);
+
+  const handleTogglePendingReminder = async (enabled: boolean) => {
+    setPendingReminderEnabled(enabled);
+    try {
+      if (enabled) {
+        await nativePendingReminder.requestNotificationPermissionIfNeeded();
+      }
+      await nativePendingReminder.setReminderEnabled(enabled);
+    } catch (error) {
+      console.error('切换待确认提醒失败:', error);
     }
   };
 
@@ -847,6 +871,23 @@ export default function GeneralSettingsScreen({ navigation: _navigation }: Gener
       <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
         <PaymentNotificationSettings style={styles.card} />
         <ManualCaptureOverlaySettings style={styles.card} />
+
+        {/* 待确认提醒 */}
+        <View style={styles.card}>
+          <Text style={styles.cardTitle}>🔔 待确认提醒</Text>
+          <View style={styles.appItem}>
+            <View style={styles.appInfo}>
+              <Text style={styles.appName}>系统通知提醒</Text>
+              <Text style={styles.appPackage}>有新的待确认交易时发送系统通知</Text>
+            </View>
+            <Switch
+              value={pendingReminderEnabled}
+              onValueChange={handleTogglePendingReminder}
+              trackColor={{ false: styles._colors.divider, true: styles._colors.primary }}
+              thumbColor="#FFFFFF"
+            />
+          </View>
+        </View>
 
         {/* AI 模型配置 */}
         <View style={styles.card}>
