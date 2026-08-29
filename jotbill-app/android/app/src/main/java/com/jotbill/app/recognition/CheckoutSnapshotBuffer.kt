@@ -549,6 +549,24 @@ logSink.w(
         }
     }
 
+    /**
+     * 旅程语义的栅栏解除(批 4 S5b):同会话即清除,不要求指纹一致。
+     *
+     * 指纹在旅程内允许漂移,原指纹精确匹配的恢复会在漂移后静默失败,
+     * 让栅栏锁死会话(消费永远 NO_MATCHING_PAGE_FINGERPRINT)。
+     * 旅程归属由会话判定,指纹不再是栅栏解除条件。
+     */
+    @Synchronized
+    fun restoreFromPaymentHandoffBySession(slotId: String, sessionId: String) {
+        if (closed) {
+            return
+        }
+        val state = slots[slotId] ?: return
+        if (state.sessionId == sessionId) {
+            state.handoffPageFingerprint = null
+        }
+    }
+
     /** 只读取与页面键对应的引用，避免为支付匹配复制或暴露图片。 */
     @Synchronized
     // CheckoutSnapshotReference 为 internal 类型，将 findReference 降为 internal 避免公开暴露内部返回类型。

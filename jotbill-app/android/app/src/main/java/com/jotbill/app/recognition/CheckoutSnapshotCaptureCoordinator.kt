@@ -400,6 +400,36 @@ internal class CheckoutSnapshotCaptureCoordinator(
     private var queuedManual: QueuedManualCapture? = null
     private var handoffCheckout: HandoffCheckout? = null
     private var userRetryContext: UserRetryCaptureContext? = null
+
+    // 批 4 S5b:旅程阶段与惰性死亡判定。
+    // 会话与旅程当前 1:1(金额锚落地前同包归并);阶段决定适用哪条死亡超时,
+    // 每次事件入口按 shouldDie 惰性清算,无事件滞留内存无害(TTL 照常清理)。
+    private val journeyLifecyclePolicy = JourneyLifecyclePolicy(nowMillis = nowMillis)
+    private var journeyStage = JourneyLifecyclePolicy.Stage.CHECKOUT_STABLE
+    private var journeyStageAt = 0L
+
+    private fun journeyShouldDie(): Boolean {
+        val checkpoint = activeCheckout ?: handoffCheckout?.activeCheckout ?: return false
+        val runtime = JourneyLifecyclePolicy.JourneyRuntime(
+            journeyId = checkpoint.sessionId,
+            anchor = JourneyAnchor(
+                shoppingPackage = checkpoint.page.observation.shoppingPackage,
+                windowClass = checkpoint.page.observation.windowClass
+            ),
+            bornAt = checkpoint.page.stableAt,
+            stage = journeyStage,
+            lastProgressAt = journeyStageAt
+        )
+        return journeyLifecyclePolicy.shouldDie(runtime)
+    }
+
+    private fun journeyDieAndClear(reason: String) {
+        val deadSlot = activeCheckout?.slotId ?: handoffCheckout?.activeCheckout?.slotId
+        deadSlot?.let { buffer.discard(it, reason = reason) }
+        activeCheckout = null
+        handoffCheckout = null
+        attemptedAutomaticCaptures.clear()
+    }
     /** "交接挂起期间跳过手动重试接管"日志的最近打印时间，按秒采样防止刷屏。 */
     private var lastHandoffRetrySkipLogAt = 0L
 
@@ -1355,34 +1385,43 @@ internal class CheckoutSnapshotCaptureCoordinator(
             return
         }
 
+        // 批 4 S5b:惰性死亡清算——事件入口按 D1/D2/D3 检查,超时旅程先终结
+        // (丢槽位、清交接)再把当前稳定事件当全新旅程处理。
+        if (journeyShouldDie()) {
+            journeyDieAndClear(reason = "JOURNEY_TIMEOUT")
+        }
+
         val retainedHandoff = handoffCheckout
         if (retainedHandoff != null) {
             if (closed) {
                 return
             }
             val retained = retainedHandoff.activeCheckout
-            val isSameCheckout =
+            // 批 4 S5b:同包同锚 = 同旅程,指纹不再参与旅程身份。
+            val isSameJourney =
                 retained.page.observation.shoppingPackage == observation.shoppingPackage &&
-                    retained.page.observation.pageFingerprint == observation.pageFingerprint
-            // 支付中间页挂起初期，结算页指纹漂移（倒计时/控件刷新）的迟到稳定事件
-            // 不代表新订单：保留挂起会话与快照，等待切支付应用消费。
-            val isDriftTail =
-                !isSameCheckout &&
-                    observation.shoppingPackage == retained.page.observation.shoppingPackage &&
-                    observation.observedAt - retained.page.stableAt < HANDOFF_DRIFT_TAIL_WINDOW_MILLIS
-            if (isDriftTail) {
+                    retained.page.observation.windowClass == observation.windowClass
+            val isSameFingerprint =
+                retained.page.observation.pageFingerprint == observation.pageFingerprint
+            // 漂移噪声:同旅程内指纹变化且距交接很近(倒计时/控件刷新),
+            // 不代表用户返回结算页,维持挂起等待支付。
+            val isDriftNoise = isSameJourney && !isSameFingerprint &&
+                observation.observedAt - retained.page.stableAt < HANDOFF_DRIFT_TAIL_WINDOW_MILLIS
+            if (isDriftNoise) {
                 return
             }
             handoffCheckout = null
-            if (isSameCheckout) {
+            if (isSameJourney) {
+                // 用户返回同一旅程的结算页(支付失败/取消返回):恢复原会话与候选。
+                // 按会话解除栅栏——指纹已可漂移,精确匹配会让栅栏锁死会话。
+                journeyStage = JourneyLifecyclePolicy.Stage.CHECKOUT_STABLE
+                journeyStageAt = nowMillis()
                 if (closed) {
                     return
                 }
-                // 支付应用返回原结算页时恢复原会话和尝试状态，不重新截图或覆盖原候选。
-                buffer.restoreFromPaymentHandoff(
+                buffer.restoreFromPaymentHandoffBySession(
                     slotId = retained.slotId,
-                    sessionId = retained.sessionId,
-                    pageFingerprint = observation.pageFingerprint
+                    sessionId = retained.sessionId
                 )
                 activeCheckout = retained.copy(page = page)
                 attemptedAutomaticCaptures.clear()
@@ -1393,27 +1432,27 @@ internal class CheckoutSnapshotCaptureCoordinator(
                     handoffCheckout = null
                     attemptedAutomaticCaptures.clear()
                 }
-                return
+                if (isSameFingerprint) {
+                    // 原页返回:无内容变化,不重截
+                    return
+                }
+                // 指纹已漂移:落入下方截图决策——无存活候选时补截新内容,
+                // 否则支付交接时槽位为空,证据只能落 NO_BUFFERED_SNAPSHOT。
+            } else {
+                // 跨包返回:旧交接会话和其槽位不能被新订单复用。
+                buffer.discard(retained.slotId, reason = "HANDOFF_RETURNED_TO_OTHER_CHECKOUT")
+                attemptedAutomaticCaptures.clear()
             }
-
-            // 返回到不同页面时，旧交接会话和其槽位不能被新订单复用。
-            buffer.discard(retained.slotId, reason = "HANDOFF_RETURNED_TO_OTHER_CHECKOUT")
-            attemptedAutomaticCaptures.clear()
         }
 
         val previous = activeCheckout
-        // 同一购物包内的指纹变化可能只是轮播/倒计时造成的漂移，而非新订单。
-        // 若旧会话已有未消费且未过期的截图，沿用旧会话与槽位：既避免把"已截到的图"
-        // 在提交订单前清零（真机上曾导致支付交接只剩 NO_BUFFERED_SNAPSHOT），
-        // 也让后续截图落在同一会话内由 buffer 按指纹去重。
-        val driftWithinSameCheckout = previous != null &&
-            previous.page.observation.shoppingPackage == observation.shoppingPackage &&
-            previous.page.observation.pageFingerprint != observation.pageFingerprint &&
-            hasRetainableCandidate(previous, observation)
+        // 批 4 S5b:指纹漂移不再拆会话——同包即同旅程(金额锚落地前同包归并,
+        // 见规格 §2a)。会话延续后,指纹变化的截图决策交给下方候选短路
+        // (已有候选则去重)与新指纹补截(无候选时),预算与去重键仍按会话归属。
+        val fingerprintDrifted = previous != null &&
+            previous.page.observation.pageFingerprint != observation.pageFingerprint
         val startsNewSession = previous == null ||
-            previous.page.observation.shoppingPackage != observation.shoppingPackage ||
-            (previous.page.observation.pageFingerprint != observation.pageFingerprint &&
-                !driftWithinSameCheckout)
+            previous.page.observation.shoppingPackage != observation.shoppingPackage
         var pendingToNotify: PendingCapture? = null
         var queuedManualToNotify: QueuedManualCapture? = null
         val current = if (startsNewSession) {
@@ -1434,16 +1473,18 @@ internal class CheckoutSnapshotCaptureCoordinator(
                 captureTarget = SnapshotCaptureTarget.CHECKOUT
             )
         } else {
-            if (driftWithinSameCheckout) {
+            if (fingerprintDrifted) {
                 Log.i(
                     TAG,
-                    "结算页指纹漂移沿用原会话: slot=${previous!!.slotId}, " +
+                    "结算页指纹漂移沿用原旅程: slot=${previous!!.slotId}, " +
                         "session=${previous.sessionId.take(8)}"
                 )
             }
             previous!!.copy(page = page)
         }
         activeCheckout = current
+        journeyStage = JourneyLifecyclePolicy.Stage.CHECKOUT_STABLE
+        journeyStageAt = nowMillis()
 
         pendingToNotify?.let { pending ->
             publishPendingResult(
@@ -1482,10 +1523,10 @@ internal class CheckoutSnapshotCaptureCoordinator(
             return
         }
 
-        // 指纹漂移沿用原会话时，槽内已有本会话的可用截图：结算页内容并未真正改变，
-        // 不必为每一次漂移重复截图（真机上曾在 8 秒内连截 6 张并互相覆盖）。
+        // 指纹漂移且槽内已有本会话的可用截图:页面语义未变(倒计时/控件刷新),
+        // 不必为每一次漂移重复截图(真机上曾在 8 秒内连截 6 张并互相覆盖)。
         // 后续支付交接会按槽内真实指纹消费这张已有截图。
-        if (driftWithinSameCheckout) {
+        if (fingerprintDrifted && hasRetainableCandidate(previous!!, observation)) {
             attemptedAutomaticCaptures += key
             publish(duplicateResult(current, SnapshotSourceReason.CHECKOUT_STABLE))
             return
@@ -1525,6 +1566,10 @@ internal class CheckoutSnapshotCaptureCoordinator(
     }
 
     private fun handleInvalidated(detail: CheckoutObservationInvalidation) {
+        // 批 4 S5b:惰性死亡清算(与 handleStable 相同的入口检查)。
+        if (journeyShouldDie()) {
+            journeyDieAndClear(reason = "JOURNEY_TIMEOUT")
+        }
         val current = activeCheckout
         val retained = handoffCheckout
         // 同购物包内的非结算中间页（拼多多提交订单后的收银台）是支付旅程的一部分：
@@ -1636,6 +1681,12 @@ internal class CheckoutSnapshotCaptureCoordinator(
         handoffCheckout = nextHandoff
         activeCheckout = null
         attemptedAutomaticCaptures.clear()
+        // 批 4 S5b:交接挂起即进入 WAITING_PAYMENT 阶段(D1 计时起点);
+        // 其余失效原因伴随槽位清理,旅程实质终结,阶段在下一会话出生时重置。
+        if (nextHandoff != null) {
+            journeyStage = JourneyLifecyclePolicy.Stage.WAITING_PAYMENT
+            journeyStageAt = nowMillis()
+        }
         if (closed) {
             handoffCheckout = null
             activeCheckout = null
