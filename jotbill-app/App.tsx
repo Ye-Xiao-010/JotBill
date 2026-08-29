@@ -4,6 +4,7 @@ import { Provider as PaperProvider, MD3DarkTheme, MD3LightTheme } from 'react-na
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { queryClient, invalidateCache } from './src/lib/queryClient';
+import { addPendingCreatedListener, nativePendingReminder } from './src/native/pendingReminder';
 import { useAppStateManager } from './src/hooks';
 import { ThemeProvider, useTheme, AlertProvider } from './src/providers';
 import AppNavigator from './src/navigation/AppNavigator';
@@ -47,6 +48,16 @@ function AppContent() {
       console.log('[App] 注销事件监听器');
       subscription.remove();
     };
+  }, []);
+
+  // 待确认创建/更新事件:失效识别链路缓存,保证待确认中心及时刷新
+  // (数据落库在原生侧完成,本监听只负责 UI 同步;事件负载不含敏感字段)
+  useEffect(() => {
+    const subscription = addPendingCreatedListener(() => {
+      invalidateCache.recognition();
+    });
+    nativePendingReminder.requestNotificationPermissionIfNeeded().catch(() => undefined);
+    return () => subscription.remove();
   }, []);
 
   // 配置 Paper 主题
