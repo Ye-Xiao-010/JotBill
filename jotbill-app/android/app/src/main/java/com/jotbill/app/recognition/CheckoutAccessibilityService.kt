@@ -304,14 +304,17 @@ class CheckoutAccessibilityService : AccessibilityService() {
     @Volatile
     private var lastSuccessfulPaymentEvidenceAt = 0L
     /**
-     * 最近一次在支付应用中观察到敏感页面的时间。
+     * 支付证据门禁策略(原 lastSensitivePaymentPageAt 锁存字段的替代)。
      *
-     * 支付密码页与随后的空节点树帧交替出现：空树帧自身无法判定敏感，
-     * 若只按单轮结果拦截，兜底截图仍会在密码页停留期间被触发。
-     * 因此把敏感状态锁存一个短窗口，窗口内一律禁止截图 AI 兜底。
+     * 支付密码页与随后的空节点树帧交替出现:空树帧自身无法判定敏感,
+     * 若只按单轮结果拦截,兜底截图仍会在密码页停留期间被触发。
+     * 因此把敏感状态锁存一个短窗口,窗口内一律禁止截图 AI 兜底。
      */
-    @Volatile
-    private var lastSensitivePaymentPageAt = 0L
+    // 批 4 S3:敏感锁存判定收敛到 PaymentEvidenceGatePolicy,主路径与截图兜底
+    // 共用同一实例,禁止各自维护锁存字段。
+    private val evidenceGatePolicy = PaymentEvidenceGatePolicy(
+        sensitiveLatchMillis = SENSITIVE_PAGE_SCREENSHOT_BLOCK_MILLIS
+    )
     private val recentPaymentResultEventKeys = mutableMapOf<String, Long>()
     private val screenshotCallbackExecutor = Executor { runnable -> mainHandler.post(runnable) }
     @Volatile
@@ -1388,7 +1391,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
                     // role != PAYMENT_RESULT 的 continue 分支溜走，最终触发截图兜底。
                     if (observation.isSensitivePage) {
                         sawSensitivePage = true
-                        lastSensitivePaymentPageAt = System.currentTimeMillis()
+                        evidenceGatePolicy.onSensitivePageObserved()
                         // 该分支在支付页每帧命中，真机 .tmp-device-capture-20260824-142754
                         // 中一次支付即刷出数百行，把"支付结果页解析到证据"
                         // "AI 结果匹配落库"等关键链路日志完全淹没。
@@ -1569,12 +1572,12 @@ class CheckoutAccessibilityService : AccessibilityService() {
             return
         }
         val now = System.currentTimeMillis()
-        // 空节点树帧无法自行判定敏感，用锁存窗口覆盖密码页与空树帧交替的场景。
-        if (now - lastSensitivePaymentPageAt < SENSITIVE_PAGE_SCREENSHOT_BLOCK_MILLIS) {
+        // 空节点树帧无法自行判定敏感,用锁存窗口覆盖密码页与空树帧交替的场景。
+        if (evidenceGatePolicy.isSensitiveLatchActive(now)) {
             logScreenshotFallbackBlockedSampled(
                 "敏感页面锁存窗口内",
                 paymentPackage,
-                extra = "elapsed=${now - lastSensitivePaymentPageAt}ms"
+                extra = "elapsed=${evidenceGatePolicy.sensitiveLatchElapsedMillis(now)}ms"
             )
             return
         }
