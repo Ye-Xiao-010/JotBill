@@ -1,0 +1,139 @@
+08-29 16:32:09.605 I/PendingReminder(27908): 待确认提醒已初始化: channel=pending_reminder
+08-29 16:32:19.172 I/PaymentNotificationService(27908): 支付通知服务启动（阶段四重写）
+08-29 16:32:19.175 I/PaymentNotificationService(27908): 支付通知服务已创建（阶段四：解析→证据→决策）
+08-29 16:32:19.181 I/PaymentNotificationService(27908): 通知监听服务已连接
+08-29 16:32:36.930 I/PendingReminder(27488): 待确认提醒已初始化: channel=pending_reminder
+08-29 16:32:45.533 I/PaymentNotificationService(27488): 支付通知服务启动（阶段四重写）
+08-29 16:32:45.537 I/PaymentNotificationService(27488): 支付通知服务已创建（阶段四：解析→证据→决策）
+08-29 16:32:45.540 I/PaymentNotificationService(27488): 通知监听服务已连接
+08-29 16:34:40.326 I/CheckoutAccessibilityService(27488): 无障碍服务开始连接: 旧协调器=无, previouslyConnected=false
+08-29 16:34:40.330 I/CheckoutAccessibilityService(27488): 结算页无障碍观察服务已连接
+08-29 16:34:44.413 I/CheckoutAccessibilityService(27488): 结算页门禁: ACCEPTED, pkg=com.jingdong.app.mall, role=CHECKOUT, amountSignal=true, actionSignal=false, classSemantic=true, sensitive=false, fp=51b81cf2af52, class=com.jd.lib.settlement.fillorder.activity.popupnewfillorderactivity
+08-29 16:34:45.590 I/CheckoutSnapshotCapture(27488): 观察失效: reason=LEFT_SUPPORTED_SHOPPING_APP, current=null, retained=null, interstitial=false, retainForHandoff=false, nextHandoff=null, replacedHandoff=false, detailPkg=com.jingdong.app.mall, detailFingerprint=147ae7c43fa4
+08-29 16:34:45.593 I/CheckoutSnapshotCapture(27488): 结算页手动上下文仅作兜底，不建立手动会话: pkg=com.jingdong.app.mall, activeTarget=null
+08-29 16:34:49.586 I/CheckoutAccessibilityService(27488): 结算页门禁: NOT_CHECKOUT_PAGE, pkg=com.jingdong.app.mall, role=UNKNOWN, amountSignal=true, actionSignal=false, classSemantic=false, sensitive=false, fp=7f39345085cb, class=android.widget.framelayout
+08-29 16:34:49.942 I/CheckoutAccessibilityService(27488): 结算页门禁: ACCEPTED, pkg=com.jingdong.app.mall, role=CHECKOUT, amountSignal=true, actionSignal=false, classSemantic=true, sensitive=false, fp=db705da51380, class=com.jd.lib.settlement.fillorder.activity.popupnewfillorderactivity
+08-29 16:34:50.064 I/CheckoutSnapshotCapture(27488): 观察失效: reason=NON_CHECKOUT_PAGE, current=null, retained=null, interstitial=false, retainForHandoff=false, nextHandoff=null, replacedHandoff=false, detailPkg=com.jingdong.app.mall, detailFingerprint=db705da51380
+08-29 16:34:50.613 I/CheckoutSnapshotCapture(27488): 截图状态: STORED, 来源=CHECKOUT_STABLE, 原因=STORED
+08-29 16:34:53.152 I/CheckoutAccessibilityService(27488): 结算页门禁: NOT_CHECKOUT_PAGE, pkg=com.jingdong.app.mall, role=UNKNOWN, amountSignal=true, actionSignal=false, classSemantic=false, sensitive=false, fp=54691b216cc1, class=android.widget.textview
+08-29 16:34:53.152 I/CheckoutSnapshotCapture(27488): 观察失效: reason=NON_CHECKOUT_PAGE, current=4ecd8dd5, retained=null, interstitial=true, retainForHandoff=true, nextHandoff=4ecd8dd5, replacedHandoff=false, detailPkg=com.jingdong.app.mall, detailFingerprint=d7a6ebba1ed5
+08-29 16:34:53.860 I/CheckoutAccessibilityService(27488): 结算页门禁: ACCEPTED, pkg=com.jingdong.app.mall, role=CHECKOUT, amountSignal=true, actionSignal=false, classSemantic=true, sensitive=false, fp=147ae7c43fa4, class=com.jd.lib.settlement.fillorder.activity.popupnewfillorderactivity
+08-29 16:34:55.338 I/CheckoutAccessibilityService(27488): 手动截图上下文: role=CHECKOUT, amountSignal=true, actionSignal=false, sensitive=false, class=com.jd.lib.settlement.fillorder.activity.popupnewfillorderactivity
+08-29 16:34:56.017 I/CheckoutSnapshotCapture(27488): 交接挂起期间跳过手动重试接管: handoffSession=4ecd8dd5, handoffPkg=com.jingdong.app.mall, contextPkg=com.jingdong.app.mall, bySnapshot=true, byFence=true
+08-29 16:34:56.309 I/CheckoutAccessibilityService(27488): 结算页门禁: NOT_CHECKOUT_PAGE, pkg=com.jingdong.app.mall, role=UNKNOWN, amountSignal=false, actionSignal=false, classSemantic=true, sensitive=false, fp=1ec79f703ddf, class=com.jd.lib.settlement.fillorder.activity.popupnewfillorderactivity
+08-29 16:34:56.309 I/CheckoutSnapshotCapture(27488): 观察失效: reason=NON_CHECKOUT_PAGE, current=4ecd8dd5, retained=null, interstitial=true, retainForHandoff=true, nextHandoff=4ecd8dd5, replacedHandoff=false, detailPkg=com.jingdong.app.mall, detailFingerprint=181da03d07a0
+08-29 16:34:56.309 I/CheckoutSnapshotCapture(27488): 交接期间保留飞行中的结算截图: session=4ecd8dd5, reason=NON_CHECKOUT_PAGE
+08-29 16:34:56.309 I/CheckoutSnapshotCapture(27488): 截图状态: CANCELLED, 来源=MANUAL_CAPTURE, 原因=NON_CHECKOUT_PAGE
+08-29 16:34:57.354 I/CheckoutSnapshotCapture(27488): 交接挂起期间跳过手动重试接管: handoffSession=4ecd8dd5, handoffPkg=com.jingdong.app.mall, contextPkg=com.jingdong.app.mall, bySnapshot=true, byFence=true
+08-29 16:34:58.852 I/CheckoutAccessibilityService(27488): 结算页门禁: ACCEPTED, pkg=com.jingdong.app.mall, role=CHECKOUT, amountSignal=true, actionSignal=false, classSemantic=true, sensitive=false, fp=147ae7c43fa4, class=com.jd.lib.settlement.fillorder.activity.popupnewfillorderactivity
+08-29 16:34:58.853 I/CheckoutSnapshotCapture(27488): 交接后落盘已补设栅栏: session=4ecd8dd5, fingerprint=181da03d07a0
+08-29 16:34:58.853 I/CheckoutSnapshotCapture(27488): 截图状态: STORED, 来源=CHECKOUT_STABLE, 原因=STORED
+08-29 16:34:59.794 I/CheckoutAccessibilityService(27488): 结算页门禁: NOT_CHECKOUT_PAGE, pkg=com.jingdong.app.mall, role=UNKNOWN, amountSignal=false, actionSignal=false, classSemantic=true, sensitive=false, fp=1d25399aefe7, class=com.jd.lib.settlement.fillorder.activity.popupnewfillorderactivity
+08-29 16:34:59.794 I/CheckoutSnapshotCapture(27488): 观察失效: reason=NON_CHECKOUT_PAGE, current=null, retained=4ecd8dd5, interstitial=true, retainForHandoff=true, nextHandoff=4ecd8dd5, replacedHandoff=false, detailPkg=com.jingdong.app.mall, detailFingerprint=147ae7c43fa4
+08-29 16:34:59.798 I/CheckoutSnapshotCapture(27488): 交接挂起期间跳过手动重试接管: handoffSession=4ecd8dd5, handoffPkg=com.jingdong.app.mall, contextPkg=com.jingdong.app.mall, bySnapshot=true, byFence=true
+08-29 16:35:00.018 I/CheckoutSnapshotCapture(27488): 观察失效: reason=NON_CHECKOUT_PAGE, current=null, retained=4ecd8dd5, interstitial=true, retainForHandoff=true, nextHandoff=4ecd8dd5, replacedHandoff=false, detailPkg=com.jingdong.app.mall, detailFingerprint=db705da51380
+08-29 16:35:02.338 I/CheckoutAccessibilityService(27488): 支付交接诊断: payment=com.tencent.mm, currentStable=true, handoffStable=true, previousShopping=com.jingdong.app.mall, coordRef=4ecd8dd5-c9cf-4c5a-bb8c-644f07901638
+08-29 16:35:02.356 I/CheckoutAccessibilityService(27488): 支付交接上下文: stable=db705da51380, buffered=false, aiRef=false, fallback=4ecd8dd5-c9cf-4c5a-bb8c-644f07901638, finalRef=4ecd8dd5-c9cf-4c5a-bb8c-644f07901638
+08-29 16:35:02.514 I/CheckoutAccessibilityService(27488): 支付交接事件补发: stable=true, fingerprint=db705da51380, foreground=com.tencent.mm
+08-29 16:35:02.514 I/CheckoutSnapshotCapture(27488): 观察失效: reason=PAYMENT_APP_HANDOFF, current=4ecd8dd5, retained=null, interstitial=false, retainForHandoff=true, nextHandoff=4ecd8dd5, replacedHandoff=false, detailPkg=com.jingdong.app.mall, detailFingerprint=db705da51380
+08-29 16:35:02.515 I/CheckoutAccessibilityService(27488): 结算页 AI 派发: session=4ecd8dd5, intent=PAYMENT_APP_HANDOFF, requestKey=checkout|com.jingdong.ap
+08-29 16:35:02.528 I/CheckoutAccessibilityService(27488): 支付交接会话预写入: session=4ecd8dd5
+08-29 16:35:02.630 I/CheckoutAccessibilityService(27488): 支付结果页截图兜底已取得: 60931 bytes
+08-29 16:35:03.622 I/CheckoutAccessibilityService(27488): 支付交接诊断: payment=com.tencent.mm, currentStable=false, handoffStable=true, previousShopping=null, coordRef=4ecd8dd5-c9cf-4c5a-bb8c-644f07901638
+08-29 16:35:03.622 I/CheckoutAccessibilityService(27488): 支付交接上下文: stable=db705da51380, buffered=false, aiRef=false, fallback=4ecd8dd5-c9cf-4c5a-bb8c-644f07901638, finalRef=4ecd8dd5-c9cf-4c5a-bb8c-644f07901638
+08-29 16:35:03.930 I/CheckoutAccessibilityService(27488): 支付结果页截图兜底已禁止: 支付包页面为敏感页面，跳过证据提取与截图兜底 pkg=com.tencent.mm, role=UNKNOWN, class=
+08-29 16:35:03.931 I/CheckoutAccessibilityService(27488): 支付结果页截图兜底已禁止: 本轮观察到敏感页面 pkg=com.tencent.mm
+08-29 16:35:04.629 I/CheckoutAccessibilityService(27488): 支付交接诊断: payment=com.tencent.mm, currentStable=false, handoffStable=true, previousShopping=null, coordRef=4ecd8dd5-c9cf-4c5a-bb8c-644f07901638
+08-29 16:35:04.629 I/CheckoutAccessibilityService(27488): 支付交接上下文: stable=db705da51380, buffered=false, aiRef=false, fallback=4ecd8dd5-c9cf-4c5a-bb8c-644f07901638, finalRef=4ecd8dd5-c9cf-4c5a-bb8c-644f07901638
+08-29 16:35:04.946 I/CheckoutAccessibilityService(27488): 支付结果页截图兜底已禁止: 敏感页面锁存窗口内 pkg=com.tencent.mm, elapsed=189ms
+08-29 16:35:05.436 I/CheckoutAccessibilityService(27488): AI 结果匹配落库结果: Accepted(sessionId=4ecd8dd5, status=WAITING_ENRICHMENT, matched=false, candidateId=candidat, evidenceId=null)
+08-29 16:35:05.436 I/CheckoutAccessibilityService(27488): 结算页 AI 任务结束: session=4ecd8dd5, elapsed=2921ms
+08-29 16:35:06.560 I/CheckoutAccessibilityService(27488): 支付交接诊断: payment=com.tencent.mm, currentStable=false, handoffStable=true, previousShopping=null, coordRef=4ecd8dd5-c9cf-4c5a-bb8c-644f07901638
+08-29 16:35:06.560 I/CheckoutAccessibilityService(27488): 支付交接上下文: stable=db705da51380, buffered=false, aiRef=false, fallback=4ecd8dd5-c9cf-4c5a-bb8c-644f07901638, finalRef=4ecd8dd5-c9cf-4c5a-bb8c-644f07901638
+08-29 16:35:06.572 I/CheckoutAccessibilityService(27488): 支付结果页解析到证据: 金额=3062分, 状态=SUCCESS, textLength=20
+08-29 16:35:06.579 I/CheckoutPaymentMatcher(27488): AI 未识别时间，证据后到回填: session=4ecd8dd5, occurredAt=1787992506560
+08-29 16:35:06.587 I/CheckoutAccessibilityService(27488): 支付结果页证据落库结果（交接上下文）: Accepted(sessionId=4ecd8dd5, status=COMPLETED, matched=true, candidateId=candidat, evidenceId=payment-01b1, billId=bill-8bfba29c54e3cd1e230c84779866edea4159f651b3a9523352cb9dd08d046b59（已自动入账）)
+08-29 16:35:07.559 I/CheckoutAccessibilityService(27488): 支付交接事件补发: stable=true, fingerprint=db705da51380, foreground=com.tencent.mm
+08-29 16:35:07.559 I/CheckoutSnapshotCapture(27488): 观察失效: reason=PAYMENT_APP_HANDOFF, current=null, retained=4ecd8dd5, interstitial=false, retainForHandoff=true, nextHandoff=4ecd8dd5, replacedHandoff=false, detailPkg=null, detailFingerprint=db705da51380
+08-29 16:35:07.651 I/CheckoutAccessibilityService(27488): 支付交接诊断: payment=com.tencent.mm, currentStable=false, handoffStable=true, previousShopping=null, coordRef=4ecd8dd5-c9cf-4c5a-bb8c-644f07901638
+08-29 16:35:07.651 I/CheckoutAccessibilityService(27488): 支付交接上下文: stable=db705da51380, buffered=false, aiRef=false, fallback=4ecd8dd5-c9cf-4c5a-bb8c-644f07901638, finalRef=4ecd8dd5-c9cf-4c5a-bb8c-644f07901638
+08-29 16:35:07.806 I/CheckoutAccessibilityService(27488): 支付结果页截图兜底未生成证据: code=JSON_SCHEMA_INVALID, attempts=1, httpStatus=null
+08-29 16:35:09.722 I/CheckoutAccessibilityService(27488): 支付交接诊断: payment=com.tencent.mm, currentStable=false, handoffStable=true, previousShopping=null, coordRef=4ecd8dd5-c9cf-4c5a-bb8c-644f07901638
+08-29 16:35:09.722 I/CheckoutAccessibilityService(27488): 支付交接上下文: stable=db705da51380, buffered=false, aiRef=false, fallback=4ecd8dd5-c9cf-4c5a-bb8c-644f07901638, finalRef=4ecd8dd5-c9cf-4c5a-bb8c-644f07901638
+08-29 16:35:09.763 I/CheckoutAccessibilityService(27488): 支付结果页未生成成功证据: reason=INVALID_AMOUNT
+08-29 16:35:09.763 I/CheckoutAccessibilityService(27488): 支付结果页截图兜底已禁止: 敏感页面锁存窗口内 pkg=com.tencent.mm, elapsed=5006ms, 期间已抑制38次
+08-29 16:35:09.767 I/CheckoutAccessibilityService(27488): 支付结果页未生成成功证据: reason=INVALID_AMOUNT
+08-29 16:35:09.774 I/CheckoutAccessibilityService(27488): 支付结果页未生成成功证据: reason=INVALID_AMOUNT
+08-29 16:35:09.785 D/CheckoutAccessibilityService(27488): 支付结果页未命中可确认的结果语义
+08-29 16:35:10.006 I/CheckoutAccessibilityService(27488): 结算页门禁: NOT_CHECKOUT_PAGE, pkg=com.jingdong.app.mall, role=UNKNOWN, amountSignal=false, actionSignal=false, classSemantic=false, sensitive=false, fp=793f69e3e099, class=android.widget.framelayout
+08-29 16:35:10.129 I/CheckoutSnapshotCapture(27488): 交接挂起期间跳过手动重试接管: handoffSession=4ecd8dd5, handoffPkg=com.jingdong.app.mall, contextPkg=com.jingdong.app.mall, bySnapshot=false, byFence=true
+08-29 16:35:11.450 I/CheckoutSnapshotCapture(27488): 交接挂起期间跳过手动重试接管: handoffSession=4ecd8dd5, handoffPkg=com.jingdong.app.mall, contextPkg=com.jingdong.app.mall, bySnapshot=false, byFence=true
+08-29 16:35:12.469 I/CheckoutSnapshotCapture(27488): 交接挂起期间跳过手动重试接管: handoffSession=4ecd8dd5, handoffPkg=com.jingdong.app.mall, contextPkg=com.jingdong.app.mall, bySnapshot=false, byFence=true
+08-29 16:35:13.086 I/CheckoutAccessibilityService(27488): 结算页门禁: NOT_CHECKOUT_PAGE, pkg=com.jingdong.app.mall, role=SHOPPING_HOME, amountSignal=false, actionSignal=false, classSemantic=false, sensitive=false, fp=fb236d305543, class=com.jingdong.app.mall.mainframeactivity
+08-29 16:35:13.677 I/CheckoutSnapshotCapture(27488): 交接挂起期间跳过手动重试接管: handoffSession=4ecd8dd5, handoffPkg=com.jingdong.app.mall, contextPkg=com.jingdong.app.mall, bySnapshot=false, byFence=true
+08-29 16:35:14.768 I/CheckoutSnapshotCapture(27488): 交接挂起期间跳过手动重试接管: handoffSession=4ecd8dd5, handoffPkg=com.jingdong.app.mall, contextPkg=com.jingdong.app.mall, bySnapshot=false, byFence=true
+08-29 16:35:16.152 I/CheckoutAccessibilityService(27488): 结算页门禁: NOT_CHECKOUT_PAGE, pkg=com.xunmeng.pinduoduo, role=SHOPPING_HOME, amountSignal=true, actionSignal=false, classSemantic=false, sensitive=false, fp=e90159de2e4a, class=android.widget.framelayout
+08-29 16:35:19.196 I/CheckoutAccessibilityService(27488): 结算页门禁: NOT_CHECKOUT_PAGE, pkg=com.xunmeng.pinduoduo, role=SHOPPING_HOME, amountSignal=true, actionSignal=false, classSemantic=false, sensitive=false, fp=79cdf8c5302c, class=android.widget.framelayout
+08-29 16:35:21.238 I/CheckoutAccessibilityService(27488): 结算页门禁: ACCEPTED, pkg=com.xunmeng.pinduoduo, role=CHECKOUT, amountSignal=true, actionSignal=true, classSemantic=false, sensitive=false, fp=4f62f0d723c0, class=com.xunmeng.pinduoduo.activity.newpageactivity
+08-29 16:35:23.804 I/CheckoutSnapshotCapture(27488): 结算页手动上下文仅作兜底，不建立手动会话: pkg=com.xunmeng.pinduoduo, activeTarget=null
+08-29 16:35:24.396 I/CheckoutAccessibilityService(27488): 结算页门禁: ACCEPTED, pkg=com.xunmeng.pinduoduo, role=CHECKOUT, amountSignal=true, actionSignal=true, classSemantic=false, sensitive=false, fp=da99c43f4a88, class=wd2.f0
+08-29 16:35:24.472 I/CheckoutSnapshotCapture(27488): 截图状态: STORED, 来源=CHECKOUT_STABLE, 原因=STORED
+08-29 16:35:25.924 I/CheckoutAccessibilityService(27488): 结算页门禁: NOT_CHECKOUT_PAGE, pkg=com.xunmeng.pinduoduo, role=UNKNOWN, amountSignal=false, actionSignal=false, classSemantic=false, sensitive=false, fp=28ea7120442b, class=wd2.f0
+08-29 16:35:25.924 I/CheckoutSnapshotCapture(27488): 观察失效: reason=NON_CHECKOUT_PAGE, current=4bb07749, retained=null, interstitial=true, retainForHandoff=true, nextHandoff=4bb07749, replacedHandoff=false, detailPkg=com.xunmeng.pinduoduo, detailFingerprint=da99c43f4a88
+08-29 16:35:25.980 I/CheckoutSnapshotCapture(27488): 交接挂起期间跳过手动重试接管: handoffSession=4bb07749, handoffPkg=com.xunmeng.pinduoduo, contextPkg=com.xunmeng.pinduoduo, bySnapshot=true, byFence=true
+08-29 16:35:26.085 I/CheckoutAccessibilityService(27488): 支付交接诊断: payment=com.tencent.mm, currentStable=true, handoffStable=true, previousShopping=com.xunmeng.pinduoduo, coordRef=4bb07749-fe65-47dc-bd69-0c266c18fad5
+08-29 16:35:26.085 I/CheckoutAccessibilityService(27488): 支付交接上下文: stable=da99c43f4a88, buffered=true, aiRef=true, fallback=4bb07749-fe65-47dc-bd69-0c266c18fad5, finalRef=4bb07749-fe65-47dc-bd69-0c266c18fad5
+08-29 16:35:26.235 I/CheckoutAccessibilityService(27488): 支付结果页截图兜底已禁止: 敏感页面锁存窗口内 pkg=com.tencent.mm, elapsed=21478ms, 期间已抑制9次
+08-29 16:35:26.235 I/CheckoutAccessibilityService(27488): 支付交接事件补发: stable=true, fingerprint=da99c43f4a88, foreground=com.tencent.mm
+08-29 16:35:26.235 I/CheckoutSnapshotCapture(27488): 观察失效: reason=PAYMENT_APP_HANDOFF, current=null, retained=4bb07749, interstitial=false, retainForHandoff=true, nextHandoff=4bb07749, replacedHandoff=false, detailPkg=com.xunmeng.pinduoduo, detailFingerprint=da99c43f4a88
+08-29 16:35:26.235 I/CheckoutAccessibilityService(27488): 结算页 AI 派发: session=4bb07749, intent=PAYMENT_APP_HANDOFF, requestKey=checkout|com.xunmeng.pin
+08-29 16:35:26.249 I/CheckoutAccessibilityService(27488): 支付交接会话预写入: session=4bb07749
+08-29 16:35:27.311 I/CheckoutAccessibilityService(27488): 支付交接诊断: payment=com.tencent.mm, currentStable=false, handoffStable=true, previousShopping=null, coordRef=4bb07749-fe65-47dc-bd69-0c266c18fad5
+08-29 16:35:27.311 I/CheckoutAccessibilityService(27488): 支付交接上下文: stable=da99c43f4a88, buffered=false, aiRef=true, fallback=4bb07749-fe65-47dc-bd69-0c266c18fad5, finalRef=4bb07749-fe65-47dc-bd69-0c266c18fad5
+08-29 16:35:27.523 I/CheckoutAccessibilityService(27488): 支付结果页截图兜底已禁止: 支付包页面为敏感页面，跳过证据提取与截图兜底 pkg=com.tencent.mm, role=UNKNOWN, class=, 期间已抑制93次
+08-29 16:35:27.525 I/CheckoutAccessibilityService(27488): 支付结果页截图兜底已禁止: 本轮观察到敏感页面 pkg=com.tencent.mm, 期间已抑制46次
+08-29 16:35:28.318 I/CheckoutAccessibilityService(27488): 支付交接诊断: payment=com.tencent.mm, currentStable=false, handoffStable=true, previousShopping=null, coordRef=4bb07749-fe65-47dc-bd69-0c266c18fad5
+08-29 16:35:28.318 I/CheckoutAccessibilityService(27488): 支付交接上下文: stable=da99c43f4a88, buffered=false, aiRef=true, fallback=4bb07749-fe65-47dc-bd69-0c266c18fad5, finalRef=4bb07749-fe65-47dc-bd69-0c266c18fad5
+08-29 16:35:29.038 I/CheckoutAccessibilityService(27488): 结算页门禁: NOT_CHECKOUT_PAGE, pkg=com.xunmeng.pinduoduo, role=UNKNOWN, amountSignal=false, actionSignal=false, classSemantic=false, sensitive=false, fp=0038370ae66f, class=android.widget.framelayout
+08-29 16:35:29.187 I/CheckoutAccessibilityService(27488): 结算页门禁: ACCEPTED, pkg=com.xunmeng.pinduoduo, role=CHECKOUT, amountSignal=true, actionSignal=true, classSemantic=false, sensitive=false, fp=e36d6d726028, class=android.widget.framelayout
+08-29 16:35:29.231 I/CheckoutAccessibilityService(27488): AI 结果匹配落库结果: Accepted(sessionId=4bb07749, status=WAITING_ENRICHMENT, matched=false, candidateId=candidat, evidenceId=null)
+08-29 16:35:29.231 I/CheckoutAccessibilityService(27488): 结算页 AI 任务结束: session=4bb07749, elapsed=2996ms
+08-29 16:35:29.554 I/CheckoutSnapshotCapture(27488): 结算页手动上下文仅作兜底，不建立手动会话: pkg=com.xunmeng.pinduoduo, activeTarget=null
+08-29 16:35:32.832 I/CheckoutAccessibilityService(27488): 结算页门禁: ACCEPTED, pkg=com.xunmeng.pinduoduo, role=CHECKOUT, amountSignal=true, actionSignal=true, classSemantic=false, sensitive=false, fp=e080879402a7, class=wd2.f0
+08-29 16:35:34.549 I/CheckoutSnapshotCapture(27488): 结算页指纹漂移沿用原旅程: slot=shopping-package:com.xunmeng.pinduoduo, session=4bb07749
+08-29 16:35:34.605 I/CheckoutSnapshotCapture(27488): 截图状态: STORED, 来源=CHECKOUT_STABLE, 原因=STORED
+08-29 16:35:36.348 I/CheckoutAccessibilityService(27488): 结算页门禁: NOT_CHECKOUT_PAGE, pkg=com.xunmeng.pinduoduo, role=UNKNOWN, amountSignal=false, actionSignal=false, classSemantic=false, sensitive=false, fp=b8e7e35ac9dd, class=wd2.f0
+08-29 16:35:36.348 I/CheckoutSnapshotCapture(27488): 观察失效: reason=NON_CHECKOUT_PAGE, current=4bb07749, retained=null, interstitial=true, retainForHandoff=true, nextHandoff=4bb07749, replacedHandoff=false, detailPkg=com.xunmeng.pinduoduo, detailFingerprint=91ea7d5dd166
+08-29 16:35:36.378 I/CheckoutAccessibilityService(27488): 支付交接诊断: payment=com.tencent.mm, currentStable=true, handoffStable=true, previousShopping=com.xunmeng.pinduoduo, coordRef=4bb07749-fe65-47dc-bd69-0c266c18fad5
+08-29 16:35:36.378 I/CheckoutAccessibilityService(27488): 支付交接上下文: stable=91ea7d5dd166, buffered=true, aiRef=true, fallback=4bb07749-fe65-47dc-bd69-0c266c18fad5, finalRef=4bb07749-fe65-47dc-bd69-0c266c18fad5
+08-29 16:35:36.460 I/CheckoutAccessibilityService(27488): 支付结果页截图兜底已禁止: 敏感页面锁存窗口内 pkg=com.tencent.mm, elapsed=8222ms, 期间已抑制43次
+08-29 16:35:36.460 I/CheckoutAccessibilityService(27488): 支付交接事件补发: stable=true, fingerprint=91ea7d5dd166, foreground=com.tencent.mm
+08-29 16:35:36.460 I/CheckoutSnapshotCapture(27488): 观察失效: reason=PAYMENT_APP_HANDOFF, current=null, retained=4bb07749, interstitial=false, retainForHandoff=true, nextHandoff=4bb07749, replacedHandoff=false, detailPkg=com.xunmeng.pinduoduo, detailFingerprint=91ea7d5dd166
+08-29 16:35:36.460 I/CheckoutAccessibilityService(27488): 结算页 AI 派发: session=4bb07749, intent=PAYMENT_APP_HANDOFF, requestKey=checkout|com.xunmeng.pin
+08-29 16:35:36.467 I/CheckoutAccessibilityService(27488): 支付交接会话预写入: session=4bb07749
+08-29 16:35:37.492 I/CheckoutAccessibilityService(27488): 支付交接诊断: payment=com.tencent.mm, currentStable=false, handoffStable=true, previousShopping=null, coordRef=4bb07749-fe65-47dc-bd69-0c266c18fad5
+08-29 16:35:37.492 I/CheckoutAccessibilityService(27488): 支付交接上下文: stable=91ea7d5dd166, buffered=false, aiRef=true, fallback=4bb07749-fe65-47dc-bd69-0c266c18fad5, finalRef=4bb07749-fe65-47dc-bd69-0c266c18fad5
+08-29 16:35:37.751 I/CheckoutAccessibilityService(27488): 支付结果页截图兜底已禁止: 支付包页面为敏感页面，跳过证据提取与截图兜底 pkg=com.tencent.mm, role=UNKNOWN, class=, 期间已抑制62次
+08-29 16:35:37.754 I/CheckoutAccessibilityService(27488): 支付结果页截图兜底已禁止: 本轮观察到敏感页面 pkg=com.tencent.mm, 期间已抑制30次
+08-29 16:35:38.691 I/CheckoutAccessibilityService(27488): 支付交接诊断: payment=com.tencent.mm, currentStable=false, handoffStable=true, previousShopping=null, coordRef=4bb07749-fe65-47dc-bd69-0c266c18fad5
+08-29 16:35:38.691 I/CheckoutAccessibilityService(27488): 支付交接上下文: stable=91ea7d5dd166, buffered=false, aiRef=true, fallback=4bb07749-fe65-47dc-bd69-0c266c18fad5, finalRef=4bb07749-fe65-47dc-bd69-0c266c18fad5
+08-29 16:35:39.469 I/CheckoutAccessibilityService(27488): 支付结果页截图兜底已禁止: 敏感页面锁存窗口内 pkg=com.tencent.mm, elapsed=189ms, 期间已抑制27次
+08-29 16:35:39.998 I/CheckoutAccessibilityService(27488): AI 结果匹配落库结果: Accepted(sessionId=4bb07749, status=WAITING_ENRICHMENT, matched=false, candidateId=candidat, evidenceId=null)
+08-29 16:35:39.998 I/CheckoutAccessibilityService(27488): 结算页 AI 任务结束: session=4bb07749, elapsed=3538ms
+08-29 16:35:40.553 I/CheckoutAccessibilityService(27488): 支付交接诊断: payment=com.tencent.mm, currentStable=false, handoffStable=true, previousShopping=null, coordRef=4bb07749-fe65-47dc-bd69-0c266c18fad5
+08-29 16:35:40.553 I/CheckoutAccessibilityService(27488): 支付交接上下文: stable=91ea7d5dd166, buffered=false, aiRef=false, fallback=4bb07749-fe65-47dc-bd69-0c266c18fad5, finalRef=4bb07749-fe65-47dc-bd69-0c266c18fad5
+08-29 16:35:40.964 I/CheckoutAccessibilityService(27488): 支付结果页解析到证据: 金额=3580分, 状态=SUCCESS, textLength=21
+08-29 16:35:40.970 I/CheckoutPaymentMatcher(27488): AI 未识别时间，证据后到回填: session=4bb07749, occurredAt=1787992540944
+08-29 16:35:40.977 I/CheckoutAccessibilityService(27488): 支付结果页证据落库结果（交接上下文）: Accepted(sessionId=4bb07749, status=COMPLETED, matched=true, candidateId=candidat, evidenceId=payment-3e57, billId=bill-492d3d472ba36d5fcd8bfc09c8df80542713f63fc68299141d825b3d6709f62a（已自动入账）)
+08-29 16:35:41.944 I/CheckoutAccessibilityService(27488): 支付交接诊断: payment=com.tencent.mm, currentStable=false, handoffStable=true, previousShopping=null, coordRef=4bb07749-fe65-47dc-bd69-0c266c18fad5
+08-29 16:35:41.944 I/CheckoutAccessibilityService(27488): 支付交接上下文: stable=91ea7d5dd166, buffered=false, aiRef=false, fallback=4bb07749-fe65-47dc-bd69-0c266c18fad5, finalRef=4bb07749-fe65-47dc-bd69-0c266c18fad5
+08-29 16:35:41.947 I/CheckoutAccessibilityService(27488): 支付交接事件补发: stable=true, fingerprint=91ea7d5dd166, foreground=com.tencent.mm
+08-29 16:35:41.947 I/CheckoutSnapshotCapture(27488): 观察失效: reason=PAYMENT_APP_HANDOFF, current=null, retained=4bb07749, interstitial=false, retainForHandoff=true, nextHandoff=4bb07749, replacedHandoff=false, detailPkg=null, detailFingerprint=91ea7d5dd166
+08-29 16:35:43.110 I/CheckoutAccessibilityService(27488): 支付交接诊断: payment=com.tencent.mm, currentStable=false, handoffStable=true, previousShopping=null, coordRef=4bb07749-fe65-47dc-bd69-0c266c18fad5
+08-29 16:35:43.110 I/CheckoutAccessibilityService(27488): 支付交接上下文: stable=91ea7d5dd166, buffered=false, aiRef=false, fallback=4bb07749-fe65-47dc-bd69-0c266c18fad5, finalRef=4bb07749-fe65-47dc-bd69-0c266c18fad5
+08-29 16:35:44.560 I/CheckoutAccessibilityService(27488): 支付交接诊断: payment=com.tencent.mm, currentStable=false, handoffStable=true, previousShopping=null, coordRef=4bb07749-fe65-47dc-bd69-0c266c18fad5
+08-29 16:35:44.560 I/CheckoutAccessibilityService(27488): 支付交接上下文: stable=91ea7d5dd166, buffered=false, aiRef=false, fallback=4bb07749-fe65-47dc-bd69-0c266c18fad5, finalRef=4bb07749-fe65-47dc-bd69-0c266c18fad5
+08-29 16:35:48.573 I/CheckoutAccessibilityService(27488): 支付交接诊断: payment=com.tencent.mm, currentStable=false, handoffStable=true, previousShopping=null, coordRef=4bb07749-fe65-47dc-bd69-0c266c18fad5
+08-29 16:35:48.573 I/CheckoutAccessibilityService(27488): 支付交接上下文: stable=91ea7d5dd166, buffered=false, aiRef=false, fallback=4bb07749-fe65-47dc-bd69-0c266c18fad5, finalRef=4bb07749-fe65-47dc-bd69-0c266c18fad5
+08-29 16:35:48.585 I/CheckoutAccessibilityService(27488): 支付交接事件补发: stable=true, fingerprint=91ea7d5dd166, foreground=com.tencent.mm
+08-29 16:35:48.586 I/CheckoutSnapshotCapture(27488): 观察失效: reason=PAYMENT_APP_HANDOFF, current=null, retained=4bb07749, interstitial=false, retainForHandoff=true, nextHandoff=4bb07749, replacedHandoff=false, detailPkg=null, detailFingerprint=91ea7d5dd166
