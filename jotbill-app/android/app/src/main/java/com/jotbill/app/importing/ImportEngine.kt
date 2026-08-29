@@ -980,6 +980,8 @@ internal class ImportEngine(
         const val MAX_SAFE_MINOR_UNIT = 9_007_199_254_740_991L
         const val BATCH_SIZE = 200
         const val MAX_SAMPLE_ERRORS = 20
-        const val REFUND_PENDING_THRESHOLD_MINOR = 100_000_00L
+        // 无关联退款达到该金额即转待确认(分)。原值 100_000_00L=¥100,000 系多写一个
+        // 数量级,2026-08-29 经用户确认原意 ¥10,000。
+        const val REFUND_PENDING_THRESHOLD_MINOR = 10_000_00L
     }
 }
