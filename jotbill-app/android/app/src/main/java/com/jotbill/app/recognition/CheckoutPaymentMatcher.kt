@@ -1380,6 +1380,13 @@ internal class CheckoutPaymentMatcher(
         val currentState = CheckoutJourneyState.fromStorageValue(journeyValue)
         val targetState = CheckoutJourneyState.fromStorageValue(target)
         if (!currentState.canTransitionTo(targetState)) {
+            // 批 4 S2:非法迁移保持静默 no-op(不崩溃服务),但必须可观测——
+            // 真机上这类迁移意味着上游时序异常,淹没在静默里就无法定位。
+            android.util.Log.w(
+                "CheckoutPaymentMatcher",
+                "非法会话状态迁移被拒: session=${session.id.take(8)}, " +
+                    "from=${currentState.wireValue}, to=${targetState.wireValue}"
+            )
             return session
         }
         val updated = session.copy(

@@ -101,10 +101,12 @@
 
 ## 6. CheckoutJourneyState 三个既有缺口的处置
 
-1. `advanceStatus` 非法迁移静默 no-op(matcher :1343-1362)→ **保持 no-op 但增加
+1. `advanceStatus` 非法迁移静默 no-op(matcher :1371-1392)→ **保持 no-op 但增加
    Log.w**(有意的可观测性变化,语义不变——会话推进失败不应崩溃服务);
-2. `LedgerRepository` 绕过状态机直写 COMPLETED/DISMISSED(:424-433/:511-520)→
-   改走统一推进入口(语义等价:原 DAO 守卫"非终态才写"与 canTransitionTo 终态规则一致);
+2. `LedgerRepository` 绕过状态机直写 COMPLETED/DISMISSED(:426-436/:512-523)→
+   **S2 先常量化**:终态值改由 `CheckoutJourneyState` 枚举派生(消除双处字面量,
+   语义不变);真正的统一推进入口在 **S5** 落地——LedgerRepository 不能依赖
+   matcher(循环依赖),届时用共享纯迁移助手而非注入;
 3. `CheckoutJourney` 未实例化包装类(Contract:329-364)→ 删除(死代码)。
 
 ## 7. 有意行为变化清单(相对批 0 特征测试,总计 1 类)

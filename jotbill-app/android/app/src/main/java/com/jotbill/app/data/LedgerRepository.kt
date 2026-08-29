@@ -7,6 +7,7 @@ import com.jotbill.app.data.entity.BillEntity
 import com.jotbill.app.data.entity.CheckoutSessionEntity
 import com.jotbill.app.data.entity.PendingTransactionEntity
 import com.jotbill.app.data.entity.TransactionCandidateEntity
+import com.jotbill.app.recognition.CheckoutJourneyState
 import com.jotbill.app.rules.DuplicateGuard
 import com.jotbill.app.rules.FieldPriorityResolver
 import org.json.JSONObject
@@ -424,10 +425,14 @@ class LedgerRepository(private val database: JotBillDatabase) {
                 }
             }
             relations.session?.let { session ->
+                // 批 4 S2:终态值改由 CheckoutJourneyState 派生,消除双处字符串字面量。
+                // 写入守卫仍是 DAO 的 updateTerminalStateIfActive(非终态才写),语义不变;
+                // 真正的状态机统一推进入口在批 4 S5 落地(LedgerRepository 不能依赖
+                // matcher,存在循环依赖,故用枚举派生而非注入)。
                 if (database.checkoutSessionDao().updateTerminalStateIfActive(
                         id = session.id,
-                        status = "COMPLETED",
-                        journeyState = "COMPLETED",
+                        status = CheckoutJourneyState.COMPLETED.toPublicSessionStatus().wireValue,
+                        journeyState = CheckoutJourneyState.COMPLETED.wireValue,
                         updatedAt = now
                     ) != 1
                 ) {
@@ -513,8 +518,9 @@ class LedgerRepository(private val database: JotBillDatabase) {
                 if (session.status !in TERMINAL_SESSION_STATUSES &&
                     database.checkoutSessionDao().updateTerminalStateIfActive(
                         id = session.id,
-                        status = "CANCELLED",
-                        journeyState = "DISMISSED",
+                        // DISMISSED 的公开状态是 CANCELLED(用户视角"忽略即取消")
+                        status = CheckoutJourneyState.DISMISSED.toPublicSessionStatus().wireValue,
+                        journeyState = CheckoutJourneyState.DISMISSED.wireValue,
                         updatedAt = now
                     ) != 1
                 ) {
