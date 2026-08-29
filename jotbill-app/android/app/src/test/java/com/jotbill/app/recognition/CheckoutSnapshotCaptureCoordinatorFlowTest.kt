@@ -40,6 +40,7 @@ class CheckoutSnapshotCaptureCoordinatorFlowTest {
         const val PKG_2 = "com.taobao.taobao"
         val FP_A = "a".repeat(64)
         val FP_B = "b".repeat(64)
+        val FP_C = "c".repeat(64)
         const val TTL = 120_000L
         const val START_NOW = 1_000_000L
         /** 与协调器 HANDOFF_DRIFT_TAIL_WINDOW_MILLIS 一致(private,测试自带副本)。 */
@@ -48,6 +49,8 @@ class CheckoutSnapshotCaptureCoordinatorFlowTest {
         const val CHECKOUT_STALL_TIMEOUT_MILLIS = 10 * 60_000L
         /** 与 JourneyLifecyclePolicy DEFAULT_WAITING_PAYMENT_TIMEOUT_MILLIS 一致。 */
         const val WAITING_PAYMENT_TIMEOUT_MILLIS = 8 * 60_000L
+        /** 与协调器 DRIFT_RECAPTURE_MIN_INTERVAL_MILLIS 一致(private,测试自带副本)。 */
+        const val DRIFT_RECAPTURE_MIN_INTERVAL_MILLIS = 8_000L
     }
 
     private class MutableClock(var now: Long = START_NOW)
@@ -223,6 +226,38 @@ class CheckoutSnapshotCaptureCoordinatorFlowTest {
     }
 
     // ---------- 交接挂起与旅程返回 ----------
+
+    @Test
+    fun driftWithLiveCandidateAfterIntervalRecapturesFreshContent() {
+        driveStable(FP_A)
+        val sessionId = results[0].sessionId!!
+        buffer.store(
+            SnapshotCaptureRequest(
+                slotId = SLOT,
+                sessionId = sessionId,
+                shoppingPackage = PKG,
+                pageRole = CheckoutPageRole.CHECKOUT,
+                pageFingerprint = FP_A,
+                sourceReason = SnapshotSourceReason.CHECKOUT_STABLE,
+                imageBytes = ByteArray(8) { 3 },
+                isSensitivePage = false
+            )
+        )
+        // 立即漂移:限流窗内 + 存活候选 → 沿用旧图(防噪声风暴)
+        driveStable(FP_B)
+        assertEquals(SnapshotCaptureStatus.DUPLICATE, results[1].status)
+        // 【S5c】限流窗外再次漂移(用户换商品/改地址)→ 重截新内容:
+        // 新截图会替换旧候选,支付时 AI 读到的是新鲜内容而非过期商品
+        clock.now += DRIFT_RECAPTURE_MIN_INTERVAL_MILLIS + 1
+        driveStable(FP_C)
+        assertEquals(3, results.size)
+        assertEquals(
+            "限流窗外应发起重截而非沿用旧图",
+            SnapshotCaptureStatus.UNAVAILABLE,
+            results[2].status
+        )
+        assertEquals(sessionId, results[2].sessionId)
+    }
 
     @Test
     fun handoffThenReturnRestoresSessionWithoutDiscardOrRecapture() {

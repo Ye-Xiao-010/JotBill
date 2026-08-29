@@ -306,6 +306,8 @@ internal class CheckoutSnapshotCaptureCoordinator(
         private const val EVENT_DISPATCH_TIMEOUT_MILLIS = 5_000L
         /** 支付中间页挂起后，同包指纹漂移尾波稳定事件被视为旧订单的时间窗口。 */
         private const val HANDOFF_DRIFT_TAIL_WINDOW_MILLIS = 2_500L
+        /** 漂移补截的最小间隔:窗口内视为倒计时/轮播噪声沿用旧图,窗外视为真变更重截。 */
+        private const val DRIFT_RECAPTURE_MIN_INTERVAL_MILLIS = 8_000L
         /** 熔断后"跳过观察事件"日志的采样间隔，兼顾可观测与防刷屏。 */
         private const val CLOSED_EVENT_SKIP_LOG_INTERVAL_MILLIS = 5_000L
         private const val MAIN_HANDLER_UNAVAILABLE = "MAIN_HANDLER_UNAVAILABLE"
@@ -407,6 +409,9 @@ internal class CheckoutSnapshotCaptureCoordinator(
     private val journeyLifecyclePolicy = JourneyLifecyclePolicy(nowMillis = nowMillis)
     private var journeyStage = JourneyLifecyclePolicy.Stage.CHECKOUT_STABLE
     private var journeyStageAt = 0L
+
+    /** 最近一次自动截图尝试的观察时间:漂移补截限流的时间基准。 */
+    private var lastAutoCaptureAt = 0L
 
     private fun journeyShouldDie(): Boolean {
         val checkpoint = activeCheckout ?: handoffCheckout?.activeCheckout ?: return false
@@ -1485,6 +1490,9 @@ internal class CheckoutSnapshotCaptureCoordinator(
         activeCheckout = current
         journeyStage = JourneyLifecyclePolicy.Stage.CHECKOUT_STABLE
         journeyStageAt = nowMillis()
+        if (startsNewSession) {
+            lastAutoCaptureAt = 0L
+        }
 
         pendingToNotify?.let { pending ->
             publishPendingResult(
@@ -1523,13 +1531,19 @@ internal class CheckoutSnapshotCaptureCoordinator(
             return
         }
 
-        // 指纹漂移且槽内已有本会话的可用截图:页面语义未变(倒计时/控件刷新),
-        // 不必为每一次漂移重复截图(真机上曾在 8 秒内连截 6 张并互相覆盖)。
-        // 后续支付交接会按槽内真实指纹消费这张已有截图。
-        if (fingerprintDrifted && hasRetainableCandidate(previous!!, observation)) {
-            attemptedAutomaticCaptures += key
-            publish(duplicateResult(current, SnapshotSourceReason.CHECKOUT_STABLE))
-            return
+        // 批 4 S5c:指纹漂移 + 存活候选 = 内容可能真变了(换商品/改地址),
+        // 不再无条件沿用旧图——改为限流重截(8 秒内防倒计时/轮播噪声风暴,
+        // 超过则补截新内容,新候选自动替换旧候选)。区分不了噪声与真变更的
+        // 根治方案是金额锚点(观察摘要携带金额值),落地前的折中。
+        if (fingerprintDrifted) {
+            val hasLiveCandidate = hasRetainableCandidate(previous!!, observation)
+            val withinRecaptureInterval =
+                observation.observedAt - lastAutoCaptureAt < DRIFT_RECAPTURE_MIN_INTERVAL_MILLIS
+            if (hasLiveCandidate && withinRecaptureInterval) {
+                attemptedAutomaticCaptures += key
+                publish(duplicateResult(current, SnapshotSourceReason.CHECKOUT_STABLE))
+                return
+            }
         }
 
         if (buffer.hasCandidate(
@@ -1562,6 +1576,7 @@ internal class CheckoutSnapshotCaptureCoordinator(
         }
 
         attemptedAutomaticCaptures += key
+        lastAutoCaptureAt = observation.observedAt
         beginCapture(current, SnapshotSourceReason.CHECKOUT_STABLE, callback = null)
     }
 
