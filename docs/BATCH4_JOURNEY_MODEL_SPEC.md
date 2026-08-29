@@ -48,6 +48,20 @@
 **JourneyId 生成**:出生时由 `snapshotIdFactory` 同源工厂生成随机 ID;
 对外(API/日志)只暴露 ID 与锚点摘要,不暴露指纹原文之外的页面文本。
 
+## 2a. S5b 实施修订(2026-08-29,实现期发现)
+
+1. **金额锚点推迟**:CheckoutPageObservation 目前只携带 hasFinalAmountSignal 布尔量,
+   不携带金额值;金额提取正则误判风险高,不在此轮引入。因此 S5b 的锚点 =
+   (shoppingPackage, windowClass),**同包旅程归并**——同包不同金额的连续订单
+   暂时归并为同一旅程,第二笔证据按已确认取舍走孤儿待确认(不静默)。
+   并发世代键(#g<N>)随之推迟到金额锚点落地后激活,当前代码不引入世代逻辑。
+2. **惰性死亡判定**:D1/D2/D3 不用定时器,在每次事件到达(handleStable/
+   handleInvalidated 入口)时按 shouldDie 求值。无事件时旅程在内存中滞留无害
+   (快照 TTL 照常清理),下次事件触发即清算——对外行为与定时器等价,
+   实现复杂度大幅降低。
+3. **漂移尾窗泛化**:交接挂起期间的同包稳定事件 = 同锚点 + WAITING_PAYMENT 阶段
+   → 维持忽略(等待支付),原 2.5 秒尾窗逻辑被阶段语义吸收。
+
 ## 3. 生命周期状态机(扩展既有 CheckoutJourneyState)
 
 现状:`CheckoutJourneyState` 16 态 + `canTransitionTo` 已上线
