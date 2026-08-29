@@ -1,0 +1,15 @@
+08-29 16:32:09.605 I/PendingReminder(27908): 待确认提醒已初始化: channel=pending_reminder
+08-29 16:32:36.930 I/PendingReminder(27488): 待确认提醒已初始化: channel=pending_reminder
+08-29 16:34:50.613 I/CheckoutSnapshotCapture(27488): 截图状态: STORED, 来源=CHECKOUT_STABLE, 原因=STORED
+08-29 16:34:56.309 I/CheckoutSnapshotCapture(27488): 截图状态: CANCELLED, 来源=MANUAL_CAPTURE, 原因=NON_CHECKOUT_PAGE
+08-29 16:34:58.853 I/CheckoutSnapshotCapture(27488): 截图状态: STORED, 来源=CHECKOUT_STABLE, 原因=STORED
+08-29 16:35:05.436 I/CheckoutAccessibilityService(27488): AI 结果匹配落库结果: Accepted(sessionId=4ecd8dd5, status=WAITING_ENRICHMENT, matched=false, candidateId=candidat, evidenceId=null)
+08-29 16:35:06.572 I/CheckoutAccessibilityService(27488): 支付结果页解析到证据: 金额=3062分, 状态=SUCCESS, textLength=20
+08-29 16:35:06.587 I/CheckoutAccessibilityService(27488): 支付结果页证据落库结果（交接上下文）: Accepted(sessionId=4ecd8dd5, status=COMPLETED, matched=true, candidateId=candidat, evidenceId=payment-01b1, billId=bill-8bfba29c54e3cd1e230c84779866edea4159f651b3a9523352cb9dd08d046b59（已自动入账）)
+08-29 16:35:24.472 I/CheckoutSnapshotCapture(27488): 截图状态: STORED, 来源=CHECKOUT_STABLE, 原因=STORED
+08-29 16:35:29.231 I/CheckoutAccessibilityService(27488): AI 结果匹配落库结果: Accepted(sessionId=4bb07749, status=WAITING_ENRICHMENT, matched=false, candidateId=candidat, evidenceId=null)
+08-29 16:35:34.549 I/CheckoutSnapshotCapture(27488): 结算页指纹漂移沿用原旅程: slot=shopping-package:com.xunmeng.pinduoduo, session=4bb07749
+08-29 16:35:34.605 I/CheckoutSnapshotCapture(27488): 截图状态: STORED, 来源=CHECKOUT_STABLE, 原因=STORED
+08-29 16:35:39.998 I/CheckoutAccessibilityService(27488): AI 结果匹配落库结果: Accepted(sessionId=4bb07749, status=WAITING_ENRICHMENT, matched=false, candidateId=candidat, evidenceId=null)
+08-29 16:35:40.964 I/CheckoutAccessibilityService(27488): 支付结果页解析到证据: 金额=3580分, 状态=SUCCESS, textLength=21
+08-29 16:35:40.977 I/CheckoutAccessibilityService(27488): 支付结果页证据落库结果（交接上下文）: Accepted(sessionId=4bb07749, status=COMPLETED, matched=true, candidateId=candidat, evidenceId=payment-3e57, billId=bill-492d3d472ba36d5fcd8bfc09c8df80542713f63fc68299141d825b3d6709f62a（已自动入账）)
