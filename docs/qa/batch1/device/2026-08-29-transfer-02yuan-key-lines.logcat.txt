@@ -1,0 +1,34 @@
+08-29 14:08:58.648 I/PendingReminder(21742): 待确认提醒已初始化: channel=pending_reminder
+08-29 14:10:40.364 I/CheckoutAccessibilityService(21742): 支付结果页解析到证据: 金额=20分, 状态=SUCCESS, textLength=22
+08-29 14:10:40.375 I/CheckoutPaymentMatcher(21742): 孤立支付证据已落待确认: pending=pending-orphan-4, amount=20, merchant=支付成功, account=default-account-wechat, reason=NO_ACTIVE_SESSION, inserted=true
+08-29 14:10:40.375 I/PendingChangeHub(21742): pending变更事件: id=pending-orphan-4, type=expense, amount=20, source=accessibility, reason=NO_ACTIVE_SESSION, isNew=true
+08-29 14:10:40.380 I/PendingReminder(21742): 待确认提醒已发送: id=pending-orphan-4, type=expense, amount=20, source=accessibility
+08-29 14:10:40.381 I/CheckoutAccessibilityService(21742): 支付结果页无关联活跃会话，已转纯通知待确认
+08-29 14:10:40.474 D/CheckoutAccessibilityService(21742): 支付结果页同一事件已处理，跳过重复解析: 464400ed0e1f
+08-29 14:10:40.511 D/CheckoutAccessibilityService(21742): 支付结果页同一事件已处理，跳过重复解析: 464400ed0e1f
+08-29 14:10:40.604 D/CheckoutAccessibilityService(21742): 支付结果页同一事件已处理，跳过重复解析: 464400ed0e1f
+08-29 14:10:40.624 D/CheckoutAccessibilityService(21742): 支付结果页同一事件已处理，跳过重复解析: 464400ed0e1f
+08-29 14:10:40.810 D/CheckoutAccessibilityService(21742): 支付结果页同一事件已处理，跳过重复解析: 464400ed0e1f
+08-29 14:10:40.909 D/CheckoutAccessibilityService(21742): 支付结果页同一事件已处理，跳过重复解析: 464400ed0e1f
+08-29 14:10:41.019 D/CheckoutAccessibilityService(21742): 支付结果页同一事件已处理，跳过重复解析: 464400ed0e1f
+08-29 14:10:41.111 D/CheckoutAccessibilityService(21742): 支付结果页同一事件已处理，跳过重复解析: 464400ed0e1f
+08-29 14:10:41.218 D/CheckoutAccessibilityService(21742): 支付结果页同一事件已处理，跳过重复解析: 464400ed0e1f
+08-29 14:10:41.313 D/CheckoutAccessibilityService(21742): 支付结果页同一事件已处理，跳过重复解析: 464400ed0e1f
+08-29 14:10:41.410 D/CheckoutAccessibilityService(21742): 支付结果页同一事件已处理，跳过重复解析: 464400ed0e1f
+08-29 14:10:41.765 D/CheckoutAccessibilityService(21742): 支付结果页同一事件已处理，跳过重复解析: 464400ed0e1f
+08-29 14:10:41.972 D/CheckoutAccessibilityService(21742): 支付结果页同一事件已处理，跳过重复解析: 464400ed0e1f
+08-29 14:10:43.743 D/CheckoutAccessibilityService(21742): 支付结果页同一事件已处理，跳过重复解析: 464400ed0e1f
+08-29 14:10:47.764 D/CheckoutAccessibilityService(21742): 支付结果页同一事件已处理，跳过重复解析: 464400ed0e1f
+08-29 14:10:53.008 D/CheckoutAccessibilityService(21742): 支付结果页同一事件已处理，跳过重复解析: 464400ed0e1f
+08-29 14:10:53.024 D/CheckoutAccessibilityService(21742): 支付结果页同一事件已处理，跳过重复解析: 464400ed0e1f
+08-29 14:10:53.034 D/CheckoutAccessibilityService(21742): 支付结果页同一事件已处理，跳过重复解析: 464400ed0e1f
+08-29 14:10:53.048 D/CheckoutAccessibilityService(21742): 支付结果页同一事件已处理，跳过重复解析: 464400ed0e1f
+08-29 14:10:53.057 D/CheckoutAccessibilityService(21742): 支付结果页同一事件已处理，跳过重复解析: 464400ed0e1f
+08-29 14:10:53.063 D/CheckoutAccessibilityService(21742): 支付结果页同一事件已处理，跳过重复解析: 464400ed0e1f
+08-29 14:10:53.117 D/CheckoutAccessibilityService(21742): 支付结果页同一事件已处理，跳过重复解析: 464400ed0e1f
+08-29 14:10:53.128 D/CheckoutAccessibilityService(21742): 支付结果页同一事件已处理，跳过重复解析: 464400ed0e1f
+08-29 14:10:53.154 D/CheckoutAccessibilityService(21742): 支付结果页同一事件已处理，跳过重复解析: 464400ed0e1f
+08-29 14:10:53.166 D/CheckoutAccessibilityService(21742): 支付结果页同一事件已处理，跳过重复解析: 464400ed0e1f
+08-29 14:10:53.206 D/CheckoutAccessibilityService(21742): 支付结果页同一事件已处理，跳过重复解析: 464400ed0e1f
+08-29 14:10:53.289 D/CheckoutAccessibilityService(21742): 支付结果页同一事件已处理，跳过重复解析: 464400ed0e1f
+08-29 14:10:53.589 I/CheckoutAccessibilityService(21742): 支付结果页截图兜底已禁止: 敏感页面锁存窗口内 pkg=com.tencent.mm, elapsed=14756ms, 期间已抑制12次
