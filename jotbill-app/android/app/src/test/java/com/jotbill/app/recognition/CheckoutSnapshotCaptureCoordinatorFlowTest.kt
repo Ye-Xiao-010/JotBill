@@ -259,6 +259,39 @@ class CheckoutSnapshotCaptureCoordinatorFlowTest {
     }
 
     @Test
+    fun journeyRestoreAfterConsumptionClearsTombstoneAndAllowsRecapture() {
+        driveStable(FP_A)
+        val sessionId = results[0].sessionId!!
+        buffer.store(
+            SnapshotCaptureRequest(
+                slotId = SLOT,
+                sessionId = sessionId,
+                shoppingPackage = PKG,
+                pageRole = CheckoutPageRole.CHECKOUT,
+                pageFingerprint = FP_A,
+                sourceReason = SnapshotSourceReason.CHECKOUT_STABLE,
+                imageBytes = ByteArray(8) { 3 },
+                isSensitivePage = false
+            )
+        )
+        // 第一次交接消费快照(AI 派发语义),会话带上消费墓碑
+        assertTrue(
+            buffer.consumeForAi(SLOT, PurchaseIntent.PAYMENT_APP_HANDOFF, FP_A)
+                is CheckoutAiTriggerResult.Ready
+        )
+        driveHandoffInvalidation(FP_A)
+        // 支付失败返回结算页并改动内容:旅程恢复并对新指纹发起补截
+        // (0.0.76 真机 16:23:14:墓碑未清导致 JOURNEY_ALREADY_TRIGGERED)
+        clock.now += HANDOFF_DRIFT_TAIL_WINDOW_MILLIS + 1
+        driveStable(FP_B)
+        // 影子环境截图必然失败(能力不可用),流程层验证到"协调器发起了
+        // 同会话新指纹补截";墓碑清解除的成功入库由 buffer 级单测覆盖
+        assertEquals(2, results.size)
+        assertEquals("同旅程恢复,会话延续", sessionId, results[1].sessionId)
+        assertEquals(FP_B, results[1].pageFingerprint)
+    }
+
+    @Test
     fun handoffThenCrossPackageCheckoutDiscardsRetainedSlot() {
         driveStable(FP_A)
         driveHandoffInvalidation(FP_A)

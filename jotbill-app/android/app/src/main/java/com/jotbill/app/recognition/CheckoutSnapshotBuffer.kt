@@ -564,6 +564,11 @@ logSink.w(
         val state = slots[slotId] ?: return
         if (state.sessionId == sessionId) {
             state.handoffPageFingerprint = null
+            // 旅程恢复 = 新一轮截图/消费周期:一并解除上一轮消费墓碑。
+            // 不解除的话,恢复后的补截会被 JOURNEY_ALREADY_TRIGGERED 拒绝,
+            // 支付失败改单重试永远拿不到新截图(0.0.76 真机 16:23:14 复现)。
+            // 幂等防双派发仍由请求键(含指纹)与每会话预算兜底。
+            state.consumedRequestKey = null
         }
     }
 

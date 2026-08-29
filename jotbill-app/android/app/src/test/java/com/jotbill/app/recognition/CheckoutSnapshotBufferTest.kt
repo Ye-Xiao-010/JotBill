@@ -403,6 +403,19 @@ class CheckoutSnapshotBufferTest {
     }
 
     @Test
+    fun restoreBySessionClearsConsumedTombstoneAllowingFreshStore() {
+        val f = Fixture()
+        f.buffer.store(captureRequest())
+        val consumed = f.buffer.consumeForAi(SLOT, PurchaseIntent.PAYMENT_APP_HANDOFF, FP_A)
+        assertTrue(consumed is CheckoutAiTriggerResult.Ready)
+        // 旅程恢复:同会话清除栅栏与消费墓碑(0.0.76 真机:不清墓碑则补截被拒)
+        f.buffer.restoreFromPaymentHandoffBySession(SLOT, SESSION)
+        assertFalse(f.buffer.hasPaymentHandoffFence(SLOT, SESSION))
+        val restored = f.buffer.store(captureRequest(fingerprint = FP_B))
+        assertTrue("恢复后同会话补截应被允许", restored is SnapshotStoreResult.Stored)
+    }
+
+    @Test
     fun restoreFromPaymentHandoffRequiresExactSessionAndFingerprint() {
         val f = Fixture()
         f.buffer.store(captureRequest(fingerprint = FP_A))
