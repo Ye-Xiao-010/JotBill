@@ -61,7 +61,29 @@
 **症状:同一笔支付出现两条待确认**
 比对两条的 id 前缀:不同 `stableId` 来源(如 pending-orphan 与 pending-ambiguous)说明出现并发会话歧义,记录 `sessions=N` 日志供分析。
 
-## 四、调试命令
+## 四、抓取协议(2026-08-29 定稿:按需抓取,不做持续抓取)
+
+持续抓取会产生巨量日志且事后阅读不现实。定稿协议:
+
+1. **定点测试**:你直接开始测,测完说一声(报个大概时间更好)→ 我执行
+   `adb logcat -d -v time -s <tags>` 拉取短窗口日志并当场分析。
+   测试前可先 `adb logcat -c -s <tags>` 清掉旧记录,窗口更干净。
+2. **日常异常**:发现该记没记/记错/通知没弹等异常,尽快(数小时内)报金额和
+   大致时间 → 我按时间点拉取 `logcat -d -t "MM-DD HH:MM:SS.000" -s <tags>`
+   (设备环形缓冲可保留数小时内的记录)。
+3. **不使用持续抓取/设备侧文件抓取**:日志量与阅读成本不匹配(教训:2431 行
+   窗口的细读需要模板去重+逐行通读,只有短窗口才负担得起)。
+
+标准 tag 集(含 buffer 侧,勿再遗漏):
+
+```bash
+adb logcat -d -v time -s PendingReminder:* PendingChangeHub:* \
+  PaymentNotificationService:* CheckoutPaymentMatcher:* \
+  CheckoutAccessibilityService:* CheckoutSnapshotCapture:* \
+  CheckoutSnapshotBuffer:* DataModule:*
+```
+
+## 五、调试命令
 
 ```bash
 # 提醒链路全量
