@@ -317,12 +317,24 @@ class CheckoutAccessibilityService : AccessibilityService() {
     )
     private val recentPaymentResultEventKeys = mutableMapOf<String, Long>()
     private val screenshotCallbackExecutor = Executor { runnable -> mainHandler.post(runnable) }
-    @Volatile
-    private var currentStableCheckout: StableCheckoutPage? = null
-    @Volatile
-    private var handoffStableCheckout: StableCheckoutPage? = null
-    @Volatile
-    private var handoffForegroundPackage: String? = null
+    // 批 4 S4:三个易失状态字段迁移至 JourneyStateHolder(唯一持有者)。
+    // 委托访问器保持 62 个使用点零改动;跨线程可见性由 holder 的 @Volatile 保证,
+    // 语义与原字段逐一致。
+    private var currentStableCheckout: StableCheckoutPage?
+        get() = JourneyStateHolder.activeStableCheckout
+        set(value) {
+            JourneyStateHolder.activeStableCheckout = value
+        }
+    private var handoffStableCheckout: StableCheckoutPage?
+        get() = JourneyStateHolder.handoffStableCheckout
+        set(value) {
+            JourneyStateHolder.handoffStableCheckout = value
+        }
+    private var handoffForegroundPackage: String?
+        get() = JourneyStateHolder.handoffForegroundPackage
+        set(value) {
+            JourneyStateHolder.handoffForegroundPackage = value
+        }
     /** 支付交接补发的节流状态：同一支付包短时间内只补发一次 PAYMENT_APP_HANDOFF。 */
     @Volatile
     private var lastPaymentHandoffRedispatchFor: String? = null
