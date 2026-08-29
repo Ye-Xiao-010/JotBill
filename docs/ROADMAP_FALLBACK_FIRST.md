@@ -158,6 +158,15 @@
 
 ## 十、里程碑总览
 
+**执行顺序(2026-08-29 按用户目标「自动记账功能完全可用」调整)**:
+1. 存量修复:退款阈值 ¥10,000(已完成);2. **批 1**(黄金流程脚本并入其验收,成文
+`docs/qa/golden-path-regression.md`)→ 3. **批 0 精简版**(buffer 引擎抽取 + 特征测试 +
+协调器 buffer 接口 + matcher Robolectric,只为批 4 服务)→ 4. **批 4** journey 重构
+(自动截图稳定性的根治)→ 5. 批 2 / 批 3(方案先行)穿插 → 6. 批 5 扩面。
+「完全可用」验收定义:结算页自动截图在连续真机日常使用中无快照丢失;付款码被扫 /
+扫商户码 / 支付结果页三种场景的钱 100% 出现在已入账或待确认;pending 即时提醒、
+一键确认;敏感页零截图。
+
 | 批次 | 内容 | 大小 | 出包验收线 |
 |---|---|---|---|
 | 0 | 安全网(buffer/门禁/matcher 测试 + 黄金脚本) | 4-6 天 | 特征测试全绿,脚本成文 |
@@ -190,7 +199,8 @@
 4. **#7 基本已存在**:一键确认(空 input)与类型选择芯片(expense/income/transfer/
    repayment/refund/fee,预填 pending.type)已在 ReviewScreen/PendingEditPanel 实现,
    孤儿 pending 固定 type="expense"。#7 缩水为一个待拍板项:无会话通知孤儿是否需要
-   更聪明的类型默认(按 transfer/refund 信号分流)。
+   更聪明的类型默认(按 transfer/refund 信号分流)。已拍板(2026-08-29):不做信号分流,
+   保持 type="expense" 默认,用户在面板自行修改。
 5. **pending 创建推送是净新增**:现有 5 族创建点(matcher 孤儿/matcher 冲突路径/
    RefundLinker/TransferClassifier/FeeExtractor/ImportEngine)均无 ReactApplicationContext,
    且 JS 侧目前**零事件监听**、待确认中心仅手动+焦点刷新、无角标。实现:单例
@@ -212,7 +222,7 @@
    审计动作(写入侧 + 撤销 when 分支同步加)。
 10. **顺带发现疑似存量 bug**:`ImportEngine.REFUND_PENDING_THRESHOLD_MINOR =
     100_000_00L`(ImportEngine.kt:983)= **¥100,000**;若原意 ¥10,000 应为
-    10_000_00L。待确认意图后单独修复,不混入批次。
+    10_000_00L。已确认原意 ¥10,000(2026-08-29 用户拍板),已修复为 10_000_00L。
 
 ### 批 3(红包/转账)——骨架比预想更完整
 11. TransferClassifier/RefundLinker 已接入通知分发管线(phase5),outcome 封顶、
