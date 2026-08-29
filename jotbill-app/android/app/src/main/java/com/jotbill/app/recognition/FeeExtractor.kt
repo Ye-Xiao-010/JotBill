@@ -2,6 +2,8 @@ package com.jotbill.app.recognition
 
 import androidx.room.withTransaction
 import com.jotbill.app.data.JotBillDatabase
+import com.jotbill.app.pending.PendingChangeHub
+import com.jotbill.app.pending.PendingChangeInfo
 import com.jotbill.app.data.PENDING_CONFIRM_AUDIT_TYPE
 import com.jotbill.app.data.entity.AccountEntity
 import com.jotbill.app.data.entity.AuditEntryEntity
@@ -170,7 +172,20 @@ internal class FeeExtractor(
             createdAt = now,
             version = 1
         )
-        database.pendingTransactionDao().insertIfAbsent(pending)
+        val inserted = database.pendingTransactionDao().insertIfAbsent(pending)
+        if (inserted != -1L) {
+            PendingChangeHub.emit(
+                PendingChangeInfo(
+                    pendingId = pending.id,
+                    type = pending.type,
+                    amountMinor = pending.amountMinor,
+                    sourceType = pending.sourceType,
+                    conflictReason = pending.conflictReason,
+                    occurredAt = pending.occurredAt,
+                    isNew = true
+                )
+            )
+        }
         FeeOutcome.PendingCreated(pending.id, conflictReason, linkedBillId)
     }
 

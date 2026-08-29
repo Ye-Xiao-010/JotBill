@@ -8,6 +8,8 @@ import com.jotbill.app.data.entity.AuditEntryEntity
 import com.jotbill.app.data.entity.BillEntity
 import com.jotbill.app.data.entity.ImportBatchEntity
 import com.jotbill.app.data.entity.PendingTransactionEntity
+import com.jotbill.app.pending.PendingChangeHub
+import com.jotbill.app.pending.PendingChangeInfo
 import com.jotbill.app.rules.DuplicateGuard
 import com.jotbill.app.rules.FieldPriorityResolver
 import org.json.JSONArray
@@ -787,7 +789,20 @@ internal class ImportEngine(
             version = 1,
             status = PendingTransactionEntity.STATUS_PENDING
         )
-        database.pendingTransactionDao().insertIfAbsent(pending)
+        val insertedPending = database.pendingTransactionDao().insertIfAbsent(pending)
+        if (insertedPending != -1L) {
+            PendingChangeHub.emit(
+                PendingChangeInfo(
+                    pendingId = pending.id,
+                    type = pending.type,
+                    amountMinor = pending.amountMinor,
+                    sourceType = pending.sourceType,
+                    conflictReason = pending.conflictReason,
+                    occurredAt = pending.occurredAt,
+                    isNew = true
+                )
+            )
+        }
         database.auditEntryDao().insertIfAbsent(
             AuditEntryEntity(
                 id = "${pending.id}:import-pending:${batchId}",

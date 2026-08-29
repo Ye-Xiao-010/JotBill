@@ -2,6 +2,8 @@ package com.jotbill.app.recognition
 
 import androidx.room.withTransaction
 import com.jotbill.app.ai.AiVisionResult
+import com.jotbill.app.pending.PendingChangeHub
+import com.jotbill.app.pending.PendingChangeInfo
 import com.jotbill.app.data.CreateBillOutcome
 import com.jotbill.app.data.JotBillDatabase
 import com.jotbill.app.data.LedgerRepository
@@ -555,6 +557,19 @@ internal class CheckoutPaymentMatcher(
                         "amount=${signal.amountMinor}, sessions=${sessionIds.size}, " +
                         "ambiguous=$insertedAmbiguousPending, reason=$effectiveConflictReason"
                 )
+                if (insertedAmbiguousPending) {
+                    PendingChangeHub.emit(
+                        PendingChangeInfo(
+                            pendingId = pendingId,
+                            type = pending.type,
+                            amountMinor = pending.amountMinor,
+                            sourceType = pending.sourceType,
+                            conflictReason = effectiveConflictReason,
+                            occurredAt = pending.occurredAt,
+                            isNew = true
+                        )
+                    )
+                }
                 return@withTransaction
             }
             val inserted = dao.insertIfAbsent(pending)
@@ -565,6 +580,19 @@ internal class CheckoutPaymentMatcher(
                     "account=${resolvedAccountId ?: "null"}, reason=$effectiveConflictReason, " +
                     "inserted=${inserted != -1L}"
             )
+            if (inserted != -1L) {
+                PendingChangeHub.emit(
+                    PendingChangeInfo(
+                        pendingId = pendingId,
+                        type = pending.type,
+                        amountMinor = pending.amountMinor,
+                        sourceType = pending.sourceType,
+                        conflictReason = effectiveConflictReason,
+                        occurredAt = pending.occurredAt,
+                        isNew = true
+                    )
+                )
+            }
         }
     }
 
@@ -1735,7 +1763,10 @@ internal class CheckoutPaymentMatcher(
     private suspend fun upsertPendingForSession(pending: PendingTransactionEntity) {
         val dao = database.pendingTransactionDao()
         val existing = dao.getById(pending.id) ?: run {
-            dao.insertIfAbsent(pending)
+            val inserted = dao.insertIfAbsent(pending)
+            if (inserted != -1L) {
+                PendingChangeHub.emit(pending.toChangeInfo(isNew = true))
+            }
             return
         }
         if (existing.status != PendingTransactionEntity.STATUS_PENDING) {
@@ -1745,8 +1776,20 @@ internal class CheckoutPaymentMatcher(
         val normalizedPending = pending.copy(version = 1, createdAt = 0L)
         if (normalizedExisting != normalizedPending) {
             dao.update(pending.copy(version = existing.version + 1))
+            PendingChangeHub.emit(pending.toChangeInfo(isNew = false))
         }
     }
+
+    /** 待确认实体转 hub 事件负载(不携带商户/订单号等敏感字段)。 */
+    private fun PendingTransactionEntity.toChangeInfo(isNew: Boolean) = PendingChangeInfo(
+        pendingId = id,
+        type = type,
+        amountMinor = amountMinor,
+        sourceType = sourceType,
+        conflictReason = conflictReason,
+        occurredAt = occurredAt,
+        isNew = isNew
+    )
 
     /** 自动入账结果：推进后的会话与生成的账单 ID（幂等跳过时为 null 或已存在的 ID）。 */
     /** 成功重试后只删除 AI 失败占位，保留用户已经产生的其他待确认交易。 */

@@ -17,6 +17,9 @@
     <!-- 悬浮窗权限（用于在其他 App 上显示支付提醒） -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
 
+    <!-- 待确认提醒本地通知（API 33+ 需运行时授权,JS 侧启动时请求） -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
     <!-- 查询所有应用权限（用于应用选择器） -->
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
 
