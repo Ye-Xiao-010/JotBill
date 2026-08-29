@@ -146,6 +146,53 @@ internal fun resolveHandoffFenceFingerprint(
 }
 
 /**
+ * 缓冲区日志出口。
+ *
+ * 生产默认走 [AndroidSnapshotBufferLogSink];JVM 单测注入捕获实现,
+ * 使缓冲区决策逻辑可以在无 Android 框架的环境下被特征测试钉死。
+ * 消息文本与触发时机保持与原 Log 调用逐字一致。
+ */
+internal interface SnapshotBufferLogSink {
+    fun i(tag: String, message: String)
+
+    fun w(tag: String, message: String)
+}
+
+internal object AndroidSnapshotBufferLogSink : SnapshotBufferLogSink {
+    override fun i(tag: String, message: String) {
+        Log.i(tag, message)
+    }
+
+    override fun w(tag: String, message: String) {
+        Log.w(tag, message)
+    }
+}
+
+/**
+ * 快照过期回调调度。
+ *
+ * 生产默认主线程 Handler;JVM 单测注入可检视的假调度器,
+ * 验证"取消旧回调-按最近过期时间重排"的调度契约。
+ */
+internal interface SnapshotExpirationScheduler {
+    fun postDelayed(runnable: Runnable, delayMillis: Long)
+
+    fun cancel(runnable: Runnable)
+}
+
+internal class MainLooperSnapshotExpirationScheduler : SnapshotExpirationScheduler {
+    private val handler = Handler(Looper.getMainLooper())
+
+    override fun postDelayed(runnable: Runnable, delayMillis: Long) {
+        handler.postDelayed(runnable, delayMillis)
+    }
+
+    override fun cancel(runnable: Runnable) {
+        handler.removeCallbacks(runnable)
+    }
+}
+
+/**
  * 按槽位保存当前结算页快照的短生命周期缓冲区。
  *
  * 每个槽位最多保留一个手动保护候选和一个最新自动候选；30 秒后自动失效并清零图片。
@@ -153,12 +200,13 @@ internal fun resolveHandoffFenceFingerprint(
  * 手动候选并存，消费前必须明确指纹，否则进入歧义回退。只有 consumeForAi 收到购买
  * 意图时才会产生请求键并消费快照，普通观察、通知重放和 RN 重渲染无法触发上传。
  */
-class CheckoutSnapshotBuffer(
+class CheckoutSnapshotBuffer internal constructor(
     private val snapshotTtlMillis: Long = DEFAULT_SNAPSHOT_TTL_MILLIS,
     private val nowMillis: () -> Long = { System.currentTimeMillis() },
     private val snapshotIdFactory: () -> String = { UUID.randomUUID().toString() },
-    private val expirationHandler: Handler = Handler(Looper.getMainLooper())
-) {
+    private val expirationScheduler: SnapshotExpirationScheduler = MainLooperSnapshotExpirationScheduler(),
+    private val logSink: SnapshotBufferLogSink = AndroidSnapshotBufferLogSink
+) : CheckoutBufferGateway {
     private companion object {
         private const val TAG = "CheckoutSnapshotBuffer"
 
@@ -311,7 +359,7 @@ class CheckoutSnapshotBuffer(
             SnapshotSourceReason.CHECKOUT_STABLE -> state.automaticCandidate = snapshot
         }
         state.expiredPageFingerprints.remove(request.pageFingerprint)
-        Log.i(
+        logSink.i(
             TAG,
             "候选已写入: slot=${request.slotId}, session=${request.sessionId.take(8)}, " +
                 "fingerprint=${request.pageFingerprint.take(12)}, " +
@@ -341,7 +389,7 @@ class CheckoutSnapshotBuffer(
 
     /** 返回当前未过期候选的副本；多个候选时交给协调器或待确认界面选择。 */
     @Synchronized
-    fun currentCandidates(slotId: String): List<CheckoutSnapshot> {
+    override fun currentCandidates(slotId: String): List<CheckoutSnapshot> {
         if (closed) {
             return emptyList()
         }
@@ -438,7 +486,7 @@ class CheckoutSnapshotBuffer(
         val state = slots[slotId]
         if (state == null) {
             // 槽位已被清理：交接元数据仍在但图片候选已丢失，后续必然 NO_BUFFERED_SNAPSHOT。
-            Log.w(
+logSink.w(
                 TAG,
                 "交接栅栏设置失败(槽位不存在): slot=$slotId, " +
                     "session=${sessionId.take(8)}, fingerprint=${pageFingerprint.take(12)}"
@@ -460,7 +508,7 @@ class CheckoutSnapshotBuffer(
                 candidateFingerprints = candidates.map { it.pageFingerprint }
             )
             state.handoffPageFingerprint = effectiveFingerprint
-            Log.i(
+logSink.i(
                 TAG,
                 "交接栅栏已设置: slot=$slotId, session=${sessionId.take(8)}, " +
                     "fingerprint=${effectiveFingerprint.take(12)}, " +
@@ -472,7 +520,7 @@ class CheckoutSnapshotBuffer(
                     "candidates=${describeCandidates(state)}"
             )
         } else {
-            Log.w(
+logSink.w(
                 TAG,
                 "交接栅栏设置失败(会话不匹配): slot=$slotId, " +
                     "slotSession=${state.sessionId.take(8)}, " +
@@ -536,10 +584,10 @@ class CheckoutSnapshotBuffer(
      * 消费当前快照并生成唯一请求键。该方法只接受明确的购买意图，消费后立即清空内部图片。
      */
     @Synchronized
-    fun consumeForAi(
+    override fun consumeForAi(
         slotId: String,
         intent: PurchaseIntent,
-        pageFingerprint: String? = null
+        pageFingerprint: String?
     ): CheckoutAiTriggerResult {
         if (closed) {
             return CheckoutAiTriggerResult.Rejected(SnapshotConsumeRejection.NO_BUFFERED_SNAPSHOT)
@@ -550,7 +598,7 @@ class CheckoutSnapshotBuffer(
             ?: run {
                 // 槽位整体不存在：图片候选连同槽位一起被 discard/clear 移除。
                 // 与"槽内无候选"区分，用于判定是会话切换清理还是失效清理。
-                Log.w(
+    logSink.w(
                     TAG,
                     "快照消费失败(槽位不存在): slot=$slotId, intent=${intent.name}, " +
                         "requested=${pageFingerprint?.take(12) ?: "null"}, " +
@@ -573,7 +621,7 @@ class CheckoutSnapshotBuffer(
                 pageFingerprint != retainedFingerprint &&
                 candidates.isNotEmpty()
             ) {
-                android.util.Log.i(
+                logSink.i(
                     TAG,
                     "快照消费被交接栅栏拒绝: requested=${pageFingerprint?.take(12)}, " +
                         "barrier=${retainedFingerprint.take(12)}, " +
@@ -596,7 +644,7 @@ class CheckoutSnapshotBuffer(
             ) {
                 state.expiredPageFingerprints.clear()
                 slots.remove(slotId)
-                Log.i(
+    logSink.i(
                     TAG,
                     "快照消费失败(已过期): slot=$slotId, session=${state.sessionId.take(8)}, " +
                         "requested=${pageFingerprint?.take(12) ?: "null"}"
@@ -604,7 +652,7 @@ class CheckoutSnapshotBuffer(
                 return CheckoutAiTriggerResult.Rejected(SnapshotConsumeRejection.SNAPSHOT_EXPIRED)
             }
             // 槽位存在但候选为空：说明图片已被 discard/clear 释放，而非 TTL 过期。
-            Log.w(
+logSink.w(
                 TAG,
                 "快照消费失败(槽内无候选): slot=$slotId, session=${state.sessionId.take(8)}, " +
                     "requested=${pageFingerprint?.take(12) ?: "null"}, " +
@@ -619,7 +667,7 @@ class CheckoutSnapshotBuffer(
                     state.expiredPageFingerprints.remove(pageFingerprint)
                     return CheckoutAiTriggerResult.Rejected(SnapshotConsumeRejection.SNAPSHOT_EXPIRED)
                 } else {
-                    android.util.Log.i(
+                    logSink.i(
                         TAG,
                         "快照指纹不匹配: requested=${pageFingerprint.take(12)}, " +
                             "barrier=${state.handoffPageFingerprint?.take(12) ?: "null"}, " +
@@ -641,7 +689,7 @@ class CheckoutSnapshotBuffer(
         // 消费——此前误用 canBufferUserRetrySnapshot()（含 CHECKOUT），导致结算页
         // 快照对自动购买意图一律被拒，AI 永远无法派发。
         if (snapshot.pageRole != CheckoutPageRole.CHECKOUT && intent != PurchaseIntent.USER_RETRY) {
-            android.util.Log.i(
+            logSink.i(
                 TAG,
                 "快照页面角色不可消费: role=${snapshot.pageRole}, intent=${intent.wireValue}"
             )
@@ -682,7 +730,7 @@ class CheckoutSnapshotBuffer(
     fun discard(slotId: String, reason: String = "UNSPECIFIED") {
         val removed = slots.remove(slotId)
         if (removed != null) {
-            Log.i(
+logSink.i(
                 TAG,
                 "槽位丢弃: reason=$reason, slot=$slotId, " +
                     "session=${removed.sessionId.take(8)}, " +
@@ -702,7 +750,7 @@ class CheckoutSnapshotBuffer(
             if (lastAt == null || now - lastAt >= EMPTY_DISCARD_LOG_INTERVAL_MILLIS) {
                 lastEmptyDiscardLogAt[reason] = now
                 val suppressed = suppressedEmptyDiscardCount.remove(reason) ?: 0
-                Log.i(
+    logSink.i(
                     TAG,
                     "槽位丢弃(空槽位): reason=$reason, slot=$slotId" +
                         if (suppressed > 0) ", 期间已抑制${suppressed}次" else ""
@@ -723,10 +771,10 @@ class CheckoutSnapshotBuffer(
     @Synchronized
     fun clear(reason: String = "UNSPECIFIED") {
         if (slots.isEmpty()) {
-            Log.i(TAG, "缓冲清空(无槽位): reason=$reason")
+logSink.i(TAG, "缓冲清空(无槽位): reason=$reason")
         } else {
             slots.forEach { (slotId, state) ->
-                Log.i(
+    logSink.i(
                     TAG,
                     "缓冲清空: reason=$reason, slot=$slotId, " +
                         "session=${state.sessionId.take(8)}, " +
@@ -741,7 +789,7 @@ class CheckoutSnapshotBuffer(
         // 清空是一次明确的状态边界：重置采样，避免清空后的首次空槽位丢弃被误抑制。
         lastEmptyDiscardLogAt.clear()
         suppressedEmptyDiscardCount.clear()
-        expirationHandler.removeCallbacks(expirationRunnable)
+        expirationScheduler.cancel(expirationRunnable)
     }
 
     /** 服务销毁时停止主动过期回调并释放所有槽位图片。 */
@@ -751,7 +799,7 @@ class CheckoutSnapshotBuffer(
             return
         }
         closed = true
-        expirationHandler.removeCallbacks(expirationRunnable)
+        expirationScheduler.cancel(expirationRunnable)
         slots.values.forEach(::releaseCandidates)
         slots.clear()
     }
@@ -781,7 +829,7 @@ class CheckoutSnapshotBuffer(
     }
 
     private fun scheduleNextExpirationLocked(now: Long) {
-        expirationHandler.removeCallbacks(expirationRunnable)
+        expirationScheduler.cancel(expirationRunnable)
         if (closed) {
             return
         }
@@ -795,7 +843,7 @@ class CheckoutSnapshotBuffer(
             }
         }
         nextExpiration?.let { expiresAt ->
-            expirationHandler.postDelayed(
+            expirationScheduler.postDelayed(
                 expirationRunnable,
                 (expiresAt - now).coerceAtLeast(0L)
             )

@@ -21,6 +21,14 @@
 
 **目标:把"现在能用"变成"可验证的能用"。这是后面所有批次的安全带,也是批 4 的硬前置。**
 
+> **进度(2026-08-29,批 0 全部完成)**:0.1——buffer 接缝化(日志 sink + 过期调度器
+> 注入,默认 Android 行为不变)+ 26 例特征测试;0.2——`CheckoutBufferGateway` 最小接口
+> 依赖倒置 + routeLocked 门禁序列 17 例(门禁次序/一次性标记被拒不烧/预算耗尽/异常
+> 收敛/交接指纹校正/用户重试内部通道);0.3——matcher Robolectric 集成 4 例(孤儿
+> 幂等与 sourceType 归一化、会话窗口恢复、**AI 未验证证据永不自动落账**)。
+> 全量 193/193。Robolectric 需 `@Config(application=Application::class)` 规避
+> RN MainApplication 在 JVM 启动。批 4 重构的安全网就位。
+
 ### 0.1 CheckoutSnapshotBuffer 可测化 + 特征测试
 - 现状:846 行,栅栏/TTL/tombstone 是回归重灾区,零直接 JVM 测试。
 - 改动:把决策逻辑(slots 状态机)抽成纯 Kotlin 引擎,时间以 `now: Long` 参数传入;Android 侧保留 `@Synchronized` 包装与 main-looper Handler 过期调度,委托给引擎。**纯机械搬移,不改任何判定**。
