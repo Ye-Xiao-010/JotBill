@@ -51,7 +51,7 @@ function toReportBill(bill: Bill, categories: Map<string, Category>): ReportBill
 /**
  * 获取某月的每日收支数据（日收支视图用）
  */
-export function useDailyGridData(year: number, month: number) {
+export function useDailyGridData(year: number, month: number, enabled = true) {
   const startDate = `${year}-${String(month + 1).padStart(2, '0')}-01`;
   const lastDay = new Date(year, month + 1, 0).getDate();
   const endDate = `${year}-${String(month + 1).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
@@ -65,6 +65,8 @@ export function useDailyGridData(year: number, month: number) {
     },
     staleTime: CACHE_TIME.BILLS_LIST,
     gcTime: GC_TIME.DEFAULT,
+    // 未选中月份时不发起请求(此前默认请求 1 月的日明细,纯多余桥接调用)
+    enabled,
   });
 
   const dailyMap = useMemo(() => {

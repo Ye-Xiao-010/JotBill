@@ -19,6 +19,10 @@ interface ImportBatchDao {
     @Query("SELECT * FROM import_batches WHERE file_hash = :fileHash LIMIT 1")
     suspend fun findByFileHash(fileHash: String): ImportBatchEntity?
 
+    /** 重试释放：删除 FAILED/CANCELLED/UNDONE 批次行，释放 file_hash 唯一索引。 */
+    @Query("DELETE FROM import_batches WHERE id = :id")
+    suspend fun deleteById(id: String)
+
     @Query("SELECT * FROM import_batches WHERE id = :id")
     suspend fun getById(id: String): ImportBatchEntity?
 

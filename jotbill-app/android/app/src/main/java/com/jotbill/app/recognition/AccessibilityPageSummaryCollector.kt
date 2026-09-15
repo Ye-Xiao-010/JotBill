@@ -139,6 +139,21 @@ internal object AccessibilityPageSummaryCollector {
         "同意并支付",
         "去付款"
     )
+
+    /**
+     * 商品规格选择层的数量调节控件文案（成对出现才构成证据，Y3 2026-09-10）。
+     *
+     * 真机取证（2026-09-10 .tmp-ui1.xml）：拼多多商品规格弹层以普通 TextView
+     * 定时轮播价格/折扣/榜单文案，隐藏节点携带支付动作词（actionSignal=true
+     * 而 33 条可见文本无任何动作词），页面被误判 CHECKOUT 后每次轮播换字都
+     * 触发新会话自动截图。结算页数量为只读展示，增减控件成对出现只存在于
+     * 规格选择/购物车编辑场景，是商品页的强结构特征。
+     */
+    private val quantityMinusTerms = listOf("减少数量")
+    private val quantityPlusTerms = listOf("增加数量")
+
+    /** 规格选择引导词；带冒号形式比裸"已选"更特异，避免误伤统计类文案。 */
+    private val specGuideTerms = listOf("已选：", "已选:")
     private val cartTerms = listOf("购物车", "购物袋", "去结算", "全选")
     private val productTerms = listOf("商品详情", "加入购物车", "立即购买", "选择规格")
     private val browsingTerms = listOf("搜索", "推荐", "首页", "分类", "猜你喜欢")
@@ -229,6 +244,45 @@ internal object AccessibilityPageSummaryCollector {
             checkoutClassTerms.any { normalizedWindowClass.contains(it) }
 
     /**
+     * 清空 L3 跨帧易变追踪的全部观察状态。
+     *
+     * 服务中断/销毁时由无障碍服务调用：页面观察不再连续，陈旧的跨帧观察
+     * 会污染重新连接后的易变判定（如中断前观察到轮播、恢复后页面早已
+     * 离开）。观察窗口有 TTL（默认 15s），不清空也会自然过期，但显式
+     * 清空使边界语义更明确。
+     */
+    fun resetVolatileTracker() {
+        NodeSummaryAccumulator.volatileTracker.clear()
+    }
+
+    /**
+     * 判定页面是否为商品规格选择层（Y3，2026-09-10；同日回归修正）。
+     *
+     * 真机回归取证（14:08:02.248）：拼多多"确认订单"结算层与商品规格层共用
+     * 同一窗口（wd2.f0 弹层），结算层同样带"已选：/数量对"文案——原判据
+     * 把真结算页误杀成 PRODUCT_DETAIL，整条自动截图链路失效（零 ACCEPTED、
+     * 支付落孤立证据）。修正：规格层证据与**提交订单动作**并存时，结算层
+     * 证据优先——checkoutActionTerms 是结算层的结构性文案，规格选择完成
+     * 进入确认态时页面必然携带"提交订单/确认订单"按钮。
+     *
+     * @param lowerText 已小写归一化的页面文本。
+     * @param hasCheckoutActionSignal 页面是否含结算动作词（由调用方判定后传入）。
+     * @return true 表示商品规格选择层（无提交动作），角色判定时不得返回 CHECKOUT。
+     */
+    internal fun isProductSpecSelectionLayer(
+        lowerText: String,
+        hasCheckoutActionSignal: Boolean
+    ): Boolean {
+        if (hasCheckoutActionSignal) {
+            return false
+        }
+        val hasQuantityPair =
+            containsAny(lowerText, quantityMinusTerms) && containsAny(lowerText, quantityPlusTerms)
+        val hasSpecGuide = containsAny(lowerText, specGuideTerms)
+        return hasQuantityPair || hasSpecGuide
+    }
+
+    /**
      * 采集页面观察摘要。
      *
      * @param includeHiddenText 是否把 isVisibleToUser=false 但带文本的节点纳入
@@ -243,6 +297,10 @@ internal object AccessibilityPageSummaryCollector {
         includeHiddenText: Boolean = true
     ): CheckoutPageObservation {
         val accumulator = NodeSummaryAccumulator()
+        // L3 易变观察的作用域：包名+窗口类名。跨窗口/跨应用隔离，同一窗口
+        // 的轮播位置才能在时间轴上被连续观察；支付结果页扫描等独立调用点
+        // 天然以不同 scopeKey 隔离，互不污染。
+        accumulator.scopeKey = "${shoppingPackage.trim()}|${normalizeWindowClass(windowClass)}"
         collectNode(
             node = root,
             accumulator = accumulator,
@@ -250,7 +308,10 @@ internal object AccessibilityPageSummaryCollector {
             includeHiddenText = includeHiddenText
         )
 
-        val normalizedText = normalizeTokens(accumulator.tokens)
+        // 信号文本：角色/金额/动作/敏感判定的输入，不受易变剔除影响——
+        // 轮播位置上的"券后 ¥9.9"仍参与 hasFinalAmountSignal 与
+        // isProductSpecSelectionLayer 判定，语义门禁不因指纹稳定化而削弱。
+        val normalizedText = normalizeTokens(accumulator.signalTokens)
         val lowerText = normalizedText.lowercase(Locale.ROOT)
         val hasFinalAmountSignal = hasFinalAmountSignal(lowerText)
         val hasCheckoutActionSignal = containsAny(lowerText, checkoutActionTerms)
@@ -258,7 +319,7 @@ internal object AccessibilityPageSummaryCollector {
             Log.w(
                 "PageSummaryCollector",
                 "页面文本因容量上限被截断: pkg=$shoppingPackage, " +
-                    "nodes=${accumulator.visitedNodes}, tokens=${accumulator.tokens.size}, " +
+                    "nodes=${accumulator.visitedNodes}, tokens=${accumulator.signalTokens.size}, " +
                     "amountSignal=$hasFinalAmountSignal, actionSignal=$hasCheckoutActionSignal"
             )
         }
@@ -272,6 +333,10 @@ internal object AccessibilityPageSummaryCollector {
             isSensitivePage = isSensitivePage,
             hasCheckoutClassSemantic = checkoutClassSemantic
         )
+        // 指纹文本：只含稳定 token。轮播位置（观察窗口内出现 ≥2 个不同文本）
+        // 的 token 已在采集时剔除（见 collectNode 的 volatileTracker 分支），
+        // 换商品时非轮播 token（标题/规格/店铺/推荐位）大量同变，指纹仍必变。
+        val stableText = normalizeTokens(accumulator.fingerprintTokens)
         val normalizedTextHash = sha256(normalizedText)
         val pageFingerprint = sha256(
             listOf(
@@ -279,7 +344,7 @@ internal object AccessibilityPageSummaryCollector {
                 shoppingPackage.trim(),
                 normalizedWindowClass,
                 pageRole.storageValue,
-                normalizedTextHash
+                sha256(stableText)
             ).joinToString("|")
         )
 
@@ -337,11 +402,29 @@ internal object AccessibilityPageSummaryCollector {
         val nodeRotating = rotatingAncestor || isRotatingWidgetClass(className)
         if (visible && !nodeSensitive) {
             if (!nodeRotating) {
-                node.text?.toString()?.let(accumulator::addText)
-                node.contentDescription?.toString()?.let(accumulator::addText)
+                // 位置键：以节点语义标记（类名+资源id）标识"同一位置"。
+                // L3 易变检测按位置观察跨帧文本：窗口内出现 ≥2 个不同文本
+                // 即判定轮播，该位置文本只进信号通道、不进指纹。
+                val positionKey = buildString {
+                    append(className.substringAfterLast('.'))
+                    if (viewId.isNotBlank()) {
+                        append('@')
+                        append(viewId.substringAfterLast('/'))
+                    }
+                }
+                node.text?.toString()?.let {
+                    accumulator.addText(it, positionKey)
+                }
+                node.contentDescription?.toString()?.let {
+                    accumulator.addText(it, positionKey)
+                }
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    node.hintText?.toString()?.let(accumulator::addText)
-                    node.tooltipText?.toString()?.let(accumulator::addText)
+                    node.hintText?.toString()?.let {
+                        accumulator.addText(it, positionKey)
+                    }
+                    node.tooltipText?.toString()?.let {
+                        accumulator.addText(it, positionKey)
+                    }
                 }
             }
 
@@ -462,6 +545,21 @@ internal object AccessibilityPageSummaryCollector {
         if (containsAny(lowerText, paymentResultTerms)) {
             return CheckoutPageRole.PAYMENT_RESULT
         }
+        // Y3（2026-09-10）：商品规格选择层前置排除 CHECKOUT。真机实证规格弹层
+        // 的隐藏节点携带支付动作词（actionSignal=true 而可见文本无动作词），
+        // 加上价格轮播使指纹持续漂移，每次换字都触发新会话自动截图——截到的
+        // 全是商品页图。数量增减成对/规格引导词是商品层强结构证据，优先级
+        // 高于"金额+动作"双信号判定，但低于支付交接/结果页判定。
+        // 同日回归修正：拼多多结算确认层与规格层共用 wd2.f0 窗口且同样带
+        // "已选："文案——动作信号并存时不得排除（结算层证据优先），否则
+        // 真结算页被误杀、自动链路全断（14:08 回归取证）。
+        if (isProductSpecSelectionLayer(
+                lowerText = lowerText,
+                hasCheckoutActionSignal = hasCheckoutActionSignal
+            )
+        ) {
+            return CheckoutPageRole.PRODUCT_DETAIL
+        }
         if (!isSensitivePage && hasFinalAmountSignal &&
             (hasCheckoutActionSignal || hasCheckoutClassSemantic)
         ) {
@@ -499,7 +597,11 @@ internal object AccessibilityPageSummaryCollector {
     }
 
     private class NodeSummaryAccumulator {
-        val tokens = ArrayList<String>()
+        /** 信号通道：页面角色/金额/动作/敏感判定的文本输入（全部文本）。 */
+        val signalTokens = ArrayList<String>()
+
+        /** 指纹通道：只含稳定文本（易变位置剔除后）与语义标记。 */
+        val fingerprintTokens = ArrayList<String>()
         var visitedNodes: Int = 0
         var sensitive: Boolean = false
 
@@ -513,32 +615,46 @@ internal object AccessibilityPageSummaryCollector {
         var textDropped: Boolean = false
 
         /**
-         * 写入节点文本。
+         * 写入节点文本（信号通道必进；指纹通道经 L3 易变检测分流）。
          *
          * 文本承载页面语义（金额、动作按钮），优先级高于类名/资源 id 语义标记，
          * 因此使用独立的更大容量上限，不与语义标记争抢槽位。
          *
          * @param value 节点的 text/contentDescription/hintText/tooltipText 之一。
+         * @param positionKey 节点位置键（类名[@资源id]），供 L3 跨帧观察。
          */
-        fun addText(value: String) {
+        fun addText(value: String, positionKey: String = "") {
             if (sensitiveTerms.any { value.contains(it, ignoreCase = true) } ||
                 sensitiveAsciiPattern.containsMatchIn(value)
             ) {
                 sensitive = true
                 return
             }
-            if (value.isNotBlank()) {
-                if (tokens.size < MAX_TOTAL_TOKEN_COUNT) {
-                    tokens += sensitiveNumberPattern.replace(value, " number ")
-                        .take(MAX_TOKEN_LENGTH)
-                } else {
-                    textDropped = true
-                }
+            if (value.isBlank()) {
+                return
+            }
+            if (signalTokens.size >= MAX_TOTAL_TOKEN_COUNT) {
+                textDropped = true
+                return
+            }
+            val normalized = sensitiveNumberPattern.replace(value, " number ")
+                .take(MAX_TOKEN_LENGTH)
+            signalTokens += normalized
+
+            // L3 易变检测（护栏前置）：命中 finalAmountTerms 语义的 token
+            // 永不进入易变判定——结算页应付金额是静态文本不会轮播，轮播的
+            // 是商品页到手价/折扣；金额 token 留在指纹中保证换商品必触发
+            // 新订单边界。轮播容器子树（rotating）已在上游跳过，不会到这。
+            val hitsFinalAmount = finalAmountTerms.any { value.contains(it) }
+            val volatile = !hitsFinalAmount &&
+                volatileTracker.observeAndCheck(scopeKey, positionKey, normalized)
+            if (!volatile) {
+                fingerprintTokens += normalized
             }
         }
 
         /**
-         * 写入类名或资源 id 的语义标记。
+         * 写入类名或资源 id 的语义标记（仅指纹通道）。
          *
          * 语义标记只服务于指纹的结构感知，数量远多于文本且不参与角色判定，
          * 因此限制在较小的配额内，避免挤占文本槽位。
@@ -546,9 +662,17 @@ internal object AccessibilityPageSummaryCollector {
          * @param value 形如 `node:类名` 或 `view:资源id` 的语义标记。
          */
         fun addSemantic(value: String) {
-            if (tokens.size < MAX_SEMANTIC_TOKEN_BUDGET) {
-                tokens += value.take(MAX_TOKEN_LENGTH)
+            if (fingerprintTokens.size < MAX_SEMANTIC_TOKEN_BUDGET) {
+                fingerprintTokens += value.take(MAX_TOKEN_LENGTH)
             }
+        }
+
+        /** 本页观察的作用域键与易变追踪器，由 collect() 每次设置。 */
+        lateinit var scopeKey: String
+
+        companion object {
+            /** L3 跨帧易变追踪器：按 scope（包名+窗口类名）隔离观察窗口。 */
+            val volatileTracker = VolatileTokenTracker()
         }
     }
 }

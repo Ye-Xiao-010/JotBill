@@ -329,8 +329,7 @@ internal class CheckoutPurchaseIntentCoordinator(
     }
 
     private fun contextFor(intent: PurchaseIntent): SafeCheckoutContext? = when (intent) {
-        PurchaseIntent.SUBMIT_ACTION,
-        PurchaseIntent.PAYMENT_PAGE_VISIBLE -> activeContext
+        PurchaseIntent.SUBMIT_ACTION -> activeContext
 
         PurchaseIntent.PAYMENT_APP_HANDOFF -> handoffContext ?: activeContext
 

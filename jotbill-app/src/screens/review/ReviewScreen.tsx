@@ -90,6 +90,8 @@ export default function ReviewScreen() {
       const message =
         error instanceof Error ? error.message : '确认入账失败，请稍后重试';
       alert('确认失败', `${pending.pendingId}：${message}`);
+      // 版本冲突等情况下列表中的 version 已过期:重新拉取,避免用户在旧版本上反复提交
+      invalidateAll();
     },
   });
 
@@ -260,6 +262,13 @@ export default function ReviewScreen() {
                 colors={styles._colors}
               />
             ))}
+            {/* 分页截断提示:接口一次最多取 50 条,超出部分此前被静默丢弃 */}
+            {(pendingQuery.data?.total ?? 0) > pendingItems.length && (
+              <Text style={styles.truncatedHint}>
+                仅显示前 {pendingItems.length} 条，共 {pendingQuery.data?.total} 条待确认；
+                处理当前条目后其余会陆续显示。
+              </Text>
+            )}
           </View>
         )}
       </ScrollView>
@@ -1019,6 +1028,8 @@ const CONFLICT_LABELS: Record<string, string> = {
   DEDUP_CHECK_FAILED: '去重检查异常，请人工核对是否重复',
   FEE_AMOUNT_UNPARSED: '手续费金额解析失败，请补填金额',
   AI_UNVERIFIED_PAYMENT: '支付结果由截图识别推断，未获得支付凭证，请确认是否已实际支付',
+  USER_ASSERTED: '手动截图识别，请核对金额与商户后确认',
+  USER_ASSERTED_AMOUNT_MISSING: '手动截图未识别到金额，请补填后确认',
 };
 
 /** 冲突原因可能为逗号拼接的多个代码，逐个翻译后合并展示。 */
@@ -1106,6 +1117,12 @@ const createStyles = (colors: ThemeColors) => ({
       fontSize: 20,
       fontWeight: '800',
       color: colors.textPrimary,
+    },
+    truncatedHint: {
+      fontSize: 12,
+      color: colors.textSecondary,
+      textAlign: 'center',
+      paddingVertical: spacing.sm,
     },
     scrollView: { flex: 1 },
     content: { padding: spacing.lg, gap: spacing.md },

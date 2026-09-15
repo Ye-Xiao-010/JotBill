@@ -67,3 +67,21 @@ export function addPendingCreatedListener(
   const emitter = new NativeEventEmitter(getRawDataModule() as never);
   return emitter.addListener(PENDING_CREATED_EVENT, listener);
 }
+
+/** 与原生 DataModule 发射的 onPendingChanged 事件对应(确认/忽略后的终态)。 */
+export const PENDING_CHANGED_EVENT = 'onPendingChanged';
+
+/** 原生 onPendingChanged 事件负载(仅含 pendingId 与终态标记,无敏感字段)。 */
+export interface PendingChangedEvent {
+  pendingId: string;
+  ignored?: boolean;
+  deleted?: boolean;
+}
+
+/** 订阅待确认确认/忽略后的终态事件;返回的句柄用于卸载时 remove。 */
+export function addPendingChangedListener(
+  listener: (event: PendingChangedEvent) => void,
+): { remove: () => void } {
+  const emitter = new NativeEventEmitter(getRawDataModule() as never);
+  return emitter.addListener(PENDING_CHANGED_EVENT, listener);
+}

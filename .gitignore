@@ -48,9 +48,14 @@ coverage/
 .gradle-build-home-*/
 .gradle-project-cache-*/
 .workbuddy/
+.serena/
 /ui*.xml
 /tmp-*.xml
 /commit-msg.txt
 
 # 隐私兜底:任何真实数据库文件(adb run-as 拉取件等)不得入库
 *.db
+
+# 真实账单样本(根目录微信/支付宝导出文件,隐私不得入库;子目录合法样本不受影响)
+/*.xlsx
+/*.csv

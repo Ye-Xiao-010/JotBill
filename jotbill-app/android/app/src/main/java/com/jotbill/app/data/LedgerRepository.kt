@@ -7,6 +7,8 @@ import com.jotbill.app.data.entity.BillEntity
 import com.jotbill.app.data.entity.CheckoutSessionEntity
 import com.jotbill.app.data.entity.PendingTransactionEntity
 import com.jotbill.app.data.entity.TransactionCandidateEntity
+import com.jotbill.app.pending.PendingChangeHub
+import com.jotbill.app.pending.PendingChangeInfo
 import com.jotbill.app.rules.DuplicateGuard
 import com.jotbill.app.rules.FieldPriorityResolver
 import org.json.JSONObject
@@ -320,7 +322,7 @@ class LedgerRepository(private val database: JotBillDatabase) {
         bill: BillEntity
     ): ConfirmResult {
         val now = System.currentTimeMillis()
-        return database.withTransaction {
+        val result = database.withTransaction {
             val currentPending = database.pendingTransactionDao().getById(pending.id)
                 ?: return@withTransaction ConfirmResult(false, null, null)
             if (
@@ -330,23 +332,46 @@ class LedgerRepository(private val database: JotBillDatabase) {
                 return@withTransaction ConfirmResult(false, null, null)
             }
 
-            // 阶段五 T2：退款待确认确认入账时回填原交易关联（Bill.originalTransactionId），
-            // 保证多次部分退款的累计口径（sumRefundsByOriginalId）覆盖用户确认路径。
-            val isRefundLinkBackfill = currentPending.type == "refund" &&
-                currentPending.originalBillId != null
-            val effectiveBill = if (isRefundLinkBackfill && bill.originalTransactionId == null) {
+            // 阶段五 T2：退款/手续费待确认确认入账时回填原交易关联（Bill.originalTransactionId），
+            // 保证多次部分退款的累计口径（sumRefundsByOriginalId）覆盖用户确认路径；
+            // 手续费同理（FeeExtractor 写入的 originalBillId 指向主交易）。
+            // 用户从编辑面板手动选择原交易时，桥接层已透传 originalTransactionId 优先，
+            // 此处仅对"未手动选择"的回填自动关联的 originalBillId。
+            // 退款判定以用户提交的账单类型为准：支出型待确认被用户改为退款并手动
+            // 关联原交易时（按 pending 原类型判定会误抛 immutable），同样走原交易绑定路径。
+            val isRefund = bill.type == "refund"
+            val backfillsOriginal = (isRefund || bill.type == "fee") &&
+                currentPending.originalBillId != null && bill.originalTransactionId == null
+            val effectiveBill = if (backfillsOriginal) {
                 bill.copy(originalTransactionId = currentPending.originalBillId)
             } else {
                 bill
             }
 
-            // 来源绑定不可改写：非退款绑 sessionId，退款绑原交易账单 ID
-            if (isRefundLinkBackfill) {
-                if (effectiveBill.originalTransactionId != currentPending.originalBillId) {
-                    throw LedgerValidationException("Refund original binding is immutable")
-                }
-            } else if (effectiveBill.originalTransactionId != currentPending.sessionId) {
+            // 来源绑定不可改写：会话型待确认绑结算会话（幂等边界）；退款/手续费绑原交易
+            // （自动关联 originalBillId 或用户手动选择 originalTransactionId 均可，
+            // 用户手动选择优先级最高，见 DECISIONS 用户操作优先原则）。
+            val bindsOriginal = isRefund || bill.type == "fee"
+            if (!bindsOriginal && effectiveBill.originalTransactionId != currentPending.sessionId) {
                 throw LedgerValidationException("Pending transaction source binding is immutable")
+            }
+
+            // 累计退款不得超过原交易金额（与 RefundLinker 自动入账路径同口径）：
+            // 只在自动入账路径校验会漏掉确认路径——如两笔同原交易退款，首笔尚在
+            // 待确认时第二笔已自动入账（sum=0），再确认首笔即累计 2×原金额。
+            if (isRefund) {
+                val originalId = effectiveBill.originalTransactionId
+                if (originalId != null) {
+                    val original = database.billDao().getById(originalId)
+                    val refundedBefore = original
+                        ?.let { database.billDao().sumRefundsByOriginalId(it.id) }
+                        ?: 0L
+                    if (original != null &&
+                        refundedBefore + effectiveBill.amountMinor > original.amountMinor
+                    ) {
+                        throw LedgerValidationException("Refund exceeds original transaction amount")
+                    }
+                }
             }
             validateConfirmationBill(effectiveBill)
             val relations = loadPendingRelations(currentPending)
@@ -473,6 +498,21 @@ class LedgerRepository(private val database: JotBillDatabase) {
                 ConfirmResult(true, committed = null, mergedInto = settledBill)
             }
         }
+        // 事务提交后广播终态事件：提醒消费方消除该待确认的系统通知
+        // (pending 物理删除,用入参的 pending 携带通知所需的字段)
+        PendingChangeHub.emit(
+            PendingChangeInfo(
+                pendingId = pending.id,
+                type = pending.type,
+                amountMinor = pending.amountMinor,
+                sourceType = pending.sourceType,
+                conflictReason = null,
+                occurredAt = pending.occurredAt,
+                isNew = false,
+                removed = true
+            )
+        )
+        return result
     }
 
     /** 在同一事务内标记忽略、收口候选并关闭其会话。 */
@@ -481,7 +521,7 @@ class LedgerRepository(private val database: JotBillDatabase) {
         expectedVersion: Int
     ): Boolean {
         val now = System.currentTimeMillis()
-        return database.withTransaction {
+        val result = database.withTransaction {
             val currentPending = database.pendingTransactionDao().getById(pending.id)
                 ?: return@withTransaction false
             if (
@@ -523,6 +563,22 @@ class LedgerRepository(private val database: JotBillDatabase) {
             }
             true
         }
+        if (result) {
+            // 忽略同样是终态：让提醒消费方消除该待确认的系统通知
+            PendingChangeHub.emit(
+                PendingChangeInfo(
+                    pendingId = pending.id,
+                    type = pending.type,
+                    amountMinor = pending.amountMinor,
+                    sourceType = pending.sourceType,
+                    conflictReason = null,
+                    occurredAt = pending.occurredAt,
+                    isNew = false,
+                    removed = true
+                )
+            )
+        }
+        return result
     }
 
     suspend fun calibrateAccountBalance(
@@ -768,11 +824,10 @@ class LedgerRepository(private val database: JotBillDatabase) {
             if (requireActiveAccounts && !target.isActive) {
                 throw LedgerValidationException("Target account $targetAccountId is inactive")
             }
-            // 阶段五 T3：目标账户方向按账户类型决定——
-            // 资产账户入金加余额；负债账户正余额表示欠款，转入减欠款（还款/转到信用卡）。
-            val direction = if (target.kind == "liability") -1L else 1L
+            // 存储口径：负债账户"负数=欠款"（normalizeBalance 取负入库、getNetWorth 取 ABS）。
+            // 目标账户恒 +amount：资产入金加余额；负债转入即还款，余额向 0 靠近（欠款减少）。
             val targetDelta = checkedMultiply(
-                bill.amountMinor * direction,
+                bill.amountMinor,
                 multiplier,
                 "Target account balance delta is out of range"
             )

@@ -21,6 +21,7 @@ import com.jotbill.app.recognition.CheckoutInvalidationReason
 import com.jotbill.app.recognition.CheckoutObservationEvent
 import com.jotbill.app.recognition.CheckoutPageRole
 import com.jotbill.app.recognition.CheckoutPageDetector
+import com.jotbill.app.recognition.CheckoutPageObservation
 import com.jotbill.app.recognition.SnapshotCaptureRejection
 import com.jotbill.app.recognition.SnapshotCaptureResult
 import com.jotbill.app.recognition.SnapshotCaptureStatus
@@ -178,7 +179,12 @@ internal class CheckoutCaptureOverlayManager(context: Context) {
         private const val PREFERENCES_NAME = "checkout_capture_overlay"
         private const val KEY_ENABLED = "manual_capture_enabled"
         private const val KEY_MODE = "manual_capture_mode"
-        private const val DEFAULT_MODE = "checkout_only"
+        /**
+         * 默认 always_on：识别失败的页面恰恰是手动断言截图最有价值的页面，
+         * checkout_only 会让按钮在那些页面消失，断言通道无从触达。
+         * 用户显式设置过的模式不受影响（仅未写入偏好时使用该默认）。
+         */
+        private const val DEFAULT_MODE = "always_on"
 
         /**
          * 手动截图点击的最小间隔。
@@ -327,6 +333,38 @@ internal class CheckoutCaptureOverlayManager(context: Context) {
         }
     }
 
+    /**
+     * 门禁通过但尚未稳定确认的"候选观察"通知。
+     *
+     * 悬浮层此前只在稳定确认后才有反馈：候选期（门禁 ACCEPTED → 稳定窗口完成，
+     * 指纹持续漂移时可达数十秒）内零事件，按钮停留在旧状态——若上一状态为
+     * HIDDEN/已移除，用户看到的是"识别在工作但按钮不出现"（真机 22:17 连续
+     * ACCEPTED 27 秒后按钮才出现）。门禁通过即进入 CAPTURING，让用户在候选
+     * 期就看到"处理中"反馈；后续 Stable/Invalidated/截图结果会自然覆盖。
+     * 状态判据沿用 canShowOnCurrentPage（含敏感页/模式/权限约束）。
+     */
+    fun onCheckoutCandidate(observation: CheckoutPageObservation) {
+        runOnMain {
+            if (closed) {
+                return@runOnMain
+            }
+            if (!pageDetector.supportsShoppingPackage(observation.shoppingPackage)) {
+                return@runOnMain
+            }
+            currentPackage = observation.shoppingPackage
+            currentFingerprint = observation.pageFingerprint
+            currentSupportedShoppingApp = true
+            currentSensitivePage = observation.isSensitivePage
+            currentCheckout = true
+            currentUserRetryContext = true
+            updateState(
+                status = CheckoutOverlayStatus.CAPTURING,
+                visible = canShowOnCurrentPage(),
+                reasonCode = CheckoutOverlayStatus.CAPTURING.wireValue
+            )
+        }
+    }
+
     /** 支持购物应用的非结算页只用于 always_on 展示，点击仍受结算页门禁保护。 */
     fun onSupportedShoppingNonCheckout(
         shoppingPackage: String,
@@ -346,6 +384,23 @@ internal class CheckoutCaptureOverlayManager(context: Context) {
             // 非结算页只有在手动重试上下文真正就绪时才可截图（服务侧要求
             // activeCheckout 已建立）。此前无条件置 READY，导致按钮显示"截图"
             // 但点击必然被 NO_ACTIVE_CHECKOUT 拒绝，用户看到的是无响应。
+            //
+            // 与 handleInvalidated(NON_CHECKOUT_PAGE) 同一保持窗口语义：
+            // 拼多多结算页的提交按钮可见性信号会间歇丢失，门禁在
+            // ACCEPTED 与翻转之间抖动；自动截图 STORED 结果刚把按钮置为
+            // "已捕获"，数十毫秒后的门禁翻转若立即回退 READY，用户根本
+            // 看不到已捕获反馈（真机 22:04:58：STORED 后 40ms 被覆盖）。
+            if (shouldHoldCapturedState(
+                    isCapturedState =
+                        state.status == CheckoutOverlayStatus.CAPTURED_WAITING_PAYMENT,
+                    capturedAt = currentCapturedAt,
+                    now = systemClock(),
+                    holdMillis = CAPTURED_STATE_HOLD_MILLIS
+                )
+            ) {
+                refreshVisibility()
+                return@runOnMain
+            }
             updateState(
                 status = if (userRetryCaptureAvailable) {
                     CheckoutOverlayStatus.READY
@@ -750,6 +805,11 @@ internal class CheckoutCaptureOverlayManager(context: Context) {
                 // 此时仍允许用户点击，由截图协调器用 CAPTURE_IN_FLIGHT 拒绝并发请求，
                 // 不能在自动截图开始前就把按钮禁用到无法手动触发。
                 CheckoutOverlayStatus.CAPTURING,
+                // "已捕获待支付"也必须可点击：自动截图落盘后用户可能想手动重截一张
+                // 更好的（漂移后金额已变、首帧不完整等）。会话绑定路径会把手动截图
+                // 落入手动候选槽（USER_RETRY target），消费端手动优先，不会因已有
+                // 自动候选而冲突；反复点击仍受节流与 CAPTURE_IN_FLIGHT 约束。
+                CheckoutOverlayStatus.CAPTURED_WAITING_PAYMENT,
                 CheckoutOverlayStatus.EXPIRED_RETRY,
                 CheckoutOverlayStatus.UNAVAILABLE
             )

@@ -261,6 +261,8 @@ class CheckoutAiVisionClient(
         private const val ATTEMPT_TIMEOUT_MILLIS = 15_000L
         private const val TOTAL_TIMEOUT_MILLIS = 32_000L
         private const val RETRY_BACKOFF_MILLIS = 350L
+        /** completedRequestKeys 上限：只用于一次性去重，超限清空重建防缓慢泄漏 */
+        private const val MAX_COMPLETED_REQUEST_KEYS = 512
         private const val MAX_PLATFORM_LENGTH = 120
         private const val MAX_MERCHANT_LENGTH = 200
         private const val MAX_PRODUCT_LENGTH = 300
@@ -354,6 +356,17 @@ class CheckoutAiVisionClient(
     private val completedRequestKeys = ConcurrentHashMap.newKeySet<String>()
     private val cancelledRequestKeys = ConcurrentHashMap.newKeySet<String>()
 
+    /**
+     * completedRequestKeys 只用于一次性去重，永久保留会缓慢泄漏内存；
+     * 超过上限时清空重建——最坏情况是旧 key 被重复请求一次，可接受。
+     */
+    private fun rememberCompletedRequestKey(requestKey: String) {
+        if (completedRequestKeys.size >= MAX_COMPLETED_REQUEST_KEYS) {
+            completedRequestKeys.clear()
+        }
+        completedRequestKeys.add(requestKey)
+    }
+
     @Volatile
     private var closed = false
 
@@ -366,7 +379,9 @@ class CheckoutAiVisionClient(
         val metadata = metadataOf(ready)
         val requestKey = ready.requestKey.value
         val activeAdded = activeRequestKeys.add(requestKey)
-        val completedAdded = activeAdded && completedRequestKeys.add(requestKey)
+        // completedRequestKeys 不在此处直接 add：登记动作延后到 rememberCompletedRequestKey，
+        // 以便在集合超限时整体清空重建（见该函数注释）
+        val completedAdded = activeAdded && !completedRequestKeys.contains(requestKey)
         if (!activeAdded || !completedAdded) {
             if (activeAdded) activeRequestKeys.remove(requestKey)
             snapshot.release()
@@ -380,6 +395,7 @@ class CheckoutAiVisionClient(
                 startedAt = System.currentTimeMillis()
             )
         }
+        rememberCompletedRequestKey(requestKey)
 
         var costConfig: AiProviderConfigEntity? = null
         var shouldRecordCost = false
@@ -1374,9 +1390,8 @@ class CheckoutAiVisionClient(
      * 是提示词漂移、字段命名变化还是围栏/格式问题；不记录 API Key 等请求侧信息。
      */
     private fun logSchemaFailure(stage: String, content: String, reason: String) {
-        val sanitized = content
-            .replace(LONG_DIGITS_PATTERN, "[digits]")
-            .take(200)
+        // 只记录键名与失败原因：商户名/商品名等非数字文本即使脱敏数字后仍是用户
+        // 购物内容，不应进入 logcat（其它进程可读）
         val keys = runCatching {
             JSONObject(content).let { payload ->
                 buildSet {
@@ -1387,7 +1402,7 @@ class CheckoutAiVisionClient(
         }.getOrDefault("unavailable")
         android.util.Log.w(
             "CheckoutAiVisionClient",
-            "AI 输出未通过 schema 校验: stage=$stage, reason=$reason, keys=[$keys], content=$sanitized"
+            "AI 输出未通过 schema 校验: stage=$stage, reason=$reason, keys=[$keys]"
         )
     }
 

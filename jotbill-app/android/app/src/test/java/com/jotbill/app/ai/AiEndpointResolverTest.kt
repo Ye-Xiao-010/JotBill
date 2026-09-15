@@ -27,6 +27,38 @@ class AiEndpointResolverTest {
     }
 
     @Test
+    fun `根域习惯地址自动补 v1 版本段`() {
+        // 此前拼出 <host>/chat/completions 直接 404，而 testAiProvider 只 GET 根路径
+        // 会误报"可访问"，用户无从定位
+        val config = config(provider = "custom", baseUrl = "https://api.openai.com")
+
+        assertEquals(
+            "https://api.openai.com/v1/chat/completions",
+            AiEndpointResolver.chatCompletions(config)
+        )
+    }
+
+    @Test
+    fun `带路由前缀但无版本段的地址同样补 v1`() {
+        val config = config(provider = "custom", baseUrl = "https://proxy.example.com/openai")
+
+        assertEquals(
+            "https://proxy.example.com/openai/v1/chat/completions",
+            AiEndpointResolver.chatCompletions(config)
+        )
+    }
+
+    @Test
+    fun `非 v1 版本段不被二次追加`() {
+        val config = config(provider = "custom", baseUrl = "https://example.com/api/v2")
+
+        assertEquals(
+            "https://example.com/api/v2/chat/completions",
+            AiEndpointResolver.chatCompletions(config)
+        )
+    }
+
+    @Test
     fun `完整聊天地址保持不变`() {
         val config = config(
             provider = "custom",

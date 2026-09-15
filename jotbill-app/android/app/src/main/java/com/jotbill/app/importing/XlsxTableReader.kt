@@ -3,8 +3,11 @@ package com.jotbill.app.importing
 import org.xmlpull.v1.XmlPullParser
 import org.xmlpull.v1.XmlPullParserFactory
 import java.io.File
+import java.time.LocalDate
+import java.time.ZoneId
 import java.util.zip.ZipEntry
 import java.util.zip.ZipFile
+import kotlin.math.roundToLong
 
 /**
  * 阶段六 T4：XLSX 轻量读取器（docs/tdd/10_phase6_tasks.md 第 3.8 节）。
@@ -15,6 +18,9 @@ import java.util.zip.ZipFile
  * - 数值单元格、共享字符串、内联字符串均兼容；日期序列数由适配器换算。
  */
 internal object XlsxTableReader {
+
+    private const val MILLIS_PER_DAY = 24 * 60 * 60 * 1000L
+    private val EXCEL_SERIAL_PATTERN = Regex("""^[0-9]+(?:\.[0-9]+)?$""")
 
     fun readRows(
         file: File,
@@ -107,6 +113,35 @@ internal object XlsxTableReader {
             event = parser.next()
         }
         return value
+    }
+
+    /**
+     * Excel 1900 日期系统序列数 → epoch millis（非纯数字返回 null）。
+     *
+     * 闰年 bug 口径：Excel 误认为 1900 年是闰年（序列 60 是虚构的 1900-02-29）。
+     * 锚定 1899-12-30：序列 ≥ 61 时日期 = 1899-12-30 + 序列 天（虚构日已被该锚点
+     * 吸收，如序列 36526 = 2000-01-01）；序列 ≤ 59 需再 +1 天（1900-01-01 =
+     * 1899-12-31 + 1）；序列 60 无对应真实日期。不得再额外减 1，否则全天日期提前。
+     */
+    fun excelSerialToEpochMillis(text: String): Long? {
+        if (!text.matches(EXCEL_SERIAL_PATTERN)) return null
+        val serial = text.toDoubleOrNull() ?: return null
+        if (serial < 1) return null
+        val days = serial.toLong()
+        val adjustedDays = when {
+            days >= 61 -> days
+            days == 60L -> return null
+            else -> days + 1
+        }
+        val fraction = serial - days
+        val millisOfDay = (fraction * MILLIS_PER_DAY).roundToLong()
+        return runCatching {
+            LocalDate.of(1899, 12, 30)
+                .plusDays(adjustedDays)
+                .atStartOfDay(ZoneId.systemDefault())
+                .toInstant()
+                .toEpochMilli() + millisOfDay
+        }.getOrNull()
     }
 
     private fun readSharedStrings(zip: ZipFile): List<String> {

@@ -57,8 +57,17 @@ object AiEndpointResolver {
         if (configured.isEmpty() || configured == defaultRoot) {
             return defaultBase(config.provider)
         }
-        return "$base/chat/completions"
+        // 用户按"根域习惯"填地址（如 https://api.openai.com）时补 /v1 版本段，
+        // 否则拼出 <host>/chat/completions 直接 404；已带 v1/v2/v4 等版本段的不动。
+        val withVersion = if (hasVersionSegment(base)) base else "$base/v1"
+        return "$withVersion/chat/completions"
     }
+
+    /** 地址路径中是否已含版本段（v1/v2/v4 等）。 */
+    private fun hasVersionSegment(base: String): Boolean =
+        base.substringAfter("://", "").substringAfter('/', "")
+            .split('/')
+            .any { it.matches(Regex("v[0-9]+")) }
 
     private fun defaultRoot(provider: String): String = when (provider) {
         "qwen" -> "https://dashscope.aliyuncs.com"

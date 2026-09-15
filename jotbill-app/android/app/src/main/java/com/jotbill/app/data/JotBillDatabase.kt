@@ -41,7 +41,7 @@ import com.jotbill.app.data.entity.PendingTransactionEntity
 import com.jotbill.app.data.entity.RuleEntity
 import com.jotbill.app.data.entity.TransactionCandidateEntity
 
-const val JOT_BILL_DATABASE_VERSION = 11
+const val JOT_BILL_DATABASE_VERSION = 12
 
 @Database(
     entities = [
@@ -422,6 +422,20 @@ object DatabaseMigrations {
         }
     }
 
+    /**
+     * 批 6 子分类:categories 增加可空 parent_id(普通 TEXT 列,无外键)。
+     * 既有数据 parent_id 为 null,即全部保持顶级分类,零迁移风险。
+     * 完整性(父存在/同 type/深度 2/删父先删子)由应用层校验,
+     * 见 CategoryEntity.parentId 文档。
+     */
+    private val migration11To12 = object : Migration(11, 12) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL("ALTER TABLE categories ADD COLUMN parent_id TEXT")
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_categories_parent_id` " +
+                "ON `categories` (`parent_id`)")
+        }
+    }
+
     val all: Array<Migration> = arrayOf(
         migration1To2,
         migration2To3,
@@ -432,6 +446,7 @@ object DatabaseMigrations {
         migration7To8,
         migration8To9,
         migration9To10,
-        migration10To11
+        migration10To11,
+        migration11To12
     )
 }

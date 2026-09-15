@@ -1,6 +1,7 @@
 package com.jotbill.app.importing
 
 import android.content.Context
+import android.database.sqlite.SQLiteConstraintException
 import androidx.room.withTransaction
 import com.jotbill.app.data.JotBillDatabase
 import com.jotbill.app.data.entity.AccountEntity
@@ -14,6 +15,8 @@ import com.jotbill.app.rules.DuplicateGuard
 import com.jotbill.app.rules.FieldPriorityResolver
 import org.json.JSONArray
 import org.json.JSONObject
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -47,6 +50,13 @@ internal class ImportEngine(
 
     @Volatile
     private var activeRun: RunState? = null
+
+    /**
+     * inspect 与 execute 串行化：execute 的 running CAS 只挡"先 inspect 后 execute"，
+     * 反向（execute 进行中 inspect 已越过 ensureNotRunning）仍会让预览读到分批写入
+     * 的中间态，预览计数与最终结果不一致。两入口统一持锁。
+     */
+    private val lifecycleMutex = Mutex()
 
     /** 用户取消当前导入；进程/模块异常路径由 BackupModule.invalidate 调用。 */
     fun requestCancel() {
@@ -97,7 +107,7 @@ internal class ImportEngine(
         filePath: String,
         password: String?,
         candidateFileName: String?
-    ): JSONObject {
+    ): JSONObject = lifecycleMutex.withLock {
         ensureNotRunning()
         var prepared: ImportFilePreparer.PreparedImport? = null
         try {
@@ -120,7 +130,7 @@ internal class ImportEngine(
         filePath: String,
         password: String?,
         candidateFileName: String?
-    ): JSONObject {
+    ): JSONObject = lifecycleMutex.withLock {
         if (!running.compareAndSet(false, true)) {
             throw ImportException("IMPORT_IN_PROGRESS", "已有导入任务正在执行")
         }
@@ -227,6 +237,18 @@ internal class ImportEngine(
         }
     }
 
+    /**
+     * file_hash 唯一索引仍会阻断导入的批次状态。
+     * FAILED/CANCELLED/UNDONE 批次在 createRunningBatch 时被释放，允许同文件重试；
+     * RUNNING/COMPLETED/UNDO_FAILED 仍阻断（进行中/已入账/撤销部分失败）。
+     */
+    private fun isHashBlockingBatch(batch: ImportBatchEntity?): Boolean =
+        batch != null && batch.status in setOf(
+            ImportBatchEntity.STATUS_RUNNING,
+            ImportBatchEntity.STATUS_COMPLETED,
+            ImportBatchEntity.STATUS_UNDO_FAILED
+        )
+
     private suspend fun passwordRequiredJson(
         prepared: ImportFilePreparer.PreparedImport
     ): JSONObject {
@@ -239,7 +261,7 @@ internal class ImportEngine(
             put("format", prepared.format)
             put("fileHash", prepared.fileHash)
             put("encrypted", true)
-            put("duplicateFile", duplicateBatch != null)
+            put("duplicateFile", isHashBlockingBatch(duplicateBatch))
             put("candidates", JSONArray())
             put("sampleErrors", JSONArray())
         }
@@ -256,7 +278,7 @@ internal class ImportEngine(
             put("format", prepared.format)
             put("fileHash", prepared.fileHash)
             put("encrypted", prepared.encrypted)
-            put("duplicateFile", duplicateBatch != null)
+            put("duplicateFile", isHashBlockingBatch(duplicateBatch))
             put("sampleErrors", JSONArray())
             put(
                 "candidates",
@@ -289,7 +311,7 @@ internal class ImportEngine(
             put("formatVersion", loaded.adapter.formatVersion)
             put("fileHash", prepared.fileHash)
             put("encrypted", prepared.encrypted)
-            put("duplicateFile", duplicateBatch != null)
+            put("duplicateFile", isHashBlockingBatch(duplicateBatch))
             put("needsCandidateSelection", prepared.candidates.size > 1)
             put(
                 "candidates",
@@ -386,7 +408,30 @@ internal class ImportEngine(
             createdAt = now,
             updatedAt = now
         )
-        database.importBatchDao().insert(batch)
+        try {
+            database.importBatchDao().insert(batch)
+        } catch (_: SQLiteConstraintException) {
+            // file_hash 唯一索引命中：FAILED/CANCELLED/UNDONE 批次不阻断重试——
+            // 释放（删除）旧批次行后重建，否则一次瞬时失败（合并版本冲突、进程被杀）
+            // 会让该文件被永久阻断且只报笼统的 IMPORT_FAILED。
+            // RUNNING/COMPLETED/UNDO_FAILED 仍拒绝，给出可理解的错误。
+            val existing = database.importBatchDao().findByFileHash(batch.fileHash)
+            when (existing?.status) {
+                null -> throw ImportException("IMPORT_FAILED", "导入批次写入冲突，请重试")
+                ImportBatchEntity.STATUS_RUNNING ->
+                    throw ImportException("IMPORT_IN_PROGRESS", "该文件已有导入任务进行中")
+                ImportBatchEntity.STATUS_FAILED,
+                ImportBatchEntity.STATUS_CANCELLED,
+                ImportBatchEntity.STATUS_UNDONE -> {
+                    database.importBatchDao().deleteById(existing.id)
+                    database.importBatchDao().insert(batch)
+                }
+                else -> throw ImportException(
+                    "DUPLICATE_FILE",
+                    "该账单文件已导入过，不能重复导入；如需重导请先撤销原批次"
+                )
+            }
+        }
         return batch.id
     }
 
@@ -448,7 +493,9 @@ internal class ImportEngine(
                         mergedCount = counts.merged,
                         skippedCount = counts.skipped,
                         pendingCount = counts.pending,
-                        failedCount = counts.failed,
+                        // 解析层失败(金额/时间无法解析等)此前只进 errors 样本、不计入
+                        // failed_count,导致"总-有效"口径对不上
+                        failedCount = counts.failed + loaded.parseResult.errors.size,
                         suspiciousCount = suspiciousCount,
                         accountUnmatchedCount = accountUnmatchedCount,
                         updatedAt = now,
@@ -467,7 +514,7 @@ internal class ImportEngine(
                     mergedCount = 0,
                     skippedCount = 0,
                     pendingCount = 0,
-                    failedCount = 0,
+                    failedCount = loaded.parseResult.errors.size,
                     suspiciousCount = 0,
                     accountUnmatchedCount = 0,
                     updatedAt = now,
@@ -864,12 +911,12 @@ internal class ImportEngine(
                 newBalance = Math.addExact(source.currentBalanceMinor, Math.multiplyExact(-bill.amountMinor, multiplier)),
                 updatedAt = now
             )
-            val direction = if (target.kind == "liability") -1L else 1L
+            // 存储口径：负债账户"负数=欠款"，转入即还款，余额向 0 靠近（与 LedgerRepository 对齐）
             database.accountDao().updateBalance(
                 id = target.id,
                 newBalance = Math.addExact(
                     target.currentBalanceMinor,
-                    Math.multiplyExact(bill.amountMinor * direction, multiplier)
+                    Math.multiplyExact(bill.amountMinor, multiplier)
                 ),
                 updatedAt = now
             )

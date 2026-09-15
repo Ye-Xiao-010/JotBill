@@ -55,6 +55,8 @@ interface RawOverlayModule {
   getManualCaptureButtonMode(): Promise<CheckoutOverlayMode>;
   getManualCaptureButtonState(): Promise<CheckoutOverlayState>;
   requestManualCapture(): Promise<SnapshotCaptureResult>;
+  setPendingConfirmPopupEnabled(enabled: boolean): Promise<void>;
+  getPendingConfirmPopupEnabled(): Promise<boolean>;
   addListener(eventName: string): void;
   removeListeners(count: number): void;
 }
@@ -97,6 +99,14 @@ export const nativeOverlay = {
 
   async requestManualCapture(): Promise<SnapshotCaptureResult> {
     return getRawOverlayModule().requestManualCapture();
+  },
+
+  async setPendingConfirmPopupEnabled(enabled: boolean): Promise<void> {
+    await getRawOverlayModule().setPendingConfirmPopupEnabled(enabled);
+  },
+
+  async getPendingConfirmPopupEnabled(): Promise<boolean> {
+    return getRawOverlayModule().getPendingConfirmPopupEnabled();
   },
 };
 

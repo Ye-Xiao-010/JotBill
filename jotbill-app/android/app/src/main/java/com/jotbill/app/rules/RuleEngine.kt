@@ -252,11 +252,11 @@ class RuleEngine(private val database: JotBillDatabase) {
             CONDITION_PLATFORM_EQUALS ->
                 subject.platform?.trim()?.equals(expected, ignoreCase = true) == true
             CONDITION_MERCHANT_EQUALS ->
-                subject.merchant?.trim()?.equals(expected) == true
+                subject.merchant?.trim()?.equals(expected, ignoreCase = true) == true
             CONDITION_MERCHANT_CONTAINS ->
-                subject.merchant?.contains(expected) == true
+                subject.merchant?.contains(expected, ignoreCase = true) == true
             CONDITION_DESCRIPTION_CONTAINS ->
-                subject.description?.contains(expected) == true
+                subject.description?.contains(expected, ignoreCase = true) == true
             CONDITION_SOURCE_EQUALS ->
                 subject.sourceType?.trim()?.equals(expected, ignoreCase = true) == true
             CONDITION_AMOUNT_RANGE -> matchesAmountRange(subject.amountMinor, expected)

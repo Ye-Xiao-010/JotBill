@@ -752,6 +752,10 @@ internal class BackupManager(
                 put("createdAt", cursor.long("created_at"))
                 put("updatedAt", cursor.long("updated_at"))
                 put("version", cursor.int("version"))
+                // 阶段五 T5 / 阶段六 T1：用户字段锁与导入记录标识必须随备份导出，
+                // 否则恢复后字段锁丢失（低优先级来源可覆盖用户保护）、导入去重键丢失（可能重复导入）。
+                put("fieldLocks", cursor.string("field_locks") ?: "[]")
+                putNullable("importRecordId", cursor.string("import_record_id"))
             }
         }
         val accounts = readRows("accounts", "sort_order ASC, id ASC") { cursor ->
@@ -1124,6 +1128,10 @@ internal class BackupManager(
                 put("created_at", requiredLong(row, "createdAt"))
                 put("updated_at", requiredLong(row, "updatedAt"))
                 put("version", requiredInt(row, "version"))
+                // 阶段五 T5 / 阶段六 T1：恢复用户字段锁与导入记录标识；
+                // 老备份缺失键时回退默认值（field_locks="[]"，import_record_id=null），保持向后兼容。
+                put("field_locks", optionalString(row, "fieldLocks") ?: "[]")
+                putNullableString("import_record_id", optionalString(row, "importRecordId"))
             })
         }
     }

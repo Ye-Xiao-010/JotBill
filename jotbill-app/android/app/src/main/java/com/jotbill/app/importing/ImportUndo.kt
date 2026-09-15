@@ -228,12 +228,12 @@ internal class ImportUndo(
                 ),
                 updatedAt = now
             )
-            val direction = if (target.kind == "liability") -1L else 1L
+            // 存储口径：负债账户"负数=欠款"，转入即还款，余额向 0 靠近（与 LedgerRepository 对齐）
             database.accountDao().updateBalance(
                 id = target.id,
                 newBalance = Math.addExact(
                     target.currentBalanceMinor,
-                    Math.multiplyExact(bill.amountMinor * direction, multiplier)
+                    Math.multiplyExact(bill.amountMinor, multiplier)
                 ),
                 updatedAt = now
             )

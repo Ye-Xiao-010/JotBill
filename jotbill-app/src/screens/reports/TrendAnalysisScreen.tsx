@@ -63,49 +63,64 @@ export default function TrendAnalysisScreen() {
         return amountMinor / 100;
       };
 
+      // 各数据点并行请求:此前逐点 await,N+1 次串行桥接调用拖慢整页
       switch (period) {
-        case 'week':
+        case 'week': {
+          const requests = [];
           for (let i = 6; i >= 0; i--) {
             const date = new Date(today);
             date.setDate(today.getDate() - i);
             const dateStr = formatDate(date);
-            const value = await getValue(dateStr, dateStr);
-            dataPoints.push({
+            requests.push({
               label: `${date.getMonth() + 1}/${date.getDate()}`,
-              value,
+              promise: getValue(dateStr, dateStr),
             });
           }
+          const values = await Promise.all(requests.map(r => r.promise));
+          dataPoints.push(...requests.map((request, index) => ({
+            label: request.label,
+            value: values[index],
+          })));
           break;
+        }
 
-        case 'month':
+        case 'month': {
+          const requests = [];
           for (let i = 3; i >= 0; i--) {
             const endDate = new Date(today);
             endDate.setDate(today.getDate() - i * 7);
             const startDateWeek = new Date(endDate);
             startDateWeek.setDate(endDate.getDate() - 6);
-
-            const value = await getValue(formatDate(startDateWeek), formatDate(endDate));
-
-            dataPoints.push({
+            requests.push({
               label: `第${4 - i}周`,
-              value,
+              promise: getValue(formatDate(startDateWeek), formatDate(endDate)),
             });
           }
+          const values = await Promise.all(requests.map(r => r.promise));
+          dataPoints.push(...requests.map((request, index) => ({
+            label: request.label,
+            value: values[index],
+          })));
           break;
+        }
 
-        case 'year':
+        case 'year': {
+          const requests = [];
           for (let i = 5; i >= 0; i--) {
             const monthDate = new Date(today.getFullYear(), today.getMonth() - i, 1);
             const nextMonth = new Date(today.getFullYear(), today.getMonth() - i + 1, 0);
-
-            const value = await getValue(formatDate(monthDate), formatDate(nextMonth));
-
-            dataPoints.push({
+            requests.push({
               label: `${monthDate.getMonth() + 1}月`,
-              value,
+              promise: getValue(formatDate(monthDate), formatDate(nextMonth)),
             });
           }
+          const values = await Promise.all(requests.map(r => r.promise));
+          dataPoints.push(...requests.map((request, index) => ({
+            label: request.label,
+            value: values[index],
+          })));
           break;
+        }
       }
 
       setTrendData(dataPoints);

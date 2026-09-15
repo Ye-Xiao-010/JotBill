@@ -5,6 +5,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { nativeData } from '../native';
 import { CACHE_TIME, QUERY_KEYS, GC_TIME } from '../lib/queryClient';
+import { formatDate } from '../utils/date';
 import type { Bill, BillStatistics } from '../native';
 
 interface DashboardData {
@@ -24,10 +25,12 @@ async function fetchDashboardData(month: string): Promise<DashboardData> {
   const startOfMonth = new Date(year, monthNum - 1, 1);
   const endOfMonth = new Date(year, monthNum, 0);
 
+  // 必须用本地时区日期串：toISOString() 输出 UTC，东八区 0-8 点会后退一天，
+  // 月初整天区间滑进上月，导致首页"本月"与统计页（本地日期）口径矛盾。
   const todayStr = today < endOfMonth
-    ? today.toISOString().split('T')[0]
-    : endOfMonth.toISOString().split('T')[0];
-  const monthStartStr = startOfMonth.toISOString().split('T')[0];
+    ? formatDate(today)
+    : formatDate(endOfMonth);
+  const monthStartStr = formatDate(startOfMonth);
 
   // 并行获取统计数据和最近账单
   const [statistics, bills] = await Promise.all([

@@ -1,6 +1,6 @@
 /**
- * 分类管理页面 - Neo-Brutalism 风格
- * 描边标签切换 + 描边方形分类网格 + 虚线添加按钮
+ * 分类管理页面 - Neo-Brutalism 风格(批 6 两级分类)
+ * 点按顶级分类展开其子分类管理面板;添加/编辑/删除均在此完成。
  */
 import React, { useState, useCallback } from 'react';
 import {
@@ -19,7 +19,7 @@ import { useAlert } from '../../providers';
 import { nativeData, type Category } from '../../native';
 import { QUERY_KEYS } from '../../lib/queryClient';
 import { ThemeColors } from '../../theme/colors';
-import { spacing, borderRadius, borderWidth, shadow } from '../../theme';
+import { spacing, borderRadius, borderWidth } from '../../theme';
 
 const CategoryManageScreen: React.FC = () => {
   const { showSuccess, showError } = useToast();
@@ -32,6 +32,9 @@ const CategoryManageScreen: React.FC = () => {
   const [selectedType, setSelectedType] = useState<'expense' | 'income'>('expense');
   const [showAddModal, setShowAddModal] = useState(false);
   const [selectedCategory, setSelectedCategory] = useState<Category | null>(null);
+  const [parentForModal, setParentForModal] = useState<Category | null>(null);
+  /** 当前展开子分类面板的顶级分类 ID;null = 全部收起 */
+  const [expandedCategoryId, setExpandedCategoryId] = useState<string | null>(null);
 
   const fetchCategories = useCallback(async () => {
     try {
@@ -68,6 +71,9 @@ const CategoryManageScreen: React.FC = () => {
         try {
           await nativeData.deleteCategory(category.id);
           showSuccess('分类删除成功');
+          if (expandedCategoryId === category.id) {
+            setExpandedCategoryId(null);
+          }
           refreshCategoryQueries();
         } catch (error: any) {
           showError(error.message || '删除失败');
@@ -79,11 +85,23 @@ const CategoryManageScreen: React.FC = () => {
   };
 
   const handleEditCategory = (category: Category) => {
-    if (category.isDefault) {
-      showError('默认分类不能编辑');
-      return;
-    }
+    const parent = category.parentId
+      ? categories.find((c) => c.id === category.parentId) ?? null
+      : null;
     setSelectedCategory(category);
+    setParentForModal(parent);
+    setShowAddModal(true);
+  };
+
+  const handleAddChild = (parent: Category) => {
+    setSelectedCategory(null);
+    setParentForModal(parent);
+    setShowAddModal(true);
+  };
+
+  const handleAddTopLevel = () => {
+    setSelectedCategory(null);
+    setParentForModal(null);
     setShowAddModal(true);
   };
 
@@ -91,8 +109,21 @@ const CategoryManageScreen: React.FC = () => {
     refreshCategoryQueries();
   };
 
-  const defaultCategories = categories.filter(cat => cat.isDefault);
-  const customCategories = categories.filter(cat => !cat.isDefault);
+  const toggleExpanded = (categoryId: string) => {
+    setExpandedCategoryId((current) => (current === categoryId ? null : categoryId));
+  };
+
+  const defaultCategories = categories.filter(cat => cat.isDefault && !cat.parentId);
+  const customTopLevel = categories.filter(cat => !cat.isDefault && !cat.parentId);
+  const childCategories = categories.filter(cat => cat.parentId);
+  /** 子分类展示排序:预设子分类在前,自定义在后;同组内按 sortOrder 升序 */
+  const sortChildren = (children: Category[]) =>
+    [...children].sort(
+      (a, b) =>
+        Number(b.isDefault) - Number(a.isDefault) || a.sortOrder - b.sortOrder,
+    );
+  /** 展示顺序:默认分类在前,自定义顶级在后 */
+  const topLevelCategories = [...defaultCategories, ...customTopLevel];
 
   return (
     <View style={styles.container}>
@@ -100,7 +131,10 @@ const CategoryManageScreen: React.FC = () => {
       <View style={styles.tabs}>
         <TouchableOpacity
           style={[styles.tab, selectedType === 'expense' && styles.tabExpenseActive]}
-          onPress={() => setSelectedType('expense')}
+          onPress={() => {
+            setSelectedType('expense');
+            setExpandedCategoryId(null);
+          }}
         >
           <Text style={[styles.tabText, selectedType === 'expense' && styles.tabTextActive]}>
             支出分类
@@ -108,7 +142,10 @@ const CategoryManageScreen: React.FC = () => {
         </TouchableOpacity>
         <TouchableOpacity
           style={[styles.tab, selectedType === 'income' && styles.tabIncomeActive]}
-          onPress={() => setSelectedType('income')}
+          onPress={() => {
+            setSelectedType('income');
+            setExpandedCategoryId(null);
+          }}
         >
           <Text style={[styles.tabText, selectedType === 'income' && styles.tabTextActive]}>
             收入分类
@@ -116,10 +153,7 @@ const CategoryManageScreen: React.FC = () => {
         </TouchableOpacity>
       </View>
 
-      <ScrollView
-        style={styles.scrollView}
-        showsVerticalScrollIndicator={false}
-      >
+      <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
         {loading ? (
           <View style={styles.loadingContainer}>
             <ActivityIndicator size="large" color={styles._colors.primary} />
@@ -127,73 +161,126 @@ const CategoryManageScreen: React.FC = () => {
           </View>
         ) : (
           <>
-            {/* 默认分类 */}
             <View style={styles.section}>
-              <Text style={styles.sectionTitle}>📋 默认分类</Text>
+              <Text style={styles.sectionTitle}>🗂 分类(点按展开子分类管理)</Text>
               <View style={styles.categoryGrid}>
-                {defaultCategories.map((category) => (
-                  <TouchableOpacity
-                    key={category.id}
-                    style={styles.categoryItem}
-                    activeOpacity={0.8}
-                  >
-                    <View style={styles.categoryIconBlock}>
-                      <Text style={styles.categoryEmoji}>
-                        {category.icon || '📝'}
-                      </Text>
-                    </View>
-                    <Text style={styles.categoryName}>{category.name}</Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-            </View>
-
-            {/* 自定义分类 */}
-            <View style={styles.section}>
-              <Text style={styles.sectionTitle}>✨ 自定义分类</Text>
-              <View style={styles.categoryGrid}>
-                {customCategories.map((category) => (
-                  <TouchableOpacity
-                    key={category.id}
-                    style={[styles.categoryItem, styles.customCategoryItem]}
-                    onLongPress={() => handleDeleteCategory(category)}
-                    activeOpacity={0.8}
-                  >
-                    <TouchableOpacity
-                      style={styles.editBtn}
-                      onPress={() => handleEditCategory(category)}
-                    >
-                      <Text style={styles.editIcon}>✏️</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      style={styles.deleteBtn}
-                      onPress={() => handleDeleteCategory(category)}
-                    >
-                      <Text style={styles.deleteIcon}>🗑️</Text>
-                    </TouchableOpacity>
-                    <View style={styles.categoryIconBlock}>
-                      <Text style={styles.categoryEmoji}>
-                        {category.icon || '📝'}
-                      </Text>
-                    </View>
-                    <Text style={styles.categoryName}>{category.name}</Text>
-                  </TouchableOpacity>
-                ))}
-
-                {/* 添加分类按钮 */}
-                <TouchableOpacity
-                  style={styles.addCategoryBtn}
-                  onPress={() => {
-                    setSelectedCategory(null);
-                    setShowAddModal(true);
-                  }}
-                >
-                  <View style={styles.addIconContainer}>
-                    <Text style={styles.addIcon}>+</Text>
+              {(() => {
+                const rows = [];
+                for (let i = 0; i < topLevelCategories.length; i += 4) {
+                  rows.push(topLevelCategories.slice(i, i + 4));
+                }
+                return rows.map((rowCats, rowIndex) => (
+                  <View key={`cat-row-${rowIndex}`} style={styles.categoryRowGrid}>
+                    {rowCats.map((category) => {
+                      const children = childCategories.filter(
+                        (c) => c.parentId === category.id,
+                      );
+                      const expanded = expandedCategoryId === category.id;
+                      return (
+                        <TouchableOpacity
+                          key={category.id}
+                          style={[
+                            styles.categoryItem,
+                            expanded && styles.categoryItemExpanded,
+                          ]}
+                          onPress={() => toggleExpanded(category.id)}
+                          activeOpacity={0.8}
+                        >
+                          <View style={styles.categoryIconBlock}>
+                            <Text style={styles.categoryEmoji}>
+                              {category.icon || '📝'}
+                            </Text>
+                          </View>
+                          <Text style={styles.categoryName}>{category.name}</Text>
+                          <Text style={styles.categoryMeta}>
+                            {children.length > 0
+                              ? `${children.length} 个子分类`
+                              : category.isDefault
+                                ? '默认'
+                                : '自定义'}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                    {expandedCategoryId &&
+                    rowCats.some(cat => cat.id === expandedCategoryId) ? (
+                      (() => {
+                        const expandedCategory = topLevelCategories.find(
+                          (cat) => cat.id === expandedCategoryId,
+                        );
+                        if (!expandedCategory) return null;
+                        const children = childCategories.filter(
+                          (c) => c.parentId === expandedCategory.id,
+                        );
+                        return (
+                          <View style={styles.expandPanel}>
+                            <Text style={styles.panelTitle}>
+                              {expandedCategory.icon || '📝'} {expandedCategory.name} · 子分类
+                            </Text>
+                            {sortChildren(children).map((child) => (
+                              <View key={child.id} style={styles.childRow}>
+                                <Text style={styles.childText}>
+                                  {child.icon || '📝'} {child.name}
+                                </Text>
+                                <View style={styles.categoryRowActions}>
+                                  <TouchableOpacity
+                                    style={styles.rowBtn}
+                                    onPress={() => handleEditCategory(child)}
+                                  >
+                                    <Text style={styles.rowBtnText}>编辑</Text>
+                                  </TouchableOpacity>
+                                  {!child.isDefault ? (
+                                    <TouchableOpacity
+                                      style={styles.rowBtnDelete}
+                                      onPress={() => handleDeleteCategory(child)}
+                                    >
+                                      <Text style={styles.rowBtnText}>删除</Text>
+                                    </TouchableOpacity>
+                                  ) : null}
+                                </View>
+                              </View>
+                            ))}
+                            {children.length === 0 ? (
+                              <Text style={styles.panelEmptyText}>
+                                暂无子分类,点击下方按钮添加
+                              </Text>
+                            ) : null}
+                            <TouchableOpacity
+                              style={styles.panelAddBtn}
+                              onPress={() => handleAddChild(expandedCategory)}
+                            >
+                              <Text style={styles.panelAddText}>+ 添加子分类</Text>
+                            </TouchableOpacity>
+                            <View style={styles.panelActions}>
+                              <TouchableOpacity
+                                style={styles.rowBtn}
+                                onPress={() => handleEditCategory(expandedCategory)}
+                              >
+                                <Text style={styles.rowBtnText}>编辑本分类</Text>
+                              </TouchableOpacity>
+                              {!expandedCategory.isDefault ? (
+                                <TouchableOpacity
+                                  style={styles.rowBtnDelete}
+                                  onPress={() => handleDeleteCategory(expandedCategory)}
+                                >
+                                  <Text style={styles.rowBtnTextDelete}>删除本分类</Text>
+                                </TouchableOpacity>
+                              ) : null}
+                            </View>
+                          </View>
+                        );
+                      })()
+                    ) : null}
                   </View>
-                  <Text style={styles.addLabel}>添加分类</Text>
-                </TouchableOpacity>
+                ));
+              })()}
               </View>
+              <TouchableOpacity
+                style={styles.addCategoryBtnFull}
+                onPress={handleAddTopLevel}
+              >
+                <Text style={styles.addLabel}>+ 添加顶级分类</Text>
+              </TouchableOpacity>
             </View>
 
             <View style={{ height: 100 }} />
@@ -206,10 +293,12 @@ const CategoryManageScreen: React.FC = () => {
         onClose={() => {
           setShowAddModal(false);
           setSelectedCategory(null);
+          setParentForModal(null);
         }}
         onSuccess={handleAddSuccess}
-        billType={selectedCategory?.type || selectedType}
+        billType={selectedCategory?.type || parentForModal?.type || selectedType}
         category={selectedCategory}
+        parentCategory={parentForModal}
       />
     </View>
   );
@@ -285,23 +374,40 @@ const createStyles = (colors: ThemeColors) => ({
       color: colors.textPrimary,
       marginBottom: spacing.lg,
     },
+    branchWrap: {
+      marginBottom: spacing.sm,
+    },
     categoryGrid: {
       flexDirection: 'row',
       flexWrap: 'wrap',
       gap: spacing.md,
     },
+    // 批 6:按行分块的容器,行内 4 个正方形瓷贴;展开的子分类区插在行后
+    categoryRowGrid: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      width: '100%',
+      gap: spacing.sm,
+      marginBottom: spacing.xs,
+    },
     categoryItem: {
       width: '22%',
+      aspectRatio: 1,
       alignItems: 'center',
-      position: 'relative',
+      justifyContent: 'center',
       paddingVertical: spacing.sm,
+      borderWidth: borderWidth.thin,
+      borderColor: colors.stroke,
+      borderRadius: borderRadius.small,
+      backgroundColor: colors.background,
     },
-    customCategoryItem: {
-      position: 'relative',
+    categoryItemExpanded: {
+      backgroundColor: colors.accent,
+      borderWidth: borderWidth.medium,
     },
     categoryIconBlock: {
-      width: 48,
-      height: 48,
+      width: 44,
+      height: 44,
       borderRadius: borderRadius.small,
       borderWidth: borderWidth.thin,
       borderColor: colors.stroke,
@@ -311,7 +417,7 @@ const createStyles = (colors: ThemeColors) => ({
       marginBottom: spacing.xs,
     },
     categoryEmoji: {
-      fontSize: 24,
+      fontSize: 22,
     },
     categoryName: {
       fontSize: 12,
@@ -319,67 +425,111 @@ const createStyles = (colors: ThemeColors) => ({
       color: colors.textPrimary,
       textAlign: 'center',
     },
-    editBtn: {
-      position: 'absolute',
-      top: 0,
-      right: 2,
-      zIndex: 1,
-      width: 22,
-      height: 22,
-      borderRadius: borderRadius.small,
-      borderWidth: 1,
+    categoryMeta: {
+      fontSize: 11,
+      fontWeight: '600',
+      color: colors.textTertiary,
+      marginTop: spacing.xs,
+    },
+    expandPanel: {
+      width: '100%',
+      marginTop: spacing.sm,
+      padding: spacing.md,
+      borderWidth: borderWidth.thin,
       borderColor: colors.stroke,
-      backgroundColor: colors.accent,
-      justifyContent: 'center',
-      alignItems: 'center',
-    },
-    editIcon: {
-      fontSize: 10,
-    },
-    deleteBtn: {
-      position: 'absolute',
-      top: 0,
-      left: 2,
-      zIndex: 1,
-      width: 22,
-      height: 22,
       borderRadius: borderRadius.small,
-      borderWidth: 1,
-      borderColor: colors.error,
-      backgroundColor: colors.error + '15',
-      justifyContent: 'center',
-      alignItems: 'center',
+      backgroundColor: colors.background,
     },
-    deleteIcon: {
-      fontSize: 10,
+    panelTitle: {
+      fontSize: 14,
+      fontWeight: '800',
+      color: colors.textPrimary,
+      marginBottom: spacing.sm,
     },
-    addCategoryBtn: {
-      width: '22%',
-      alignItems: 'center',
+    panelEmptyText: {
+      fontSize: 13,
+      fontWeight: '600',
+      color: colors.textSecondary,
       paddingVertical: spacing.sm,
     },
-    addIconContainer: {
-      width: 48,
-      height: 48,
+    childRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      paddingVertical: spacing.sm,
+      borderBottomWidth: borderWidth.thin,
+      borderBottomColor: colors.divider,
+    },
+    childText: {
+      fontSize: 14,
+      fontWeight: '600',
+      color: colors.textPrimary,
+      flex: 1,
+    },
+    categoryRowActions: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: spacing.xs,
+    },
+    rowBtn: {
+      paddingHorizontal: spacing.sm,
+      paddingVertical: 4,
+      borderRadius: borderRadius.small,
+      borderWidth: borderWidth.thin,
+      borderColor: colors.stroke,
+      backgroundColor: colors.background,
+    },
+    rowBtnText: {
+      fontSize: 12,
+      fontWeight: '700',
+      color: colors.textPrimary,
+    },
+    rowBtnDelete: {
+      paddingHorizontal: spacing.sm,
+      paddingVertical: 4,
+      borderRadius: borderRadius.small,
+      borderWidth: borderWidth.thin,
+      borderColor: colors.error,
+      backgroundColor: colors.error + '15',
+    },
+    rowBtnTextDelete: {
+      fontSize: 12,
+      fontWeight: '700',
+      color: colors.error,
+    },
+    panelAddBtn: {
+      marginTop: spacing.sm,
+      paddingVertical: spacing.sm,
       borderRadius: borderRadius.small,
       borderWidth: borderWidth.thin,
       borderColor: colors.stroke,
       borderStyle: 'dashed',
-      justifyContent: 'center',
       alignItems: 'center',
-      marginBottom: spacing.xs,
+    },
+    panelAddText: {
+      fontSize: 13,
+      fontWeight: '800',
+      color: colors.textSecondary,
+    },
+    panelActions: {
+      flexDirection: 'row',
+      gap: spacing.sm,
+      marginTop: spacing.sm,
+    },
+    addCategoryBtnFull: {
+      marginTop: spacing.sm,
+      paddingVertical: spacing.md,
+      borderRadius: borderRadius.small,
+      borderWidth: borderWidth.thin,
+      borderColor: colors.stroke,
+      borderStyle: 'dashed',
+      alignItems: 'center',
       backgroundColor: 'transparent',
     },
-    addIcon: {
-      fontSize: 24,
-      color: colors.textTertiary,
-      fontWeight: '800',
-    },
     addLabel: {
-      fontSize: 12,
-      fontWeight: '700',
+      fontSize: 13,
+      fontWeight: '800',
       color: colors.textTertiary,
-      textAlign: 'center',
     },
   }),
   _colors: colors,

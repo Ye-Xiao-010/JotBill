@@ -11,6 +11,7 @@ import com.facebook.react.ReactPackage
 import com.facebook.react.defaults.DefaultReactHost.getDefaultReactHost
 import com.facebook.react.defaults.DefaultReactNativeHost
 import com.jotbill.app.notification.PaymentNotificationPackage
+import com.jotbill.app.overlay.PendingConfirmOverlayManager
 import com.jotbill.app.utils.InstallApkPackage
 import com.jotbill.app.utils.SentryLogger
 import com.jotbill.app.hotupdate.HotUpdatePackage
@@ -22,6 +23,7 @@ import com.jotbill.app.backup.BackupPackage
 import com.jotbill.app.overlay.OverlayPackage
 import com.jotbill.app.bridge.RecognitionPackage
 import com.jotbill.app.pending.PendingReminderNotifier
+import com.jotbill.app.budget.BudgetReminderNotifier
 import com.facebook.react.ReactInstanceManager
 import com.facebook.react.bridge.JSBundleLoader
 import java.io.File
@@ -135,6 +137,10 @@ class MainApplication : Application(), ReactApplication {
     super.onCreate()
     // 待确认提醒先于 RN 初始化:通知监听/无障碍路径在 RN 未启动时也要能发系统通知
     PendingReminderNotifier.init(this)
+    // 付款确认弹窗:订阅待确认创建事件,悬浮权限+非敏感帧门禁通过时就地弹窗
+    PendingConfirmOverlayManager.init(this)
+    // 预算超支提醒:账单增删改后由 DataModule 触发检查,应用未启动也能发系统通知
+    BudgetReminderNotifier.init(this)
     HotUpdateModule.recoverInterruptedSwap(this)
     loadReactNative(this)
     initializeSentry()

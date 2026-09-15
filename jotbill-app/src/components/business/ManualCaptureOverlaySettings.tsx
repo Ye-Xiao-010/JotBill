@@ -34,7 +34,10 @@ interface BridgeReadResult<T> {
   failed: boolean;
 }
 
-const DEFAULT_MODE: CheckoutOverlayMode = 'checkout_only';
+// 与 Native 端默认值（CheckoutCaptureOverlayManager.DEFAULT_MODE = "always_on"）
+// 及 DECISIONS"购物APP前台就显示(方案A)"保持一致；此前 RN 默认 checkout_only
+// 导致两端首启状态不一致。
+const DEFAULT_MODE: CheckoutOverlayMode = 'always_on';
 
 const INITIAL_STATE: CheckoutOverlayState = {
   status: 'SERVICE_NOT_CONNECTED',

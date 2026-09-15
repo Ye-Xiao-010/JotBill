@@ -679,10 +679,23 @@ logSink.w(
                     )
                 }
         } else {
-            candidates.singleOrNull()
-                ?: return CheckoutAiTriggerResult.Rejected(
-                    SnapshotConsumeRejection.AMBIGUOUS_CANDIDATES
-                )
+            // 无指纹消费在手动+自动并存时优先取手动候选（不变式第 5 条：用户手动操作
+            // 优先级最高）。此前一律 AMBIGUOUS_CANDIDATES 拒绝，导致用户在自动候选
+            // 之外手动补截一张后，支付交接反而消费不到任何快照。purgeExpired 已在
+            // 上方执行，此处的 manualCandidate 必然未过期。手动候选为结算角色或
+            // 本意图就是 USER_RETRY 时才可直接消费（与下方角色守卫同一判据），
+            // 否则回退 singleOrNull——自动候选槽唯一，仅存自动时不会产生歧义。
+            val manual = state.manualCandidate
+            if (manual != null &&
+                (manual.pageRole == CheckoutPageRole.CHECKOUT || intent == PurchaseIntent.USER_RETRY)
+            ) {
+                manual
+            } else {
+                candidates.singleOrNull()
+                    ?: return CheckoutAiTriggerResult.Rejected(
+                        SnapshotConsumeRejection.AMBIGUOUS_CANDIDATES
+                    )
+            }
         }
         // 页面角色守卫：只有 USER_RETRY（手动截图重试）允许消费非结算页快照；
         // CHECKOUT 快照必须允许 SUBMIT_ACTION / PAYMENT_APP_HANDOFF 等真实购买意图

@@ -11,8 +11,6 @@ export { default as TransactionItem } from './TransactionItem';
 export type { TransactionItemProps } from './TransactionItem';
 export { default as AccountCard } from './AccountCard';
 export type { AccountCardProps, AccountType } from './AccountCard';
-export { default as BudgetCard } from './BudgetCard';
-export type { BudgetCardProps } from './BudgetCard';
 export { default as InsightCard } from './InsightCard';
 export type { InsightCardProps, InsightType } from './InsightCard';
 export { default as QuickAction } from './QuickAction';

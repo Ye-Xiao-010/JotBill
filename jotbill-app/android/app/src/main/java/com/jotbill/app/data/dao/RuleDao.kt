@@ -19,10 +19,12 @@ interface RuleDao {
     @Delete
     suspend fun delete(rule: RuleEntity)
 
-    @Query("SELECT * FROM rules WHERE is_active = 1 ORDER BY priority DESC")
+    // 排序与 RuleEngine 仲裁一致：priority 数字小者优先，同优先级按创建先后；
+    // 此前列表用 DESC 展示，与引擎实际执行顺序相反，易误导排查
+    @Query("SELECT * FROM rules WHERE is_active = 1 ORDER BY priority ASC, created_at ASC")
     suspend fun getActive(): List<RuleEntity>
 
-    @Query("SELECT * FROM rules ORDER BY priority DESC")
+    @Query("SELECT * FROM rules ORDER BY priority ASC, created_at ASC")
     suspend fun getAll(): List<RuleEntity>
 
     @Query("SELECT * FROM rules WHERE id = :id")

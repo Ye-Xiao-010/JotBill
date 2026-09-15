@@ -1,0 +1,63 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "JotBill 组件图",
+    "quality_profile": "showcase",
+    "views": [
+      {
+        "id": "rn-to-native",
+        "label": "RN 到原生",
+        "focus": ["rn_ui", "native_ts", "bridge"],
+        "note": "界面层经 TypeScript 封装调用 Native Module 桥。"
+      },
+      {
+        "id": "recognize-commit",
+        "label": "识别与入账",
+        "focus": ["notification", "recognition", "ai", "rules", "data"],
+        "note": "通知监听驱动识别引擎，经规则去重后写入本地账本。"
+      },
+      {
+        "id": "external-security",
+        "label": "外部与安全",
+        "focus": ["ai", "ai_cloud", "security", "data"],
+        "note": "AI 客户端直连外部服务商，密钥经 Keystore 读取。"
+      }
+    ]
+  },
+  "components": [
+    { "id": "rn_ui", "type": "frontend", "label": "RN 界面层", "sublabel": "18 屏 · 组件 · hooks", "pos": [40, 40], "size": [210, 56] },
+    { "id": "native_ts", "type": "frontend", "label": "TS 原生封装", "sublabel": "src/native · 7 模块", "pos": [40, 150], "size": [210, 56] },
+    { "id": "bridge", "type": "backend", "label": "Native Module 桥", "sublabel": "Data · Recognition · Ai · Emitter", "pos": [340, 280], "size": [200, 56] },
+    { "id": "recognition", "type": "backend", "label": "支付识别引擎", "sublabel": "Detector · Buffer · Matcher", "pos": [620, 40], "size": [200, 60] },
+    { "id": "ai", "type": "backend", "label": "AI 客户端", "sublabel": "Vision · SSE · ASR", "pos": [620, 170], "size": [200, 60] },
+    { "id": "rules", "type": "backend", "label": "规则与去重", "sublabel": "RuleEngine · DuplicateGuard", "pos": [620, 300], "size": [200, 60] },
+    { "id": "data", "type": "database", "label": "Room 数据层", "sublabel": "Entity · Dao · Repository", "pos": [620, 430], "size": [200, 60] },
+    { "id": "notification", "type": "backend", "label": "通知监听", "sublabel": "Service · Normalizer", "pos": [900, 40], "size": [200, 60] },
+    { "id": "security", "type": "security", "label": "密钥安全", "sublabel": "KeyStoreSecretStore", "pos": [900, 300], "size": [200, 60] },
+    { "id": "ai_cloud", "type": "external", "label": "外部 AI 服务商", "sublabel": "qwen-vl-plus · GLM-4V", "pos": [1140, 170], "size": [200, 56] }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "React Native（TypeScript）", "wraps": ["rn_ui", "native_ts"] },
+    { "kind": "region", "label": "Android 原生层（Kotlin）", "wraps": ["bridge", "recognition", "ai", "rules", "data", "notification", "security"] }
+  ],
+  "connections": [
+    { "from": "rn_ui", "to": "native_ts", "label": "调用", "labelDy": 24 },
+    { "from": "native_ts", "to": "bridge", "label": "NativeModule", "variant": "emphasis" },
+    { "from": "bridge", "to": "data", "label": "CRUD · 统计", "variant": "emphasis" },
+    { "from": "bridge", "to": "recognition", "label": "会话 · 待确认" },
+    { "from": "bridge", "to": "ai", "label": "对话 · ASR", "labelDx": -40 },
+    { "from": "notification", "to": "recognition", "label": "支付通知" },
+    { "from": "recognition", "to": "ai", "label": "视觉识别", "labelDy": 24 },
+    { "from": "ai", "to": "rules", "label": "识别结果", "labelDy": 24 },
+    { "from": "rules", "to": "data", "label": "去重写入", "labelDy": 24 },
+    { "from": "ai", "to": "ai_cloud", "label": "HTTPS JSON", "variant": "emphasis" },
+    { "from": "ai", "to": "security", "label": "读 API Key", "variant": "security" },
+    { "from": "security", "to": "data", "label": "SQLCipher 密钥", "variant": "security" }
+  ],
+  "cards": [
+    { "dot": "violet", "title": "React Native 侧", "items": ["18 屏界面与组件库复用 LiteNote", "src/native 封装 7 个原生模块的 TypeScript 调用", "经 NativeEventEmitter 订阅原生事件"] },
+    { "dot": "cyan", "title": "Kotlin 原生侧", "items": ["data/ 提供 Room 实体、DAO 与 Repository", "recognition/ 结算页检测、快照与支付匹配", "importing/ 与 backup/ 提供账单导入与备份"] },
+    { "dot": "emerald", "title": "边界与约束", "items": ["正式账单只能由规则引擎经 Repository 写入", "UI、通知回调与 AI 客户端不得直接创建交易", "AI 密钥经 Keystore 读取，账单数据不联网上传"] }
+  ]
+}

@@ -1037,6 +1037,9 @@ export default function AIChatScreen() {
       alert('提示', '当前已经是新对话了');
       return;
     }
+    // 停掉进行中的流：否则旧会话的 text_delta/tool_result 会经 insertBeforeStream
+    // 混进新会话的消息列表，误点"保存全部"还会把旧会话建议的账单写入账本
+    streamRef.current?.stop();
     setSessionId(null);
     storage.removeItem(LAST_SESSION_ID_KEY);
     setPendingBills([]);
@@ -1151,6 +1154,9 @@ export default function AIChatScreen() {
   const handleSelectSession = (sid: string) => {
     closeSidebar();
     if (sid === sessionId) return;
+    // 切换前停掉进行中的流并清空旧会话的待确认账单，避免跨会话状态污染
+    streamRef.current?.stop();
+    setPendingBills([]);
     loadSessionHistory(sid);
   };
 
@@ -1343,7 +1349,7 @@ export default function AIChatScreen() {
             displayMessages.push({
               id: `db-${msg.id}`,
               type: 'text',
-              content: msg.imageUrl ? (msg.content || '') : (msg.content || ''),
+              content: msg.content || '',
               imageUrls,
               isUser: true,
               timestamp: new Date(msg.createdAt),
@@ -1611,7 +1617,9 @@ export default function AIChatScreen() {
           finishActiveSteps();
           const totalMs = data.thinkingTimeMs || (Date.now() - streamStartTime);
 
-          if (!accumulatedText && currentSteps.length === 0) {
+          // currentSteps 初始必含 thinking 占位步，length===0 永假；
+          // 语义应为"既没有文本也没有工具调用"（模型空回复）才移除气泡
+          if (!accumulatedText && !currentSteps.some(step => step.type === 'tool_call')) {
             setMessages(prev => prev.filter(m => m.id !== streamMsgId));
           } else {
             updateMessage(streamMsgId, {

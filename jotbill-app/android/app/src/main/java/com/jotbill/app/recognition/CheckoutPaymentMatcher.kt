@@ -24,7 +24,13 @@ import org.json.JSONObject
 private const val PAYMENT_MATCH_WINDOW_MILLIS = 5 * 60 * 1000L
 internal const val CHECKOUT_PAYMENT_MATCH_WINDOW_MILLIS = PAYMENT_MATCH_WINDOW_MILLIS
 
-/** 同会话跨来源证据收敛窗口：与服务层结果页 2 分钟去重桶保持一致。 */
+/**
+ * 同会话跨来源证据收敛窗口。
+ *
+ * ⚠️ 刻意**宽于**结果页事件去重桶（D-6 已把事件桶收窄为 30 秒）：事件键跨桶后不再命中，
+ * 同一结果页的跨桶重复读（同包同金额，读取间隔 > 30 秒）靠本窗口收敛为一条证据。
+ * ⇒ **不得随事件桶一并收窄**，否则跨桶重复读会落成两条证据（D-6 裁定：本常量值不动）。
+ */
 private const val PAYMENT_EVIDENCE_MERGE_WINDOW_MILLIS = 2 * 60 * 1000L
 private const val PAYMENT_CONFIRMED_STATUS = "PAYMENT_CONFIRMED"
 private const val AI_PENDING_STATUS = "AI_PENDING"
@@ -36,6 +42,12 @@ private const val COMPLETED_STATUS = "COMPLETED"
 private const val AUTO_COMMIT_OPERATOR = "auto_commit"
 private const val AI_RECOGNITION_FAILED_REASON = "AI_RECOGNITION_FAILED"
 private const val EVIDENCE_ONLY_DECISION = "EVIDENCE_ONLY"
+
+/** 用户断言截图（手动点击强制记账）的冲突原因，供前端提示用户核对。 */
+internal const val USER_ASSERTED_REASON = "USER_ASSERTED"
+
+/** 用户断言截图但 AI 未识别到金额时的冲突原因；落 0 金额占位由用户补填。 */
+internal const val USER_ASSERTED_AMOUNT_MISSING_REASON = "USER_ASSERTED_AMOUNT_MISSING"
 
 /**
  * 仅由截图 AI 视觉推断出的支付结果状态。
@@ -1308,6 +1320,68 @@ internal class CheckoutPaymentMatcher(
         }
     }
 
+    /**
+     * 用户断言截图通道的收口：AI 识别成功但会话尚无支付证据时，立即落一条待确认。
+     *
+     * 自动截图的会话允许"AI 成功、无证据"静默等待支付（用户可能只是浏览未购买）；
+     * 用户断言截图则代表用户明确要求记账，若不落待确认，AI 识别结果会随会话
+     * 过期无声消失。后续两条收敛路径均已存在，无需额外处理：
+     * - 支付证据晚到并匹配本会话：自动入账路径会删除本会话的待确认；
+     * - 用户先手动确认待确认入账：自动入账的 manuallyCommitted 检查会跳过重复写 Bill。
+     *
+     * @return true 表示本次调用创建（或已存在）了该会话的待确认交易。
+     */
+    suspend fun promoteAssertedSessionToPending(sessionId: String): Boolean = database.withTransaction {
+        val session = database.checkoutSessionDao().getById(sessionId)
+            ?: return@withTransaction false
+        val now = nowMillis()
+        // 已入账（自动入账或用户手动确认）则不再产生待确认
+        if (database.billDao().getById(stableId("bill", session.id)) != null) {
+            return@withTransaction false
+        }
+        if (database.billDao().findByOriginalTransactionId(session.id) != null) {
+            return@withTransaction false
+        }
+        // 已有支付成功证据：正常匹配链路会自动入账或按冲突落待确认，不抢跑
+        if (database.paymentEvidenceDao().getBySession(sessionId).any { it.indicatesPaidOutcome() }) {
+            return@withTransaction false
+        }
+        val candidate = database.transactionCandidateDao().getBySession(sessionId).singleOrNull()
+            ?: return@withTransaction false
+        // 规则判定忽略的交易：用户规则明确说不记，断言通道不得违背
+        if (ruleEngine.decisionOf(candidate.appliedRules) == RuleEngine.DECISION_IGNORED) {
+            return@withTransaction false
+        }
+        val pending = pendingFromConflict(
+            session = session,
+            candidate = candidate,
+            evidence = null,
+            conflictReason = USER_ASSERTED_REASON,
+            now = now
+        ) ?: PendingTransactionEntity(
+            // AI 未识别到金额：仍落 0 金额占位待确认，让用户看到并可编辑，
+            // 而不是无声丢失（与 AI 失败占位的处理一致，确认前强制补金额）。
+            id = stableId("pending", session.id),
+            candidateId = candidate.id,
+            sessionId = session.id,
+            amountMinor = 0L,
+            type = "expense",
+            occurredAt = candidate.aiOccurredAt ?: now,
+            platform = candidate.platform ?: shoppingPlatformName(session.shoppingPackage),
+            merchant = candidate.merchant,
+            productDescription = candidate.productDescription,
+            orderId = candidate.aiOrderId,
+            accountId = null,
+            categoryId = null,
+            conflictReason = USER_ASSERTED_AMOUNT_MISSING_REASON,
+            sourceType = "ai_vision",
+            createdAt = now,
+            version = 1
+        )
+        upsertPendingForSession(pending)
+        true
+    }
+
     private suspend fun upsertSession(
         reference: CheckoutSnapshotReference,
         initialStatus: String,
@@ -1636,6 +1710,19 @@ internal class CheckoutPaymentMatcher(
         // 阶段四 T6：会话已自动入账，清理该会话仍在等待的待确认交易（忽略记录保留审计）
         database.pendingTransactionDao().findPendingBySessionId(session.id)?.let {
             database.pendingTransactionDao().delete(it)
+            // 广播终态事件,让提醒消费方消除该待确认的系统通知
+            PendingChangeHub.emit(
+                PendingChangeInfo(
+                    pendingId = it.id,
+                    type = it.type,
+                    amountMinor = it.amountMinor,
+                    sourceType = it.sourceType,
+                    conflictReason = null,
+                    occurredAt = it.occurredAt,
+                    isNew = false,
+                    removed = true
+                )
+            )
         }
         return AutoCommitOutcome(advanceStatus(session, AUTO_COMMITTED_STATUS, now), settledBillId)
     }

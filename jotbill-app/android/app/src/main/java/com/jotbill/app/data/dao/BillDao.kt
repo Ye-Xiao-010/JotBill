@@ -119,11 +119,16 @@ interface BillDao {
      * 不限制 sourceType（含自动识别、手动、历史导入），由导入引擎经
      * FieldPriorityResolver(Source.IMPORT) 决定可变字段是否写入。
      * 退款行由引擎豁免，不调用本查询。
+     * 合并目标同样排除退款/带原交易关联的账单：RefundLinker 创建的退款账单
+     * 携带与原单相同的 order_id，若命中会把 refund 覆写为 expense 并造成
+     * 余额双重扣减（行侧豁免 + 目标侧豁免必须成对）。
      */
     @Query(
         """
         SELECT * FROM bills
         WHERE order_id = :orderId
+          AND type != 'refund'
+          AND original_transaction_id IS NULL
         ORDER BY occurred_at DESC, id DESC
         LIMIT 1
         """
@@ -170,9 +175,9 @@ interface BillDao {
           AND (:endDate IS NULL OR occurred_at <= :endDate)
           AND (
               :keyword IS NULL
-              OR description LIKE '%' || :keyword || '%'
-              OR merchant LIKE '%' || :keyword || '%'
-              OR product_description LIKE '%' || :keyword || '%'
+              OR description LIKE '%' || :keyword || '%' ESCAPE '~'
+              OR merchant LIKE '%' || :keyword || '%' ESCAPE '~'
+              OR product_description LIKE '%' || :keyword || '%' ESCAPE '~'
           )
         ORDER BY
           CASE WHEN :orderBy = 'date' AND :orderDirection = 'asc' THEN occurred_at END ASC,
@@ -254,13 +259,14 @@ interface BillDao {
     @Query(
         """
         SELECT
-          b.category_id AS categoryId,
-          c.name AS categoryName,
-          c.icon AS categoryIcon,
+          COALESCE(parent.id, b.category_id) AS categoryId,
+          COALESCE(parent.name, c.name) AS categoryName,
+          COALESCE(parent.icon, c.icon) AS categoryIcon,
           SUM(b.amount_minor) AS amountMinor,
           COUNT(*) AS count
         FROM bills b
         LEFT JOIN categories c ON b.category_id = c.id
+        LEFT JOIN categories parent ON parent.id = c.parent_id
         WHERE (
               b.type = :type
               OR (:type = 'income' AND b.type = 'refund')
@@ -268,7 +274,9 @@ interface BillDao {
           )
           AND b.occurred_at >= :startDate
           AND b.occurred_at <= :endDate
-        GROUP BY b.category_id, c.name, c.icon
+        GROUP BY COALESCE(parent.id, b.category_id),
+                 COALESCE(parent.name, c.name),
+                 COALESCE(parent.icon, c.icon)
         ORDER BY amountMinor DESC
         """
     )
@@ -342,7 +350,10 @@ interface BillDao {
         WHERE type IN ('expense', 'fee')
           AND occurred_at >= :startDate
           AND occurred_at <= :endDate
-          AND (:categoryId IS NULL OR category_id = :categoryId)
+          AND (:categoryId IS NULL OR category_id = :categoryId
+               OR category_id IN (
+                   SELECT id FROM categories WHERE parent_id = :categoryId
+               ))
         """
     )
     suspend fun sumExpenses(
@@ -357,6 +368,22 @@ interface BillDao {
     /** 按来源溯源 ID（如结算 sessionId）查账单，用于判断该会话是否已手动确认入账。 */
     @Query("SELECT * FROM bills WHERE original_transaction_id = :originalTransactionId LIMIT 1")
     suspend fun findByOriginalTransactionId(originalTransactionId: String): BillEntity?
+
+    /** 该商户最近一次归类用的支出分类，供付款确认弹窗预选（merchant 精确匹配）。 */
+    @Query(
+        "SELECT category_id FROM bills " +
+            "WHERE merchant = :merchant AND category_id IS NOT NULL AND type = 'expense' " +
+            "ORDER BY occurred_at DESC LIMIT 1"
+    )
+    suspend fun findLastExpenseCategoryIdByMerchant(merchant: String): String?
+
+    /** 最近一次支出的分类，供付款确认弹窗在无商户命中时预选。 */
+    @Query(
+        "SELECT category_id FROM bills " +
+            "WHERE category_id IS NOT NULL AND type = 'expense' " +
+            "ORDER BY occurred_at DESC LIMIT 1"
+    )
+    suspend fun findLastExpenseCategoryId(): String?
 
     @Query(
         """
@@ -424,3 +451,15 @@ interface BillDao {
         limit: Int
     ): List<BillEntity>
 }
+
+/**
+ * LIKE 关键字转义：query() 的 LIKE 子句带 ESCAPE '~'（Room 校验器不接受 '\'），
+ * 调用方传入用户可控的 keyword 前必须先经过本函数，否则 % 和 _ 会被当通配符
+ * （搜索 "100%" 变全匹配）。
+ */
+internal fun escapeLikeKeyword(value: String?): String? =
+    value
+        ?.replace("~", "~~")
+        ?.replace("%", "~%")
+        ?.replace("_", "~_")
+        ?.takeIf { it.isNotBlank() }

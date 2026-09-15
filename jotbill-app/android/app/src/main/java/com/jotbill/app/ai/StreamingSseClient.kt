@@ -43,6 +43,7 @@ class StreamingSseClient(
                         val source = response.body?.source()
                             ?: throw IOException("AI 服务未返回响应内容")
                         var sawPayload = false
+                        var sawDone = false
                         while (!source.exhausted()) {
                             val line = source.readUtf8Line() ?: break
                             val payload = when {
@@ -50,13 +51,22 @@ class StreamingSseClient(
                                 line.trimStart().startsWith("{") -> line.trim()
                                 else -> continue
                             }
-                            if (payload == "[DONE]") break
+                            if (payload == "[DONE]") {
+                                sawDone = true
+                                break
+                            }
                             if (payload.isEmpty()) continue
                             sawPayload = true
                             parsePayload(payload, callbacks)
                         }
-                        if (!sawPayload && !call.isCanceled()) {
-                            throw IOException("AI 服务未返回有效内容")
+                        if (!sawDone && !call.isCanceled()) {
+                            // 未见完成标记即断流（半包/被截断）不得当成功：否则 UI 留空气泡、
+                            // 截断的 tool_calls 参数被当作有效结果。部分厂商在 200 响应体里
+                            // 返回 {"error": ...}（限流等），同样在此抛出。
+                            throw IOException(
+                                if (sawPayload) "AI 服务流式响应在完成标记前结束（可能被截断）"
+                                else "AI 服务未返回有效内容"
+                            )
                         }
                         activeCalls.remove(sessionId, call)
                         if (terminal.compareAndSet(false, true)) callbacks.onCompleted()
@@ -84,6 +94,11 @@ class StreamingSseClient(
 
     private fun parsePayload(payload: String, callbacks: Callbacks) {
         val root = JSONObject(payload)
+        // 200 状态码内的错误载荷（DashScope/Qwen 限流等）：不抛出会表现为"成功但空回复"
+        if (root.has("error")) {
+            val message = root.optJSONObject("error")?.optString("message")?.takeIf { it.isNotBlank() }
+            throw IOException("AI 服务返回错误: ${message ?: payload.take(200)}")
+        }
         root.optJSONObject("usage")?.let { usage ->
             callbacks.onUsage(
                 usage.optInt("prompt_tokens").takeIf { it > 0 },

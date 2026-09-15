@@ -24,6 +24,8 @@ interface AddCategoryModalProps {
   onSuccess: () => void;
   billType: BillType;
   category?: Category | null;
+  /** 添加子分类时的父分类(与 category 编辑态互斥使用) */
+  parentCategory?: Category | null;
 }
 
 const ICON_OPTIONS = [
@@ -41,6 +43,7 @@ export const AddCategoryModal: React.FC<AddCategoryModalProps> = ({
   onSuccess,
   billType,
   category = null,
+  parentCategory = null,
 }) => {
   const styles = useStyles(createStyles);
   const [categoryName, setCategoryName] = useState(category?.name || '');
@@ -67,6 +70,7 @@ export const AddCategoryModal: React.FC<AddCategoryModalProps> = ({
         type: billType,
         icon: selectedIcon,
         color: billType === 'income' ? styles._colors.income : styles._colors.expense,
+        ...(category ? {} : { parentId: parentCategory?.id }),
       };
 
       if (category) {
@@ -97,13 +101,19 @@ export const AddCategoryModal: React.FC<AddCategoryModalProps> = ({
     <Modal
       visible={visible}
       onClose={handleClose}
-      title={category ? '编辑分类' : '添加分类'}
+      title={category ? '编辑分类' : parentCategory ? `添加子分类 · ${parentCategory.name}` : '添加分类'}
     >
       <ScrollView
         style={styles.content}
         contentContainerStyle={styles.contentContainer}
         showsVerticalScrollIndicator={false}
       >
+        {category?.parentId ? (
+          <View style={styles.section}>
+            <Text style={styles.label}>所属父分类</Text>
+            <Text style={styles.parentHint}>{category.parentId === parentCategory?.id ? parentCategory.name : '　'}</Text>
+          </View>
+        ) : null}
         {/* 分类名称输入 */}
         <View style={styles.section}>
           <Text style={styles.label}>分类名称</Text>
@@ -186,6 +196,11 @@ const createStyles = (colors: ThemeColors) => ({
       fontWeight: '600',
       color: colors.textPrimary,
       backgroundColor: colors.surface,
+    },
+    parentHint: {
+      fontSize: 14,
+      fontWeight: '700',
+      color: colors.textSecondary,
     },
     iconGrid: {
       flexDirection: 'row',

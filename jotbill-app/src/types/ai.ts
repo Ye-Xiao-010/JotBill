@@ -2,11 +2,9 @@
  * AI 相关类型定义
  */
 
-// 支持的 AI 服务商
+// 支持的 AI 服务商（原生 AiModule/AiEndpointResolver 仅实现这四家，
+// claude/openai/deepseek 预设从未在 UI 暴露，留置会误导后续接入）
 export type AIProvider =
-  | 'claude'
-  | 'openai'
-  | 'deepseek'
   | 'qwen'
   | 'glm'
   | 'siliconflow'
@@ -164,24 +162,6 @@ export interface ProviderPreset {
 
 // 服务商预设
 export const AI_PROVIDERS: Record<AIProvider, ProviderPreset> = {
-  claude: {
-    name: 'Claude',
-    defaultUrl: 'https://api.anthropic.com',
-    models: ['claude-sonnet-4-20250514', 'claude-3-5-sonnet-20241022', 'claude-3-haiku-20240307'],
-    supportsVision: true,
-  },
-  openai: {
-    name: 'OpenAI',
-    defaultUrl: 'https://api.openai.com',
-    models: ['gpt-5.2', 'gpt-5.2-chat-latest', 'gpt-5', 'gpt-5.1'],
-    supportsVision: true,
-  },
-  deepseek: {
-    name: 'DeepSeek',
-    defaultUrl: 'https://api.deepseek.com',
-    models: ['deepseek-chat', 'deepseek-coder'],
-    supportsVision: false,
-  },
   qwen: {
     name: '通义千问',
     defaultUrl: 'https://dashscope.aliyuncs.com',

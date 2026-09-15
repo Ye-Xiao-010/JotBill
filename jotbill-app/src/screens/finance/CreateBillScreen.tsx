@@ -14,7 +14,6 @@ import { Text } from 'react-native';
 import { Toast } from '../../components';
 import { AddCategoryModal, ConfirmModal } from '../../components/modals';
 import { useToast, useCategories, useStyles } from '../../hooks';
-import { useAlert } from '../../providers';
 import { nativeData, type Account, type Bill, type Category } from '../../native';
 import { invalidateCache } from '../../lib/queryClient';
 import { ThemeColors } from '../../theme/colors';
@@ -63,12 +62,15 @@ interface CreateBillScreenProps {
 
 const CreateBillScreen: React.FC<CreateBillScreenProps> = ({ navigation, route }) => {
   const { toastState, showSuccess, showError, hideToast } = useToast();
-  const { confirm } = useAlert();
   const styles = useStyles(createStyles);
 
   const editingBill = route?.params?.bill;
   const initialType = route?.params?.initialType;
   const isEditing = !!editingBill;
+  // 编辑退款/手续费/调整类账单时锁定类型：表单不支持这些类型，若随表单提交会把
+  // refund/fee 静默改写成 expense，收支统计双向偏移（同笔金额从收入侧挪到支出侧）。
+  const editingTypeLocked = !!editingBill &&
+    !(['expense', 'income', 'transfer', 'repayment'] as string[]).includes(editingBill.type);
 
   const [amount, setAmount] = useState(
     editingBill ? (editingBill.amountMinor / 100).toFixed(2) : ''
@@ -77,6 +79,8 @@ const CreateBillScreen: React.FC<CreateBillScreenProps> = ({ navigation, route }
     resolveInitialFormType(editingBill?.type, initialType)
   );
   const [selectedCategory, setSelectedCategory] = useState<Category | null>(null);
+  // 批 6:账单表单中展开子分类区域的顶级分类 ID(点顶级展开,点子分类选中)
+  const [expandedBillCategoryId, setExpandedBillCategoryId] = useState<string | null>(null);
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [selectedAccountId, setSelectedAccountId] = useState<string | undefined>(editingBill?.accountId);
   // 阶段五 T7：转账/还款目标账户（编辑回显）
@@ -111,9 +115,10 @@ const CreateBillScreen: React.FC<CreateBillScreenProps> = ({ navigation, route }
 
   useEffect(() => {
     if (!editingBill?.categoryId) return;
-    setSelectedCategory(
-      categories.find(category => category.id === editingBill.categoryId) || null
-    );
+    const matched = categories.find(category => category.id === editingBill.categoryId) || null;
+    setSelectedCategory(matched);
+    // 批 6 缺陷修复:编辑回显时若分类为子分类,自动展开其父级,便于用户看到当前选中项
+    setExpandedBillCategoryId(matched?.parentId ?? null);
   }, [categories, editingBill?.categoryId]);
 
   const [showAddCategoryModal, setShowAddCategoryModal] = useState(false);
@@ -124,11 +129,8 @@ const CreateBillScreen: React.FC<CreateBillScreenProps> = ({ navigation, route }
   const handleTypeChange = (newType: BillFormType) => {
     setType(newType);
     setSelectedCategory(null);
+    setExpandedBillCategoryId(null);
     setSelectedTargetAccountId(undefined);
-  };
-
-  const handleCategorySelect = (category: Category) => {
-    setSelectedCategory(category);
   };
 
   const handleCategoryLongPress = (category: Category) => {
@@ -179,6 +181,13 @@ const CreateBillScreen: React.FC<CreateBillScreenProps> = ({ navigation, route }
     return [...mergedCategories, ...customCategories];
   };
 
+  /** 子分类展示排序:预设子分类在前,自定义在后;同组内按 sortOrder 升序 */
+  const sortChildren = (children: Category[]) =>
+    [...children].sort(
+      (a, b) =>
+        Number(b.isDefault) - Number(a.isDefault) || a.sortOrder - b.sortOrder,
+    );
+
   const selectableAccounts = accounts.filter(
     account => account.isActive || account.id === editingBill?.accountId,
   );
@@ -228,7 +237,8 @@ const CreateBillScreen: React.FC<CreateBillScreenProps> = ({ navigation, route }
       const amountMinor = Math.round(parseFloat(amount) * 100);
       const billData = {
         amountMinor,
-        type,
+        // 类型锁定的编辑（退款/手续费等）保留原类型，仅允许修改金额/备注/分类/账户
+        type: editingTypeLocked ? editingBill!.type : type,
         description: description.trim() || null,
         occurredAt: editingBill?.occurredAt || new Date().toISOString(),
         // 转账/还款不计收支，不写分类
@@ -260,28 +270,6 @@ const CreateBillScreen: React.FC<CreateBillScreenProps> = ({ navigation, route }
     }
   };
 
-  const handleDelete = async () => {
-    if (!isEditing) return;
-    confirm(
-      '确认删除',
-      '确定要删除这笔账单吗？此操作无法撤销。',
-      async () => {
-        try {
-          setLoading(true);
-          await nativeData.deleteBill(editingBill!.id);
-          invalidateCache.bills();
-          showSuccess('账单删除成功');
-          navigation.goBack();
-        } catch (error: any) {
-          showError(error.message || '删除失败');
-        } finally {
-          setLoading(false);
-        }
-      },
-      undefined,
-      { confirmText: '删除', destructive: true }
-    );
-  };
 
   return (
     <View style={styles.container}>
@@ -292,6 +280,7 @@ const CreateBillScreen: React.FC<CreateBillScreenProps> = ({ navigation, route }
             {FORM_TYPE_OPTIONS.map(option => (
               <TouchableOpacity
                 key={option.value}
+                disabled={editingTypeLocked}
                 style={[
                   styles.typeButton,
                   type === option.value && styles.typeButtonActive,
@@ -308,6 +297,11 @@ const CreateBillScreen: React.FC<CreateBillScreenProps> = ({ navigation, route }
               </TouchableOpacity>
             ))}
           </View>
+          {editingTypeLocked && (
+            <Text style={styles.typeLockHint}>
+              退款/手续费类型不可更改（仅可修改金额、备注、分类、账户）；如需变更类型请删除后重新记账。
+            </Text>
+          )}
 
           {/* 金额输入 */}
           <View style={styles.formGroup}>
@@ -391,26 +385,89 @@ const CreateBillScreen: React.FC<CreateBillScreenProps> = ({ navigation, route }
           {!isTransferLike && (
           <View style={styles.formGroup}>
             <Text style={styles.formLabel}>📂 分类</Text>
-            <View style={styles.categoryGrid}>
-              {getCategoryList().map((category) => (
-                <TouchableOpacity
-                  key={category.id}
-                  style={[styles.categoryItem, selectedCategory?.id === category.id && styles.categoryItemSelected]}
-                  onPress={() => handleCategorySelect(category)}
-                  onLongPress={() => handleCategoryLongPress(category)}
-                  delayLongPress={500}
-                >
-                  <Text style={styles.categoryIcon}>{category.icon}</Text>
-                  <Text style={[styles.categoryName, selectedCategory?.id === category.id && styles.categoryNameSelected]}>
-                    {category.name}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-              <TouchableOpacity style={styles.categoryItem} onPress={handleOtherClick}>
-                <Text style={styles.categoryIcon}>➕</Text>
-                <Text style={styles.categoryName}>其他</Text>
-              </TouchableOpacity>
-            </View>
+            {(() => {
+              const allCats = getCategoryList();
+              const topLevel = allCats.filter(cat => !cat.parentId);
+              const rows = [];
+              for (let i = 0; i < topLevel.length; i += 4) {
+                rows.push(topLevel.slice(i, i + 4));
+              }
+              return rows.map((rowCats, rowIndex) => (
+                <View key={`cat-row-${rowIndex}`} style={styles.categoryRowGrid}>
+                  {rowCats.map((category) => {
+                    const children = allCats.filter(cat => cat.parentId === category.id);
+                    const childSelected = children.some(cat => cat.id === selectedCategory?.id);
+                    const topLevelSelected =
+                      selectedCategory?.id === category.id || childSelected;
+                    const expanded = expandedBillCategoryId === category.id;
+                    return (
+                      <TouchableOpacity
+                        key={category.id}
+                        style={[styles.categoryItem, topLevelSelected && styles.categoryItemSelected]}
+                        onPress={() => {
+                          // 点击顶级分类:若其子分类已被选中,再次点击顶级会取消子分类
+                          // 并使用顶级分类;否则按原逻辑展开/收起子分类面板。
+                          setSelectedCategory(category);
+                          if (children.length > 0) {
+                            if (expanded) {
+                              setExpandedBillCategoryId(null);
+                            } else if (childSelected) {
+                              // 取消子分类,使用顶级分类;保持面板关闭
+                              setExpandedBillCategoryId(null);
+                            } else {
+                              setExpandedBillCategoryId(category.id);
+                            }
+                          } else {
+                            setExpandedBillCategoryId(null);
+                          }
+                        }}
+                        onLongPress={() => handleCategoryLongPress(category)}
+                        delayLongPress={500}
+                      >
+                        <Text style={styles.categoryIcon}>{category.icon}</Text>
+                        <Text
+                          style={[styles.categoryName, topLevelSelected && styles.categoryNameSelected]}
+                        >
+                          {category.name}
+                          {children.length > 0 ? (expanded ? ' ▾' : ' ›') : ''}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                  {rowIndex === rows.length - 1 ? (
+                    <TouchableOpacity
+                      style={styles.categoryItem}
+                      onPress={handleOtherClick}
+                    >
+                      <Text style={styles.categoryIcon}>➕</Text>
+                      <Text style={styles.categoryName}>其他</Text>
+                    </TouchableOpacity>
+                  ) : null}
+                  {expandedBillCategoryId &&
+                  rowCats.some(cat => cat.id === expandedBillCategoryId) ? (
+                    <View style={styles.childChipArea}>
+                      {sortChildren(
+                        allCats.filter(cat => cat.parentId === expandedBillCategoryId),
+                      ).map((child) => (
+                          <TouchableOpacity
+                            key={child.id}
+                            style={[
+                              styles.childChip,
+                              selectedCategory?.id === child.id && styles.childChipSelected,
+                            ]}
+                            onPress={() => {
+                              // 选中子分类后保持子分类面板展开,只有点击顶级分类才收起
+                              setSelectedCategory(child);
+                            }}
+                          >
+                            <Text style={styles.childChipText}>{child.name}</Text>
+                          </TouchableOpacity>
+                        ))}
+                    </View>
+                  ) : null}
+                </View>
+              ));
+            })()}
           </View>
           )}
 
@@ -516,6 +573,11 @@ const createStyles = (colors: ThemeColors) => ({
     },
     typeButtonText: { fontSize: 16, fontWeight: '700', color: colors.textSecondary },
     typeButtonTextActive: { color: '#FFFFFF', fontWeight: '800' },
+    typeLockHint: {
+      fontSize: 12,
+      color: colors.textSecondary,
+      marginTop: spacing.xs,
+    },
     formGroup: { marginBottom: spacing.lg },
     formLabel: { fontSize: 14, fontWeight: '800', color: colors.textPrimary, marginBottom: spacing.sm },
     amountInputContainer: {
@@ -581,17 +643,25 @@ const createStyles = (colors: ThemeColors) => ({
         color: colors.textSecondary,
       },
       categoryGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.md },
+      // 批 6:按行分块的容器,行内 4 个正方形瓷贴;展开的子分类区插在行后
+      categoryRowGrid: {
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        width: '100%',
+        gap: spacing.sm,
+        marginBottom: spacing.xs,
+      },
       categoryItem: {
         width: '22%',
         aspectRatio: 1,
-      justifyContent: 'center',
-      alignItems: 'center',
-      borderRadius: borderRadius.small,
-      borderWidth: borderWidth.thin,
-      borderColor: colors.stroke,
-      backgroundColor: colors.surface,
-      padding: spacing.sm,
-    },
+        justifyContent: 'center',
+        alignItems: 'center',
+        borderRadius: borderRadius.small,
+        borderWidth: borderWidth.thin,
+        borderColor: colors.stroke,
+        backgroundColor: colors.surface,
+        padding: spacing.sm,
+      },
     categoryItemSelected: {
       backgroundColor: colors.accent,
       borderWidth: borderWidth.medium,
@@ -600,6 +670,33 @@ const createStyles = (colors: ThemeColors) => ({
     categoryIcon: { fontSize: 24, marginBottom: 4 },
     categoryName: { fontSize: 12, color: colors.textPrimary, textAlign: 'center', fontWeight: '600' },
     categoryNameSelected: { color: colors.textPrimary, fontWeight: '800' },
+    // 批 6:子分类动态区(点顶级后展开,芯片自动换行,区域高度动态)
+    childChipArea: {
+      width: '100%',
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      gap: spacing.sm,
+      marginTop: spacing.sm,
+      marginBottom: spacing.sm,
+      paddingHorizontal: spacing.xs,
+    },
+    childChip: {
+      paddingHorizontal: spacing.md,
+      paddingVertical: spacing.sm,
+      borderRadius: borderRadius.small,
+      borderWidth: borderWidth.thin,
+      borderColor: colors.stroke,
+      backgroundColor: colors.surface,
+    },
+    childChipSelected: {
+      backgroundColor: colors.accent,
+      borderWidth: borderWidth.medium,
+    },
+    childChipText: {
+      fontSize: 13,
+      fontWeight: '700',
+      color: colors.textPrimary,
+    },
     bottomActions: {
       flexDirection: 'row',
       gap: spacing.md,

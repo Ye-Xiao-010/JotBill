@@ -2,12 +2,10 @@ package com.jotbill.app.importing
 
 import java.io.File
 import java.math.BigDecimal
-import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
-import kotlin.math.roundToLong
 
 /**
  * 阶段六 T4：支付宝官方账单适配器（docs/tdd/10_phase6_tasks.md 任务卡 T4）。
@@ -20,9 +18,13 @@ import kotlin.math.roundToLong
  * - alipay-csv-v1：`交易号,商家订单号,交易创建时间,付款时间,最近修改时间,交易来源地,
  *   类型,交易对方,商品名称,金额（元）,收/支,交易状态,服务费（元）,成功退款（元）,备注,资金状态`
  * - alipay-xlsx-v1：同字段的 XLSX 导出。
+ * - alipay-csv-v2：2026 年电子客户回单（表头不在首行、无独立交易号/付款时间列）：
+ *   `交易时间,交易分类,交易对方,对方账号,商品说明,收/支,金额,收/付款方式,交易状态,
+ *   交易订单号,商家订单号,备注`。交易订单号充作交易号、交易时间充作付款时间。
  *
- * 识别依据：表头同时含 `交易号`、`商家订单号`、`金额`、`收/支`、`交易状态`，
- * 时间列含 `付款时间` 或 `交易创建时间`。未知版本不强行入账。
+ * 识别依据（满足任一表头族）：v1 同时含 `交易号`、`商家订单号`、`金额`、`收/支`、
+ * `交易状态`、`付款时间|交易创建时间`；v2 同时含 `交易时间`、`交易订单号`、
+ * `商家订单号`、`金额`、`收/支`、`交易状态`。未知版本不强行入账。
  */
 internal object AlipayBillAdapter : BillImportAdapter {
     override val source = "alipay"
@@ -30,7 +32,7 @@ internal object AlipayBillAdapter : BillImportAdapter {
         ImportFilePreparer.FORMAT_CSV,
         ImportFilePreparer.FORMAT_XLSX
     )
-    override val formatVersion = "alipay-bill-v1"
+    override val formatVersion = "alipay-bill-v2"
 
     override fun canParse(file: File, encoding: String?): Boolean =
         runCatching { findHeader(file, encoding) != null }.getOrDefault(false)
@@ -75,6 +77,7 @@ internal object AlipayBillAdapter : BillImportAdapter {
             val parsed = parseRow(values, columns, lineNumber)
             when {
                 parsed == null && valueAt(values, columns.status) == "交易关闭" -> skippedRecords += 1
+                parsed == null && isNeutralZeroAmountRow(values, columns) -> skippedRecords += 1
                 parsed != null -> rows += parsed
                 else -> errors += ImportParseError(
                     lineNumber = lineNumber,
@@ -124,14 +127,21 @@ internal object AlipayBillAdapter : BillImportAdapter {
         }
         readRows { lineNumber, values ->
             val normalized = values.map { normalizeHeader(it) }
-            if (
+            val isV1Header =
                 normalized.any { it == "交易号" } &&
-                normalized.any { it == "商家订单号" } &&
-                normalized.any(::amountHeaderOf) &&
-                normalized.any { it == "收/支" } &&
-                normalized.any { it == "交易状态" } &&
-                normalized.any { it == "付款时间" || it == "交易创建时间" }
-            ) {
+                    normalized.any { it == "商家订单号" } &&
+                    normalized.any(::amountHeaderOf) &&
+                    normalized.any { it == "收/支" } &&
+                    normalized.any { it == "交易状态" } &&
+                    normalized.any { it == "付款时间" || it == "交易创建时间" }
+            val isV2Header =
+                normalized.any { it == "交易时间" } &&
+                    normalized.any { it == "交易订单号" } &&
+                    normalized.any { it == "商家订单号" } &&
+                    normalized.any(::amountHeaderOf) &&
+                    normalized.any { it == "收/支" } &&
+                    normalized.any { it == "交易状态" }
+            if (isV1Header || isV2Header) {
                 found = Header(lineNumber, values)
                 false
             } else {
@@ -222,13 +232,23 @@ internal object AlipayBillAdapter : BillImportAdapter {
         return parts.joinToString("；").takeIf { it.isNotBlank() }
     }
 
-    private fun isPreambleOrSummary(values: List<String>): Boolean {
-        val first = values.firstOrNull()?.trim().orEmpty()
+    private fun isPreambleOrSummary(values: List<String>): Boolean {        val first = values.firstOrNull()?.trim().orEmpty()
         if (first.isBlank()) return false
         if (first.contains("支付宝交易流水明细") || first.contains("支付宝账单明细")) return true
         if (first == "合计" || first == "总计") return true
         if (first.startsWith("共") && (first.contains("笔") || first.contains("条"))) return true
         return false
+    }
+
+    /**
+     * 收/支为空或"/"且金额无法解析（如 0.00 的冻结/解冻行）：按来源规则跳过，
+     * 不计入解析错误污染 failed 口径。
+     */
+    private fun isNeutralZeroAmountRow(values: List<String>, columns: HeaderColumns): Boolean {
+        val direction = valueAt(values, columns.direction)
+        if (!direction.isNullOrBlank() && direction != "/" && direction != "不计收支") return false
+        val amountText = valueAt(values, columns.amount) ?: return false
+        return parseAmountMinor(amountText) == null
     }
 
     private fun parseAmountMinor(text: String): Long? {
@@ -252,31 +272,10 @@ internal object AlipayBillAdapter : BillImportAdapter {
 
     private fun parseOccurredAt(text: String): Long? {
         val normalized = text.trim()
-        return parseExcelSerial(normalized) ?: runCatching {
+        return XlsxTableReader.excelSerialToEpochMillis(normalized) ?: runCatching {
             TIME_FORMATTERS.firstNotNullOf { formatter ->
                 runCatching { LocalDateTime.parse(normalized, formatter) }.getOrNull()
             }.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
-        }.getOrNull()
-    }
-
-    /**
-     * XLSX 日期序列数换算（1900 闰年 bug：序列 60 及以上减 1 天）。
-     * 只在输入为纯数字时启用，不得使用系统时区以外的换算口径。
-     */
-    private fun parseExcelSerial(text: String): Long? {
-        if (!text.matches(EXCEL_SERIAL_PATTERN)) return null
-        val serial = text.toDoubleOrNull() ?: return null
-        if (serial < 0) return null
-        val days = serial.toLong()
-        val adjustedDays = if (days >= 60) days - 1 else days
-        val fraction = serial - days
-        val millisOfDay = (fraction * MILLIS_PER_DAY).roundToLong()
-        return runCatching {
-            LocalDate.of(1899, 12, 30)
-                .plusDays(adjustedDays)
-                .atStartOfDay(ZoneId.systemDefault())
-                .toInstant()
-                .toEpochMilli() + millisOfDay
         }.getOrNull()
     }
 
@@ -289,10 +288,10 @@ internal object AlipayBillAdapter : BillImportAdapter {
             return -1
         }
         return HeaderColumns(
-            tradeNo = column("交易号"),
+            tradeNo = column("交易号", "交易订单号"),
             merchantOrderNo = column("商家订单号"),
-            createdTime = column("交易创建时间"),
-            paidTime = column("付款时间"),
+            createdTime = column("交易创建时间", "交易时间"),
+            paidTime = column("付款时间", "交易时间"),
             type = column("类型", "交易类型"),
             counterparty = column("交易对方"),
             product = column("商品名称", "商品", "商品说明"),
@@ -337,10 +336,9 @@ internal object AlipayBillAdapter : BillImportAdapter {
     private fun String.containsAny(keywords: List<String>): Boolean =
         keywords.any { contains(it) }
 
-    private const val MAX_HEADER_SCAN_LINES = 20
-    private const val MILLIS_PER_DAY = 24 * 60 * 60 * 1000L
+    /** 表头扫描上限：2026 电子客户回单表头在第 24 行附近，预留到 40。 */
+    private const val MAX_HEADER_SCAN_LINES = 40
     private val AMOUNT_PATTERN = Regex("""[-+]?[0-9][0-9,]*(?:\.[0-9]{1,2})?""")
-    private val EXCEL_SERIAL_PATTERN = Regex("""^[0-9]+(?:\.[0-9]+)?$""")
     private val REFUND_KEYWORDS = listOf("退款", "退回", "返还")
     private val FEE_KEYWORDS = listOf("手续费", "服务费", "提现费")
     private val REPAYMENT_KEYWORDS = listOf("信用卡还款", "花呗还款", "还款")

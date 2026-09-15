@@ -1,6 +1,7 @@
 package com.jotbill.app.recognition
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -149,5 +150,63 @@ class PaymentResultParserTest {
         )
 
         assertTrue(result is PaymentResultParseResult.Success)
+    }
+
+    // ---------- D-6：结果页事件去重键桶宽（主路径 = 文本解析成功） ----------
+
+    /**
+     * 同一结果页在 30 秒内的重复读取必须收敛到同一事件键。
+     *
+     * 防噪原意保留：无障碍结果页会秒级连发多条事件，同一页不得落多条证据。
+     */
+    @Test
+    fun sameResultPageWithinThirtySecondBucketKeepsSingleEventKey() {
+        val pageText = "支付成功 拼多多 实付 ¥39.60"
+
+        assertEquals(
+            "同一结果页 5 秒内重复读取应收敛到同一事件键（防噪语义保留）",
+            eventKeyOf(pageText, observedAt),
+            eventKeyOf(pageText, observedAt + 5_000L)
+        )
+    }
+
+    /**
+     * 同包同金额两单相隔 40 秒（< 2 分钟）时事件键必须不同。
+     *
+     * 否则第二单证据会被 `markPaymentResultEvent` 静默吞掉（不落待确认、不派 AI）。
+     *
+     * **判别性**：40 秒的间隔仍落在同一个 120 秒桶内 ⇒ 旧实现（`/ 120_000`）两键相同、
+     * 本用例必红；收窄为 30 秒桶后两键必须不同。该用例专钉**文本主路径**
+     * （`PaymentResultParser`），因为只测截图兜底路径会漏掉这一处的漏改。
+     */
+    @Test
+    fun sameResultPageAcrossThirtySecondBucketProducesDistinctEventKeys() {
+        val pageText = "支付成功 拼多多 实付 ¥39.60"
+        val secondOrderObservedAt = observedAt + 40_000L
+
+        // 前提自检：这两次读取在旧 120 秒桶下确实撞键 —— 本用例判别力的来源。
+        assertEquals(
+            "前提：相隔 40 秒的两次读取仍落在同一 120 秒桶内",
+            observedAt / 120_000L,
+            secondOrderObservedAt / 120_000L
+        )
+
+        assertNotEquals(
+            "同包同金额两单相隔 40 秒不得撞键，否则第二单被静默丢弃",
+            eventKeyOf(pageText, observedAt),
+            eventKeyOf(pageText, secondOrderObservedAt)
+        )
+    }
+
+    /** 取文本主路径生成的事件键；未解析成功时直接判失败（避免测试假绿）。 */
+    private fun eventKeyOf(pageText: String, at: Long): String {
+        val result = PaymentResultParser.parseResult(
+            pageText = pageText,
+            sourcePackage = "com.tencent.mm",
+            pageFingerprint = "f".repeat(64),
+            observedAt = at
+        )
+        assertTrue("期望文本主路径解析成功，实际为 $result", result is PaymentResultParseResult.Success)
+        return (result as PaymentResultParseResult.Success).evidence.sourceEventKey
     }
 }

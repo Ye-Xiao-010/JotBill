@@ -4,7 +4,13 @@ import { Provider as PaperProvider, MD3DarkTheme, MD3LightTheme } from 'react-na
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { queryClient, invalidateCache } from './src/lib/queryClient';
-import { addPendingCreatedListener, nativePendingReminder } from './src/native/pendingReminder';
+import {
+  addPendingChangedListener,
+  addPendingCreatedListener,
+  nativePendingReminder,
+} from './src/native/pendingReminder';
+import { addBudgetAlertListener } from './src/native/budgetReminder';
+import { markBundleLoaded } from './src/services/hotUpdate';
 import { useAppStateManager } from './src/hooks';
 import { ThemeProvider, useTheme, AlertProvider } from './src/providers';
 import AppNavigator from './src/navigation/AppNavigator';
@@ -17,6 +23,13 @@ function AppContent() {
 
   // 获取主题
   const { isDark, colors } = useTheme();
+
+  // 热更新崩溃计数复位：JS bundle 能执行到这里即证明热包健康，必须立即复位
+  // 原生侧 crash_count（原生每次启动 +1，达到 2 会静默删除热包回退内置 bundle）。
+  // 此前唯一复位点挂在无人使用的 useHotUpdate 里，热包最多存活 2 次启动即被回滚。
+  useEffect(() => {
+    markBundleLoaded();
+  }, []);
 
   // 监听账单创建成功事件
   useEffect(() => {
@@ -57,6 +70,22 @@ function AppContent() {
       invalidateCache.recognition();
     });
     nativePendingReminder.requestNotificationPermissionIfNeeded().catch(() => undefined);
+    return () => subscription.remove();
+  }, []);
+
+  // 待确认确认/忽略后的终态事件:刷新识别链路缓存,核销页与待确认入口及时同步
+  useEffect(() => {
+    const subscription = addPendingChangedListener(() => {
+      invalidateCache.recognition();
+    });
+    return () => subscription.remove();
+  }, []);
+
+  // 预算超支告警事件:刷新预算进度缓存(系统通知之外的 JS 侧 UI 同步通道)
+  useEffect(() => {
+    const subscription = addBudgetAlertListener(() => {
+      invalidateCache.budgets();
+    });
     return () => subscription.remove();
   }, []);
 

@@ -26,6 +26,7 @@ import {
   Bell,
   BellRing,
   ShieldCheck,
+  Tags,
 } from 'lucide-react-native';
 import { ThemeColors } from '../theme/colors';
 import { spacing, borderRadius, borderWidth, shadow } from '../theme';
@@ -77,6 +78,7 @@ const ICON_CANDY_COLORS: Record<string, string> = {
   review: '#FFC9DE',
   accessibility: '#B5E8DC',
   notification: '#FFD6A5',
+  category: '#FFE8CC',
 };
 
 export default function SettingsScreen({ navigation }: SettingsScreenProps) {
@@ -98,6 +100,7 @@ export default function SettingsScreen({ navigation }: SettingsScreenProps) {
     review: Bell,
     accessibility: ShieldCheck,
     notification: BellRing,
+    category: Tags,
   };
 
   const settingGroups: SettingGroup[] = [
@@ -105,6 +108,7 @@ export default function SettingsScreen({ navigation }: SettingsScreenProps) {
       title: '💰 财务',
       items: [
         { id: 'accounts', label: '账户管理', icon: 'accounts', onPress: () => navigation?.navigate('Accounts') },
+        { id: 'category-manage', label: '分类管理', icon: 'category', onPress: () => navigation?.navigate('Categories') },
         { id: 'budget-manage', label: '预算管理', icon: 'wallet', onPress: () => navigation?.navigate('Budgets') },
         { id: 'financial-goals', label: '财务目标', icon: 'flag', onPress: () => navigation?.navigate('FinancialGoals') },
         { id: 'net-worth', label: '净资产', icon: 'netWorth', onPress: () => navigation?.navigate('Reports') },

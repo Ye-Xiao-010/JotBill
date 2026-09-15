@@ -1,15 +1,12 @@
 package com.jotbill.app.notification
 
-import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import android.content.IntentFilter
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.os.Build
 import android.provider.Settings
 import android.util.Log
-import androidx.localbroadcastmanager.content.LocalBroadcastManager
 import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.LifecycleEventListener
 import com.facebook.react.bridge.Promise
@@ -18,7 +15,6 @@ import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
 import com.facebook.react.bridge.ReadableArray
 import com.facebook.react.bridge.WritableArray
-import com.facebook.react.modules.core.DeviceEventManagerModule
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -62,9 +58,6 @@ class PaymentNotificationModule(
         /** 模块名称，JavaScript 中通过此名称访问 */
         const val MODULE_NAME = "PaymentNotificationModule"
 
-        /** 事件名称：账单创建成功 */
-        const val EVENT_BILL_CREATED = "onBillCreated"
-
         /** 权限状态：已授权 */
         const val PERMISSION_AUTHORIZED = "authorized"
         
@@ -74,12 +67,6 @@ class PaymentNotificationModule(
         /** 权限状态：未知 */
         const val PERMISSION_UNKNOWN = "unknown"
     }
-
-    /** 支付通知广播接收器 */
-    private var paymentReceiver: BroadcastReceiver? = null
-    
-    /** 是否已注册广播接收器 */
-    private var isReceiverRegistered = false
 
     init {
         reactContext.addLifecycleEventListener(this)
@@ -198,23 +185,22 @@ class PaymentNotificationModule(
     /**
      * 启动监听
      * 
-     * 注册广播接收器，开始接收支付通知事件
+     * D-20：账单创建广播接收器已随旧 PaymentOverlayManager（整文件删除）一并移除，
+     * 本方法保留为 JS 接口形状，不再注册任何接收器。
      */
     @ReactMethod
     fun startListening() {
-        registerPaymentReceiver()
-        Log.i(TAG, "已开始监听支付通知")
+        Log.i(TAG, "startListening 调用（D-20 后不再注册账单创建广播接收器）")
     }
 
     /**
      * 停止监听
      *
-     * 注销广播接收器，停止接收支付通知事件
+     * D-20：账单创建广播接收器已删除，本方法保留为 JS 接口形状，不再注销任何接收器。
      */
     @ReactMethod
     fun stopListening() {
-        unregisterPaymentReceiver()
-        Log.i(TAG, "已停止监听支付通知")
+        Log.i(TAG, "stopListening 调用（D-20 后无接收器可注销）")
     }
 
     /**
@@ -311,75 +297,15 @@ class PaymentNotificationModule(
         }
     }
 
-    /**
-     * 注册账单创建广播接收器
-     */
-    private fun registerPaymentReceiver() {
-        if (isReceiverRegistered) {
-            Log.d(TAG, "账单创建广播接收器已注册")
-            return
-        }
-
-        paymentReceiver = object : BroadcastReceiver() {
-            override fun onReceive(context: Context?, intent: Intent?) {
-                if (intent?.action == PaymentOverlayManager.ACTION_BILL_CREATED) {
-                    Log.d(TAG, "收到账单创建成功广播")
-                    sendBillCreatedEventToJS()
-                }
-            }
-        }
-
-        val filter = IntentFilter(PaymentOverlayManager.ACTION_BILL_CREATED)
-        LocalBroadcastManager.getInstance(reactContext).registerReceiver(paymentReceiver!!, filter)
-        isReceiverRegistered = true
-
-        Log.d(TAG, "账单创建广播接收器注册成功")
-    }
-
-    /**
-     * 注销支付通知广播接收器
-     */
-    private fun unregisterPaymentReceiver() {
-        if (!isReceiverRegistered || paymentReceiver == null) {
-            return
-        }
-        
-        try {
-            LocalBroadcastManager.getInstance(reactContext).unregisterReceiver(paymentReceiver!!)
-            paymentReceiver = null
-            isReceiverRegistered = false
-            Log.d(TAG, "支付广播接收器已注销")
-        } catch (e: Exception) {
-            Log.e(TAG, "注销支付广播接收器失败", e)
-        }
-    }
-
-    /**
-     * 发送账单创建成功事件到 JavaScript 层
-     */
-    private fun sendBillCreatedEventToJS() {
-        try {
-            reactContext
-                .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
-                .emit(EVENT_BILL_CREATED, null)
-
-            Log.d(TAG, "账单创建事件已发送到JS")
-        } catch (e: Exception) {
-            Log.e(TAG, "发送账单创建事件到JS失败", e)
-        }
-    }
-
     // LifecycleEventListener 实现
+    //
+    // D-20：账单创建广播链路已删除（旧 PaymentOverlayManager 是 ACTION_BILL_CREATED
+    // 的唯一发送方，其类内发送点随整文件删除）。生命周期回调保留为接口实现，不承载行为；
+    // 「确认入账 → 前端缓存刷新」现由 sharedJsEventEmitter 直接推送 onBillCreated 承担。
 
-    override fun onHostResume() {
-        registerPaymentReceiver()
-    }
+    override fun onHostResume() = Unit
 
-    override fun onHostPause() {
-        // 保持接收器注册，以便在后台也能接收事件
-    }
+    override fun onHostPause() = Unit
 
-    override fun onHostDestroy() {
-        unregisterPaymentReceiver()
-    }
+    override fun onHostDestroy() = Unit
 }

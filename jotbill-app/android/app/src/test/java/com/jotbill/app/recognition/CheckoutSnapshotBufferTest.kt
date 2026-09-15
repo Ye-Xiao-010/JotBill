@@ -23,6 +23,12 @@ class CheckoutSnapshotBufferTest {
         val FP_B = "b".repeat(64)
         const val TTL = 120_000L
         const val START_NOW = 1_000_000L
+
+        /** 用户断言截图的专用槽位与会话（服务侧 user-asserted: 前缀约定）。 */
+        const val ASSERTED_SLOT = "user-asserted:com.test.app"
+        const val ASSERTED_SESSION = "asserted-session-1"
+        const val ASSERTED_SESSION_2 = "asserted-session-2"
+        val ASSERTED_FP = "d".repeat(64)
     }
 
     private class MutableClock(var now: Long = START_NOW)
@@ -274,6 +280,75 @@ class CheckoutSnapshotBufferTest {
     }
 
     @Test
+    fun fingerprintlessConsumePrefersManualCandidateOverAutomatic() {
+        // 【有意行为变化】无指纹消费在手动+自动并存时优先取手动候选（不变式第 5 条：
+        // 用户手动操作优先级最高）。此前一律 AMBIGUOUS_CANDIDATES 拒绝，
+        // 手动补截反而让支付交接消费不到任何快照。
+        val f = Fixture()
+        f.buffer.store(
+            captureRequest(
+                fingerprint = FP_A,
+                sourceReason = SnapshotSourceReason.MANUAL_CAPTURE,
+                target = SnapshotCaptureTarget.USER_RETRY
+            )
+        )
+        f.buffer.store(captureRequest(fingerprint = FP_B))
+
+        val result = f.buffer.consumeForAi(SLOT, PurchaseIntent.PAYMENT_APP_HANDOFF)
+        assertTrue(result is CheckoutAiTriggerResult.Ready)
+        result as CheckoutAiTriggerResult.Ready
+        assertEquals(FP_A, result.snapshot.pageFingerprint)
+        assertEquals(SnapshotSourceReason.MANUAL_CAPTURE, result.snapshot.sourceReason)
+        assertEquals(
+            CheckoutRequestKey.from(SESSION, "com.test.app", FP_A),
+            result.requestKey
+        )
+    }
+
+    @Test
+    fun fingerprintlessConsumeKeepsAmbiguousWhenManualNotConsumableForIntent() {
+        // 手动候选为非结算角色（如商品页手动截图）时，对 SUBMIT_ACTION 等真实购买
+        // 意图不可消费：不能选中它再被角色守卫拒绝，应回退到原有歧义语义。
+        val f = Fixture()
+        f.buffer.store(
+            captureRequest(
+                fingerprint = FP_A,
+                pageRole = CheckoutPageRole.PRODUCT_DETAIL,
+                sourceReason = SnapshotSourceReason.MANUAL_CAPTURE,
+                target = SnapshotCaptureTarget.USER_RETRY
+            )
+        )
+        f.buffer.store(captureRequest(fingerprint = FP_B))
+
+        assertEquals(
+            SnapshotConsumeRejection.AMBIGUOUS_CANDIDATES,
+            (f.buffer.consumeForAi(SLOT, PurchaseIntent.SUBMIT_ACTION)
+                as CheckoutAiTriggerResult.Rejected).reason
+        )
+    }
+
+    @Test
+    fun fingerprintlessConsumeUsesManualForUserRetryIntentEvenIfNonCheckoutRole() {
+        // USER_RETRY 意图明确指向手动截图：非结算角色的手动候选也可被选中消费。
+        val f = Fixture()
+        f.buffer.store(
+            captureRequest(
+                fingerprint = FP_A,
+                pageRole = CheckoutPageRole.PRODUCT_DETAIL,
+                sourceReason = SnapshotSourceReason.MANUAL_CAPTURE,
+                target = SnapshotCaptureTarget.USER_RETRY
+            )
+        )
+        f.buffer.store(captureRequest(fingerprint = FP_B))
+
+        val result = f.buffer.consumeForAi(SLOT, PurchaseIntent.USER_RETRY)
+        assertTrue(result is CheckoutAiTriggerResult.Ready)
+        result as CheckoutAiTriggerResult.Ready
+        assertEquals(FP_A, result.snapshot.pageFingerprint)
+        assertEquals(SnapshotSourceReason.MANUAL_CAPTURE, result.snapshot.sourceReason)
+    }
+
+    @Test
     fun userRetryStoreClearsConsumedTombstoneAndCanConsumeAgain() {
         val f = Fixture()
         f.buffer.store(captureRequest())
@@ -522,5 +597,79 @@ class CheckoutSnapshotBufferTest {
         // 消费后无候选,只剩取消
         f.buffer.consumeForAi(SLOT, PurchaseIntent.SUBMIT_ACTION, FP_A)
         assertTrue(f.scheduler.scheduled.isEmpty())
+    }
+
+    // ---------- 用户断言截图通道（服务侧专用槽位契约） ----------
+
+    private fun assertedRequest(
+        slotId: String = ASSERTED_SLOT,
+        sessionId: String = ASSERTED_SESSION,
+        fingerprint: String = ASSERTED_FP
+    ) = captureRequest(
+        slotId = slotId,
+        sessionId = sessionId,
+        fingerprint = fingerprint,
+        sourceReason = SnapshotSourceReason.MANUAL_CAPTURE,
+        target = SnapshotCaptureTarget.USER_RETRY
+    )
+
+    @Test
+    fun userAssertedCaptureRoundTripStoresAndConsumesOnDedicatedSlot() {
+        val f = Fixture()
+        // 服务侧断言截图契约：全新会话 + 合成指纹 + MANUAL_CAPTURE/USER_RETRY + CHECKOUT 角色
+        val stored = f.buffer.store(assertedRequest())
+        assertTrue(stored is SnapshotStoreResult.Stored)
+        (stored as SnapshotStoreResult.Stored).snapshot.release()
+
+        val ready = f.buffer.consumeForAi(ASSERTED_SLOT, PurchaseIntent.USER_RETRY, ASSERTED_FP)
+        assertTrue(ready is CheckoutAiTriggerResult.Ready)
+        ready as CheckoutAiTriggerResult.Ready
+        assertEquals(
+            CheckoutRequestKey.from(ASSERTED_SESSION, "com.test.app", ASSERTED_FP),
+            ready.requestKey
+        )
+        assertEquals(PurchaseIntent.USER_RETRY, ready.intent)
+        ready.snapshot.release()
+
+        // 消费后槽位无候选，后续同指纹消费为 AlreadyTriggered（幂等键生效）
+        val again = f.buffer.consumeForAi(ASSERTED_SLOT, PurchaseIntent.USER_RETRY, ASSERTED_FP)
+        assertTrue(again is CheckoutAiTriggerResult.AlreadyTriggered)
+    }
+
+    @Test
+    fun userAssertedCaptureNeverTouchesShoppingPackageSlot() {
+        val f = Fixture()
+        // 结算槽位有在途自动候选时，断言截图写入专用槽位，互不可见
+        f.buffer.store(captureRequest())
+        val stored = f.buffer.store(assertedRequest()) as SnapshotStoreResult.Stored
+        stored.snapshot.release()
+
+        // 断言槽位可正常消费
+        val ready = f.buffer.consumeForAi(ASSERTED_SLOT, PurchaseIntent.USER_RETRY, ASSERTED_FP)
+            as CheckoutAiTriggerResult.Ready
+        ready.snapshot.release()
+        // 结算槽位的自动候选原样保留，仍可被真实购买意图消费
+        val auto = f.buffer.consumeForAi(SLOT, PurchaseIntent.SUBMIT_ACTION, FP_A)
+        assertTrue(auto is CheckoutAiTriggerResult.Ready)
+        (auto as CheckoutAiTriggerResult.Ready).snapshot.release()
+    }
+
+    @Test
+    fun repeatedUserAssertedCaptureReplacesPreviousSlotState() {
+        val f = Fixture()
+        val first = f.buffer.store(assertedRequest()) as SnapshotStoreResult.Stored
+        first.snapshot.release()
+        f.buffer.consumeForAi(ASSERTED_SLOT, PurchaseIntent.USER_RETRY, ASSERTED_FP)
+
+        // 第二次断言：全新会话，整体替换已消费的旧槽位状态，不受 consumedRequestKey 阻塞
+        val secondFp = "c".repeat(64)
+        val second = f.buffer.store(
+            assertedRequest(sessionId = ASSERTED_SESSION_2, fingerprint = secondFp)
+        )
+        assertTrue(second is SnapshotStoreResult.Stored)
+        (second as SnapshotStoreResult.Stored).snapshot.release()
+        val ready = f.buffer.consumeForAi(ASSERTED_SLOT, PurchaseIntent.USER_RETRY, secondFp)
+        assertTrue(ready is CheckoutAiTriggerResult.Ready)
+        (ready as CheckoutAiTriggerResult.Ready).snapshot.release()
     }
 }

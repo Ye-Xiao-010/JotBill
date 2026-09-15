@@ -95,8 +95,8 @@ android {
         applicationId "com.jotbill.app"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 75
-        versionName "0.0.75"
+        versionCode 94
+        versionName "0.0.98"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
     }
     signingConfigs {
@@ -198,6 +198,8 @@ dependencies {
     // 批 0 安全网:matcher 证据链需要 Room 内存库,Robolectric 提供 JVM 上的 Android 环境
     testImplementation("org.robolectric:robolectric:4.14.1")
     testImplementation("androidx.test:core:1.6.1")
+    // 批 6:XlsxTableReader 用 XmlPullParser,JVM 单测环境无平台内置实现,补 kxml2
+    testImplementation("net.sf.kxml:kxml2:2.3.0")
 
     // 阶段七 T2：Room 迁移与 androidTest DAO 集成测试。
     androidTestImplementation("androidx.test:runner:1.7.0")

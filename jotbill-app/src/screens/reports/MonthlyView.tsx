@@ -35,10 +35,11 @@ export default function MonthlyView({
 
   const { monthlyData, isLoading, refetch } = useMonthlyGridData(year);
 
-  // 当选中月份时，获取该月每日数据
+  // 当选中月份时，获取该月每日数据（未选月份不发请求）
   const { dailyMap } = useDailyGridData(
     year,
     selectedMonth ? selectedMonth - 1 : 0,
+    selectedMonth !== null,
   );
 
   const isNextDisabled = year >= now.getFullYear();

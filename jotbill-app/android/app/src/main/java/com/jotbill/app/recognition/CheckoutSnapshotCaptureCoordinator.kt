@@ -205,6 +205,58 @@ internal fun shouldReplaceHandoffCheckout(
     retainedHasFence: Boolean
 ): Boolean = hasCurrentCheckout && !retainedHasSnapshot && !retainedHasFence
 
+/** 挂起交接期间稳定事件的处置动作。 */
+internal enum class HandoffStableEventAction {
+    /** 同包过渡期事件：保留挂起会话，忽略本次稳定事件。 */
+    KEEP_RETAINED,
+    /** 返回原结算页：恢复挂起会话。 */
+    RESTORE,
+    /** 返回不同结算页：丢弃挂起会话，允许新订单建立会话。 */
+    DISCARD_RETAINED
+}
+
+/** 交接挂起后的过渡窗长度：同购物包的迟到稳定事件在此窗口内不视为新订单。 */
+internal const val HANDOFF_TRANSITION_WINDOW_MILLIS = 10_000L
+
+/**
+ * 判定挂起交接期间到达的稳定事件应如何处置挂起会话。
+ *
+ * X1 真机故障时序（2026-09-10 17:09 第三次复现，与 09-09 20:55 / 22:10 同构）：
+ * - 17:09:17.149 交接栅栏已设置（指纹已按候选校正），购买意图 Accepted；
+ * - 17:09:17.165 支付交接会话预写入，结算截图 AI 已派发；
+ * - 17:09:17.345 同包迟到稳定事件（转场 UI 指纹漂移，距结算页稳定 6.4s）
+ *   超出旧漂移尾波窗口（锚定页面 stableAt + 2.5s），被判"返回其他结算页"丢弃；
+ * - 17:09:18.105 支付上下文失去协调器引用，fallback 生成新会话 23eafff1；
+ * - 17:09:21.837 ¥55 支付证据落错会话 matched=false，待确认而非自动入账。
+ *
+ * 边界（本函数钉死）：
+ * 1. 过渡窗必须锚定**挂起时刻**而非结算页稳定时刻——用户从页面稳定到提交订单
+ *    天然间隔数秒（E 场景 6.4s），页面锚点会把挂起初期的转场事件全部误判；
+ * 2. 只放行同购物包事件：转场 UI 重发来自同一购物 App；跨包稳定事件立即丢弃；
+ * 3. 同指纹（返回原结算页）在任何时刻都走恢复，与过渡窗无关；
+ * 4. 窗口外/跨包的不同指纹结算页按新订单丢弃——用户真正回来逛新订单不受影响，
+ *    代价仅是窗口内（10s）立刻开新订单的自动截图延迟一个稳定事件周期。
+ */
+internal fun handoffStableEventAction(
+    observedPackage: String,
+    observedFingerprint: String,
+    retainedPackage: String,
+    retainedFingerprint: String,
+    handoffRetainedAtMillis: Long,
+    observedAtMillis: Long,
+    transitionWindowMillis: Long = HANDOFF_TRANSITION_WINDOW_MILLIS
+): HandoffStableEventAction {
+    val samePackage = observedPackage == retainedPackage
+    val sameCheckout = samePackage && observedFingerprint == retainedFingerprint
+    return when {
+        sameCheckout -> HandoffStableEventAction.RESTORE
+        samePackage &&
+            observedAtMillis - handoffRetainedAtMillis < transitionWindowMillis ->
+            HandoffStableEventAction.KEEP_RETAINED
+        else -> HandoffStableEventAction.DISCARD_RETAINED
+    }
+}
+
 /**
  * 判定手动重试上下文能否建立 USER_RETRY 会话。
  *
@@ -304,13 +356,23 @@ internal class CheckoutSnapshotCaptureCoordinator(
         private const val JPEG_QUALITY = 85
         private const val MAX_ENCODED_SCREENSHOT_BYTES = 5 * 1024 * 1024
         private const val EVENT_DISPATCH_TIMEOUT_MILLIS = 5_000L
-        /** 支付中间页挂起后，同包指纹漂移尾波稳定事件被视为旧订单的时间窗口。 */
-        private const val HANDOFF_DRIFT_TAIL_WINDOW_MILLIS = 2_500L
         /** 熔断后"跳过观察事件"日志的采样间隔，兼顾可观测与防刷屏。 */
         private const val CLOSED_EVENT_SKIP_LOG_INTERVAL_MILLIS = 5_000L
         private const val MAIN_HANDLER_UNAVAILABLE = "MAIN_HANDLER_UNAVAILABLE"
         private const val EVENT_PROCESSING_FAILED = "EVENT_PROCESSING_FAILED"
         private const val SCREENSHOT_HANDLER_UNAVAILABLE = "SCREENSHOT_HANDLER_UNAVAILABLE"
+        /** 飞行中的自动截图被手动截图抢占时的取消原因；手动优先级见不变式第 5 条。 */
+        private const val PREEMPTED_BY_MANUAL_CAPTURE = "PREEMPTED_BY_MANUAL_CAPTURE"
+
+        /**
+         * 截图回调超时看门狗。MIUI 等系统可能静默丢弃 takeScreenshot 回调
+         * （真机上出现在 adb 授权恢复后），无超时则 pendingCapture 永久占位、
+         * 同页所有手动重试恒 CAPTURE_IN_FLIGHT、自动截图排队永不消费。
+         * 正常回调耗时百毫秒级，3 秒足以覆盖重度卡顿；超时按 CANCELLED 收口，
+         * 迟到的系统回调会因 requestId 不匹配走字节抹零路径，不会二次发布。
+         */
+        private const val CAPTURE_CALLBACK_TIMEOUT_MILLIS = 3_000L
+        private const val CAPTURE_CALLBACK_TIMEOUT = "CAPTURE_CALLBACK_TIMEOUT"
     }
 
     private data class CaptureKey(
@@ -361,7 +423,9 @@ internal class CheckoutSnapshotCaptureCoordinator(
 
     private data class HandoffCheckout(
         val activeCheckout: ActiveCheckout,
-        val attemptedAutomaticCaptures: Set<CaptureKey>
+        val attemptedAutomaticCaptures: Set<CaptureKey>,
+        /** 挂起时刻；交接过渡窗锚点（见 handoffStableEventAction）。 */
+        val retainedAtMillis: Long
     )
 
     private data class QueuedManualCapture(
@@ -1153,21 +1217,24 @@ internal class CheckoutSnapshotCaptureCoordinator(
                             ),
                             callback
                         )
-                    } else {
-                        if (!closed) {
-                            queuedManual = QueuedManualCapture(current.key, callback)
-                        } else {
-                            publish(
-                                unavailableResult(
-                                    current = current,
-                                    sourceReason = SnapshotSourceReason.MANUAL_CAPTURE,
-                                    reasonCode = MAIN_HANDLER_UNAVAILABLE
-                                ),
-                                callback
-                            )
-                        }
+                        return@post
                     }
-                    return@post
+                    // 自动截图在飞时手动请求不再排队等待：排队期间页面失效会让手动请求
+                    // 被静默取消，且 1~2 秒的等待内用户得不到任何反馈。按不变式第 5 条
+                    // （用户手动操作优先级最高），取消飞行中的自动截图并立即执行手动。
+                    // 自动 key 从已尝试集合移除：手动若失败，后续稳定事件仍可自动补截兜底。
+                    val preempted = detachPendingCapture()
+                    if (preempted != null) {
+                        attemptedAutomaticCaptures.remove(preempted.activeCheckout.key)
+                        publishPendingResult(
+                            pending = preempted,
+                            result = cancelledResult(
+                                current = preempted.activeCheckout,
+                                sourceReason = preempted.sourceReason,
+                                reason = PREEMPTED_BY_MANUAL_CAPTURE
+                            )
+                        )
+                    }
                 }
 
                 beginCapture(current, SnapshotSourceReason.MANUAL_CAPTURE, callback)
@@ -1361,44 +1428,58 @@ internal class CheckoutSnapshotCaptureCoordinator(
                 return
             }
             val retained = retainedHandoff.activeCheckout
-            val isSameCheckout =
-                retained.page.observation.shoppingPackage == observation.shoppingPackage &&
-                    retained.page.observation.pageFingerprint == observation.pageFingerprint
-            // 支付中间页挂起初期，结算页指纹漂移（倒计时/控件刷新）的迟到稳定事件
-            // 不代表新订单：保留挂起会话与快照，等待切支付应用消费。
-            val isDriftTail =
-                !isSameCheckout &&
-                    observation.shoppingPackage == retained.page.observation.shoppingPackage &&
-                    observation.observedAt - retained.page.stableAt < HANDOFF_DRIFT_TAIL_WINDOW_MILLIS
-            if (isDriftTail) {
-                return
-            }
-            handoffCheckout = null
-            if (isSameCheckout) {
-                if (closed) {
+            when (
+                handoffStableEventAction(
+                    observedPackage = observation.shoppingPackage,
+                    observedFingerprint = observation.pageFingerprint,
+                    retainedPackage = retained.page.observation.shoppingPackage,
+                    retainedFingerprint = retained.page.observation.pageFingerprint,
+                    handoffRetainedAtMillis = retainedHandoff.retainedAtMillis,
+                    observedAtMillis = observation.observedAt
+                )
+            ) {
+                HandoffStableEventAction.KEEP_RETAINED -> {
+                    // 交接过渡期（挂起后 10s 内）同包迟到稳定事件：转场 UI 重发或
+                    // 倒计时漂移，不代表新订单。保留挂起会话等支付证据消费，
+                    // 丢弃会让证据落错会话（X1，2026-09-10 17:09 实证）。
+                    Log.i(
+                        TAG,
+                        "交接过渡期忽略迟到稳定事件: slot=${retained.slotId}, " +
+                            "session=${retained.sessionId.take(8)}, " +
+                            "sinceRetained=${observation.observedAt - retainedHandoff.retainedAtMillis}ms, " +
+                            "pkg=${observation.shoppingPackage}"
+                    )
                     return
                 }
-                // 支付应用返回原结算页时恢复原会话和尝试状态，不重新截图或覆盖原候选。
-                buffer.restoreFromPaymentHandoff(
-                    slotId = retained.slotId,
-                    sessionId = retained.sessionId,
-                    pageFingerprint = observation.pageFingerprint
-                )
-                activeCheckout = retained.copy(page = page)
-                attemptedAutomaticCaptures.clear()
-                attemptedAutomaticCaptures += retainedHandoff.attemptedAutomaticCaptures
-                if (closed) {
-                    // 关闭可能与恢复并发发生；不得让旧交接状态在失败收口后复活。
-                    activeCheckout = null
+                HandoffStableEventAction.RESTORE -> {
                     handoffCheckout = null
+                    if (closed) {
+                        return
+                    }
+                    // 支付应用返回原结算页时恢复原会话和尝试状态，不重新截图或覆盖原候选。
+                    buffer.restoreFromPaymentHandoff(
+                        slotId = retained.slotId,
+                        sessionId = retained.sessionId,
+                        pageFingerprint = observation.pageFingerprint
+                    )
+                    activeCheckout = retained.copy(page = page)
+                    attemptedAutomaticCaptures.clear()
+                    attemptedAutomaticCaptures += retainedHandoff.attemptedAutomaticCaptures
+                    if (closed) {
+                        // 关闭可能与恢复并发发生；不得让旧交接状态在失败收口后复活。
+                        activeCheckout = null
+                        handoffCheckout = null
+                        attemptedAutomaticCaptures.clear()
+                    }
+                    return
+                }
+                HandoffStableEventAction.DISCARD_RETAINED -> {
+                    // 返回到不同页面时，旧交接会话和其槽位不能被新订单复用。
+                    handoffCheckout = null
+                    buffer.discard(retained.slotId, reason = "HANDOFF_RETURNED_TO_OTHER_CHECKOUT")
                     attemptedAutomaticCaptures.clear()
                 }
-                return
             }
-
-            // 返回到不同页面时，旧交接会话和其槽位不能被新订单复用。
-            buffer.discard(retained.slotId, reason = "HANDOFF_RETURNED_TO_OTHER_CHECKOUT")
-            attemptedAutomaticCaptures.clear()
         }
 
         val previous = activeCheckout
@@ -1570,7 +1651,8 @@ internal class CheckoutSnapshotCaptureCoordinator(
                 activeCheckout = activeForHandoff,
                 attemptedAutomaticCaptures = attemptedAutomaticCaptures
                     .filter { it.sessionId == activeForHandoff.sessionId }
-                    .toSet()
+                    .toSet(),
+                retainedAtMillis = nowMillis()
             )
         }
 
@@ -1735,6 +1817,8 @@ internal class CheckoutSnapshotCaptureCoordinator(
             return
         }
 
+        scheduleCaptureCallbackWatchdog(pending)
+
         try {
             @Suppress("NewApi")
             accessibilityService.takeScreenshot(
@@ -1777,6 +1861,48 @@ internal class CheckoutSnapshotCaptureCoordinator(
         }
     }
 
+    /**
+     * 给在飞截图挂回调超时看门狗。
+     *
+     * 只做一件事：超时后若该请求仍在 pendingCapture 位上，按 CANCELLED 收口并
+     * 排空排队项。正常完成（finishCaptureOnMainThread 已摘除）或已被失效路径
+     * 摘除时，requestId 不匹配使本次触发成为无操作，无需显式取消。
+     * 看门狗在主线程执行，与协调器其余状态变更同线程串行，无额外同步要求。
+     */
+    private fun scheduleCaptureCallbackWatchdog(pending: PendingCapture) {
+        val posted = try {
+            mainHandler.postDelayed({
+                if (pendingCapture?.requestId != pending.requestId) {
+                    return@postDelayed
+                }
+                Log.w(
+                    TAG,
+                    "截图回调看门狗超时，按 CANCELLED 收口: request=${pending.requestId.take(8)}, " +
+                        "source=${pending.sourceReason.wireValue}, " +
+                        "session=${pending.activeCheckout.sessionId.take(8)}"
+                )
+                val timedOut = detachPendingCapture()
+                if (timedOut != null) {
+                    publishPendingResult(
+                        pending = timedOut,
+                        result = cancelledResult(
+                            current = timedOut.activeCheckout,
+                            sourceReason = timedOut.sourceReason,
+                            reason = CAPTURE_CALLBACK_TIMEOUT
+                        )
+                    )
+                    drainQueuedCapture()
+                }
+            }, CAPTURE_CALLBACK_TIMEOUT_MILLIS)
+        } catch (_: RuntimeException) {
+            false
+        }
+        if (!posted) {
+            // 主线程不可用时走既有熔断路径；看门狗本身不承载关闭语义。
+            requestFailClosedFromAnyThread(reason = MAIN_HANDLER_UNAVAILABLE)
+        }
+    }
+
     private fun finishCapture(
         pending: PendingCapture,
         imageBytes: ByteArray?,
@@ -1799,9 +1925,19 @@ internal class CheckoutSnapshotCaptureCoordinator(
                     } catch (error: Throwable) {
                         dispatch.failure = error
                         pending.takeImage()?.fill(0)
-                        failClosedOnMainThread(
-                            pending = pending,
-                            reason = EVENT_PROCESSING_FAILED
+                        // Y5（2026-09-10 16:50 真机实证）：单次收口异常不熔断。
+                        // 旧实现直接 failClosedOnMainThread，单事件异常即令协调器
+                        // 永久关闭，配合服务重建形成"截图→异常→熔断→重建→再截图"
+                        // 的"处理中"闪断循环。收口点在 pendingCapture 摘除之前均为
+                        // 字段读取，抛异常概率极低；真异常由看门狗按 requestId
+                        // 兜底收口。此处记录完整栈，修复旧实现只记 reason 不记因的
+                        // 归因盲区（E 场景三次失败无法区分超时与异常）。
+                        Log.w(
+                            TAG,
+                            "截图结果主线程收口异常(不熔断，看门狗按 requestId 兜底): " +
+                                "pending=${pending.sourceReason.wireValue}, " +
+                                "session=${pending.activeCheckout.sessionId.take(8)}",
+                            error
                         )
                     } finally {
                         dispatch.completed.countDown()
@@ -1829,9 +1965,20 @@ internal class CheckoutSnapshotCaptureCoordinator(
                 return
             }
             if (!completed || dispatch.failure != null) {
-                requestFailClosedFromAnyThread(
-                    pending = pending,
-                    reason = EVENT_PROCESSING_FAILED
+                // Y5（2026-09-10 16:50 真机实证）：主线程卡顿（RN 调试包加载 +
+                // 无障碍事件洪流，Choreographer 跳帧 350≈5.8s 冻结）时截图结果
+                // 分发超时。旧实现直接熔断，代价与事件分发路径的历史教训完全相同
+                // （见 shouldFailClosedForDispatchFailure：一次 5 秒卡顿令截图能力
+                // 永久失效）。对齐该裁定：超时不熔断——投递已入队，主线程恢复后
+                // 照常收口，看门狗与 requestId 比对保证迟到处理无副作用。
+                Log.w(
+                    TAG,
+                    "截图结果主线程分发超时(已入队，不熔断): " +
+                        "pending=${pending.sourceReason.wireValue}, " +
+                        "completed=${completed}, " +
+                        "failure=${dispatch.failure != null}, " +
+                        "timeoutMs=$EVENT_DISPATCH_TIMEOUT_MILLIS, " +
+                        "thread=${Thread.currentThread().name}"
                 )
             }
             return
@@ -1904,7 +2051,17 @@ internal class CheckoutSnapshotCaptureCoordinator(
             sourceReason = pending.sourceReason,
             imageBytes = capturedBytes,
             isSensitivePage = pending.activeCheckout.page.observation.isSensitivePage,
-            captureTarget = pending.activeCheckout.captureTarget
+            // 手动截图统一改挂 USER_RETRY target：CHECKOUT target 在 buffer 门禁处只接受
+            // CHECKOUT_STABLE 来源（CheckoutSnapshotBuffer.store 的 targetAllowed 判定），
+            // 若沿用会话的 CHECKOUT target，手动截图会以 NOT_CHECKOUT_PAGE 被整张丢弃，
+            // "自动已截 → 手动重截一张更好的"永远没有落盘通道。
+            // canBufferUserRetrySnapshot() 已包含 CHECKOUT 角色（CheckoutContract.kt），
+            // 且 USER_RETRY 落盘按既有语义解除消费墓碑，手动重截即一次新的明确消费机会。
+            captureTarget = if (pending.sourceReason == SnapshotSourceReason.MANUAL_CAPTURE) {
+                SnapshotCaptureTarget.USER_RETRY
+            } else {
+                pending.activeCheckout.captureTarget
+            }
         )
 
         val result = try {

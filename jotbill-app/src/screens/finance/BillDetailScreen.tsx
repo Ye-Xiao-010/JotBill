@@ -124,9 +124,15 @@ export default function BillDetailScreen() {
     ? '余额校准'
     : bill.type === 'refund'
       ? '退款'
-      : isPositive
-        ? '收入'
-        : '支出';
+      : bill.type === 'transfer'
+        ? '转账'
+        : bill.type === 'repayment'
+          ? '还款'
+          : bill.type === 'fee'
+            ? '手续费'
+            : isPositive
+              ? '收入'
+              : '支出';
   const amountColor = isPositive ? styles._colors.income : styles._colors.expense;
 
   return (

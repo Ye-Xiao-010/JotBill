@@ -173,8 +173,13 @@ const StatisticsScreen: React.FC = () => {
     fetchStatistics(true);
   };
 
+  // 收入为 0 时除法会爆表(如 0 收入/50 支出显示 5000%),按无意义处理
   const expensePercent = statistics
-    ? ((statistics.totalExpense / (statistics.totalIncome || 1)) * 100).toFixed(1)
+    ? statistics.totalIncome > 0
+      ? ((statistics.totalExpense / statistics.totalIncome) * 100).toFixed(1)
+      : statistics.totalExpense > 0
+        ? '—'
+        : '0'
     : '0';
 
   return (

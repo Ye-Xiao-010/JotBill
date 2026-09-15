@@ -100,6 +100,8 @@ internal object BridgeDtoMapper {
         put("sortOrder", entity.sortOrder)
         put("createdAt", formatTimestamp(entity.createdAt))
         put("updatedAt", formatTimestamp(entity.updatedAt))
+        // 批 6 子分类:null = 顶级分类
+        put("parentId", entity.parentId ?: JSONObject.NULL)
     }
 
     fun budget(entity: BudgetEntity): JSONObject = JSONObject().apply {

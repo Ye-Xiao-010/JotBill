@@ -592,12 +592,13 @@ export default function DashboardScreen() {
                       <Text
                         style={[
                           styles.transactionAmount,
-                          bill.type === 'income'
+                          bill.type === 'income' || bill.type === 'refund'
                             ? styles.incomeAmount
                             : styles.expenseAmount,
                         ]}
                       >
-                        {bill.type === 'income' ? '+' : '-'}¥
+                        {/* refund 是退回的资金,显示为正向(与统计口径一致) */}
+                        {bill.type === 'income' || bill.type === 'refund' ? '+' : '-'}¥
                         {(bill.amountMinor / 100).toFixed(2)}
                       </Text>
                     </View>

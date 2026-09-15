@@ -99,6 +99,25 @@ class OverlayModule(
     }
 
     @ReactMethod
+    fun setPendingConfirmPopupEnabled(enabled: Boolean, promise: Promise) {
+        try {
+            PendingConfirmOverlayManager.setEnabled(reactContext, enabled)
+            promise.resolve(null)
+        } catch (error: RuntimeException) {
+            promise.reject(ERROR_CODE, "更新付款确认弹窗开关失败", error)
+        }
+    }
+
+    @ReactMethod
+    fun getPendingConfirmPopupEnabled(promise: Promise) {
+        try {
+            promise.resolve(PendingConfirmOverlayManager.isEnabled(reactContext))
+        } catch (error: RuntimeException) {
+            promise.reject(ERROR_CODE, "读取付款确认弹窗开关失败", error)
+        }
+    }
+
+    @ReactMethod
     fun requestManualCapture(promise: Promise) {
         try {
             CheckoutAccessibilityService.requestManualCapture { result ->

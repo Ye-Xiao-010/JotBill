@@ -1,0 +1,63 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "JotBill 系统架构",
+    "quality_profile": "showcase",
+    "views": [
+      {
+        "id": "auto-bookkeeping",
+        "label": "AI 自动记账主链路",
+        "focus": ["accessibility", "notification", "recognition", "ai_client", "ai_cloud", "rules", "ledger", "room_db"],
+        "note": "从结算页截图与支付通知，到 AI 识别、规则去重与本地入账的完整链路。"
+      },
+      {
+        "id": "ui-data-path",
+        "label": "UI 数据链路",
+        "focus": ["rn_frontend", "bridge", "ledger", "room_db"],
+        "note": "前端经 Native Module 桥直读直写本地账本，不再经过 NestJS 后端。"
+      },
+      {
+        "id": "security-boundary",
+        "label": "加密与密钥",
+        "focus": ["ai_client", "keystore", "room_db"],
+        "note": "API Key 与 SQLCipher 主密钥均经 Android Keystore 保护。"
+      }
+    ]
+  },
+  "components": [
+    { "id": "ai_cloud", "type": "external", "label": "外部多模态 AI", "sublabel": "qwen-vl-plus · GLM-4V · Qwen3-VL", "pos": [590, 30], "size": [190, 58] },
+    { "id": "rn_frontend", "type": "frontend", "label": "React Native 前端", "sublabel": "18 屏 · 组件 · 导航 · 主题", "pos": [1145, 110], "size": [240, 58] },
+    { "id": "bridge", "type": "backend", "label": "Native Module 桥", "sublabel": "Data · Recognition · Ai · Overlay · Backup", "pos": [1155, 210], "size": [220, 58] },
+    { "id": "accessibility", "type": "external", "label": "无障碍服务", "sublabel": "结算页检测 · 截图", "pos": [40, 320], "size": [160, 56] },
+    { "id": "notification", "type": "external", "label": "通知监听服务", "sublabel": "微信/支付宝通知", "pos": [40, 430], "size": [160, 56] },
+    { "id": "recognition", "type": "backend", "label": "支付识别引擎", "sublabel": "会话 · 快照 · 匹配", "pos": [300, 300], "size": [190, 66] },
+    { "id": "ai_client", "type": "backend", "label": "AI 客户端", "sublabel": "视觉 · SSE · ASR", "pos": [590, 300], "size": [190, 66] },
+    { "id": "rules", "type": "backend", "label": "规则与去重", "sublabel": "RuleEngine · DuplicateGuard", "pos": [880, 300], "size": [190, 66] },
+    { "id": "ledger", "type": "backend", "label": "账本访问层", "sublabel": "Repository · DAO · 事务", "pos": [1170, 300], "size": [190, 66] },
+    { "id": "keystore", "type": "security", "label": "Android Keystore", "sublabel": "API Key · 主密钥", "pos": [880, 440], "size": [190, 56] },
+    { "id": "room_db", "type": "database", "label": "Room 数据库", "sublabel": "SQLCipher 加密", "pos": [1170, 440], "size": [190, 56] }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "JotBill 应用 · 本地优先", "wraps": ["rn_frontend", "bridge", "recognition", "ai_client", "rules", "ledger", "keystore", "room_db"] },
+    { "kind": "security-group", "label": "加密存储边界", "wraps": ["keystore", "room_db"] }
+  ],
+  "connections": [
+    { "from": "rn_frontend", "to": "bridge", "label": "调用 / 事件", "variant": "emphasis", "labelDy": 24 },
+    { "from": "bridge", "to": "ledger", "label": "CRUD · 统计", "variant": "emphasis", "labelDy": 24 },
+    { "from": "accessibility", "to": "recognition", "label": "结算页 · 截图" },
+    { "from": "notification", "to": "recognition", "label": "支付通知" },
+    { "from": "recognition", "to": "ai_client", "label": "视觉识别" },
+    { "from": "ai_client", "to": "ai_cloud", "label": "HTTPS · JSON Schema", "variant": "emphasis" },
+    { "from": "ai_client", "to": "rules", "label": "候选 · 置信度" },
+    { "from": "rules", "to": "ledger", "label": "去重 · 优先级" },
+    { "from": "ledger", "to": "room_db", "label": "Room 事务", "labelDy": 24 },
+    { "from": "ai_client", "to": "keystore", "label": "读 API Key", "variant": "security" },
+    { "from": "keystore", "to": "room_db", "label": "SQLCipher 主密钥", "variant": "security" }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "本地优先", "items": ["核心账本、规则、统计、备份均在设备本地完成", "不运行 NestJS 后端，无账号体系", "网络仅用于 AI 识别、对话与语音转写"] },
+    { "dot": "emerald", "title": "AI 与支付确认分离", "items": ["AI 识别“买了什么”，通知/结果页确认“是否支付成功”", "AI 结果不能独立入账", "低置信度进入待确认，宁缺毋滥"] },
+    { "dot": "amber", "title": "数据与隐私", "items": ["Room + SQLCipher 加密，主密钥由 Keystore 派生", "结算页截图仅内存保留，支付过程槽位 2 分钟兜底过期不落盘", "API Key 脱敏存储，上传前做敏感页面检查"] }
+  ]
+}

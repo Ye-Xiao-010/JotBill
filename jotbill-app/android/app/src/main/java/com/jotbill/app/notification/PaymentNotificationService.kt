@@ -1,6 +1,7 @@
 package com.jotbill.app.notification
 
 import android.app.Notification
+import android.content.ComponentName
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import android.util.Log
@@ -74,11 +75,21 @@ class PaymentNotificationService : NotificationListenerService() {
 
     /**
      * 服务断开时调用。
+     *
+     * 国产 ROM 杀后台后系统可能解除绑定且不自动重连，此后支付/退款/转账/手续费
+     * 四类通知证据全部停止采集且无任何痕迹。按官方推荐在此请求重绑；
+     * requestRebind 为 API 24+（minSdk 24，无需版本守卫）。
      */
     override fun onListenerDisconnected() {
         super.onListenerDisconnected()
-        Log.w(TAG, "通知监听服务已断开")
-        SentryLogger.addBreadcrumb("通知监听服务已断开", category = "service_lifecycle")
+        Log.w(TAG, "通知监听服务已断开，请求重绑")
+        SentryLogger.addBreadcrumb("通知监听服务已断开，请求重绑", category = "service_lifecycle")
+        runCatching {
+            requestRebind(ComponentName(this, PaymentNotificationService::class.java))
+        }.onFailure { error ->
+            Log.w(TAG, "通知监听服务重绑请求失败", error)
+            SentryLogger.addBreadcrumb("通知监听服务重绑请求失败: ${error.message}", category = "service_lifecycle")
+        }
     }
 
     /**

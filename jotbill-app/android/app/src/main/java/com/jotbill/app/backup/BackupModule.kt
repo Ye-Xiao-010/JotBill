@@ -13,6 +13,7 @@ import com.jotbill.app.data.JotBillDatabaseProvider
 import com.jotbill.app.importing.ImportEngine
 import com.jotbill.app.importing.ImportFilePreparer
 import com.jotbill.app.importing.ImportUndo
+import com.jotbill.app.budget.BudgetReminderNotifier
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -551,6 +552,9 @@ class BackupModule(
     ) {
         try {
             val result = importEngine.execute(filePath, password, candidateFileName)
+            // 导入直写 bills 绕过 DataModule，需显式触发预算超支提醒，
+            // 否则导入的历史/当期支出不会推送预算系统通知。
+            runCatching { BudgetReminderNotifier.checkAndNotify(database) }
             withContext(Dispatchers.Main) { promise.resolve(result.toString()) }
         } catch (error: Exception) {
             rejectFromWorker(promise, error, "IMPORT_FAILED")

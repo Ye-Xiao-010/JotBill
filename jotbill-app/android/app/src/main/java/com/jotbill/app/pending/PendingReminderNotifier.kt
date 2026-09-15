@@ -67,8 +67,26 @@ internal object PendingReminderNotifier {
 
     private fun onPendingChange(info: PendingChangeInfo) {
         val context = appContext ?: return
+        if (info.removed) {
+            // 待确认已确认/忽略/自动入账清理：消除状态栏上"有一笔交易待确认"，
+            // 否则通知挂到用户手动划掉为止
+            val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+            manager?.cancel(info.pendingId.hashCode())
+            Log.i(TAG, "已消除待确认通知: id=${info.pendingId.take(16)}")
+            return
+        }
         if (!info.isNew) {
             Log.i(TAG, "跳过提醒: 内容更新事件 id=${info.pendingId.take(16)}")
+            return
+        }
+        // 用户断言通道产生的待确认不发送系统通知:断言是用户主动点击,
+        // 按钮状态变化已构成操作反馈;弹窗/通知的触发权属于支付证据链路
+        // (支付结果页无障碍读取/支付通知)。条目仍静默进入待确认中心。
+        if (
+            info.sourceType == PendingSourceTypes.AI_VISION &&
+            info.conflictReason == PENDING_CONFLICT_REASON_USER_ASSERTED
+        ) {
+            Log.i(TAG, "跳过提醒: 用户断言条目待支付证据 id=${info.pendingId.take(16)}")
             return
         }
         if (info.amountMinor <= 0L) {

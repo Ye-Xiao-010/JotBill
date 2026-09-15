@@ -171,6 +171,9 @@ class AIService {
               result: JSON.parse(chunk.resultJson ?? '{}'),
             });
           } catch {
+            // 与 done/error 分支一致：终止订阅，否则原生流继续推送、后续事件落到错误态消息上
+            subscription.remove();
+            closed = true;
             callbacks.onError?.({ message: 'AI 返回的工具结果格式无效' });
           }
           break;

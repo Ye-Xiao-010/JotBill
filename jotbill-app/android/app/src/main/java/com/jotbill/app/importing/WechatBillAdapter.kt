@@ -8,25 +8,35 @@ import java.time.format.DateTimeFormatter
 import java.util.Locale
 
 /**
- * 阶段六 T3：微信官方账单 CSV 适配器（docs/tdd/10_phase6_tasks.md 任务卡 T3）。
+ * 阶段六 T3：微信官方账单适配器（docs/tdd/10_phase6_tasks.md 任务卡 T3）。
+ *
+ * 支持格式：
+ * - CSV：UTF-8 / UTF-8 BOM / GBK，由 ImportFilePreparer 探测编码；
+ * - XLSX：ZIP + XML 轻量解析（XlsxTableReader），交易时间列为 Excel 序列数，
+ *   经 XlsxTableReader.excelSerialToEpochMillis 换算。
  *
  * 已登记表头版本：
  * - wechat-csv-v1：`交易时间,交易类型,交易对方,商品,收/支,金额(元),支付方式,当前状态,交易单号,商户单号,备注`
  * - wechat-csv-v2：上述表头的中文括号变体（`金额（元）`）或缺失 `当前状态` 的历史版本；
  *   列顺序变化由表头名映射吸收，不依赖固定列号。
+ * - wechat-xlsx-v1：同字段的 XLSX 导出（表头约在第 18 行，前置为账单说明区）。
  *
  * 识别依据：文件头部存在同时含 `交易时间`、`收/支`、`金额`、`交易单号` 的表头行。
  * 未知版本不强行入账，返回带脱敏表头样本的解析错误。
  */
 internal object WechatBillAdapter : BillImportAdapter {
     override val source = "wechat"
-    override val supportedFormats = setOf(ImportFilePreparer.FORMAT_CSV)
-    override val formatVersion = "wechat-csv-v1"
+    override val supportedFormats = setOf(
+        ImportFilePreparer.FORMAT_CSV,
+        ImportFilePreparer.FORMAT_XLSX
+    )
+    override val formatVersion = "wechat-bill-v2"
 
     override fun canParse(file: File, encoding: String?): Boolean =
         runCatching { findHeader(file, encoding) != null }.getOrDefault(false)
 
     override fun parse(file: File, encoding: String?): ImportParseResult {
+        val format = file.extension.lowercase(Locale.ROOT)
         val header = findHeader(file, encoding)
             ?: return ImportParseResult(
                 rows = emptyList(),
@@ -37,7 +47,7 @@ internal object WechatBillAdapter : BillImportAdapter {
                     ImportParseError(
                         lineNumber = 0,
                         message = "未识别的微信账单表头版本",
-                        sample = maskSample(firstLinesSample(file, encoding))
+                        sample = maskSample(firstLinesSample(file, encoding, format))
                     )
                 )
             )
@@ -46,8 +56,15 @@ internal object WechatBillAdapter : BillImportAdapter {
         val errors = mutableListOf<ImportParseError>()
         var totalRecords = 0
         var filteredRecords = 0
+        var skippedRecords = 0
 
-        val rowCount = CsvTableReader.readRows(file, encoding) { lineNumber, values ->
+        val readRows: ((Int, List<String>) -> Boolean) -> Int = { onRow ->
+            when (format) {
+                ImportFilePreparer.FORMAT_XLSX -> XlsxTableReader.readRows(file, onRow)
+                else -> CsvTableReader.readRows(file, encoding, onRow)
+            }
+        }
+        val rowCount = readRows { lineNumber, values ->
             if (lineNumber <= header.lineNumber) return@readRows true
             val nonBlank = values.any { it.isNotBlank() }
             if (!nonBlank) return@readRows true
@@ -57,10 +74,10 @@ internal object WechatBillAdapter : BillImportAdapter {
                 return@readRows true
             }
             val parsed = parseRow(values, columns, lineNumber)
-            if (parsed != null) {
-                rows += parsed
-            } else {
-                errors += ImportParseError(
+            when {
+                parsed == null && isNeutralZeroAmountRow(values, columns) -> skippedRecords += 1
+                parsed != null -> rows += parsed
+                else -> errors += ImportParseError(
                     lineNumber = lineNumber,
                     message = "账单行缺少必要字段或金额/时间无法解析",
                     sample = maskSample(values.joinToString("|"))
@@ -80,7 +97,8 @@ internal object WechatBillAdapter : BillImportAdapter {
             totalRecords = totalRecords,
             validRecords = rows.size,
             filteredRecords = filteredRecords,
-            errors = errors
+            errors = errors,
+            skippedRecords = skippedRecords
         )
     }
 
@@ -105,7 +123,14 @@ internal object WechatBillAdapter : BillImportAdapter {
 
     private fun findHeader(file: File, encoding: String?): Header? {
         var found: Header? = null
-        CsvTableReader.readRows(file, encoding) { lineNumber, values ->
+        val readRows: ((Int, List<String>) -> Boolean) -> Int = { onRow ->
+            if (file.extension.equals("xlsx", ignoreCase = true)) {
+                XlsxTableReader.readRows(file, onRow)
+            } else {
+                CsvTableReader.readRows(file, encoding, onRow)
+            }
+        }
+        readRows { lineNumber, values ->
             val normalized = values.map { normalizeHeader(it) }
             if (
                 normalized.any { it == "交易时间" } &&
@@ -196,6 +221,17 @@ internal object WechatBillAdapter : BillImportAdapter {
         return false
     }
 
+    /**
+     * 收/支为空或"/"且金额无法解析（如 0.00 的零金额行）：按来源规则跳过，
+     * 不计入解析错误污染 failed 口径。
+     */
+    private fun isNeutralZeroAmountRow(values: List<String>, columns: HeaderColumns): Boolean {
+        val direction = valueAt(values, columns.direction)
+        if (!direction.isNullOrBlank() && direction != "/" && direction != "不计收支") return false
+        val amountText = valueAt(values, columns.amount) ?: return false
+        return parseAmountMinor(amountText) == null
+    }
+
     private fun parseAmountMinor(text: String): Long? {
         val normalized = text.trim()
             .replace("¥", "")
@@ -217,7 +253,7 @@ internal object WechatBillAdapter : BillImportAdapter {
 
     private fun parseOccurredAt(text: String): Long? {
         val normalized = text.trim()
-        return runCatching {
+        return XlsxTableReader.excelSerialToEpochMillis(normalized) ?: runCatching {
             TIME_FORMATTERS.firstNotNullOf { formatter ->
                 runCatching { LocalDateTime.parse(normalized, formatter) }.getOrNull()
             }.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
@@ -256,9 +292,16 @@ internal object WechatBillAdapter : BillImportAdapter {
     private fun amountHeaderOf(value: String): Boolean =
         value == "金额(元)" || value == "金额（元）" || value == "金额"
 
-    private fun firstLinesSample(file: File, encoding: String?): String {
+    private fun firstLinesSample(file: File, encoding: String?, format: String): String {
         val sample = StringBuilder()
-        CsvTableReader.readRows(file, encoding) { lineNumber, values ->
+        val readRows: ((Int, List<String>) -> Boolean) -> Int = { onRow ->
+            if (format == ImportFilePreparer.FORMAT_XLSX) {
+                XlsxTableReader.readRows(file, onRow)
+            } else {
+                CsvTableReader.readRows(file, encoding, onRow)
+            }
+        }
+        readRows { lineNumber, values ->
             if (lineNumber > MAX_HEADER_SCAN_LINES) return@readRows false
             if (values.any { it.isNotBlank() }) {
                 sample.append(values.joinToString("|").take(120)).append('\n')
@@ -271,7 +314,8 @@ internal object WechatBillAdapter : BillImportAdapter {
     private fun String.containsAny(keywords: List<String>): Boolean =
         keywords.any { contains(it) }
 
-    private const val MAX_HEADER_SCAN_LINES = 20
+    /** 表头扫描上限：微信 XLSX 表头约在第 18 行，支付宝 2026 回单在第 24 行附近，统一预留到 40。 */
+    private const val MAX_HEADER_SCAN_LINES = 40
     private val AMOUNT_PATTERN = Regex("""[-+]?[0-9][0-9,]*(?:\.[0-9]{1,2})?""")
     private val REFUND_KEYWORDS = listOf("退款", "退回", "返还")
     private val FEE_KEYWORDS = listOf("手续费", "服务费", "提现费")

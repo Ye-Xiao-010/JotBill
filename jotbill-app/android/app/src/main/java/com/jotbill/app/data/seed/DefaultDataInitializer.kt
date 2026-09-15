@@ -29,7 +29,9 @@ class DefaultDataInitializer(
                         (existing.name == default.name && existing.type == default.type)
                 }
                 if (!alreadyExists) {
-                    database.categoryDao().insert(
+                    // IGNORE：即使内存预检漏掉（如唯一键冲突的边界竞态），也不让
+                    // 首启播种抛异常拖垮数据库初始化
+                    database.categoryDao().insertIgnore(
                         CategoryEntity(
                             id = default.id,
                             name = default.name,
@@ -82,6 +84,87 @@ class DefaultDataInitializer(
         }
     }
 
+    /**
+     * 批 6:预设子分类(单次播种)。
+     *
+     * 为常用顶级分类补齐二级分类。以设置键 PRESET_CHILDREN_SEEDED 标记
+     * "已播种"——只播一次,用户此后删除的预设子分类不会被复活。
+     * 仅作用于 isDefault 的顶级分类;预设子分类同为 isDefault
+     * (不可删除,可通过编辑改名)。
+     */
+    suspend fun ensurePresetSubCategories() {
+        if (database.appSettingDao().get(PRESET_CHILDREN_SEEDED_KEY) == INITIALIZED_VALUE) {
+            return
+        }
+        val presetChildren: List<Pair<String, List<String>>> = listOf(
+            "default-category-expense-food" to listOf("早餐", "正餐", "外卖", "零食饮品"),
+            "default-category-expense-transport" to listOf("打车", "公共交通", "加油", "停车"),
+            "default-category-expense-shopping" to listOf("日用百货", "衣物", "数码家电"),
+            "default-category-expense-entertainment" to listOf("电影演出", "游戏", "健身运动"),
+            "default-category-expense-housing" to listOf("房租房贷", "水电燃气", "物业费"),
+            "default-category-expense-medical" to listOf("门诊", "药品", "体检"),
+            "default-category-expense-education" to listOf("学费培训", "书籍资料"),
+        )
+        val now = System.currentTimeMillis()
+        database.withTransaction {
+            if (database.appSettingDao().get(PRESET_CHILDREN_SEEDED_KEY) == INITIALIZED_VALUE) {
+                return@withTransaction
+            }
+            var seeded = false
+            for ((parentId, names) in presetChildren) {
+                val parent = database.categoryDao().getById(parentId) ?: continue
+                val existingChildren = database.categoryDao().getChildren(parentId)
+                val existingNames = existingChildren.map { it.name }.toSet()
+                // 若曾发生部分播种(设置键未写入但已插入部分预设),不能固定从 100 开始,
+                // 否则会与已有预设子分类撞 sortOrder。统一排在现有子分类之后,且不低于 100。
+                val maxExistingSort = existingChildren.maxOfOrNull { it.sortOrder } ?: 99
+                var nextSort = maxOf(100, maxExistingSort + 1)
+                for (name in names) {
+                    if (name in existingNames) {
+                        continue
+                    }
+                    // 同上：预设子分类播种用 IGNORE，ID 冲突只跳过该条
+                    val inserted = database.categoryDao().insertIgnore(
+                        CategoryEntity(
+                            id = "$parentId-preset-$name",
+                            name = name,
+                            type = parent.type,
+                            icon = parent.icon,
+                            color = parent.color,
+                            isDefault = true,
+                            sortOrder = nextSort,
+                            createdAt = now,
+                            updatedAt = now,
+                            parentId = parentId
+                        )
+                    )
+                    if (inserted != -1L) {
+                        nextSort += 1
+                        seeded = true
+                    }
+                }
+            }
+            if (seeded) {
+                database.appSettingDao().set(
+                    AppSettingEntity(
+                        key = PRESET_CHILDREN_SEEDED_KEY,
+                        value = INITIALIZED_VALUE,
+                        updatedAt = now
+                    )
+                )
+                android.util.Log.i(
+                    "DefaultDataInitializer",
+                    "预设子分类播种完成"
+                )
+            } else {
+                android.util.Log.i(
+                    "DefaultDataInitializer",
+                    "预设子分类已播种过,跳过"
+                )
+            }
+        }
+    }
+
     private data class DefaultCategory(
         val id: String,
         val name: String,
@@ -104,6 +187,7 @@ class DefaultDataInitializer(
     private companion object {
         const val INITIALIZED_KEY = "initialized"
         const val INITIALIZED_VALUE = "true"
+        const val PRESET_CHILDREN_SEEDED_KEY = "preset_children_seeded"
 
         // 以文档中的15个分类为基础，补充5个常用分类，保持总数为20个。
         val defaultCategories = listOf(

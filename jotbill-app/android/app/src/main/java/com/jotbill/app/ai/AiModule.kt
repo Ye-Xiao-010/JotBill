@@ -4,6 +4,7 @@ import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
+import androidx.room.withTransaction
 import com.jotbill.app.data.JotBillDatabase
 import com.jotbill.app.data.JotBillDatabaseProvider
 import com.jotbill.app.data.entity.AiCostRecordEntity
@@ -83,54 +84,59 @@ class AiModule(
     @ReactMethod
     fun updateAiProvider(id: String, inputJson: String, promise: Promise) = launch(promise) {
         val dao = database.aiProviderConfigDao()
-        val existing = dao.getAll().firstOrNull { it.id == id }
-            ?: throw AiException("NOT_FOUND", "AI provider $id was not found")
-        val input = JSONObject(inputJson)
-        val apiKey = input.optionalString("apiKey")
-        val provider = input.optionalString("provider")?.also(::validateProvider) ?: existing.provider
-        val apiBaseUrl = if (input.has("apiBaseUrl")) {
-            input.optionalString("apiBaseUrl")?.let { AiEndpointResolver.validateBaseUrl(it) }
-        } else {
-            existing.apiBaseUrl
+        // 读-改-写（含默认切换）包进事务，避免并发下残留两个默认或丢更新
+        database.withTransaction {
+            val existing = dao.getAll().firstOrNull { it.id == id }
+                ?: throw AiException("NOT_FOUND", "AI provider $id was not found")
+            val input = JSONObject(inputJson)
+            val apiKey = input.optionalString("apiKey")
+            val provider = input.optionalString("provider")?.also(::validateProvider) ?: existing.provider
+            val apiBaseUrl = if (input.has("apiBaseUrl")) {
+                input.optionalString("apiBaseUrl")?.let { AiEndpointResolver.validateBaseUrl(it) }
+            } else {
+                existing.apiBaseUrl
+            }
+            if (provider == "custom" && apiBaseUrl.isNullOrBlank()) {
+                throw AiException("INVALID_ARGUMENT", "自定义服务商必须填写 API 地址")
+            }
+            val updated = existing.copy(
+                name = input.optionalString("name") ?: existing.name,
+                provider = provider,
+                model = input.optionalString("model") ?: existing.model,
+                apiKeyEncrypted = if (apiKey.isNullOrBlank() || apiKey == MASKED_KEY) {
+                    existing.apiKeyEncrypted
+                } else {
+                    secretStore.encryptSecret(apiKey)
+                },
+                apiBaseUrl = apiBaseUrl,
+                isDefault = if (input.has("isDefault") && !input.isNull("isDefault")) {
+                    input.getBoolean("isDefault")
+                } else {
+                    existing.isDefault
+                },
+                supportsVision = if (input.has("supportsVision")) {
+                    input.getBoolean("supportsVision")
+                } else {
+                    existing.supportsVision
+                },
+                updatedAt = System.currentTimeMillis()
+            )
+            if (updated.isDefault) clearDefault()
+            dao.update(updated)
+            toJson(updated).toString()
         }
-        if (provider == "custom" && apiBaseUrl.isNullOrBlank()) {
-            throw AiException("INVALID_ARGUMENT", "自定义服务商必须填写 API 地址")
-        }
-        val updated = existing.copy(
-            name = input.optionalString("name") ?: existing.name,
-            provider = provider,
-            model = input.optionalString("model") ?: existing.model,
-            apiKeyEncrypted = if (apiKey.isNullOrBlank() || apiKey == MASKED_KEY) {
-                existing.apiKeyEncrypted
-            } else {
-                secretStore.encryptSecret(apiKey)
-            },
-            apiBaseUrl = apiBaseUrl,
-            isDefault = if (input.has("isDefault") && !input.isNull("isDefault")) {
-                input.getBoolean("isDefault")
-            } else {
-                existing.isDefault
-            },
-            supportsVision = if (input.has("supportsVision")) {
-                input.getBoolean("supportsVision")
-            } else {
-                existing.supportsVision
-            },
-            updatedAt = System.currentTimeMillis()
-        )
-        if (updated.isDefault) clearDefault()
-        dao.update(updated)
-        toJson(updated).toString()
     }
 
     @ReactMethod
     fun deleteAiProvider(id: String, promise: Promise) = launch(promise) {
         val dao = database.aiProviderConfigDao()
-        val existing = dao.getAll().firstOrNull { it.id == id }
-            ?: throw AiException("NOT_FOUND", "AI provider $id was not found")
-        dao.delete(existing)
-        if (existing.isDefault) {
-            dao.getAll().firstOrNull()?.let { dao.update(it.copy(isDefault = true)) }
+        database.withTransaction {
+            val existing = dao.getAll().firstOrNull { it.id == id }
+                ?: throw AiException("NOT_FOUND", "AI provider $id was not found")
+            dao.delete(existing)
+            if (existing.isDefault) {
+                dao.getAll().firstOrNull()?.let { dao.update(it.copy(isDefault = true)) }
+            }
         }
         null
     }
@@ -138,12 +144,14 @@ class AiModule(
     @ReactMethod
     fun setDefaultAiProvider(id: String, promise: Promise) = launch(promise) {
         val dao = database.aiProviderConfigDao()
-        val selected = dao.getAll().firstOrNull { it.id == id }
-            ?: throw AiException("NOT_FOUND", "AI provider $id was not found")
-        clearDefault()
-        val updated = selected.copy(isDefault = true, updatedAt = System.currentTimeMillis())
-        dao.update(updated)
-        toJson(updated).toString()
+        database.withTransaction {
+            val selected = dao.getAll().firstOrNull { it.id == id }
+                ?: throw AiException("NOT_FOUND", "AI provider $id was not found")
+            clearDefault()
+            val updated = selected.copy(isDefault = true, updatedAt = System.currentTimeMillis())
+            dao.update(updated)
+            toJson(updated).toString()
+        }
     }
 
     @ReactMethod

@@ -1,11 +1,13 @@
 package com.jotbill.app.ai
 
 import android.util.Base64
+import android.util.Log
 import androidx.room.withTransaction
 import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.modules.core.DeviceEventManagerModule
 import com.jotbill.app.data.JotBillDatabase
+import com.jotbill.app.data.dao.escapeLikeKeyword
 import com.jotbill.app.data.entity.AiCostRecordEntity
 import com.jotbill.app.data.entity.AiProviderConfigEntity
 import com.jotbill.app.data.entity.ChatMessageEntity
@@ -28,6 +30,7 @@ import java.time.LocalDate
 import java.time.YearMonth
 import java.time.ZoneId
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 
 /** AI 对话、会话存储和语音转写的原生实现。 */
@@ -41,9 +44,16 @@ class AiChatModule(
         .connectTimeout(20, TimeUnit.SECONDS)
         .writeTimeout(60, TimeUnit.SECONDS)
         .readTimeout(60, TimeUnit.SECONDS)
-        .callTimeout(2, TimeUnit.MINUTES)
+        .callTimeout(5, TimeUnit.MINUTES)
         .build()
     private val streamingClient = StreamingSseClient(httpClient)
+
+    /**
+     * 用户请求取消的会话集合：多轮 Tool Calling 在轮间空窗期 activeCalls 中没有
+     * 该会话的 Call，仅靠 streamingClient.cancel 会返回 false 且第 2 轮照常发起，
+     * 用户以为已停止、实际继续计费。取消后每一轮开始前都检查此标志。
+     */
+    private val cancelledSessions: MutableSet<String> = ConcurrentHashMap.newKeySet()
 
     suspend fun sendMessage(inputJson: String): String {
         val input = JSONObject(inputJson)
@@ -83,11 +93,21 @@ class AiChatModule(
             )
         }
 
-        val messages = database.chatDao().getMessages(session.id).takeLast(MAX_HISTORY_MESSAGES)
-        val request = buildChatRequest(config, messages, images, content)
+        val history = database.chatDao().getMessages(session.id).takeLast(MAX_HISTORY_MESSAGES)
+        val baseMessages = buildBaseMessages(history, images, content)
         emitChunk(requestId, session.id, "session_created")
         emitChunk(requestId, session.id, "thinking", round = 1)
-        startStreaming(requestId, session.id, config, request, now)
+        cancelledSessions.remove(session.id)
+        startStreaming(
+            requestId,
+            session.id,
+            config,
+            baseMessages,
+            1,
+            now,
+            StringBuilder(),
+            UsageTotals()
+        )
 
         return JSONObject()
             .put("requestId", requestId)
@@ -95,7 +115,11 @@ class AiChatModule(
             .toString()
     }
 
-    fun cancelMessage(sessionId: String): Boolean = streamingClient.cancel(sessionId)
+    fun cancelMessage(sessionId: String): Boolean {
+        // 先记标志再取消：即使此刻没有活跃 Call（轮间空窗），下一轮开始前也会中止
+        cancelledSessions.add(sessionId)
+        return streamingClient.cancel(sessionId)
+    }
 
     suspend fun getChatSessions(page: Int, limit: Int): String {
         val safePage = page.coerceAtLeast(1)
@@ -152,6 +176,16 @@ class AiChatModule(
             throw AiChatException("INVALID_ARGUMENT", "音频 Base64 格式无效")
         }
         val config = resolveProvider(null)
+        // 语音转写需要音频模型：把聊天/视觉模型名直接塞进 chat/completions 的
+        // input_audio 块，绝大多数服务商直接返回 400（如 qwen-plus/glm-4v-flash）。
+        // 模型名不含音频能力特征时提前给出明确指引，而不是让用户收到笼统的 ASR 错误。
+        if (ASR_CAPABLE_MODEL_HINTS.none(config.model.lowercase()::contains)) {
+            throw AiChatException(
+                "AI_ASR_UNSUPPORTED",
+                "当前模型 ${config.model} 不支持语音转写，请在 AI 服务商配置中选择语音模型" +
+                    "（如 qwen3-omni、qwen-audio、glm-4-voice 或含 audio 的模型）"
+            )
+        }
         val body = JSONObject()
             .put("model", config.model)
             .put("stream", false)
@@ -256,12 +290,11 @@ class AiChatModule(
         return config ?: throw AiChatException("AI_CONFIG_MISSING", "请先在设置中配置 AI 服务商")
     }
 
-    private suspend fun buildChatRequest(
-        config: AiProviderConfigEntity,
+    private suspend fun buildBaseMessages(
         history: List<ChatMessageEntity>,
         latestImages: List<String>,
         latestContent: String
-    ): Request {
+    ): JSONArray {
         val messages = JSONArray()
             .put(JSONObject().put("role", "system").put("content", systemPrompt(latestContent)))
         history.forEachIndexed { index, message ->
@@ -273,10 +306,15 @@ class AiChatModule(
             }
             messages.put(json)
         }
+        return messages
+    }
+
+    private fun buildChatRequest(config: AiProviderConfigEntity, messages: JSONArray): Request {
         val body = JSONObject()
             .put("model", config.model)
             .put("messages", messages)
             .put("stream", true)
+            .put("stream_options", JSONObject().put("include_usage", true))
             .put("temperature", 0.2)
             .put(
                 "tools",
@@ -484,17 +522,30 @@ class AiChatModule(
         return builder
     }
 
+    /** 跨轮累计的 token 用量：每轮 usage 累加，避免只落最后一轮。 */
+    private class UsageTotals {
+        @Volatile var tokensIn: Int? = null
+        @Volatile var tokensOut: Int? = null
+
+        fun merge(tokensInValue: Int?, tokensOutValue: Int?) {
+            tokensInValue?.let { tokensIn = (tokensIn ?: 0) + it }
+            tokensOutValue?.let { tokensOut = (tokensOut ?: 0) + it }
+        }
+    }
+
     private fun startStreaming(
         requestId: String,
         sessionId: String,
         config: AiProviderConfigEntity,
-        request: Request,
-        startedAt: Long
+        messages: JSONArray,
+        round: Int,
+        startedAt: Long,
+        accumulatedText: StringBuilder,
+        usage: UsageTotals
     ) {
+        val request = buildChatRequest(config, messages)
         val text = StringBuilder()
         val toolCalls = linkedMapOf<Int, ToolCallState>()
-        var tokensIn: Int? = null
-        var tokensOut: Int? = null
         streamingClient.start(sessionId, request, object : StreamingSseClient.Callbacks {
             override fun onThinkingDelta(content: String) {
                 emitChunk(requestId, sessionId, "thinking_delta", content = content)
@@ -502,6 +553,7 @@ class AiChatModule(
 
             override fun onTextDelta(content: String) {
                 text.append(content)
+                accumulatedText.append(content)
                 emitChunk(requestId, sessionId, "text_delta", content = content)
             }
 
@@ -512,7 +564,7 @@ class AiChatModule(
                 argumentsDelta: String?
             ) {
                 val state = toolCalls.getOrPut(index) {
-                    ToolCallState(id = id ?: "tool-$requestId-$index")
+                    ToolCallState(id = id ?: "tool-$requestId-$round-$index")
                 }
                 id?.let { state.id = it }
                 if (!name.isNullOrBlank() && state.name == null) {
@@ -529,33 +581,84 @@ class AiChatModule(
             }
 
             override fun onUsage(tokensInValue: Int?, tokensOutValue: Int?) {
-                tokensIn = tokensInValue ?: tokensIn
-                tokensOut = tokensOutValue ?: tokensOut
+                usage.merge(tokensInValue, tokensOutValue)
             }
 
             override fun onCompleted() {
                 scope.launch {
-                    emitToolResults(requestId, sessionId, toolCalls.values)
-                    finishStream(
-                        requestId,
-                        sessionId,
-                        config,
-                        text.toString(),
-                        tokensIn,
-                        tokensOut,
-                        startedAt,
-                        false
-                    )
+                    try {
+                        // 轮间空窗的取消请求：立即按已取消收口（保留已生成文本），不再发起下一轮
+                        if (cancelledSessions.contains(sessionId)) {
+                            finishStream(
+                                requestId,
+                                sessionId,
+                                config,
+                                accumulatedText.toString().ifBlank { text.toString() },
+                                usage.tokensIn,
+                                usage.tokensOut,
+                                startedAt,
+                                true
+                            )
+                            return@launch
+                        }
+                        val results = executeToolCalls(requestId, sessionId, toolCalls.values)
+                        if (results.isNotEmpty() && round < MAX_TOOL_ROUNDS) {
+                            // 多轮 Tool Calling 闭环：把 assistant 的 tool_calls 与 tool 结果回传，
+                            // 追加进消息上下文后继续下一轮，让 AI 基于查询/统计结果作答。
+                            appendToolRound(messages, toolCalls.values, results, text.toString())
+                            emitChunk(requestId, sessionId, "thinking", round = round + 1)
+                            startStreaming(
+                                requestId,
+                                sessionId,
+                                config,
+                                messages,
+                                round + 1,
+                                startedAt,
+                                accumulatedText,
+                                usage
+                            )
+                        } else {
+                            finishStream(
+                                requestId,
+                                sessionId,
+                                config,
+                                accumulatedText.toString().ifBlank { text.toString() },
+                                usage.tokensIn,
+                                usage.tokensOut,
+                                startedAt,
+                                false
+                            )
+                        }
+                    } catch (error: Exception) {
+                        // 下一轮 buildChatRequest（Keystore 解密）或工具执行抛出时不得炸掉 scope
+                        Log.w(TAG, "多轮工具调用执行失败", error)
+                        recordCostSafely(config, "chat", usage.tokensIn, usage.tokensOut, false)
+                        emitChunk(
+                            requestId,
+                            sessionId,
+                            "error",
+                            message = readableNetworkError(error)
+                        )
+                    }
                 }
             }
 
             override fun onCancelled() {
-                finishStream(requestId, sessionId, config, text.toString(), tokensIn, tokensOut, startedAt, true)
+                finishStream(
+                    requestId,
+                    sessionId,
+                    config,
+                    accumulatedText.toString().ifBlank { text.toString() },
+                    usage.tokensIn,
+                    usage.tokensOut,
+                    startedAt,
+                    true
+                )
             }
 
             override fun onError(error: Exception) {
                 scope.launch {
-                    recordCostSafely(config, "chat", tokensIn, tokensOut, false)
+                    recordCostSafely(config, "chat", usage.tokensIn, usage.tokensOut, false)
                     emitChunk(
                         requestId,
                         sessionId,
@@ -567,12 +670,13 @@ class AiChatModule(
         })
     }
 
-    private suspend fun emitToolResults(
+    /** 执行工具调用并发射 tool_result 事件；返回 (调用, 结果) 供下一轮回传上下文。 */
+    private suspend fun executeToolCalls(
         requestId: String,
         sessionId: String,
         toolCalls: Collection<ToolCallState>
-    ) {
-        toolCalls.forEach { call ->
+    ): List<Pair<ToolCallState, JSONObject>> {
+        return toolCalls.map { call ->
             val result = when (call.name) {
                 "query_bills" -> queryBillsResult(call.arguments.toString())
                 "get_statistics" -> statisticsResult(call.arguments.toString())
@@ -588,6 +692,47 @@ class AiChatModule(
                 toolCallId = call.id,
                 toolName = call.name ?: "unknown",
                 resultJson = result.toString()
+            )
+            call to result
+        }
+    }
+
+    /** 把本轮的 assistant tool_calls 与 tool 结果追加到消息上下文（OpenAI 工具回传格式）。 */
+    private fun appendToolRound(
+        messages: JSONArray,
+        toolCalls: Collection<ToolCallState>,
+        results: List<Pair<ToolCallState, JSONObject>>,
+        assistantText: String?
+    ) {
+        val assistantToolCalls = JSONArray()
+        toolCalls.forEach { call ->
+            assistantToolCalls.put(
+                JSONObject()
+                    .put("id", call.id)
+                    .put("type", "function")
+                    .put(
+                        "function",
+                        JSONObject()
+                            .put("name", call.name)
+                            .put("arguments", call.arguments.toString())
+                    )
+            )
+        }
+        // 保留本轮已流式输出的文本：置 NULL 会丢失模型"我先帮您查一下…"类上下文，
+        // 部分严格兼容层还会因 content 缺失返回 4xx
+        val content = assistantText?.takeIf { it.isNotBlank() } ?: JSONObject.NULL
+        messages.put(
+            JSONObject()
+                .put("role", "assistant")
+                .put("content", content)
+                .put("tool_calls", assistantToolCalls)
+        )
+        results.forEach { (call, result) ->
+            messages.put(
+                JSONObject()
+                    .put("role", "tool")
+                    .put("tool_call_id", call.id)
+                    .put("content", result.toString())
             )
         }
     }
@@ -612,7 +757,7 @@ class AiChatModule(
             sourceType = null,
             startDate = startDate,
             endDate = endDate,
-            keyword = input.optionalString("keyword")?.take(100),
+            keyword = escapeLikeKeyword(input.optionalString("keyword")?.take(100)),
             orderBy = "date",
             orderDirection = "desc",
             limit = limit,
@@ -679,34 +824,48 @@ class AiChatModule(
         }.getOrNull()
     }
 
-    private fun createBillsResult(arguments: String): JSONObject = try {
-        val source = JSONObject(arguments).optJSONArray("bills") ?: JSONArray()
-        val bills = JSONArray()
-        for (index in 0 until minOf(source.length(), MAX_PROPOSED_BILLS)) {
-            val bill = source.optJSONObject(index) ?: continue
-            val amount = bill.optDouble("amount", 0.0)
-            if (!amount.isFinite() || amount <= 0) continue
-            val type = bill.optString("type").takeIf { it in setOf("income", "expense") }
-                ?: "expense"
-            bills.put(
+    private fun createBillsResult(arguments: String): JSONObject {
+        return try {
+            val source = JSONObject(arguments).optJSONArray("bills") ?: JSONArray()
+            val bills = JSONArray()
+            for (index in 0 until minOf(source.length(), MAX_PROPOSED_BILLS)) {
+                val bill = source.optJSONObject(index) ?: continue
+                val amount = bill.optDouble("amount", 0.0)
+                if (!amount.isFinite() || amount <= 0) continue
+                // 非法 type/日期不静默兜底：静默改写会让模型与用户对入账内容产生错误预期，
+                // 返回明确失败让模型修正后重试
+                val type = bill.optString("type")
+                if (type != "income" && type != "expense") {
+                    return JSONObject()
+                        .put("success", false)
+                        .put("message", "第 ${index + 1} 条账单类型无效（仅支持 income 或 expense），请修正后重新调用")
+                }
+                val dateText = bill.optString("date").trim()
+                if (dateText.isNotEmpty() && !dateText.take(10).matches(Regex("\\d{4}-\\d{2}-\\d{2}"))) {
+                    return JSONObject()
+                        .put("success", false)
+                        .put("message", "第 ${index + 1} 条账单日期无效（应为 YYYY-MM-DD），请修正后重新调用")
+                }
+                bills.put(
+                    JSONObject()
+                        .put("amount", amount)
+                        .put("type", type)
+                        .put("description", bill.optString("description").take(200))
+                        .put("categoryName", bill.optString("categoryName", "其他").take(50))
+                        .put("date", normalizedDate(dateText))
+                )
+            }
+            if (bills.length() == 0) {
+                JSONObject().put("success", false).put("message", "未识别到有效账单")
+            } else {
                 JSONObject()
-                    .put("amount", amount)
-                    .put("type", type)
-                    .put("description", bill.optString("description").take(200))
-                    .put("categoryName", bill.optString("categoryName", "其他").take(50))
-                    .put("date", normalizedDate(bill.optString("date")))
-            )
+                    .put("success", true)
+                    .put("data", JSONObject().put("bills", bills))
+                    .put("message", "已整理 ${bills.length()} 条待确认账单")
+            }
+        } catch (_: Exception) {
+            JSONObject().put("success", false).put("message", "AI 返回的账单格式无效")
         }
-        if (bills.length() == 0) {
-            JSONObject().put("success", false).put("message", "未识别到有效账单")
-        } else {
-            JSONObject()
-                .put("success", true)
-                .put("data", JSONObject().put("bills", bills))
-                .put("message", "已整理 ${bills.length()} 条待确认账单")
-        }
-    } catch (_: Exception) {
-        JSONObject().put("success", false).put("message", "AI 返回的账单格式无效")
     }
 
     private fun normalizedDate(value: String): String {
@@ -730,21 +889,27 @@ class AiChatModule(
     ) {
         scope.launch {
             val now = System.currentTimeMillis()
+            cancelledSessions.remove(sessionId)
             try {
                 if (content.isNotBlank() && database.chatDao().getSession(sessionId) != null) {
-                    database.withTransaction {
-                        database.chatDao().appendMessage(
-                            ChatMessageEntity(
-                                id = UUID.randomUUID().toString(),
-                                sessionId = sessionId,
-                                seqNum = database.chatDao().nextSequence(sessionId),
-                                role = "assistant",
-                                content = content,
-                                imageDataJson = null,
-                                createdAt = now
-                            ),
-                            now
-                        )
+                    try {
+                        database.withTransaction {
+                            database.chatDao().appendMessage(
+                                ChatMessageEntity(
+                                    id = UUID.randomUUID().toString(),
+                                    sessionId = sessionId,
+                                    seqNum = database.chatDao().nextSequence(sessionId),
+                                    role = "assistant",
+                                    content = content,
+                                    imageDataJson = null,
+                                    createdAt = now
+                                ),
+                                now
+                            )
+                        }
+                    } catch (error: Exception) {
+                        // 落库失败（磁盘满/库关闭）不得沿 SupervisorJob 上抛崩溃整个 App
+                        Log.w(TAG, "AI 回复落库失败", error)
                     }
                 }
             } finally {
@@ -916,6 +1081,7 @@ class AiChatModule(
     }
 
     private companion object {
+        private const val TAG = "AiChatModule"
         val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
         const val STREAM_EVENT = "onAiStreamChunk"
         const val MAX_CONTENT_LENGTH = 8000
@@ -924,6 +1090,10 @@ class AiChatModule(
         const val MAX_PROPOSED_BILLS = 10
         const val MAX_QUERY_BILLS = 20
         const val MAX_IMAGE_BASE64_LENGTH = 12 * 1024 * 1024
+        // 多轮 Tool Calling 上限：防止模型反复调用工具导致无限循环。
+        const val MAX_TOOL_ROUNDS = 4
+        /** 模型名命中任一特征才允许走 input_audio 语音转写。 */
+        val ASR_CAPABLE_MODEL_HINTS = listOf("audio", "omni", "asr", "whisper", "voice")
         val BILL_TYPES = setOf("income", "expense", "transfer", "refund", "repayment", "fee", "adjustment")
         val QUERY_KEYWORDS = listOf("查询", "查账", "账单", "统计", "最近", "今天", "昨天", "本月", "这个月", "多少")
     }

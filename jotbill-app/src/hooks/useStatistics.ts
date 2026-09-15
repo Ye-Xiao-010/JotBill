@@ -92,7 +92,10 @@ async function fetchStatistics(params: StatisticsParams): Promise<StatisticsData
   const { startDate, endDate } = params;
 
   // 计算上一周期的日期范围
-  const currentDate = new Date(startDate);
+  // 手动按本地时区拆解 YYYY-MM-DD:new Date("YYYY-MM-DD") 按 UTC 解析,
+  // 负 UTC 偏移时区会滑到前一天(中国时区无感知,但口径应与 formatDate 一致)
+  const [year, month, day] = startDate.split('-').map(Number);
+  const currentDate = new Date(year, month - 1, day);
   const prevRange = getPreviousDateRange(currentDate, params.period);
 
   // 并行获取当前周期和上一周期的数据

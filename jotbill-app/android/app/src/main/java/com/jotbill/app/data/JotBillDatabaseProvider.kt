@@ -45,7 +45,10 @@ object JotBillDatabaseProvider {
 
             // 等待迁移完成后再初始化默认数据，确保数据库交给调用方时已经可用。
             runBlocking(Dispatchers.IO) {
-                DefaultDataInitializer(database!!).initializeIfFirstRun()
+                val initializer = DefaultDataInitializer(database!!)
+                initializer.initializeIfFirstRun()
+                // 批 6:预设子分类单次播种(老库升级也生效,用户删除后不复活)
+                initializer.ensurePresetSubCategories()
             }
             database!!
         } catch (error: Exception) {

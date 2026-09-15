@@ -4,6 +4,8 @@ import android.content.Context
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import com.jotbill.app.data.JotBillDatabase
+import com.jotbill.app.data.entity.PaymentEvidenceEntity
+import com.jotbill.app.data.entity.TransactionCandidateEntity
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -160,5 +162,111 @@ class CheckoutPaymentMatcherIntegrationTest {
             "AI 未验证证据应转入待确认(result=$result)",
             pendings.isNotEmpty()
         )
+    }
+
+    // ---------- 契约 4:用户断言截图会话收口为待确认 ----------
+
+    private fun assertedCandidate(
+        sessionId: String = SESSION,
+        amountMinor: Long? = 1234L
+    ) = TransactionCandidateEntity(
+        id = "candidate-$sessionId",
+        sessionId = sessionId,
+        amountMinor = amountMinor,
+        platform = null,
+        merchant = "测试商户",
+        productDescription = null,
+        evidenceAmountMinor = null,
+        evidenceMerchant = null,
+        evidenceOrderId = null,
+        aiOrderId = null,
+        aiOccurredAt = now,
+        matched = false,
+        conflictReason = null,
+        appliedRules = "{}",
+        createdAt = now,
+        version = 1
+    )
+
+    @Test
+    fun promoteAssertedSessionCreatesPendingFromCandidateWithoutEvidence() = runBlocking {
+        matcher.ensureSession(
+            reference = checkoutReference(),
+            requestKey = CheckoutRequestKey.from(SESSION, PKG, FP_A)
+        )
+        database.transactionCandidateDao().insertIfAbsent(assertedCandidate())
+
+        assertTrue(matcher.promoteAssertedSessionToPending(SESSION))
+        val pending = database.pendingTransactionDao().getPage(10, 0).single()
+        assertEquals(1234L, pending.amountMinor)
+        assertEquals("USER_ASSERTED", pending.conflictReason)
+        assertEquals("ai_vision", pending.sourceType)
+        assertEquals("expense", pending.type)
+        assertEquals(SESSION, pending.sessionId)
+        assertEquals("测试商户", pending.merchant)
+    }
+
+    @Test
+    fun promoteAssertedSessionIsIdempotent() = runBlocking {
+        matcher.ensureSession(
+            reference = checkoutReference(),
+            requestKey = CheckoutRequestKey.from(SESSION, PKG, FP_A)
+        )
+        database.transactionCandidateDao().insertIfAbsent(assertedCandidate())
+        matcher.promoteAssertedSessionToPending(SESSION)
+        matcher.promoteAssertedSessionToPending(SESSION)
+        assertEquals(1, database.pendingTransactionDao().getPage(10, 0).size)
+    }
+
+    @Test
+    fun promoteAssertedSessionFallsBackToZeroAmountWhenCandidateHasNoAmount() = runBlocking {
+        matcher.ensureSession(
+            reference = checkoutReference(),
+            requestKey = CheckoutRequestKey.from(SESSION, PKG, FP_A)
+        )
+        database.transactionCandidateDao().insertIfAbsent(assertedCandidate(amountMinor = null))
+        assertTrue(matcher.promoteAssertedSessionToPending(SESSION))
+        val pending = database.pendingTransactionDao().getPage(10, 0).single()
+        assertEquals(0L, pending.amountMinor)
+        assertEquals("USER_ASSERTED_AMOUNT_MISSING", pending.conflictReason)
+    }
+
+    @Test
+    fun promoteAssertedSessionSkipsWhenPaidEvidenceAlreadyExists() = runBlocking {
+        matcher.ensureSession(
+            reference = checkoutReference(),
+            requestKey = CheckoutRequestKey.from(SESSION, PKG, FP_A)
+        )
+        database.transactionCandidateDao().insertIfAbsent(assertedCandidate())
+        database.paymentEvidenceDao().insert(
+            PaymentEvidenceEntity(
+                id = "evidence-1",
+                sessionId = SESSION,
+                sourceType = "notification",
+                amountMinor = 1234L,
+                merchant = "测试商户",
+                platform = "com.tencent.mm",
+                orderId = null,
+                paymentMethod = null,
+                paymentStatus = "SUCCESS",
+                occurredAt = now,
+                rawTextHash = "hash-1",
+                sourceEventKey = "evt-asserted-1",
+                capturedAt = now
+            )
+        )
+        // 已有支付成功证据：正常匹配链路负责自动入账或冲突转待确认，promote 不抢跑
+        assertTrue(!matcher.promoteAssertedSessionToPending(SESSION))
+        assertEquals(0, database.pendingTransactionDao().getPage(10, 0).size)
+    }
+
+    @Test
+    fun promoteAssertedSessionReturnsFalseWithoutCandidate() = runBlocking {
+        matcher.ensureSession(
+            reference = checkoutReference(),
+            requestKey = CheckoutRequestKey.from(SESSION, PKG, FP_A)
+        )
+        assertTrue(!matcher.promoteAssertedSessionToPending(SESSION))
+        assertEquals(0, database.pendingTransactionDao().getPage(10, 0).size)
     }
 }

@@ -133,6 +133,8 @@ export interface Category {
   sortOrder: number;
   createdAt: string;
   updatedAt: string;
+  /** 批 6 子分类:null = 顶级分类 */
+  parentId?: string | null;
 }
 
 export interface CategoryInput {
@@ -141,6 +143,8 @@ export interface CategoryInput {
   icon?: string;
   color?: string;
   sortOrder?: number;
+  /** 添加子分类时指定父分类(体系两级) */
+  parentId?: string;
 }
 
 export interface CategoryUpdateInput extends Partial<CategoryInput> {}

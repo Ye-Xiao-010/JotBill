@@ -150,6 +150,7 @@ paymentStatus = "SUCCESS",
 - 对 recognition 目录检索 `FileOutputStream|writeBytes|filesDir|cacheDir|openFileOutput|Environment.getExternalStorage` → **零命中**。
 - `CheckoutSnapshot.release()`（`CheckoutSnapshotBuffer.kt:46`）执行 `imageBytes.fill(0)`；`discard`/`clear`/`close` 均经 `releaseCandidates` 调 `release()`，销毁时字节即抹零。
 - `DEFAULT_SNAPSHOT_TTL_MILLIS = 120_000L`（`CheckoutSnapshotBuffer.kt:12`），**确为 120 秒**，与文档写的 30 秒不符（文档其余偏差报告已列，均属实）。
+  > ⚠️ **2026-09-12 更新**：该"文档 vs 代码"不符已处理 —— **代码 120s 改为 90s**，且**起算点改为"搬入支付过程槽位时刻"**（G6.3 Q2a/Q2b）；文档侧"30 秒"已改为"结算页槽位无倒计时 / 支付过程槽位 90 秒"。本行所述"120 秒"为**当时的代码实测值**，保留作历史取证。
 
 ---
 

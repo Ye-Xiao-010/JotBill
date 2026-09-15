@@ -10,6 +10,7 @@ import com.jotbill.app.data.JotBillDatabase
 import com.jotbill.app.data.JotBillDatabaseProvider
 import com.jotbill.app.data.LedgerRepository
 import com.jotbill.app.data.LedgerValidationException
+import com.jotbill.app.data.dao.escapeLikeKeyword
 import com.jotbill.app.data.seed.DefaultDataInitializer
 import com.jotbill.app.data.entity.AccountEntity
 import com.jotbill.app.data.entity.BillEntity
@@ -24,7 +25,9 @@ import com.jotbill.app.data.model.PlatformStatRow
 import com.jotbill.app.data.model.TrendRow
 import com.jotbill.app.pending.PendingChangeHub
 import com.jotbill.app.pending.PendingChangeInfo
+import com.jotbill.app.pending.PendingConfirmService
 import com.jotbill.app.pending.PendingReminderNotifier
+import com.jotbill.app.budget.BudgetReminderNotifier
 import com.jotbill.app.rules.RuleEngine
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -44,6 +47,16 @@ import java.util.UUID
 
 /** JS 事件名:待确认创建/更新(DataModule → RN)。 */
 internal const val PENDING_CREATED_EVENT = "onPendingCreated"
+
+/**
+ * 进程内共享的 JS 事件出口。
+ *
+ * 付款确认弹窗([com.jotbill.app.overlay.PendingConfirmOverlayManager])在
+ * 无 RN 桥实例的上下文里确认入账后，借此广播 onBillCreated 让前端刷新
+ * 账单缓存；RN 宿主未启动或已销毁时为 null,弹窗侧跳过推送即可。
+ */
+@Volatile
+internal var sharedJsEventEmitter: NativeEventEmitter? = null
 
 class DataModule(
     private val reactContext: ReactApplicationContext
@@ -66,10 +79,14 @@ class DataModule(
         // 待确认创建/更新事件 → JS 推送。数据落库在各自创建点完成,本监听只是提醒旁路;
         // 落库与提醒解耦的设计见 pending/PendingChangeHub。
         PendingChangeHub.addListener(::onPendingChangeFromHub)
+        sharedJsEventEmitter = events
     }
 
     override fun onCatalystInstanceDestroy() {
         PendingChangeHub.removeListener(::onPendingChangeFromHub)
+        if (sharedJsEventEmitter === events) {
+            sharedJsEventEmitter = null
+        }
     }
 
     private fun onPendingChangeFromHub(info: PendingChangeInfo) {
@@ -86,6 +103,34 @@ class DataModule(
             )
         } catch (error: RuntimeException) {
             Log.w("DataModule", "pending 事件推送 JS 失败(RN 可能未就绪)", error)
+        }
+    }
+
+    /**
+     * 账单增删改成功后触发预算超支提醒检查(异步,不阻塞主流程)。
+     * 命中预警档位时发系统通知,并向 JS 推送 onBudgetAlert 事件。
+     */
+    private fun maybeNotifyBudgetAlerts() {
+        scope.launch {
+            try {
+                val hits = BudgetReminderNotifier.checkAndNotify(database)
+                hits.forEach { hit ->
+                    try {
+                        events.emit(
+                            "onBudgetAlert",
+                            JSONObject()
+                                .put("budgetId", hit.budget.id)
+                                .put("budgetName", hit.budget.name)
+                                .put("progress", hit.progressPct / 100.0)
+                                .put("isOverBudget", hit.progressPct >= 100)
+                        )
+                    } catch (error: RuntimeException) {
+                        Log.w("DataModule", "onBudgetAlert 推送 JS 失败(RN 可能未就绪)", error)
+                    }
+                }
+            } catch (error: Exception) {
+                Log.w("DataModule", "预算提醒检查失败(不影响记账)", error)
+            }
         }
     }
 
@@ -106,7 +151,7 @@ class DataModule(
         val platform = filter.optionalString("platform")
         val merchant = filter.optionalString("merchant")
         val sourceType = filter.optionalString("sourceType")
-        val keyword = filter.optionalString("keyword")
+        val keyword = escapeLikeKeyword(filter.optionalString("keyword"))
         val orderBy = filter.optString("orderBy", "date").takeIf {
             it in setOf("date", "amount", "createdAt")
         } ?: "date"
@@ -166,6 +211,7 @@ class DataModule(
         val bill = BridgeDtoMapper.parseBillInput(input, now, UUID.randomUUID().toString())
         repository.createBillWithBalanceUpdate(bill)
         events.emit("onBillCreated", BridgeDtoMapper.bill(bill))
+        maybeNotifyBudgetAlerts()
         BridgeDtoMapper.bill(bill).toString()
     }
 
@@ -246,6 +292,7 @@ class DataModule(
             throw BridgeException("VERSION_CONFLICT", "Bill $id has changed; refresh before updating")
         }
         events.emit("onBillUpdated", BridgeDtoMapper.bill(updated))
+        maybeNotifyBudgetAlerts()
         BridgeDtoMapper.bill(updated).toString()
     }
 
@@ -260,6 +307,7 @@ class DataModule(
             throw BridgeException("NOT_FOUND", "Bill $id was not found")
         }
         events.emit("onBillDeleted", JSONObject().put("id", bill.id))
+        maybeNotifyBudgetAlerts()
         null
     }
 
@@ -452,24 +500,61 @@ class DataModule(
         JSONArray().also { array -> categories.forEach { array.put(BridgeDtoMapper.category(it)) } }.toString()
     }
 
+    private suspend fun nextChildSortOrder(parentId: String): Int {
+        val maxChildSortOrder = database.categoryDao().getChildren(parentId)
+            .maxOfOrNull { it.sortOrder } ?: 99
+        return maxOf(100, maxChildSortOrder + 1)
+    }
+
+    private suspend fun nextTopLevelSortOrder(type: String, requestedSortOrder: Int): Int {
+        val maxTopLevelSortOrder = database.categoryDao().getByType(type)
+            .filter { it.parentId == null }
+            .maxOfOrNull { it.sortOrder } ?: -1
+        return maxOf(requestedSortOrder, maxTopLevelSortOrder + 1)
+    }
+
     @ReactMethod
     fun addCategory(inputJson: String, promise: Promise) = launch(promise) {
         val input = parseJson(inputJson)
         val type = BridgeDtoMapper.requiredString(input, "type")
         validateCategoryType(type)
+        // 批 6 子分类:parentId 可选;父须存在、同类型,且父本身是顶级(体系两级)
+        val parentId = input.optionalString("parentId")
+        if (parentId != null) {
+            val parent = database.categoryDao().getById(parentId)
+                ?: throw BridgeException("NOT_FOUND", "Parent category $parentId was not found")
+            if (parent.type != type) {
+                throw BridgeException("INVALID_ARGUMENT", "子分类类型必须与父分类一致")
+            }
+            if (parent.parentId != null) {
+                throw BridgeException("INVALID_ARGUMENT", "分类体系最多两级,子分类下不能再建子分类")
+            }
+        }
         val now = System.currentTimeMillis()
-        val category = CategoryEntity(
-            id = UUID.randomUUID().toString(),
-            name = BridgeDtoMapper.requiredString(input, "name"),
-            type = type,
-            icon = input.optionalString("icon"),
-            color = input.optionalString("color"),
-            isDefault = false,
-            sortOrder = input.optInt("sortOrder", 0),
-            createdAt = now,
-            updatedAt = now
-        )
-        database.categoryDao().insert(category)
+        // 排序计算与插入包进事务：nextChildSortOrder/nextTopLevelSortOrder 是
+        // 读-算-写,并发新增两个分类会取到同一个 max 撞 sortOrder
+        val category = database.withTransaction {
+            // 子分类排序:预设子分类 sortOrder 从 100 起,新增子分类排到既有子分类之后。
+            // 顶级分类排序:新增自定义顶级分类排到既有顶级分类之后,避免 sortOrder=0
+            // 与默认分类混排,保证"默认在前、自定义在后"。
+            val sortOrder = if (parentId != null) {
+                nextChildSortOrder(parentId)
+            } else {
+                nextTopLevelSortOrder(type, input.optInt("sortOrder", 0))
+            }
+            CategoryEntity(
+                id = UUID.randomUUID().toString(),
+                name = BridgeDtoMapper.requiredString(input, "name"),
+                type = type,
+                icon = input.optionalString("icon"),
+                color = input.optionalString("color"),
+                isDefault = false,
+                sortOrder = sortOrder,
+                createdAt = now,
+                updatedAt = now,
+                parentId = parentId
+            ).also { database.categoryDao().insert(it) }
+        }
         events.emit("onCategoryChanged", BridgeDtoMapper.category(category))
         BridgeDtoMapper.category(category).toString()
     }
@@ -478,19 +563,66 @@ class DataModule(
     fun updateCategory(id: String, inputJson: String, promise: Promise) = launch(promise) {
         val existing = database.categoryDao().getById(requireId(id, "category"))
             ?: throw BridgeException("NOT_FOUND", "Category $id was not found")
-        if (existing.isDefault) {
-            throw BridgeException("INVALID_ARGUMENT", "Default categories cannot be edited")
-        }
         val input = parseJson(inputJson)
-        val type = input.optionalString("type") ?: existing.type
+        // 批 6:默认分类允许改名/图标/颜色/排序(类型锁定、不可删除)
+        val type = if (existing.isDefault) {
+            existing.type
+        } else {
+            input.optionalString("type") ?: existing.type
+        }
         validateCategoryType(type)
+        // 类型变更保护：有子分类或已被账单引用时拒绝。否则会出现两级类型不一致、
+        // 或支出账单挂在 income 分类上（账单在选择器中不可见）。
+        if (type != existing.type) {
+            if (database.categoryDao().countChildren(existing.id) > 0) {
+                throw BridgeException("DATA_CONFLICT", "该分类含子分类，不可变更类型，请先处理子分类")
+            }
+            if (database.billDao().countByCategoryId(existing.id) > 0) {
+                throw BridgeException("DATA_CONFLICT", "该分类已被账单使用，不可变更类型")
+            }
+        }
+        // 父级变更校验:父须存在、同类型、顶级;自引用禁止;
+        // "改为顶级"仅当该分类没有子分类(有子分类会制造三级体系)
+        val requestedParentId = input.optionalString("parentId") ?: existing.parentId
+        if (requestedParentId != existing.parentId) {
+            if (requestedParentId == null) {
+                if (database.categoryDao().countChildren(existing.id) > 0) {
+                    throw BridgeException("INVALID_ARGUMENT", "已含子分类的分类不可改为顶级,请先处理其子分类")
+                }
+            } else {
+                if (requestedParentId == existing.id) {
+                    throw BridgeException("INVALID_ARGUMENT", "分类不能成为自己的父分类")
+                }
+                if (database.categoryDao().countChildren(existing.id) > 0) {
+                    throw BridgeException("DATA_CONFLICT", "已含子分类的分类不可移动,请先处理其子分类")
+                }
+                val parent = database.categoryDao().getById(requestedParentId)
+                    ?: throw BridgeException("NOT_FOUND", "Parent category $requestedParentId was not found")
+                if (parent.type != type) {
+                    throw BridgeException("INVALID_ARGUMENT", "子分类类型必须与父分类一致")
+                }
+                if (parent.parentId != null) {
+                    throw BridgeException("INVALID_ARGUMENT", "分类体系最多两级,子分类下不能再建子分类")
+                }
+            }
+        }
+        // 排序:移动到新父分类下重算子分类排序;子分类升为顶级时按顶级重算;
+        // 仅编辑名称/图标时保持原 sortOrder
+        val sortOrder = when {
+            requestedParentId != null && requestedParentId != existing.parentId ->
+                nextChildSortOrder(requestedParentId)
+            requestedParentId == null && existing.parentId != null ->
+                nextTopLevelSortOrder(type, input.optionalInt("sortOrder") ?: existing.sortOrder)
+            else -> input.optionalInt("sortOrder") ?: existing.sortOrder
+        }
         val updated = existing.copy(
             name = input.optionalString("name") ?: existing.name,
             type = type,
             icon = input.updatedNullableString("icon", existing.icon),
             color = input.updatedNullableString("color", existing.color),
-            sortOrder = input.optionalInt("sortOrder") ?: existing.sortOrder,
-            updatedAt = System.currentTimeMillis()
+            sortOrder = sortOrder,
+            updatedAt = System.currentTimeMillis(),
+            parentId = requestedParentId
         )
         database.categoryDao().update(updated)
         events.emit("onCategoryChanged", BridgeDtoMapper.category(updated))
@@ -504,6 +636,9 @@ class DataModule(
                 ?: throw BridgeException("NOT_FOUND", "Category $id was not found")
             if (existing.isDefault) {
                 throw BridgeException("INVALID_ARGUMENT", "Default categories cannot be deleted")
+            }
+            if (database.categoryDao().countChildren(existing.id) > 0) {
+                throw BridgeException("DATA_CONFLICT", "请先删除或移动该分类下的子分类")
             }
             if (database.billDao().countByCategoryId(existing.id) > 0) {
                 throw BridgeException("DATA_CONFLICT", "Category $id is referenced by bills")
@@ -816,6 +951,18 @@ class DataModule(
         null
     }
 
+    /** 预算超支提醒开关(仅控制系统通知;预算进度计算与 UI 变色不受影响)。默认开启。 */
+    @ReactMethod
+    fun isBudgetReminderEnabled(promise: Promise) = launch(promise) {
+        BudgetReminderNotifier.isEnabled(reactContext.applicationContext)
+    }
+
+    @ReactMethod
+    fun setBudgetReminderEnabled(enabled: Boolean, promise: Promise) = launch(promise) {
+        BudgetReminderNotifier.setEnabled(reactContext.applicationContext, enabled)
+        null
+    }
+
     @ReactMethod
     fun confirmPendingTransaction(
         id: String,
@@ -829,72 +976,38 @@ class DataModule(
             throw BridgeException("VERSION_CONFLICT", "Pending transaction $id has changed")
         }
         val input = parseJson(inputJson)
-        val now = System.currentTimeMillis()
-        val type = input.optionalString("type") ?: pending.type
-        val sourceType = input.optionalString("sourceType") ?: pending.sourceType
-        BridgeDtoMapper.validateBillType(type)
-        BridgeDtoMapper.validateSourceType(sourceType)
-        val amountMinor = input.optionalMinor("amountMinor") ?: pending.amountMinor
-        if (amountMinor !in 1L..MAX_SAFE_MINOR_UNIT) {
-            throw BridgeException("INVALID_ARGUMENT", "amountMinor must be a positive safe integer minor unit")
-        }
-        // 阶段五 T1 时机二：用户确认入账前最终执行规则。
-        // 字段优先级：用户显式输入 > 规则补全 > 待确认既有字段（证据/AI）；
-        // ignore/send_to_review 不阻断用户确认（用户明确操作优先级最高），仅记录命中。
-        val ruleDecision = ruleEngine.evaluateAndRecord(
-            RuleEngine.Subject(
-                amountMinor = amountMinor,
-                platform = pending.platform,
-                merchant = pending.merchant,
-                description = pending.productDescription,
-                sourceType = sourceType
+        // 确认入账统一走共享入口：与付款确认弹窗共用同一条
+        // "覆写字段→规则引擎→组装 Bill→事务内乐观锁确认"路径，防止双实现漂移。
+        // 字段优先级：用户显式输入 > 规则补全 > 待确认既有字段（证据/AI）。
+        val outcome = PendingConfirmService(database).confirm(
+            pendingId = pending.id,
+            overrides = PendingConfirmService.Overrides(
+                type = input.optionalString("type"),
+                sourceType = input.optionalString("sourceType"),
+                amountMinor = input.optionalMinor("amountMinor"),
+                merchant = input.optionalString("merchant"),
+                categoryId = input.optionalString("categoryId"),
+                accountId = input.optionalString("accountId"),
+                targetAccountId = input.optionalString("targetAccountId"),
+                platform = input.optionalString("platform"),
+                productDescription = input.optionalString("productDescription"),
+                orderId = input.optionalString("orderId"),
+                description = input.updatedNullableString("description", null),
+                occurredAt = if (input.hasValue("occurredAt")) {
+                    BridgeDtoMapper.requiredTimestamp(input, "occurredAt")
+                } else {
+                    null
+                },
+                originalTransactionId = input.optionalString("originalTransactionId")
             )
         )
-        val rulePatch = ruleEngine.sanitizePatch(
-            (ruleDecision as? RuleEngine.Decision.Continue)?.patch
-                ?: RuleEngine.FieldPatch()
-        )
-        // 确认入账必须使用正数安全整数金额，AI 失败占位记录只能忽略或重试。
-        val bill = BillEntity(
-            id = UUID.randomUUID().toString(),
-            amountMinor = amountMinor,
-            type = type,
-            occurredAt = if (input.hasValue("occurredAt")) {
-                BridgeDtoMapper.requiredTimestamp(input, "occurredAt")
-            } else {
-                pending.occurredAt
-            },
-            description = input.updatedNullableString("description", null),
-            categoryId = input.optionalString("categoryId")
-                ?: rulePatch.categoryId
-                ?: pending.categoryId,
-            accountId = input.optionalString("accountId")
-                ?: rulePatch.accountId
-                ?: pending.accountId,
-            targetAccountId = input.optionalString("targetAccountId"),
-            platform = input.optionalString("platform")
-                ?: rulePatch.platform
-                ?: pending.platform,
-            merchant = input.optionalString("merchant")
-                ?: rulePatch.merchant
-                ?: pending.merchant,
-            productDescription = input.optionalString("productDescription") ?: pending.productDescription,
-            sourceType = sourceType,
-            // 来源会话 ID 固定为 pending 绑定值，避免请求改写幂等边界。
-            originalTransactionId = pending.sessionId,
-            orderId = input.optionalString("orderId") ?: pending.orderId,
-            createdAt = now,
-            updatedAt = now,
-            version = 1
-        )
-        // 事务内乐观锁确认：版本不一致返回 false，Bill 不写入、余额不更新。
-        // 阶段五 T6：确认入账前执行去重（第 1 级命中合并进既有账单，不产生第二笔），
-        // settledBill 为实际落库账单（新建或合并目标），事件与返回值均以它为准
-        val confirmResult = repository.confirmPendingTransaction(pending, bill)
-        if (!confirmResult.success) {
-            throw BridgeException("VERSION_CONFLICT", "Pending transaction $id has changed")
+        val settledBill = when (outcome) {
+            is PendingConfirmService.Outcome.Confirmed -> outcome.bill
+            is PendingConfirmService.Outcome.AlreadyHandled ->
+                throw BridgeException("VERSION_CONFLICT", "Pending transaction $id has changed")
+            is PendingConfirmService.Outcome.Invalid ->
+                throw BridgeException("INVALID_ARGUMENT", outcome.reason)
         }
-        val settledBill = confirmResult.committed ?: confirmResult.mergedInto ?: bill
         events.emit("onPendingChanged", JSONObject().put("pendingId", pending.id).put("deleted", true))
         events.emit("onBillCreated", BridgeDtoMapper.bill(settledBill))
         BridgeDtoMapper.bill(settledBill).toString()
@@ -1062,6 +1175,8 @@ class DataModule(
                 val result = withContext(Dispatchers.IO) { action() }
                 promise.resolve(result)
             } catch (error: CancellationException) {
+                // 协程被取消（模块销毁/scope 取消）时也要 reject，否则 JS 侧 Promise 永久悬挂。
+                promise.reject("CANCELLED", error.message ?: "Operation was cancelled", error)
                 throw error
             } catch (error: BridgeException) {
                 promise.reject(error.code, error.message, error)

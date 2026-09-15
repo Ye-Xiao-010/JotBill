@@ -43,7 +43,6 @@ enum class CheckoutPageRole(val storageValue: String) {
 enum class PurchaseIntent(val wireValue: String) {
     SUBMIT_ACTION("SUBMIT_ACTION"),
     PAYMENT_APP_HANDOFF("PAYMENT_APP_HANDOFF"),
-    PAYMENT_PAGE_VISIBLE("PAYMENT_PAGE_VISIBLE"),
     PAYMENT_NOTIFICATION_FALLBACK("PAYMENT_NOTIFICATION_FALLBACK"),
     USER_RETRY("USER_RETRY")
 }

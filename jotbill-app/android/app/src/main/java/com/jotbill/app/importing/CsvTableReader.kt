@@ -69,8 +69,16 @@ internal object CsvTableReader {
                             field.append(char)
                         }
                     }
-                    char == '"' -> inQuotes = true
-                    char == ',' -> finishField()
+                    char == '"' -> {
+                        // 任何非 \r 的字符都要清掉 CRLF 锁存：否则上一行以 \r 结尾、
+                        // 下一行以引号字段开头再以 \n 结尾时，两行会被并作一行
+                        previousWasCr = false
+                        inQuotes = true
+                    }
+                    char == ',' -> {
+                        previousWasCr = false
+                        finishField()
+                    }
                     char == '\r' -> {
                         if (!finishRow()) return rowNumber
                         previousWasCr = true

@@ -19,7 +19,7 @@ import { ChevronLeft, Plus, Trash2, Pencil } from 'lucide-react-native';
 import { ThemeColors } from '../theme/colors';
 import { spacing, borderRadius, borderWidth, shadow } from '../theme/spacing';
 import { ProgressBar, BrutalPressable } from '../components/ui';
-import { useStyles } from '../hooks';
+import { useStyles, useToast } from '../hooks';
 import { useAlert } from '../providers';
 import { nativeData, type BudgetInput, type BudgetProgress, type Category } from '../native';
 import { QUERY_KEYS, invalidateCache } from '../lib/queryClient';
@@ -38,6 +38,7 @@ export default function BudgetScreen() {
   const navigation = useNavigation();
   const styles = useStyles(createStyles);
   const { confirm } = useAlert();
+  const { showError } = useToast();
 
   // 弹窗状态
   const [showFormModal, setShowFormModal] = useState(false);
@@ -74,6 +75,7 @@ export default function BudgetScreen() {
       invalidateCache.budgets();
       closeFormModal();
     },
+    onError: (error: any) => showError(error?.message || '创建预算失败'),
   });
 
   // 更新 mutation
@@ -84,12 +86,14 @@ export default function BudgetScreen() {
       invalidateCache.budgets();
       closeFormModal();
     },
+    onError: (error: any) => showError(error?.message || '更新预算失败'),
   });
 
   // 删除 mutation
   const deleteMutation = useMutation({
     mutationFn: (id: string) => nativeData.deleteBudget(id),
     onSuccess: () => invalidateCache.budgets(),
+    onError: (error: any) => showError(error?.message || '删除预算失败'),
   });
 
   // 表单操作
@@ -121,14 +125,25 @@ export default function BudgetScreen() {
   const handleSubmitForm = () => {
     const amount = parseFloat(formAmount);
     const alertAt = parseInt(formAlertAt, 10);
-    if (!formName.trim() || isNaN(amount) || amount <= 0) { return; }
+    if (!formName.trim()) {
+      showError('请输入预算名称');
+      return;
+    }
+    if (isNaN(amount) || amount <= 0) {
+      showError('请输入有效的预算金额');
+      return;
+    }
+    if (isNaN(alertAt) || alertAt < 0 || alertAt > 100) {
+      showError('预警阈值须在 0-100 之间');
+      return;
+    }
 
     const payload: BudgetInput = {
       name: formName.trim(),
       amountMinor: Math.round(amount * 100),
       period: formPeriod,
       categoryId: formCategoryId,
-      alertAt: isNaN(alertAt) ? 80 : alertAt,
+      alertAt,
     };
 
     if (editingBudget) {

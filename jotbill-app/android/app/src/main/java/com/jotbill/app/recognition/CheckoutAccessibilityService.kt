@@ -7,6 +7,7 @@ import android.accessibilityservice.AccessibilityServiceInfo
 import android.content.Intent
 import android.graphics.Bitmap
 import android.hardware.HardwareBuffer
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
@@ -18,6 +19,7 @@ import com.jotbill.app.ai.CheckoutAiResultCallback
 import com.jotbill.app.ai.CheckoutAiVisionClient
 import com.jotbill.app.data.JotBillDatabaseProvider
 import com.jotbill.app.overlay.CheckoutCaptureOverlayManager
+import com.jotbill.app.overlay.PendingConfirmOverlayManager
 import com.jotbill.app.security.KeyStoreSecretStore
 import java.io.ByteArrayOutputStream
 import java.security.MessageDigest
@@ -30,6 +32,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /**
@@ -70,6 +73,24 @@ class CheckoutAccessibilityService : AccessibilityService() {
          * 空树帧无法自行判定敏感，需靠锁存窗口保证整个密码输入过程都不截图。
          */
         private const val SENSITIVE_PAGE_SCREENSHOT_BLOCK_MILLIS = 60_000L
+
+        /** 支付结果页截图兜底的系统回调看门狗：MIUI 等可能静默丢弃回调，超时强制复位。 */
+        private const val PAYMENT_SCREENSHOT_FALLBACK_WATCHDOG_MILLIS = 8_000L
+
+        /** 用户断言截图的最小点击间隔，防止连点在同一页面制造多条待确认。 */
+        private const val USER_ASSERTED_CAPTURE_MIN_INTERVAL_MILLIS = 3_000L
+
+        /** 用户断言截图的系统回调看门狗：MIUI 等可能静默丢弃回调，超时强制复位。 */
+        private const val USER_ASSERTED_CAPTURE_WATCHDOG_MILLIS = 8_000L
+
+        /**
+         * 用户断言截图的专用内存槽位前缀。
+         *
+         * 断言截图绝不写入 shopping-package: 结算槽位：store 对新会话会整体替换
+         * 槽位状态，会把在途自动候选连同交接栅栏一起清掉。专用槽位让断言通道
+         * 与 journey 状态机完全隔离，复用 buffer 的字节卫生与原子消费语义。
+         */
+        private const val USER_ASSERTED_SLOT_PREFIX = "user-asserted:"
 
         /**
          * 系统 UI 包名：这些窗口（状态栏、通知、输入法）的内容变化不代表购物页变化。
@@ -173,24 +194,6 @@ class CheckoutAccessibilityService : AccessibilityService() {
         }
 
         @JvmStatic
-        fun requestSubmitAction(
-            pageFingerprint: String?,
-            callback: PurchaseIntentResultCallback
-        ) = requestPurchaseIntent(PurchaseIntent.SUBMIT_ACTION, pageFingerprint, callback)
-
-        @JvmStatic
-        fun requestPaymentAppHandoff(
-            pageFingerprint: String?,
-            callback: PurchaseIntentResultCallback
-        ) = requestPurchaseIntent(PurchaseIntent.PAYMENT_APP_HANDOFF, pageFingerprint, callback)
-
-        @JvmStatic
-        fun requestPaymentPageVisible(
-            pageFingerprint: String?,
-            callback: PurchaseIntentResultCallback
-        ) = requestPurchaseIntent(PurchaseIntent.PAYMENT_PAGE_VISIBLE, pageFingerprint, callback)
-
-        @JvmStatic
         fun requestPaymentNotificationFallback(
             pageFingerprint: String?,
             callback: PurchaseIntentResultCallback
@@ -222,12 +225,6 @@ class CheckoutAccessibilityService : AccessibilityService() {
             }
             service.requestPaymentNotificationFallbackForSignal(signal, callback)
         }
-
-        @JvmStatic
-        fun requestUserRetry(
-            pageFingerprint: String?,
-            callback: PurchaseIntentResultCallback
-        ) = requestPurchaseIntent(PurchaseIntent.USER_RETRY, pageFingerprint, callback)
 
         /** 仅允许在当前安全购物页重新截图，并把结果回写到指定失败会话。 */
         @JvmStatic
@@ -312,6 +309,33 @@ class CheckoutAccessibilityService : AccessibilityService() {
      */
     @Volatile
     private var lastSensitivePaymentPageAt = 0L
+
+    /**
+     * 最近一次在购物应用中观察到敏感页面的时间。
+     *
+     * 用户断言截图的入口门禁：购物页的密码/付款码等内容同样触发锁存，
+     * 与支付应用侧的 [lastSensitivePaymentPageAt] 共同构成断言截图的敏感门禁。
+     */
+    @Volatile
+    private var lastSensitiveShoppingPageAt = 0L
+
+    /** 用户断言截图的在飞标志；配合看门狗在系统回调丢失时强制复位。 */
+    @Volatile
+    private var userAssertedCaptureInFlight = false
+
+    /** 用户断言截图最近一次受理时间，用于点击节流。 */
+    @Volatile
+    private var lastUserAssertedCaptureAt = 0L
+
+    /**
+     * 已派发 AI 的用户断言会话 ID。
+     *
+     * AI 结果落库后据此收口：识别成功且无支付证据时立即转待确认
+     * （promoteAssertedSessionToPending），避免识别结果随会话过期无声消失。
+     * 自动截图的会话不进该集合，保持"等待支付证据"的原有语义。
+     */
+    private val assertedSessionIds = mutableSetOf<String>()
+
     private val recentPaymentResultEventKeys = mutableMapOf<String, Long>()
     private val screenshotCallbackExecutor = Executor { runnable -> mainHandler.post(runnable) }
     @Volatile
@@ -440,6 +464,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
         shutdownAiClient()
         purchaseIntentCoordinator?.close()
         snapshotCaptureCoordinator?.close()
+        AccessibilityPageSummaryCollector.resetVolatileTracker()
         checkoutCaptureOverlayManager?.setManualCaptureRequestHandler(null)
         checkoutCaptureOverlayManager?.close()
         val sharedBuffer = CheckoutSnapshotBuffer()
@@ -842,6 +867,16 @@ class CheckoutAccessibilityService : AccessibilityService() {
                 root = root,
                 observedAt = System.currentTimeMillis()
             )
+            if (observation.isSensitivePage) {
+                // 购物应用内的敏感页（密码键盘、付款码等）同样锁存：
+                // 用户断言截图与支付兜底共用"锁存窗口内一律不截图"的约定。
+                lastSensitiveShoppingPageAt = System.currentTimeMillis()
+            }
+            // 付款确认弹窗的帧级敏感门禁依据：只在确认当前帧非敏感时才允许弹出。
+            PendingConfirmOverlayManager.onObservationState(
+                sensitive = observation.isSensitivePage,
+                foregroundPackage = shoppingPackage
+            )
             when (val detection = pageDetector.detect(observation)) {
                 is CheckoutPageDetection.Accepted -> {
                     logCheckoutGateSampled(observation, rejection = null)
@@ -857,6 +892,11 @@ class CheckoutAccessibilityService : AccessibilityService() {
                     // 该上下文只承载脱敏元数据，且 CHECKOUT 角色本就在
                     // canBufferUserRetrySnapshot() 允许集合内；敏感页已在更前面拦截。
                     setUserRetryCaptureContext(observation)
+                    // 门禁通过即通知悬浮层进入"处理中"：候选期（稳定窗口确认前，
+                    // 指纹漂移时可达数十秒）此前零反馈，按钮停留在 HIDDEN 会让用户
+                    // 以为识别未工作（截图链路实际照常运行）。后续 Stable 事件、
+                    // Invalidated 或截图结果会自然覆盖该状态。
+                    checkoutCaptureOverlayManager?.onCheckoutCandidate(observation)
                     val stable = currentStableCheckout
                     val sameStableCheckout = stable?.let { stablePage ->
                         stablePage.observation.shoppingPackage == observation.shoppingPackage &&
@@ -893,7 +933,10 @@ class CheckoutAccessibilityService : AccessibilityService() {
                     }
                     submitActionTriggeredKey = null
                     val userRetryCaptureAvailable = if (reason == CheckoutInvalidationReason.NON_CHECKOUT_PAGE) {
-                        setUserRetryCaptureContext(observation)
+                        // 手动重试上下文就绪，或用户断言通道可用（服务存活且 AI 已配置），
+                        // 都让按钮进入 READY：识别失败/普通购物页不再表现为"按钮不可用"，
+                        // 此时的点击由断言通道接管并直接产出待确认。
+                        setUserRetryCaptureContext(observation) || isUserAssertedCaptureAvailable()
                     } else {
                         clearUserRetryCaptureContext()
                         false
@@ -963,6 +1006,9 @@ class CheckoutAccessibilityService : AccessibilityService() {
         purchaseIntentCoordinator?.onServiceInterrupted()
         stabilityCoordinator.invalidate(CheckoutInvalidationReason.SERVICE_INTERRUPTED)
         checkoutCaptureOverlayManager?.onServiceInterrupted()
+        // 服务中断后页面观察不再连续，L3 跨帧易变观察窗口失去意义，
+        // 清空防止陈旧观察污染重新连接后的判定。
+        AccessibilityPageSummaryCollector.resetVolatileTracker()
         Log.w(TAG, "结算页无障碍观察服务被中断")
         // AccessibilityService.onInterrupt() 是抽象方法，无法调用 super.onInterrupt()。
     }
@@ -1171,9 +1217,27 @@ class CheckoutAccessibilityService : AccessibilityService() {
                         )
                     }
                     if (matcher != null) {
+                        // 断言标记先摘除再落库：无论后续成败都不残留集合项。
+                        val isAssertedSession = synchronized(aiLifecycleLock) {
+                            assertedSessionIds.remove(reference.sessionId)
+                        }
                         try {
                             val matchResult = matcher.recordAiResult(result)
                             Log.i(TAG, "AI 结果匹配落库结果: ${formatMatchResult(matchResult)}")
+                            if (isAssertedSession &&
+                                result is com.jotbill.app.ai.AiVisionResult.Succeeded
+                            ) {
+                                // 断言通道的收口：识别成功且无支付证据时立即转待确认；
+                                // 失败结果由 recordAiResult 的占位分支处理，无需在此收口。
+                                val promoted = matcher.promoteAssertedSessionToPending(
+                                    reference.sessionId
+                                )
+                                Log.i(
+                                    TAG,
+                                    "断言截图会话收口: session=${reference.sessionId.take(8)}, " +
+                                        "promoted=$promoted"
+                                )
+                            }
                         } catch (error: RuntimeException) {
                             Log.w(TAG, "AI 结果匹配写入失败", error)
                         }
@@ -1382,6 +1446,11 @@ class CheckoutAccessibilityService : AccessibilityService() {
                         observedAt = observedAt,
                         includeHiddenText = true
                     )
+                    // 付款确认弹窗的帧级敏感门禁依据（支付密码页帧为敏感时不得弹出）。
+                    PendingConfirmOverlayManager.onObservationState(
+                        sensitive = observation.isSensitivePage,
+                        foregroundPackage = paymentPackage
+                    )
 
                     // 敏感判定必须先于页面角色分支：微信支付密码页常被分类为
                     // UNKNOWN，若沿用“先判角色再判敏感”的顺序，敏感页会从
@@ -1568,6 +1637,14 @@ class CheckoutAccessibilityService : AccessibilityService() {
             logScreenshotFallbackBlockedSampled("本轮观察到敏感页面", paymentPackage)
             return
         }
+        // 支付旅程门槛：无任何支付交接上下文（既非购物应用→支付应用的结算交接，
+        // 也无截图协调器的最近支付交接引用）说明用户只是在日常使用微信/支付宝，
+        // 此时截图会把聊天记录、朋友圈等无关内容编码后发往外部 AI——一律禁止。
+        // 结果页文本解析主路径不受影响（无截图、无外发）。
+        if (handoffContext == null) {
+            Log.i(TAG, "支付结果页截图兜底跳过: 无支付交接上下文 pkg=$paymentPackage")
+            return
+        }
         val now = System.currentTimeMillis()
         // 空节点树帧无法自行判定敏感，用锁存窗口覆盖密码页与空树帧交替的场景。
         if (now - lastSensitivePaymentPageAt < SENSITIVE_PAGE_SCREENSHOT_BLOCK_MILLIS) {
@@ -1583,6 +1660,12 @@ class CheckoutAccessibilityService : AccessibilityService() {
             now - lastPaymentScreenshotFallbackAt < 15_000L ||
             now - lastSuccessfulPaymentEvidenceAt < 90_000L
         ) {
+            return
+        }
+        // AccessibilityService.takeScreenshot 为 API 30+；低版本系统直接禁用该兜底
+        //（NoSuchMethodError 是 Error，不能靠外层 RuntimeException 捕获）。
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            Log.i(TAG, "支付结果页截图兜底不可用: 需要 Android 11+，当前 API ${Build.VERSION.SDK_INT}")
             return
         }
         val activeRootPackage = try {
@@ -1604,6 +1687,15 @@ class CheckoutAccessibilityService : AccessibilityService() {
         }
         lastPaymentScreenshotFallbackAt = now
         paymentScreenshotFallbackInFlight = true
+        // MIUI 等系统可能静默丢弃 takeScreenshot 回调，8 秒后强制复位 in-flight 标志，
+        // 避免"失败后立刻在原页重试"永远被 CAPTURE_IN_FLIGHT/兜底永久停用。
+        val watchdogJob = evidenceFallbackScope.launch {
+            delay(PAYMENT_SCREENSHOT_FALLBACK_WATCHDOG_MILLIS)
+            if (paymentScreenshotFallbackInFlight) {
+                paymentScreenshotFallbackInFlight = false
+                Log.w(TAG, "支付结果页截图兜底看门狗复位（系统回调未达）")
+            }
+        }
         try {
             @Suppress("NewApi")
             takeScreenshot(
@@ -1611,6 +1703,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
                 screenshotCallbackExecutor,
                 object : TakeScreenshotCallback {
                     override fun onSuccess(screenshot: ScreenshotResult) {
+                        watchdogJob.cancel()
                         paymentScreenshotFallbackInFlight = false
                         val bytes = encodePaymentScreenshot(screenshot)
                         if (bytes == null || bytes.isEmpty()) {
@@ -1625,12 +1718,14 @@ class CheckoutAccessibilityService : AccessibilityService() {
                     }
 
                     override fun onFailure(errorCode: Int) {
+                        watchdogJob.cancel()
                         paymentScreenshotFallbackInFlight = false
                         Log.w(TAG, "支付结果页截图兜底失败: errorCode=$errorCode")
                     }
                 }
             )
         } catch (error: RuntimeException) {
+            watchdogJob.cancel()
             paymentScreenshotFallbackInFlight = false
             Log.w(TAG, "支付结果页截图兜底调用失败", error)
         }
@@ -1716,9 +1811,10 @@ class CheckoutAccessibilityService : AccessibilityService() {
             )
             return
         }
-        // 与无障碍结果页共用同一个去重键：同包名、同一分钟、同金额、同订单号只落一次。
+        // 与无障碍结果页共用同一个去重键：同包名、同一 30 秒桶、同金额、同订单号只落一次。
+        // 桶宽须与主路径（PaymentResultParser）一致 —— 只改一处则另一条路径仍按旧桶撞键。
         val sourceEventKey = sha256(
-            "result-event|$paymentPackage|${occurredAt / 120_000L}|${fields.amountMinor}|" +
+            "result-event|$paymentPackage|${occurredAt / 30_000L}|${fields.amountMinor}|" +
                 "${fields.orderId.orEmpty()}"
         )
         val now = System.currentTimeMillis()
@@ -2289,7 +2385,30 @@ class CheckoutAccessibilityService : AccessibilityService() {
     }
 
     /** 悬浮按钮只调用现有手动截图入口，不直接接触截图资源或 AI。 */
+    /**
+     * 悬浮按钮点击路由。
+     *
+     * 结算槽位仍有未消费的自动候选时（识别成功的正常链路），保持原手动路径语义：
+     * 截图补入既有会话，支付交接时消费，多为 DUPLICATE/PROTECTED 反馈；
+     * 否则走用户断言通道——识别失败、交接挂起、普通购物页这些原路径必然
+     * NO_ACTIVE_CHECKOUT/NOT_CHECKOUT_PAGE 的场景，现在都能直接产出待确认。
+     */
     private fun requestManualCaptureFromOverlay() {
+        val foregroundPackage = currentForegroundShoppingPackage()
+        val hasLiveAutoCandidate = foregroundPackage != null && try {
+            checkoutSnapshotBuffer?.findReference(checkoutSnapshotSlotId(foregroundPackage)) != null
+        } catch (_: RuntimeException) {
+            false
+        }
+        if (hasLiveAutoCandidate) {
+            requestSessionBoundManualCapture()
+        } else {
+            performUserAssertedCapture(foregroundPackage)
+        }
+    }
+
+    /** 原会话绑定的手动截图路径：仅在结算槽位有在途自动候选时由路由进入。 */
+    private fun requestSessionBoundManualCapture() {
         val context = userRetryCaptureContext
         if (context != null) {
             Log.i(
@@ -2361,6 +2480,297 @@ class CheckoutAccessibilityService : AccessibilityService() {
         snapshotCaptureCoordinator?.setUserRetryContext(retainedContext)
         purchaseIntentCoordinator?.setUserRetryContext(retainedContext)
         return true
+    }
+
+    /**
+     * 当前前台是否为白名单购物应用。
+     *
+     * rootInActiveWindow 瞬时不可读（系统窗过渡、多窗口切换）时回退最近一次
+     * 确认的购物页上下文——与支付兜底"空前台不拦截、非白名单前台才拦截"的
+     * 既有口径一致；用户真实切到非白名单应用时仍然拒绝。
+     */
+    private fun currentForegroundShoppingPackage(): String? {
+        val activePackage = try {
+            rootInActiveWindow?.packageName?.toString()?.trim()?.takeIf { it.isNotBlank() }
+        } catch (_: RuntimeException) {
+            null
+        }
+        if (activePackage != null) {
+            return activePackage.takeIf { pageDetector.supportsShoppingPackage(it) }
+        }
+        return userRetryCaptureContext?.shoppingPackage
+            ?.takeIf { pageDetector.supportsShoppingPackage(it) }
+    }
+
+    /** 用户断言通道是否可用：服务存活且 AI 视觉客户端已配置。 */
+    private fun isUserAssertedCaptureAvailable(): Boolean =
+        serviceConnected && synchronized(aiLifecycleLock) { aiVisionClient != null }
+
+    /**
+     * 用户断言截图通道：绕过结算页识别与会话门禁，把"用户点了截图"直接变成
+     * 一条待确认交易。
+     *
+     * 不可绕过的门禁只剩三道：敏感页锁存（不变式第 1 条——密码页/付款码页
+     * 永不截图）、前台购物包名白名单、系统截图 API。截图落在专用内存槽位
+     * （user-asserted:&lt;pkg&gt;），与结算会话槽位零交互；随后立即经既有 AI 管道
+     * （ensureSession → recognize → recordAiResult）生成候选，无支付证据时由
+     * [CheckoutPaymentMatcher.promoteAssertedSessionToPending] 收口为待确认，
+     * 支付证据晚到时仍走既有匹配链路自动核销或收敛。
+     */
+    private fun performUserAssertedCapture(foregroundPackage: String?) {
+        val now = System.currentTimeMillis()
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            Log.i(TAG, "断言截图不可用: 需要 Android 11+，当前 API ${Build.VERSION.SDK_INT}")
+            publishAssertedOverlayResult(
+                SnapshotCaptureStatus.UNAVAILABLE,
+                SnapshotCaptureUnavailableReason.API_UNSUPPORTED.wireValue
+            )
+            return
+        }
+        if (!serviceConnected) {
+            publishAssertedOverlayResult(
+                SnapshotCaptureStatus.UNAVAILABLE,
+                SnapshotCaptureUnavailableReason.SERVICE_NOT_CONNECTED.wireValue
+            )
+            return
+        }
+        if (foregroundPackage == null) {
+            Log.i(TAG, "断言截图拒绝: 前台不是白名单购物应用")
+            publishAssertedOverlayResult(
+                SnapshotCaptureStatus.REJECTED,
+                SnapshotCaptureRejection.NOT_CHECKOUT_PAGE.wireValue
+            )
+            return
+        }
+        // 敏感页锁存：支付应用与购物应用两把锁存任一命中即拒绝。这是本通道
+        // 唯一继承自自动链路的页面判定门禁，也是不变式第 1 条的入口。
+        val sensitiveLatchElapsed = now - maxOf(lastSensitivePaymentPageAt, lastSensitiveShoppingPageAt)
+        if (sensitiveLatchElapsed < SENSITIVE_PAGE_SCREENSHOT_BLOCK_MILLIS) {
+            Log.w(
+                TAG,
+                "断言截图拒绝: 敏感页锁存窗口内 elapsed=${sensitiveLatchElapsed}ms, pkg=$foregroundPackage"
+            )
+            publishAssertedOverlayResult(
+                SnapshotCaptureStatus.REJECTED,
+                SnapshotCaptureRejection.SENSITIVE_PAGE.wireValue
+            )
+            return
+        }
+        if (userAssertedCaptureInFlight) {
+            Log.i(TAG, "断言截图拒绝: 截图在飞")
+            publishAssertedOverlayResult(
+                SnapshotCaptureStatus.REJECTED,
+                SnapshotCaptureRejection.CAPTURE_IN_FLIGHT.wireValue
+            )
+            return
+        }
+        if (now - lastUserAssertedCaptureAt < USER_ASSERTED_CAPTURE_MIN_INTERVAL_MILLIS) {
+            Log.i(TAG, "断言截图拒绝: 点击过快")
+            // 必须发布结果：按钮此时已进入 CAPTURING，静默返回会让它在静态页面上
+            // 一直卡住（没有后续观察事件来复位状态）。
+            publishAssertedOverlayResult(
+                SnapshotCaptureStatus.REJECTED,
+                "USER_ASSERTED_THROTTLED"
+            )
+            return
+        }
+        val client = synchronized(aiLifecycleLock) { aiVisionClient }
+        if (client == null) {
+            Log.i(TAG, "断言截图拒绝: AI 视觉客户端未配置")
+            publishAssertedOverlayResult(
+                SnapshotCaptureStatus.UNAVAILABLE,
+                "AI_NOT_CONFIGURED"
+            )
+            return
+        }
+
+        lastUserAssertedCaptureAt = now
+        userAssertedCaptureInFlight = true
+        val watchdogJob = evidenceFallbackScope.launch {
+            delay(USER_ASSERTED_CAPTURE_WATCHDOG_MILLIS)
+            if (userAssertedCaptureInFlight) {
+                userAssertedCaptureInFlight = false
+                Log.w(TAG, "断言截图看门狗复位（系统回调未达）")
+            }
+        }
+        Log.i(TAG, "断言截图受理: pkg=$foregroundPackage")
+        try {
+            @Suppress("NewApi")
+            takeScreenshot(
+                Display.DEFAULT_DISPLAY,
+                screenshotCallbackExecutor,
+                object : TakeScreenshotCallback {
+                    override fun onSuccess(screenshot: ScreenshotResult) {
+                        watchdogJob.cancel()
+                        userAssertedCaptureInFlight = false
+                        val bytes = encodePaymentScreenshot(screenshot)
+                        if (bytes == null || bytes.isEmpty()) {
+                            bytes?.fill(0)
+                            Log.w(TAG, "断言截图编码失败")
+                            publishAssertedOverlayResult(
+                                SnapshotCaptureStatus.FAILED,
+                                SnapshotCaptureUnavailableReason.ENCODE_FAILED.wireValue
+                            )
+                            return
+                        }
+                        Log.i(TAG, "断言截图已取得: ${bytes.size} bytes")
+                        evidenceFallbackScope.launch {
+                            dispatchUserAssertedScreenshot(bytes, foregroundPackage)
+                        }
+                    }
+
+                    override fun onFailure(errorCode: Int) {
+                        watchdogJob.cancel()
+                        userAssertedCaptureInFlight = false
+                        Log.w(TAG, "断言截图失败: errorCode=$errorCode")
+                        publishAssertedOverlayResult(
+                            SnapshotCaptureStatus.UNAVAILABLE,
+                            "SCREENSHOT_ERROR_$errorCode"
+                        )
+                    }
+                }
+            )
+        } catch (error: RuntimeException) {
+            watchdogJob.cancel()
+            userAssertedCaptureInFlight = false
+            Log.w(TAG, "断言截图调用失败", error)
+            publishAssertedOverlayResult(
+                SnapshotCaptureStatus.UNAVAILABLE,
+                SnapshotCaptureUnavailableReason.SYSTEM_REJECTED.wireValue
+            )
+        }
+    }
+
+    /**
+     * 断言截图的字节处理：写入专用槽位 → 立即消费 → 派发既有 AI 管道。
+     *
+     * 字节卫生全程遵循"单一所有者"：buffer.store 内部复制后，入口数组在本函数
+     * finally 中抹零；Stored 返回的元数据副本读取后立即 release；Ready 的所有权
+     * 按 dispatchReadyToAi 的既有契约移交（返回 false 时由本调用方释放）。
+     */
+    private suspend fun dispatchUserAssertedScreenshot(
+        imageBytes: ByteArray,
+        shoppingPackage: String
+    ) {
+        val sessionId = CheckoutRequestKey.newSessionId()
+        // 合成指纹只承载"一次断言"的幂等键：SHA-256 十六进制格式与页面指纹一致，
+        // 使请求键/会话记录无需任何特判；两次断言指纹必然不同，互不合并。
+        val pageFingerprint = sha256("user-asserted|$shoppingPackage|$sessionId")
+        val slotId = USER_ASSERTED_SLOT_PREFIX + shoppingPackage
+        val buffer = checkoutSnapshotBuffer
+        if (buffer == null) {
+            Log.w(TAG, "断言截图落库失败: 缓冲区不可用")
+            imageBytes.fill(0)
+            publishAssertedOverlayResult(
+                SnapshotCaptureStatus.UNAVAILABLE,
+                SnapshotCaptureUnavailableReason.SERVICE_NOT_CONNECTED.wireValue
+            )
+            return
+        }
+        try {
+            val storeResult = try {
+                buffer.store(
+                    SnapshotCaptureRequest(
+                        slotId = slotId,
+                        sessionId = sessionId,
+                        shoppingPackage = shoppingPackage,
+                        pageRole = CheckoutPageRole.CHECKOUT,
+                        pageFingerprint = pageFingerprint,
+                        sourceReason = SnapshotSourceReason.MANUAL_CAPTURE,
+                        imageBytes = imageBytes,
+                        // 敏感页已在入口门禁拒绝；此处如实传 false。
+                        isSensitivePage = false,
+                        captureTarget = SnapshotCaptureTarget.USER_RETRY
+                    )
+                )
+            } catch (error: RuntimeException) {
+                Log.w(TAG, "断言截图写入缓冲失败", error)
+                null
+            }
+            val stored = storeResult as? SnapshotStoreResult.Stored
+            if (stored == null) {
+                Log.w(TAG, "断言截图落库被拒: ${storeResult}")
+                publishAssertedOverlayResult(
+                    SnapshotCaptureStatus.REJECTED,
+                    (storeResult as? SnapshotStoreResult.Rejected)?.reason?.wireValue
+                        ?: "BUFFER_STORE_FAILED"
+                )
+                return
+            }
+            val snapshotMetadata = stored.snapshot
+            checkoutCaptureOverlayManager?.onCaptureResult(
+                SnapshotCaptureResult(
+                    status = SnapshotCaptureStatus.STORED,
+                    sourceReason = SnapshotSourceReason.MANUAL_CAPTURE,
+                    reasonCode = SnapshotCaptureStatus.STORED.wireValue,
+                    sessionId = sessionId,
+                    slotId = slotId,
+                    shoppingPackage = shoppingPackage,
+                    pageFingerprint = pageFingerprint,
+                    snapshotId = snapshotMetadata.snapshotId,
+                    candidateRevision = snapshotMetadata.candidateRevision
+                )
+            )
+            snapshotMetadata.release()
+
+            val trigger = buffer.consumeForAi(
+                slotId = slotId,
+                intent = PurchaseIntent.USER_RETRY,
+                pageFingerprint = pageFingerprint
+            )
+            if (trigger !is CheckoutAiTriggerResult.Ready) {
+                Log.w(TAG, "断言截图消费失败: ${trigger}")
+                publishAssertedOverlayResult(
+                    SnapshotCaptureStatus.REJECTED,
+                    (trigger as? CheckoutAiTriggerResult.Rejected)?.reason?.wireValue
+                        ?: "CONSUME_FAILED"
+                )
+                return
+            }
+            synchronized(aiLifecycleLock) { assertedSessionIds += sessionId }
+            Log.i(TAG, "断言截图派发 AI: session=${sessionId.take(8)}, pkg=$shoppingPackage")
+            val dispatched = dispatchReadyToAi(trigger)
+            if (!dispatched) {
+                // dispatchReadyToAi 返回 false 表示未进入 AI 任务，所有权归还本调用方。
+                synchronized(aiLifecycleLock) { assertedSessionIds -= sessionId }
+                trigger.snapshot.release()
+                publishAssertedOverlayResult(
+                    SnapshotCaptureStatus.UNAVAILABLE,
+                    "AI_DISPATCH_FAILED"
+                )
+                return
+            }
+            // AI 已接管快照：收起按钮防止同页重复断言（pending 到达后有系统通知提示）。
+            checkoutCaptureOverlayManager?.onAiDispatched()
+        } finally {
+            imageBytes.fill(0)
+        }
+    }
+
+    /**
+     * 断言截图的悬浮按钮状态反馈。
+     *
+     * 失败结果携带当前真实页面指纹（而非合成指纹），使 overlay 的结果门禁
+     * 能采纳并把 CAPTURING 状态复位；成功结果按包名匹配放行。
+     */
+    private fun publishAssertedOverlayResult(
+        status: SnapshotCaptureStatus,
+        reasonCode: String
+    ) {
+        val observation = userRetryCaptureContext?.observation
+        checkoutCaptureOverlayManager?.onCaptureResult(
+            SnapshotCaptureResult(
+                status = status,
+                sourceReason = SnapshotSourceReason.MANUAL_CAPTURE,
+                reasonCode = reasonCode,
+                sessionId = null,
+                slotId = null,
+                shoppingPackage = observation?.shoppingPackage,
+                pageFingerprint = observation?.pageFingerprint,
+                snapshotId = null,
+                candidateRevision = null
+            )
+        )
     }
 
     /**
@@ -2832,6 +3242,16 @@ internal class CheckoutStabilityCoordinator(
             return@Runnable
         }
 
+        // Y4（2026-09-10 15:41 真机实证，0.0.97 B/D 场景）：抖动保留路径确认稳定后
+        // 必须恢复 hasActiveCheckout。旧实现只恢复候选不恢复标记，导致：
+        // 规格层抖动帧（observe 后紧跟 invalidate）锚定的会话，此后所有"真正离开
+        // 结算页"的失效全部被入口 !hasActiveCheckout 吞掉——协调器零"观察失效"，
+        // activeCheckout 无限期存续，商品规格层会话与截图跨 4 次页面切换
+        // （规格层→主页→商品页→结算页）活到支付交接栅栏，真结算页自动截图
+        // 被"指纹漂移沿用原会话"拒绝。恢复标记后，下一次离开正常上报，协调器
+        // 把会话转入挂起（快照保留），由交接过渡窗（handoffStableEventAction）
+        // 约束时效。正常路径 observe() 已置位，此处恢复是幂等 no-op。
+        hasActiveCheckout = true
         lastStableFingerprint = observation.pageFingerprint
         onStable(
             StableCheckoutPage(

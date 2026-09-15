@@ -128,10 +128,13 @@ const AllBillsScreen: React.FC = () => {
   };
 
   const calculateMonthTotal = (monthBills: Bill[]) => {
+    // 口径与原生统计一致（BillDao.getSummary）：income/refund 计入、expense/fee 计出，
+    // 转账/还款/调整不参与收支，否则一笔 5000 转账会让月合计虚减 5000。
     return monthBills.reduce((total, bill) => {
       const amount = bill.amountMinor / 100;
-      const isPositive = bill.type === 'income' || bill.type === 'refund';
-      return total + (isPositive ? amount : -amount);
+      if (bill.type === 'income' || bill.type === 'refund') return total + amount;
+      if (bill.type === 'expense' || bill.type === 'fee') return total - amount;
+      return total;
     }, 0);
   };
 

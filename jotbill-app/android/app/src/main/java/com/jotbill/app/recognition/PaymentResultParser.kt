@@ -62,7 +62,8 @@ internal enum class PaymentResultFailureReason {
  * - 不截图支付结果页，只读取无障碍节点文本
  * - 不读密码、付款码、银行卡号、CVV 等敏感字段
  * - 支付失败的结果不生成成功证据
- * - sourceEventKey 按结果页来源包名 + 页面指纹 + 时间组合生成，幂等落库
+ * - sourceEventKey 按**结果页来源包名 + 30 秒时间桶 + 金额 + 订单号**生成
+ *   （**不含页面指纹** —— 同一结果页在微信 LiteApp 中会随动态节点变化产生多个指纹），幂等落库
  */
 internal object PaymentResultParser {
 
@@ -204,9 +205,12 @@ internal object PaymentResultParser {
         val rawTextHash = sha256("result|$sourcePackage|$hashableText")
 
         // 事件键不包含页面指纹：同一支付结果页在微信 LiteApp 中会随动态节点变化产生
-        // 多个指纹，旧实现会生成多条幂等键不同的孤儿待确认；现在按包名+分钟+金额+订单号去重。
+        // 多个指纹，旧实现会生成多条幂等键不同的孤儿待确认；现在按包名+30 秒桶+金额+订单号去重。
+        // 桶宽 30 秒（D-6）：原 120 秒桶会让"同包同金额、2 分钟内两单"撞键，第二单证据被
+        // markPaymentResultEvent 静默吞掉（不落待确认、不派 AI）；跨桶重复读由
+        // CheckoutPaymentMatcher.mergeSessionEvidence 的 2 分钟收敛窗口兜底。
         val sourceEventKey = sha256(
-            "result-event|$sourcePackage|${occurredAt / 120_000}|$amountMinor|${orderId.orEmpty()}"
+            "result-event|$sourcePackage|${occurredAt / 30_000}|$amountMinor|${orderId.orEmpty()}"
         )
 
         return PaymentResultParseResult.Success(

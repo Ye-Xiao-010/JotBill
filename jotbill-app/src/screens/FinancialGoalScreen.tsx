@@ -19,7 +19,7 @@ import { ChevronLeft, Plus, Trash2 } from 'lucide-react-native';
 import { ThemeColors } from '../theme/colors';
 import { spacing, borderRadius, borderWidth, shadow } from '../theme/spacing';
 import { ProgressBar, BrutalPressable } from '../components/ui';
-import { useStyles } from '../hooks';
+import { useStyles, useToast } from '../hooks';
 import { useAlert } from '../providers';
 import {
   nativeData,
@@ -57,6 +57,7 @@ export default function FinancialGoalScreen() {
   const navigation = useNavigation();
   const styles = useStyles(createStyles);
   const { confirm } = useAlert();
+  const { showError } = useToast();
 
   // 弹窗状态
   const [showFormModal, setShowFormModal] = useState(false);
@@ -87,6 +88,7 @@ export default function FinancialGoalScreen() {
       invalidateCache.financialGoals();
       closeFormModal();
     },
+    onError: (error: any) => showError(error?.message || '创建目标失败'),
   });
 
   const updateMutation = useMutation({
@@ -98,11 +100,13 @@ export default function FinancialGoalScreen() {
       setShowDepositModal(false);
       setDepositAmount('');
     },
+    onError: (error: any) => showError(error?.message || '更新目标失败'),
   });
 
   const deleteMutation = useMutation({
     mutationFn: (id: string) => nativeData.deleteFinancialGoal(id),
     onSuccess: () => invalidateCache.financialGoals(),
+    onError: (error: any) => showError(error?.message || '删除目标失败'),
   });
 
   // 表单操作

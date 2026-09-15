@@ -27,6 +27,7 @@ import { useStyles } from '../hooks';
 import { useAlert } from '../providers';
 import { aiService } from '../services/ai';
 import { nativePendingReminder } from '../native/pendingReminder';
+import { nativeBudgetReminder } from '../native/budgetReminder';
 import type {
   AIModelConfig,
   AIProvider,
@@ -614,6 +615,8 @@ export default function GeneralSettingsScreen({ navigation: _navigation }: Gener
 
   // 待确认提醒开关(仅控制系统通知;数据落库与 JS 事件不受影响,默认开启)
   const [pendingReminderEnabled, setPendingReminderEnabled] = useState(true);
+  // 预算超支提醒开关(仅控制系统通知;进度计算与 UI 变色不受影响,默认开启)
+  const [budgetReminderEnabled, setBudgetReminderEnabled] = useState(true);
 
   // 加载配置
   useEffect(() => {
@@ -652,6 +655,10 @@ export default function GeneralSettingsScreen({ navigation: _navigation }: Gener
       .isReminderEnabled()
       .then(setPendingReminderEnabled)
       .catch(() => undefined);
+    nativeBudgetReminder
+      .isReminderEnabled()
+      .then(setBudgetReminderEnabled)
+      .catch(() => undefined);
   }, []);
 
   const handleTogglePendingReminder = async (enabled: boolean) => {
@@ -663,6 +670,15 @@ export default function GeneralSettingsScreen({ navigation: _navigation }: Gener
       await nativePendingReminder.setReminderEnabled(enabled);
     } catch (error) {
       console.error('切换待确认提醒失败:', error);
+    }
+  };
+
+  const handleToggleBudgetReminder = async (enabled: boolean) => {
+    setBudgetReminderEnabled(enabled);
+    try {
+      await nativeBudgetReminder.setReminderEnabled(enabled);
+    } catch (error) {
+      console.error('切换预算提醒失败:', error);
     }
   };
 
@@ -883,6 +899,23 @@ export default function GeneralSettingsScreen({ navigation: _navigation }: Gener
             <Switch
               value={pendingReminderEnabled}
               onValueChange={handleTogglePendingReminder}
+              trackColor={{ false: styles._colors.divider, true: styles._colors.primary }}
+              thumbColor="#FFFFFF"
+            />
+          </View>
+        </View>
+
+        {/* 预算超支提醒 */}
+        <View style={styles.card}>
+          <Text style={styles.cardTitle}>💰 预算提醒</Text>
+          <View style={styles.appItem}>
+            <View style={styles.appInfo}>
+              <Text style={styles.appName}>系统通知提醒</Text>
+              <Text style={styles.appPackage}>预算使用达到预警阈值(如 80%/100%)时发送系统通知</Text>
+            </View>
+            <Switch
+              value={budgetReminderEnabled}
+              onValueChange={handleToggleBudgetReminder}
               trackColor={{ false: styles._colors.divider, true: styles._colors.primary }}
               thumbColor="#FFFFFF"
             />
