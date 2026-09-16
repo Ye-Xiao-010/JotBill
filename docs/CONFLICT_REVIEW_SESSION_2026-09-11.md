@@ -1656,7 +1656,49 @@ val startsNewSession = previous == null ||
 - [ ] 重新评估 Y3（`isProductSpecSelectionLayer`）的存废——用户设计为"规格层可截"，与 Y3 直接对立。
 - [ ] 核对 `classifyPageRole` 8 级短路顺序在"宽进"语境下是否仍需调整。
 - [ ] 评估送 AI 触发点（`CheckoutPurchaseIntentCoordinator`）推迟到"支付成功信号"的影响面。
-- [ ] **【D-9，触碰不变式 1】** 敏感页 60s 锁存增加"提前解除"：解除点在 `Service:886-898`（购物包观察路径），条件 = 白名单购物包 ∧ `pageRole ∈ {PRODUCT_DETAIL, CART, CHECKOUT}` ∧ 非敏感。**必须配套负向测试**（密码页↔空树帧交替零截图 / 支付包内不解除 / UNKNOWN 帧不解除）。
+- [ ] **【D-9，触碰不变式 1】** 敏感页 60s 锁存增加"提前解除"：
+  > 🔴 **2026-09-16 核查补正（本清单条不完整，实施请以 G1-8 定稿为准）**
+  >
+  > **本条原先只写了三条件，漏了 G1-8 定稿（`:452-460`）的三项关键要求**，实施前由实施方实读发现：
+  >
+  > | 项 | 本清单条（原） | **G1-8 定稿（权威）** |
+  > |---|---|---|
+  > | **帧数阈值** | ❌ 未提 | ✅ **N = 3 帧连续确认**（用户原话 `:457`："N 帧就是 3 吧，刚好保证流畅性和安全性"） |
+  > | **解除的锁存** | ❌ 未提 | ✅ 三道风险控制之一 |
+  > | **风险控制** | ❌ 未提 | ✅ **三道**：①只在购物包路径解除、**支付包内的锁存有效期逻辑不变** ②连续 N 帧确认 ③必须补负向测试 |
+  >
+  > ⇒ **按本条字面实现（一帧即解除）会削弱风险控制②** ⇒ **不接受**。**按 N=3 + 三道风控实施。**
+  >
+  > ---
+  >
+  > **✅ 两项实施裁定（2026-09-16）**
+  >
+  > **裁定 A｜`root == null` 早退帧也中断连续计数 → 纳入** ✅
+  > 实测该分支在 `:795-798` **提前 return、走不到解除点** ⇒ 若不管它，"合格页×2 → 空树帧 → 合格页×1"会凑满 3 帧，**3 帧并非真连续**。纳入 = 更严（宁可少解除），符合红线精神。
+  >
+  > **裁定 B｜解除方式用「解除水位」而非「清零时间戳」** ✅（实施方提出，论证成立）
+  > - **决定性证据（已核实）**：`lastSensitivePaymentPageAt` **同时被两条门禁消费**：
+  >   | 消费点 | 通道 | 判据 |
+  >   |---|---|---|
+  >   | `:2547-2548` | **断言截图（手动）** | `now - maxOf(支付锁存, 购物锁存) < 60s` ⇒ 拒 |
+  >   | **`:1650`** | **支付结果页截图兜底（自动）** | `now - lastSensitivePaymentPageAt < 60s` ⇒ 拒 |
+  > - ⇒ ①**只清购物锁存**：`maxOf` 仍取到支付锁存 ⇒ **G1-7 的误伤一点没修，D-9 等于没做**；②**真清零支付锁存**（G1-8 字面）：会**顺手解锁 `:1650` 那条自动兜底路径**，而风控①原话恰是"**支付包内的锁存有效期逻辑不变**" ⇒ **字面执行违反风控①**。
+  > - **采纳方案**：**不动任何时间戳**，新增「解除水位」，把解除作用域**严格限定在断言通道**：
+  >   ```
+  >   断言通道（手动）：blocked = maxOf(payLatch, shopLatch) > watermarkAt
+  >                             && now - maxOf(...) < 60_000L
+  >   支付兜底（自动）：blocked = now - lastSensitivePaymentPageAt < 60_000L   ← 完全不变
+  >   ```
+  >   三点好处：①严格落地"宁可少解除"（**自动路径零改动**）；②严格落地风控①；③语义自洽 —— 解除后若**再次**遇到敏感帧，锁存时间戳会 > 水位 ⇒ **自动重新拦截**，无需显式失效。
+  >
+  > **✅ 另两项判断确认无误**
+  > - **白名单**：复用已存在的 `DEFAULT_SUPPORTED_SHOPPING_PACKAGES`（`CheckoutPageDetector.kt:3-12`，8 个包）+ `CheckoutPageDetector.supportsShoppingPackage(pkg)`，**不新造**。
+  > - ⚠️ **角色集合 `{PRODUCT_DETAIL, CART, CHECKOUT}` 全仓不存在，须新增**；**严禁复用** `CheckoutPageRole.canBufferUserRetrySnapshot()`（`CheckoutContract.kt:24-30`，**5 个成员**，多 `SHOPPING_HOME`/`UNKNOWN`）—— 它是"手动截图允许页"，语义**比解除条件宽** ⇒ **复用即红线降级**。
+  > - **"非敏感"不能单独作为解除条件**：`isSensitivePage` 是**默认值不是证据**（采集不到文本 ⇒ `accumulator.sensitive` 与 `containsSensitiveSignal` 双双为 false ⇒ 报 `false`；同时 `classifyPageRole` 落 `UNKNOWN`）⇒ "非敏感即解除"等于**把"读不到"当成"安全"**，正是锁存存在的唯一理由，也是 N1 的攻击面。必须叠加"读到了足够文本并判定为**具体购物角色**"这一**正向证据**。
+
+  **解除点** = `CheckoutAccessibilityService:872-874`（购物包观察路径，`lastSensitiveShoppingPageAt` 的唯一赋值处；与规格所写 `Service:886-898` 一致，行号漂 14 行）。**条件** = 白名单购物包 ∧ `pageRole ∈ {PRODUCT_DETAIL, CART, CHECKOUT}` ∧ 非敏感，且**连续 3 帧**。
+  **必须配套负向测试**（规格明列三条）：N1 密码页↔空树帧交替零截图 / N2 支付包内不解除 / N3 `UNKNOWN` 帧不解除。
+  **另需双向判别性实证**：A 移除解除逻辑 ⇒ 正向用例红；**B1 放开白名单 ⇒ N2 红；B2 放开角色限制 ⇒ N1+N3 红**（B 组才证明负向测试真的有约束力）。
 - [x] ~~`CheckoutSubmitActionDetector` 动作词匹配放宽（D-12）~~ ⇒ ⚠️ **2026-09-13：本条作废**（D-12 已随 D-11 删除 `submitLabels` 而失去对象）；后半句"`SUBMIT_ACTION` 触发条件中 `pageRole != CHECKOUT`（`Service:2958`）放宽"**亦随 D-11 整链路删除而作废**。
 - [ ] **【死入口清理】✅ 2026-09-15 定案：4 个方法全部「删除」，不做"重定位"**（依据见 `IMPL_PLAN` §8.8）：`requestSubmitAction`（D-11 删整链路）/ `requestPaymentAppHandoff`（改造 B 改为 `onEvent` 内部搬运，不再需要外部触发入口）/ `requestPaymentPageVisible`（D-10 死枚举）/ **`requestUserRetry`（实测已被 `requestUserRetryForSession`（`Service:255`）取代 —— 后者带 sessionId、实现完整、且负责"回写到指定失败会话"）**。另 `PAYMENT_PAGE_VISIBLE` 死枚举一并删除。**共删 5 个符号，不保留任何"搬家"形式。**
 - [ ] **【D-11 删除】** 删除 `PurchaseIntent.SUBMIT_ACTION` 及其链路：`shouldTriggerSubmitAction`/`triggerSubmitAction`（`Service:934-935`/`:2953-2989`）、`CheckoutSubmitActionDetector`（整文件，含 `submitLabels`/`submitResourceMarkers`）、`IntentCoordinator` 中 `SUBMIT_ACTION` 分支。**注意**：`checkoutActionTerms`（`Collector:133-141`）属页面角色判定，**不随之删除**。
