@@ -300,24 +300,20 @@ class CheckoutAccessibilityService : AccessibilityService() {
     private var paymentScreenshotFallbackInFlight = false
     @Volatile
     private var lastSuccessfulPaymentEvidenceAt = 0L
-    /**
-     * 最近一次在支付应用中观察到敏感页面的时间。
-     *
-     * 支付密码页与随后的空节点树帧交替出现：空树帧自身无法判定敏感，
-     * 若只按单轮结果拦截，兜底截图仍会在密码页停留期间被触发。
-     * 因此把敏感状态锁存一个短窗口，窗口内一律禁止截图 AI 兜底。
-     */
-    @Volatile
-    private var lastSensitivePaymentPageAt = 0L
 
     /**
-     * 最近一次在购物应用中观察到敏感页面的时间。
+     * 敏感页锁存（D-9：增加"读到明确非敏感购物页 ×N 帧 ⇒ 提前解除"）。
      *
-     * 用户断言截图的入口门禁：购物页的密码/付款码等内容同样触发锁存，
-     * 与支付应用侧的 [lastSensitivePaymentPageAt] 共同构成断言截图的敏感门禁。
+     * 原先这里持有两个 `@Volatile var` 时间戳（支付侧/购物侧），现由
+     * [SensitivePageLatch] 统一持有，原因有二：
+     * ① 解除判据抽成纯对象才能被 JVM 单测驱动 —— 触碰不变式 1 的改动
+     *    必须由负向用例钉死，否则"解除"一旦写宽无人能及时发现；
+     * ② "解除水位"只作用于断言（手动）通道，支付结果页兜底（自动）通道
+     *    的判定语义原样保留（G1-8 风控①）。
      */
-    @Volatile
-    private var lastSensitiveShoppingPageAt = 0L
+    private val sensitivePageLatch = SensitivePageLatch(
+        blockMillis = SENSITIVE_PAGE_SCREENSHOT_BLOCK_MILLIS
+    )
 
     /** 用户断言截图的在飞标志；配合看门狗在系统回调丢失时强制复位。 */
     @Volatile
@@ -793,6 +789,9 @@ class CheckoutAccessibilityService : AccessibilityService() {
         if (root == null) {
             // 从购物页切到微信支付的瞬间常有一帧节点树为空；这里只暂时隐藏悬浮按钮，
             // 不把稳定结算页和截图缓冲清掉，否则支付结果到达时永远无会话可关联。
+            // D-9 裁定 A：该帧同样走不到敏感判定，必须中断"连续合格帧"计数 ——
+            // 否则"合格页×2 → 空树帧 → 合格页×1"会凑满阈值，而它们并非真连续。
+            sensitivePageLatch.onUnobservableFrame()
             clearUserRetryCaptureContext()
             dispatchOverlayInvalidation(
                 reason = CheckoutInvalidationReason.NODE_TREE_UNAVAILABLE,
@@ -867,10 +866,23 @@ class CheckoutAccessibilityService : AccessibilityService() {
                 root = root,
                 observedAt = System.currentTimeMillis()
             )
-            if (observation.isSensitivePage) {
-                // 购物应用内的敏感页（密码键盘、付款码等）同样锁存：
-                // 用户断言截图与支付兜底共用"锁存窗口内一律不截图"的约定。
-                lastSensitiveShoppingPageAt = System.currentTimeMillis()
+            // D-9：每帧都交给锁存对象 —— 敏感帧刷新锁存；读到明确非敏感购物页
+            // 连续 N 帧则提前解除（解除只作用于断言通道，理由见 SensitivePageLatch）。
+            // 判据内的"明确" = 白名单购物包 ∧ 具体购物角色，空树帧（UNKNOWN）与
+            // 首页（SHOPPING_HOME）均不合格 ⇒ 天然排除"空树帧无法判定敏感"的陷阱。
+            val shoppingObservedAt = System.currentTimeMillis()
+            val latchReleased = sensitivePageLatch.onShoppingObservation(
+                shoppingPackage = shoppingPackage,
+                pageRole = observation.pageRole,
+                isSensitivePage = observation.isSensitivePage,
+                now = shoppingObservedAt
+            )
+            if (latchReleased) {
+                Log.i(
+                    TAG,
+                    "敏感页锁存提前解除: 连续 ${SensitivePageLatch.RELEASE_FRAME_THRESHOLD} 帧明确非敏感购物页, " +
+                        "pkg=$shoppingPackage, role=${observation.pageRole}"
+                )
             }
             // 付款确认弹窗的帧级敏感门禁依据：只在确认当前帧非敏感时才允许弹出。
             PendingConfirmOverlayManager.onObservationState(
@@ -1457,7 +1469,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
                     // role != PAYMENT_RESULT 的 continue 分支溜走，最终触发截图兜底。
                     if (observation.isSensitivePage) {
                         sawSensitivePage = true
-                        lastSensitivePaymentPageAt = System.currentTimeMillis()
+                        sensitivePageLatch.onPaymentSensitiveFrame(System.currentTimeMillis())
                         // 该分支在支付页每帧命中，真机 .tmp-device-capture-20260824-142754
                         // 中一次支付即刷出数百行，把"支付结果页解析到证据"
                         // "AI 结果匹配落库"等关键链路日志完全淹没。
@@ -1647,11 +1659,13 @@ class CheckoutAccessibilityService : AccessibilityService() {
         }
         val now = System.currentTimeMillis()
         // 空节点树帧无法自行判定敏感，用锁存窗口覆盖密码页与空树帧交替的场景。
-        if (now - lastSensitivePaymentPageAt < SENSITIVE_PAGE_SCREENSHOT_BLOCK_MILLIS) {
+        // D-9 风控①：本通道是**自动**兜底，不读解除水位 —— 支付包内的锁存
+        // 有效期逻辑与 D-9 之前完全一致（解除只作用于断言/手动通道）。
+        if (sensitivePageLatch.isPaymentFallbackBlocked(now)) {
             logScreenshotFallbackBlockedSampled(
                 "敏感页面锁存窗口内",
                 paymentPackage,
-                extra = "elapsed=${now - lastSensitivePaymentPageAt}ms"
+                extra = "elapsed=${sensitivePageLatch.paymentLatchAgeMillis(now)}ms"
             )
             return
         }
@@ -2544,11 +2558,13 @@ class CheckoutAccessibilityService : AccessibilityService() {
         }
         // 敏感页锁存：支付应用与购物应用两把锁存任一命中即拒绝。这是本通道
         // 唯一继承自自动链路的页面判定门禁，也是不变式第 1 条的入口。
-        val sensitiveLatchElapsed = now - maxOf(lastSensitivePaymentPageAt, lastSensitiveShoppingPageAt)
-        if (sensitiveLatchElapsed < SENSITIVE_PAGE_SCREENSHOT_BLOCK_MILLIS) {
+        // D-9：本通道（手动）是"提前解除"的唯一受益者 —— 读到明确非敏感购物页
+        // 连续 N 帧后不再被锁存拦截；水位不作用于自动兜底（见 SensitivePageLatch）。
+        if (sensitivePageLatch.isAssertionCaptureBlocked(now)) {
             Log.w(
                 TAG,
-                "断言截图拒绝: 敏感页锁存窗口内 elapsed=${sensitiveLatchElapsed}ms, pkg=$foregroundPackage"
+                "断言截图拒绝: 敏感页锁存窗口内 " +
+                    "elapsed=${sensitivePageLatch.assertionLatchAgeMillis(now)}ms, pkg=$foregroundPackage"
             )
             publishAssertedOverlayResult(
                 SnapshotCaptureStatus.REJECTED,
