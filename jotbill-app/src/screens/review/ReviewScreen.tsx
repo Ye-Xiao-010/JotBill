@@ -1012,6 +1012,8 @@ const CONFLICT_LABELS: Record<string, string> = {
   PAYMENT_AMOUNT_MISSING: '支付通知缺少金额，无法核对',
   AI_AMOUNT_MISSING: 'AI 识别缺少金额，无法核对',
   AI_AMOUNT_LOWER_THAN_PAYMENT: '实际支付金额高于 AI 识别金额',
+  // D-19（2026-09-16）新增方向：AI 金额高于支付金额且超出容差带 max(¥1.00, 5%)。
+  AI_AMOUNT_HIGHER_THAN_PAYMENT: 'AI 识别金额高于实际支付金额，请核对是否识别有误',
   ORDER_ID_MISMATCH: 'AI 订单号与支付订单号不一致',
   TIME_WINDOW_MISMATCH: '支付时间与结算页时间差距过大',
   TIME_MISSING: '缺少时间信息，无法自动核对',

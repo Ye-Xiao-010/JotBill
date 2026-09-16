@@ -25,6 +25,61 @@ private const val PAYMENT_MATCH_WINDOW_MILLIS = 5 * 60 * 1000L
 internal const val CHECKOUT_PAYMENT_MATCH_WINDOW_MILLIS = PAYMENT_MATCH_WINDOW_MILLIS
 
 /**
+ * D-19 金额容差绝对下限（分，即 ¥1.00）：保证小额单有基本余量（运费、包装等固定型差异）。
+ *
+ * ⚠️ 容差**只在本文件定义一次**：`evaluate()` 的判定与会话解析的 DAO 检索带
+ * （`TransactionCandidateDao.findUnoccupiedByAmountCovering`）共用
+ * [paymentAmountToleranceMinor]，后者以**绑定参数**接收计算结果。
+ * **不得在 SQL 内联同一公式**——两处实现必导致日后调参漏改一处（本项目已三次踩同类问题）。
+ */
+private const val AMOUNT_TOLERANCE_MIN_MINOR = 100L
+
+/** D-19 金额容差比例项（%）：自适应大额单（优惠、手续费等比例型差异）。 */
+private const val AMOUNT_TOLERANCE_PERCENT = 5L
+
+/**
+ * D-19 双向有界容差（分）：`max(¥1.00, 支付金额 × 5%)`，两者取大。
+ *
+ * 小额时下限兜底、大额时比例放宽。以**支付金额**为基准——支付金额是事实，
+ * AI 读的是页面。可调常量，待真机数据校准（与 D-4 槽位 TTL、D-7 窗口同一处理方式）。
+ */
+internal fun paymentAmountToleranceMinor(paymentAmountMinor: Long): Long = maxOf(
+    AMOUNT_TOLERANCE_MIN_MINOR,
+    paymentAmountMinor * AMOUNT_TOLERANCE_PERCENT / 100
+)
+
+/** 候选金额相对支付金额的容差归属（D-19）。 */
+internal enum class PaymentAmountMatch {
+    /** 落在容差带内：视为同一笔，以支付金额入账。 */
+    WITHIN_TOLERANCE,
+
+    /** AI 金额低于支付金额且超出容差带（常见成因：少读运费/优惠前金额）。 */
+    AI_LOWER,
+
+    /** AI 金额高于支付金额且超出容差带（误读放大，如 100 读成 1000）。 */
+    AI_HIGHER
+}
+
+/**
+ * 判定候选金额落在容差带的哪一侧（D-19 三态）。
+ *
+ * 带内不区分方向；带外**保留方向**，供冲突原因与用户文案区分"实付更高"与
+ * "AI 读高"——后者是本次新增的拦截方向，此前一律放行会静默入账。
+ */
+internal fun classifyPaymentAmount(
+    candidateAmountMinor: Long,
+    paymentAmountMinor: Long
+): PaymentAmountMatch {
+    val delta = candidateAmountMinor - paymentAmountMinor
+    return when {
+        abs(delta) <= paymentAmountToleranceMinor(paymentAmountMinor) ->
+            PaymentAmountMatch.WITHIN_TOLERANCE
+        delta < 0L -> PaymentAmountMatch.AI_LOWER
+        else -> PaymentAmountMatch.AI_HIGHER
+    }
+}
+
+/**
  * 同会话跨来源证据收敛窗口。
  *
  * ⚠️ 刻意**宽于**结果页事件去重桶（D-6 已把事件桶收窄为 30 秒）：事件键跨桶后不再命中，
@@ -289,8 +344,14 @@ internal class CheckoutPaymentMatcher(
         }
 
         // 第二优先级：金额覆盖 + 时间窗口 + 会话未被占用
-        val candidates = database.transactionCandidateDao()
-            .findUnoccupiedByAmountCovering(amountMinor, at)
+        // D-19：检索带与 evaluate() 共用同一容差公式（双向带）。**必须同改**——
+        // 只改 evaluate() 时，AI 金额更低的候选会在会话解析阶段就被 SQL 滤掉，
+        // 证据落孤儿待确认、根本走不到 evaluate()，新容差在下行方向完全失效。
+        val candidates = database.transactionCandidateDao().findUnoccupiedByAmountCovering(
+            amountMinor = amountMinor,
+            toleranceMinor = paymentAmountToleranceMinor(amountMinor),
+            at = at
+        )
         val withinWindow = candidates.filter { candidate ->
             val candidateTime = candidate.aiOccurredAt
                 ?: database.checkoutSessionDao().getById(candidate.sessionId)?.createdAt
@@ -2007,11 +2068,24 @@ internal class CheckoutPaymentMatcher(
                 conflicts += "AI_AMOUNT_MISSING"
                 "INVALID"
             }
-            candidate.amountMinor < evidence.amountMinor -> {
-                conflicts += "AI_AMOUNT_LOWER_THAN_PAYMENT"
-                "PAYMENT_EXCEEDS_AI"
+            // D-19：双向有界容差 max(¥1.00, 支付金额 × 5%)。带内视为同一笔、以支付金额
+            // 入账（见 candidateAfterPayment）；带外保留冲突原因 ⇒ 转待确认。
+            // 此前为单边不等式（AI 金额更低才冲突、更高一律放行）⇒ AI 误读放大会静默入账。
+            else -> when (classifyPaymentAmount(candidate.amountMinor, evidence.amountMinor)) {
+                // ⚠️ 本字面值于 D-19（2026-09-16）由 AI_AMOUNT_COVERS_PAYMENT 改名而来：
+                // 旧名只描述"AI 更高"单一方向，容差带内两方向都放行故失真。
+                // 该值只进 appliedRules 诊断 JSON（无程序消费方）⇒ 历史记录中两者会混存，
+                // 排查旧数据时需同时识别。
+                PaymentAmountMatch.WITHIN_TOLERANCE -> "AI_AMOUNT_WITHIN_TOLERANCE"
+                PaymentAmountMatch.AI_LOWER -> {
+                    conflicts += "AI_AMOUNT_LOWER_THAN_PAYMENT"
+                    "PAYMENT_EXCEEDS_AI"
+                }
+                PaymentAmountMatch.AI_HIGHER -> {
+                    conflicts += "AI_AMOUNT_HIGHER_THAN_PAYMENT"
+                    "AI_EXCEEDS_PAYMENT"
+                }
             }
-            else -> "AI_AMOUNT_COVERS_PAYMENT"
         }
         val orderRule = when {
             candidate.aiOrderId.isNullOrBlank() || evidence.orderId.isNullOrBlank() -> "ORDER_ID_PARTIAL"

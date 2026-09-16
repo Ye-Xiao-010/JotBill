@@ -69,14 +69,26 @@ interface TransactionCandidateDao {
 
     /**
      * 按金额查找活跃会话中未被支付证据占用的候选。
-     * 条件：候选金额 >= 支付金额（优惠后下降视为正常）、未匹配、未绑定证据。
+     *
+     * 条件：**候选金额与支付金额之差的绝对值落在容差带内**（D-19 双向有界容差
+     * `max(¥1.00, 支付金额 × 5%)`，由调用方按同一公式计算后以 `toleranceMinor` 传入）、
+     * 未匹配、未绑定证据。
+     *
+     * ⚠️ 此前为单边条件 `amount_minor >= :amountMinor`（自述"优惠后下降视为正常"）：
+     * AI 金额**更低**的候选会在会话解析阶段就被滤掉 ⇒ 证据落孤儿待确认，根本走不到
+     * `CheckoutPaymentMatcher.evaluate()` ⇒ 该方向的容差完全失效（D-19 跨层影响）。
+     *
+     * 容差只在 Kotlin 侧定义一次（`paymentAmountToleranceMinor`），**不得在本 SQL 内联公式**。
+     * `ABS(NULL - x)` 结果为 NULL ⇒ 金额缺失的候选被排除（与旧条件同样排除，此处 `IS NOT NULL`
+     * 仅为把该隐含语义显式化）。
      * 时间窗口过滤由调用方在内存中执行（需结合候选时间和支付时间）。
      */
     @Query(
         """
         SELECT candidates.* FROM transaction_candidates candidates
         INNER JOIN checkout_sessions sessions ON sessions.id = candidates.session_id
-        WHERE candidates.amount_minor >= :amountMinor
+        WHERE candidates.amount_minor IS NOT NULL
+          AND ABS(candidates.amount_minor - :amountMinor) <= :toleranceMinor
           AND candidates.matched = 0
           AND candidates.evidence_amount_minor IS NULL
           AND sessions.status NOT IN ('COMPLETED', 'CANCELLED', 'FAILED', 'EXPIRED')
@@ -84,7 +96,11 @@ interface TransactionCandidateDao {
         ORDER BY candidates.created_at DESC
         """
     )
-    suspend fun findUnoccupiedByAmountCovering(amountMinor: Long, at: Long): List<TransactionCandidateEntity>
+    suspend fun findUnoccupiedByAmountCovering(
+        amountMinor: Long,
+        toleranceMinor: Long,
+        at: Long
+    ): List<TransactionCandidateEntity>
 
     /**
      * 查找最近一次 AI 失败且尚未被支付证据补齐的占位候选。
