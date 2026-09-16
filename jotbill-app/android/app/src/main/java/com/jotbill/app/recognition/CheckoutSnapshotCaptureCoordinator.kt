@@ -25,7 +25,6 @@ import kotlin.math.roundToInt
 /** 本地截图入口的最终状态；不会代表已经发起 AI 网络请求。 */
 enum class SnapshotCaptureStatus(val wireValue: String) {
     STORED("STORED"),
-    PROTECTED("PROTECTED"),
     EXPIRED("EXPIRED"),
     REJECTED("REJECTED"),
     UNAVAILABLE("UNAVAILABLE"),
@@ -1572,18 +1571,9 @@ internal class CheckoutSnapshotCaptureCoordinator(
             return
         }
 
-        if (buffer.hasCandidate(
-                slotId = current.slotId,
-                sessionId = current.sessionId,
-                pageFingerprint = observation.pageFingerprint,
-                sourceReason = SnapshotSourceReason.MANUAL_CAPTURE
-            )
-        ) {
-            attemptedAutomaticCaptures += key
-            publish(protectedResult(current, SnapshotSourceReason.CHECKOUT_STABLE))
-            return
-        }
-
+        // D-16 = B（自动优先）：此处原有"同指纹已有手动候选 ⇒ 前置拒绝自动截图"守卫，
+        // 与职责边界原则冲突（同指纹说明自动也认得出这一页），已删除 ⇒ 自动截图继续，
+        // 由 buffer 覆盖同指纹的手动候选。删除后本方法不再有与手动候选相关的前置分支。
         if (buffer.hasCandidate(
                 slotId = current.slotId,
                 sessionId = current.sessionId,
@@ -2139,19 +2129,15 @@ internal class CheckoutSnapshotCaptureCoordinator(
                 result
             }
 
-            is SnapshotStoreResult.Rejected -> when (storeResult.reason) {
-                SnapshotStoreRejection.MANUAL_CANDIDATE_PROTECTED ->
-                    protectedResult(current, sourceReason)
-                else -> SnapshotCaptureResult(
-                    status = SnapshotCaptureStatus.REJECTED,
-                    sourceReason = sourceReason,
-                    reasonCode = storeResult.reason.wireValue,
-                    sessionId = current.sessionId,
-                    slotId = current.slotId,
-                    shoppingPackage = current.page.observation.shoppingPackage,
-                    pageFingerprint = current.page.observation.pageFingerprint
-                )
-            }
+            is SnapshotStoreResult.Rejected -> SnapshotCaptureResult(
+                status = SnapshotCaptureStatus.REJECTED,
+                sourceReason = sourceReason,
+                reasonCode = storeResult.reason.wireValue,
+                sessionId = current.sessionId,
+                slotId = current.slotId,
+                shoppingPackage = current.page.observation.shoppingPackage,
+                pageFingerprint = current.page.observation.pageFingerprint
+            )
         }
     }
 
@@ -2191,17 +2177,8 @@ internal class CheckoutSnapshotCaptureCoordinator(
         if (current == null || current.key != queued.key || queued.key in attemptedAutomaticCaptures) {
             return
         }
-        if (buffer.hasCandidate(
-                slotId = current.slotId,
-                sessionId = current.sessionId,
-                pageFingerprint = current.page.observation.pageFingerprint,
-                sourceReason = SnapshotSourceReason.MANUAL_CAPTURE
-            )
-        ) {
-            attemptedAutomaticCaptures += current.key
-            publish(protectedResult(current, SnapshotSourceReason.CHECKOUT_STABLE))
-            return
-        }
+        // D-16 = B（自动优先）：此处原有排队路径的"同指纹已有手动候选 ⇒ 前置拒绝"守卫，
+        // 与 handleStable 的实时路径同源同改，已删除 ⇒ 排队自动截图照常发起。
         attemptedAutomaticCaptures += current.key
         beginCapture(current, SnapshotSourceReason.CHECKOUT_STABLE, callback = null)
     }
@@ -2340,19 +2317,6 @@ internal class CheckoutSnapshotCaptureCoordinator(
     }
 
     private fun slotIdFor(shoppingPackage: String): String = checkoutSnapshotSlotId(shoppingPackage)
-
-    private fun protectedResult(
-        current: ActiveCheckout,
-        sourceReason: SnapshotSourceReason
-    ): SnapshotCaptureResult = SnapshotCaptureResult(
-        status = SnapshotCaptureStatus.PROTECTED,
-        sourceReason = sourceReason,
-        reasonCode = SnapshotStoreRejection.MANUAL_CANDIDATE_PROTECTED.wireValue,
-        sessionId = current.sessionId,
-        slotId = current.slotId,
-        shoppingPackage = current.page.observation.shoppingPackage,
-        pageFingerprint = current.page.observation.pageFingerprint
-    )
 
     private fun duplicateResult(
         current: ActiveCheckout,

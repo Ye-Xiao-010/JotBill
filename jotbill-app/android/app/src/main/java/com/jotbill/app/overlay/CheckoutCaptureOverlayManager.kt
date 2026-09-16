@@ -63,7 +63,7 @@ internal fun shouldHoldCapturedState(
 /**
  * 判定一次截图结果是否应更新悬浮按钮状态。
  *
- * 成功类结果（STORED / PROTECTED / DUPLICATE）代表快照确已写入缓冲，
+ * 成功类结果（STORED / DUPLICATE）代表快照确已写入缓冲，
  * 只需确认购物包一致即可采纳：自动截图用的是稳定确认时刻的指纹，
  * 而页面指纹在结算页上持续漂移，若要求指纹相等则必然被丢弃。
  * 真机 .tmp-device-capture-20260823-154942 中自动截图 6 次 STORED
@@ -419,7 +419,7 @@ internal class CheckoutCaptureOverlayManager(context: Context) {
             if (closed) {
                 return@runOnMain
             }
-            // 成功类结果（STORED / PROTECTED / DUPLICATE）证明快照确实已写入缓冲，
+            // 成功类结果（STORED / DUPLICATE）证明快照确实已写入缓冲，
             // 不能因指纹或会话已推进而丢弃——否则按钮永远停在"未捕获"。
             // 真机 .tmp-device-capture-20260823-154942：自动截图 6 次 STORED
             // 却无一次更新按钮状态，用户反馈"明明已捕获但显示没有变化"。
@@ -427,7 +427,6 @@ internal class CheckoutCaptureOverlayManager(context: Context) {
             // currentFingerprint 早已是新值，相等过滤必然失败。
             // 失败类结果仍需严格匹配，避免旧页面的拒绝原因覆盖当前页面状态。
             val isSuccessResult = result.status == SnapshotCaptureStatus.STORED ||
-                result.status == SnapshotCaptureStatus.PROTECTED ||
                 result.status == SnapshotCaptureStatus.DUPLICATE
             if (!shouldAcceptOverlayCaptureResult(
                     isSuccessResult = isSuccessResult,
@@ -444,7 +443,6 @@ internal class CheckoutCaptureOverlayManager(context: Context) {
 
             when (result.status) {
                 SnapshotCaptureStatus.STORED,
-                SnapshotCaptureStatus.PROTECTED,
                 SnapshotCaptureStatus.DUPLICATE -> {
                     // "已捕获"是既成事实：快照已在缓冲中等待支付交接消费。
                     // 不能用 canShowOnCurrentPage() 决定可见性——该判据依赖

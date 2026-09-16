@@ -229,19 +229,24 @@ class CheckoutSnapshotBufferTest {
     }
 
     @Test
-    fun manualCandidateProtectedFromAutoOverwriteOnSameFingerprint() {
+    fun autoOverwritesManualCandidateOnSameFingerprint() {
+        // 【D-16 = B 有意行为变化】同指纹 ⇒ 自动也认得出这一页，按职责边界原则
+        // （自动负责认得出的页面、手动负责认不出的页面）放行自动覆盖手动候选。
+        // 旧行为是拒绝自动（MANUAL_CANDIDATE_PROTECTED），该拒绝原因已随 D-16 删除。
         val f = Fixture()
         val manual = f.buffer.store(
             captureRequest(
                 sourceReason = SnapshotSourceReason.MANUAL_CAPTURE,
                 target = SnapshotCaptureTarget.USER_RETRY
             )
-        )
-        assertTrue(manual is SnapshotStoreResult.Stored)
-        assertEquals(
-            SnapshotStoreRejection.MANUAL_CANDIDATE_PROTECTED,
-            (f.buffer.store(captureRequest()) as SnapshotStoreResult.Rejected).reason
-        )
+        ) as SnapshotStoreResult.Stored
+
+        val auto = f.buffer.store(captureRequest()) as SnapshotStoreResult.Stored
+        assertEquals(manual.snapshot.snapshotId, auto.replacedSnapshotId)
+        assertFalse(auto.requiresDisambiguation)
+        val remaining = f.buffer.currentCandidates(SLOT)
+        assertEquals(1, remaining.size)
+        assertEquals(SnapshotSourceReason.CHECKOUT_STABLE, remaining.single().sourceReason)
     }
 
     @Test
@@ -280,10 +285,10 @@ class CheckoutSnapshotBufferTest {
     }
 
     @Test
-    fun fingerprintlessConsumePrefersManualCandidateOverAutomatic() {
-        // 【有意行为变化】无指纹消费在手动+自动并存时优先取手动候选（不变式第 5 条：
-        // 用户手动操作优先级最高）。此前一律 AMBIGUOUS_CANDIDATES 拒绝，
-        // 手动补截反而让支付交接消费不到任何快照。
+    fun fingerprintlessConsumePrefersAutomaticCandidateOverManual() {
+        // 【D-16 = B 有意行为变化】无指纹消费在手动+自动并存时改为**自动优先**
+        // （旧行为为手动优先）。此前一律 AMBIGUOUS_CANDIDATES 拒绝，导致手动补截
+        // 反而让支付交接消费不到任何快照；"手动优先"是为修该 bug 引入的补丁而非原则。
         val f = Fixture()
         f.buffer.store(
             captureRequest(
@@ -297,18 +302,18 @@ class CheckoutSnapshotBufferTest {
         val result = f.buffer.consumeForAi(SLOT, PurchaseIntent.PAYMENT_APP_HANDOFF)
         assertTrue(result is CheckoutAiTriggerResult.Ready)
         result as CheckoutAiTriggerResult.Ready
-        assertEquals(FP_A, result.snapshot.pageFingerprint)
-        assertEquals(SnapshotSourceReason.MANUAL_CAPTURE, result.snapshot.sourceReason)
+        assertEquals(FP_B, result.snapshot.pageFingerprint)
+        assertEquals(SnapshotSourceReason.CHECKOUT_STABLE, result.snapshot.sourceReason)
         assertEquals(
-            CheckoutRequestKey.from(SESSION, "com.test.app", FP_A),
+            CheckoutRequestKey.from(SESSION, "com.test.app", FP_B),
             result.requestKey
         )
     }
 
     @Test
-    fun fingerprintlessConsumeKeepsAmbiguousWhenManualNotConsumableForIntent() {
-        // 手动候选为非结算角色（如商品页手动截图）时，对 SUBMIT_ACTION 等真实购买
-        // 意图不可消费：不能选中它再被角色守卫拒绝，应回退到原有歧义语义。
+    fun fingerprintlessConsumeUsesAutomaticWhenManualIsNotConsumableForIntent() {
+        // 手动候选为非结算角色（如商品页手动截图）时对 SUBMIT_ACTION 不可消费，
+        // 但槽内还有可消费的自动候选 ⇒ 自动优先直接取用，不再落到歧义。
         val f = Fixture()
         f.buffer.store(
             captureRequest(
@@ -320,16 +325,17 @@ class CheckoutSnapshotBufferTest {
         )
         f.buffer.store(captureRequest(fingerprint = FP_B))
 
-        assertEquals(
-            SnapshotConsumeRejection.AMBIGUOUS_CANDIDATES,
-            (f.buffer.consumeForAi(SLOT, PurchaseIntent.SUBMIT_ACTION)
-                as CheckoutAiTriggerResult.Rejected).reason
-        )
+        val result = f.buffer.consumeForAi(SLOT, PurchaseIntent.SUBMIT_ACTION)
+        assertTrue(result is CheckoutAiTriggerResult.Ready)
+        assertEquals(FP_B, (result as CheckoutAiTriggerResult.Ready).snapshot.pageFingerprint)
     }
 
     @Test
-    fun fingerprintlessConsumeUsesManualForUserRetryIntentEvenIfNonCheckoutRole() {
-        // USER_RETRY 意图明确指向手动截图：非结算角色的手动候选也可被选中消费。
+    fun fingerprintlessConsumeUsesAutomaticEvenForUserRetryIntent() {
+        // ⚠️ 该组合（无指纹 + USER_RETRY）**生产不可达，仅作防御性覆盖**：
+        // USER_RETRY 的公开入口恒带合法 64 位 hex 指纹（UserRetryCaptureContext.isComplete()
+        // 要求 hasSafeDisplayContext()），唯一可传空指纹的 requestUserRetry 已在批 V-1a 删除。
+        // 钉死意图：USER_RETRY 不再使手动候选抢先于自动候选。
         val f = Fixture()
         f.buffer.store(
             captureRequest(
@@ -344,8 +350,68 @@ class CheckoutSnapshotBufferTest {
         val result = f.buffer.consumeForAi(SLOT, PurchaseIntent.USER_RETRY)
         assertTrue(result is CheckoutAiTriggerResult.Ready)
         result as CheckoutAiTriggerResult.Ready
-        assertEquals(FP_A, result.snapshot.pageFingerprint)
-        assertEquals(SnapshotSourceReason.MANUAL_CAPTURE, result.snapshot.sourceReason)
+        assertEquals(FP_B, result.snapshot.pageFingerprint)
+        assertEquals(SnapshotSourceReason.CHECKOUT_STABLE, result.snapshot.sourceReason)
+    }
+
+    @Test
+    fun consumeReleasesOnlyConsumedCandidateAndRetainsManualFallback() {
+        // 【D-16 = B 有意行为变化】消费自动图时不得连带释放手动图（IMPL_PLAN §8.6）：
+        // 手动图是"自动图被下游判无效后回退"的保底。旧行为无条件释放两张。
+        val f = Fixture()
+        f.buffer.store(
+            captureRequest(
+                fingerprint = FP_A,
+                sourceReason = SnapshotSourceReason.MANUAL_CAPTURE,
+                target = SnapshotCaptureTarget.USER_RETRY
+            )
+        )
+        f.buffer.store(captureRequest(fingerprint = FP_B))
+
+        val consumed = f.buffer.consumeForAi(SLOT, PurchaseIntent.PAYMENT_APP_HANDOFF)
+            as CheckoutAiTriggerResult.Ready
+        assertEquals(FP_B, consumed.snapshot.pageFingerprint)
+
+        // 被消费的自动图已摘除，手动图仍在槽内且图片字节未被抹零
+        val retained = f.buffer.currentCandidates(SLOT)
+        assertEquals(1, retained.size)
+        assertEquals(SnapshotSourceReason.MANUAL_CAPTURE, retained.single().sourceReason)
+        assertEquals(FP_A, retained.single().pageFingerprint)
+        assertTrue(
+            "手动回退图的图片字节已被抹零",
+            retained.single().imageBytes.any { it != 0.toByte() }
+        )
+        // 交接栅栏必须随消费清除，否则会反过来拦住保留下来的手动候选
+        assertFalse(f.buffer.hasPaymentHandoffFence(SLOT, SESSION))
+        consumed.snapshot.release()
+    }
+
+    @Test
+    fun consumedRequestTombstoneStillBlocksSecondConsumeAfterNarrowedRelease() {
+        // ⚠️ 记录 D-16 第 3 项的收益边界：释放粒度收窄后手动图虽被保留，
+        // 但 consumedRequestKey 墓碑仍使二次消费返回 AlreadyTriggered ⇒
+        // "自动图被下游判无效后可回退手动"要完全兑现还需墓碑放开或独立回退入口。
+        val f = Fixture()
+        f.buffer.store(
+            captureRequest(
+                fingerprint = FP_A,
+                sourceReason = SnapshotSourceReason.MANUAL_CAPTURE,
+                target = SnapshotCaptureTarget.USER_RETRY
+            )
+        )
+        f.buffer.store(captureRequest(fingerprint = FP_B))
+
+        val first = f.buffer.consumeForAi(SLOT, PurchaseIntent.PAYMENT_APP_HANDOFF)
+            as CheckoutAiTriggerResult.Ready
+        val second = f.buffer.consumeForAi(SLOT, PurchaseIntent.PAYMENT_APP_HANDOFF)
+        assertTrue(second is CheckoutAiTriggerResult.AlreadyTriggered)
+        assertEquals(first.requestKey, (second as CheckoutAiTriggerResult.AlreadyTriggered).requestKey)
+        // 保留下来的手动图未被抹零（墓碑只挡消费，不擦字节）
+        val retained = f.buffer.currentCandidates(SLOT)
+        assertEquals(1, retained.size)
+        assertEquals(FP_A, retained.single().pageFingerprint)
+        assertTrue(retained.single().imageBytes.any { it != 0.toByte() })
+        first.snapshot.release()
     }
 
     @Test

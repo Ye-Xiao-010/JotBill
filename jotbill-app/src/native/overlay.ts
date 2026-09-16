@@ -29,7 +29,6 @@ export interface CheckoutOverlayState {
 export interface SnapshotCaptureResult {
   status:
     | 'STORED'
-    | 'PROTECTED'
     | 'EXPIRED'
     | 'REJECTED'
     | 'UNAVAILABLE'

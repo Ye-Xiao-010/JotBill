@@ -2389,7 +2389,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
      * 悬浮按钮点击路由。
      *
      * 结算槽位仍有未消费的自动候选时（识别成功的正常链路），保持原手动路径语义：
-     * 截图补入既有会话，支付交接时消费，多为 DUPLICATE/PROTECTED 反馈；
+     * 截图补入既有会话，支付交接时消费，多为 DUPLICATE 反馈；
      * 否则走用户断言通道——识别失败、交接挂起、普通购物页这些原路径必然
      * NO_ACTIVE_CHECKOUT/NOT_CHECKOUT_PAGE 的场景，现在都能直接产出待确认。
      */

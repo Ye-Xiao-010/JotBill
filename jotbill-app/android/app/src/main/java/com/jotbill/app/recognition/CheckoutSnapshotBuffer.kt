@@ -81,8 +81,7 @@ enum class SnapshotStoreRejection(val wireValue: String) {
     NOT_CHECKOUT_PAGE("NOT_CHECKOUT_PAGE"),
     EMPTY_IMAGE("EMPTY_IMAGE"),
     SENSITIVE_PAGE("SENSITIVE_PAGE"),
-    JOURNEY_ALREADY_TRIGGERED("JOURNEY_ALREADY_TRIGGERED"),
-    MANUAL_CANDIDATE_PROTECTED("MANUAL_CANDIDATE_PROTECTED")
+    JOURNEY_ALREADY_TRIGGERED("JOURNEY_ALREADY_TRIGGERED")
 }
 
 sealed class SnapshotStoreResult {
@@ -299,14 +298,14 @@ class CheckoutSnapshotBuffer internal constructor(
             existing
         }
 
+        // D-16 = B（自动优先）：同指纹即"自动也认得出这一页"，按职责边界原则
+        // （自动负责认得出的页面、手动负责认不出的页面）应由自动接管。
+        // 旧实现在此处拒绝同指纹的自动截图（MANUAL_CANDIDATE_PROTECTED），
+        // 使自动被手动反向干扰，已取消 ⇒ 自动候选覆盖手动候选。
+        // 注意：协调器侧还有两处"同指纹手动候选 ⇒ 前置拒绝自动"的守卫（实时 + 排队），
+        // 三者必须同改，只改此处不生效。
         val sameFingerprint = findCandidate(state, request.pageFingerprint)
         if (sameFingerprint != null) {
-            if (
-                sameFingerprint.sourceReason == SnapshotSourceReason.MANUAL_CAPTURE &&
-                request.sourceReason == SnapshotSourceReason.CHECKOUT_STABLE
-            ) {
-                return SnapshotStoreResult.Rejected(SnapshotStoreRejection.MANUAL_CANDIDATE_PROTECTED)
-            }
             if (sameFingerprint.sourceReason == request.sourceReason) {
                 return SnapshotStoreResult.Unchanged(sameFingerprint.copyForConsumer())
             }
@@ -679,23 +678,26 @@ logSink.w(
                     )
                 }
         } else {
-            // 无指纹消费在手动+自动并存时优先取手动候选（不变式第 5 条：用户手动操作
-            // 优先级最高）。此前一律 AMBIGUOUS_CANDIDATES 拒绝，导致用户在自动候选
-            // 之外手动补截一张后，支付交接反而消费不到任何快照。purgeExpired 已在
-            // 上方执行，此处的 manualCandidate 必然未过期。手动候选为结算角色或
-            // 本意图就是 USER_RETRY 时才可直接消费（与下方角色守卫同一判据），
-            // 否则回退 singleOrNull——自动候选槽唯一，仅存自动时不会产生歧义。
+            // 无指纹消费：D-16 = B ⇒ 自动优先 + 自动不可消费才回退手动。
+            // 判据与下方统一角色守卫同源，只保留 CHECKOUT 半边（自动候选由 store 的
+            // target 门禁保证恒为 CHECKOUT 角色；手动候选可为非结算角色，如断言通道）。
+            // 不满足角色判据的候选不得被选中——否则会先选中再被角色守卫拒绝，
+            // 丢失本应保留的歧义语义；此时回退 singleOrNull：槽内只剩自动候选时
+            // 唯一即无歧义。
+            // ⚠️ 无指纹的 USER_RETRY 组合生产不可达（其公开入口恒带合法 64 位 hex 指纹，
+            // 见 UserRetryCaptureContext.isComplete()），故此处不再为它设例外。
+            // 此前一律 AMBIGUOUS_CANDIDATES 拒绝，导致手动补截后支付交接反而消费不到
+            // 任何快照；purgeExpired 已在上方执行，此处候选必然未过期。
+            val automatic = state.automaticCandidate
+                ?.takeIf { it.pageRole == CheckoutPageRole.CHECKOUT }
             val manual = state.manualCandidate
-            if (manual != null &&
-                (manual.pageRole == CheckoutPageRole.CHECKOUT || intent == PurchaseIntent.USER_RETRY)
-            ) {
-                manual
-            } else {
-                candidates.singleOrNull()
-                    ?: return CheckoutAiTriggerResult.Rejected(
-                        SnapshotConsumeRejection.AMBIGUOUS_CANDIDATES
-                    )
-            }
+                ?.takeIf { it.pageRole == CheckoutPageRole.CHECKOUT }
+            automatic
+                ?: manual
+                ?: candidates.singleOrNull()
+                ?: return CheckoutAiTriggerResult.Rejected(
+                    SnapshotConsumeRejection.AMBIGUOUS_CANDIDATES
+                )
         }
         // 页面角色守卫：只有 USER_RETRY（手动截图重试）允许消费非结算页快照；
         // CHECKOUT 快照必须允许 SUBMIT_ACTION / PAYMENT_APP_HANDOFF 等真实购买意图
@@ -723,7 +725,7 @@ logSink.w(
             pageFingerprint = snapshot.pageFingerprint
         )
         val consumerSnapshot = snapshot.copyForConsumer()
-        releaseCandidates(state)
+        releaseConsumedCandidate(state, snapshot)
         state.consumedRequestKey = requestKey
         scheduleNextExpirationLocked(now)
         return CheckoutAiTriggerResult.Ready(
@@ -872,6 +874,22 @@ logSink.i(TAG, "缓冲清空(无槽位): reason=$reason")
         return candidates.joinToString(",") { candidate ->
             "${candidate.sourceReason.wireValue}@${candidate.pageFingerprint.take(12)}"
         }
+    }
+
+    /**
+     * 只释放**被消费的那一张**候选（D-16 = B 的直接推论，见 `IMPL_PLAN_VERSION_B` §8.6）。
+     *
+     * 未被消费的候选必须保留图片字节：它正是"自动图被下游判无效时回退手动"的保底。
+     * 旧实现无条件释放两张，会在消费自动图时连带抹掉手动图，使回退无图可用。
+     * 交接栅栏与过期墓碑仍随消费清除：栅栏是一次交接的临时保护，消费完成后失去保护
+     * 对象，若不清除会反过来拦住保留下来的候选。
+     *
+     * 槽位整体消失的路径（`discard` / `clear` / `close` / 换会话）仍走 [releaseCandidates]。
+     */
+    private fun releaseConsumedCandidate(state: SlotState, consumed: CheckoutSnapshot) {
+        removeCandidate(state, consumed)?.release()
+        state.expiredPageFingerprints.clear()
+        state.handoffPageFingerprint = null
     }
 
     private fun releaseCandidates(state: SlotState) {
