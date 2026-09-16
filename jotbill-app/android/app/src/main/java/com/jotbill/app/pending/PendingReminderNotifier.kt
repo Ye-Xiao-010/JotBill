@@ -82,9 +82,14 @@ internal object PendingReminderNotifier {
         // 用户断言通道产生的待确认不发送系统通知:断言是用户主动点击,
         // 按钮状态变化已构成操作反馈;弹窗/通知的触发权属于支付证据链路
         // (支付结果页无障碍读取/支付通知)。条目仍静默进入待确认中心。
+        // 判据走共享函数(与弹窗策略同一出处):断言通道的变体不止一个,
+        // 精确相等会漏掉 USER_ASSERTED_AMOUNT_MISSING(AI 未识别到金额)。
+        // 该变体当前恒被下方 0 金额闸拦下 ⇒ 本处改动为零行为变化,仅日志
+        // 归因更准确;但两侧判据必须同源,否则将来任一侧闸门放开都会让
+        // Z2 在单侧静默失效。
         if (
             info.sourceType == PendingSourceTypes.AI_VISION &&
-            info.conflictReason == PENDING_CONFLICT_REASON_USER_ASSERTED
+            isUserAssertedConflictReason(info.conflictReason)
         ) {
             Log.i(TAG, "跳过提醒: 用户断言条目待支付证据 id=${info.pendingId.take(16)}")
             return

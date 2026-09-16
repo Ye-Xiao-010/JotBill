@@ -1,5 +1,6 @@
 package com.jotbill.app.pending
 
+import com.jotbill.app.recognition.USER_ASSERTED_AMOUNT_MISSING_REASON
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -12,6 +13,16 @@ class PendingPromptPolicyTest {
 
     private companion object {
         const val NOW = 1_700_000_000_000L
+
+        /**
+         * AI 失败占位的冲突原因。
+         *
+         * ⚠️ 不能引用产生方常量：`CheckoutPaymentMatcher` 里
+         * `AI_RECOGNITION_FAILED_REASON` 是 **file-private**（`:98`）⇒ 测试不可见，
+         * 只能按字面量复制。该字面量在 `TransactionCandidateDao:114`（SQL）也有
+         * 一份；改动时须三处同查。
+         */
+        const val AI_FAILURE_REASON = "AI_RECOGNITION_FAILED"
     }
 
     private fun info(
@@ -87,7 +98,7 @@ class PendingPromptPolicyTest {
     }
 
     @Test
-    fun skipsRemovedUpdatedDisabledNonExpenseAndZeroAmount() {
+    fun skipsRemovedUpdatedDisabledAndNonExpense() {
         assertEquals(
             PendingPromptPolicy.SkipReason.REMOVED,
             (evaluate(info(removed = true)) as PendingPromptPolicy.Decision.Skip).reason
@@ -104,9 +115,66 @@ class PendingPromptPolicyTest {
             PendingPromptPolicy.SkipReason.NOT_EXPENSE,
             (evaluate(info(type = "transfer")) as PendingPromptPolicy.Decision.Skip).reason
         )
+    }
+
+    /**
+     * 【有意行为变化 2026-09-16 · 批 V-1b/D-21】0 金额占位（AI 失败/金额缺失）
+     * **允许弹窗** —— 原先被 ZERO_AMOUNT 跳过，只能进 App 内编辑。
+     *
+     * 真实来源（实测）：`CheckoutPaymentMatcher` AI 失败且无支付证据 ⇒
+     * amountMinor=0L + conflictReason=AI_RECOGNITION_FAILED + sourceType=ai_vision。
+     * "确认前强制补金额"不靠本策略保证，而由就绪判据 PendingConfirmReadiness
+     * 与服务端 PendingConfirmService 兜底（两端同一口径）。
+     */
+    @Test
+    fun promptsAiFailureWithMissingAmount() {
         assertEquals(
-            PendingPromptPolicy.SkipReason.ZERO_AMOUNT,
-            (evaluate(info(amountMinor = 0L)) as PendingPromptPolicy.Decision.Skip).reason
+            PendingPromptPolicy.Decision.Prompt("测试商户|0"),
+            evaluate(
+                info(
+                    amountMinor = 0L,
+                    sourceType = PendingSourceTypes.AI_VISION,
+                    conflictReason = AI_FAILURE_REASON
+                )
+            )
+        )
+        // 断言通道之外的其他来源同样放行（策略不看 sourceType 的 0 金额分支）
+        assertEquals(
+            PendingPromptPolicy.Decision.Prompt("测试商户|0"),
+            evaluate(info(amountMinor = 0L, sourceType = PendingSourceTypes.NOTIFICATION))
+        )
+    }
+
+    /**
+     * 【Z2 回归 · 批 V-1b/D-21 前置 ①】断言通道 + 金额缺失 ⇒ **仍不弹窗**。
+     *
+     * 该变体（USER_ASSERTED_AMOUNT_MISSING）此前是被 ZERO_AMOUNT 闸"偶然"
+     * 拦下的：移除 ZERO_AMOUNT 后必须靠断言判据本身拦住。故本用例是 ① 的
+     * **判别性回归** —— 把判据退回精确相等（`== USER_ASSERTED`），本用例必红。
+     */
+    @Test
+    fun skipsUserAssertedPendingWithMissingAmount() {
+        val decision = evaluate(
+            info(
+                amountMinor = 0L,
+                sourceType = PendingSourceTypes.AI_VISION,
+                conflictReason = USER_ASSERTED_AMOUNT_MISSING_REASON
+            )
+        )
+        assertEquals(
+            PendingPromptPolicy.SkipReason.USER_ASSERTED,
+            (decision as PendingPromptPolicy.Decision.Skip).reason
+        )
+        // 对照：同为零金额 + ai_vision，但非断言标记（AI 失败）⇒ 放行（见上条用例）
+        assertEquals(
+            PendingPromptPolicy.Decision.Prompt("测试商户|0"),
+            evaluate(
+                info(
+                    amountMinor = 0L,
+                    sourceType = PendingSourceTypes.AI_VISION,
+                    conflictReason = AI_FAILURE_REASON
+                )
+            )
         )
     }
 

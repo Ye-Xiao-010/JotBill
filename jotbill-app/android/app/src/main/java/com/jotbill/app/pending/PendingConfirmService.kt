@@ -4,7 +4,6 @@ import com.jotbill.app.bridge.BridgeDtoMapper
 import com.jotbill.app.data.JotBillDatabase
 import com.jotbill.app.data.LedgerRepository
 import com.jotbill.app.data.entity.BillEntity
-import com.jotbill.app.recognition.MAX_SAFE_MINOR_UNIT
 import com.jotbill.app.rules.RuleEngine
 import java.util.UUID
 
@@ -68,7 +67,8 @@ internal class PendingConfirmService(private val database: JotBillDatabase) {
             return Outcome.Invalid(error.message ?: "INVALID_ARGUMENT")
         }
         val amountMinor = overrides.amountMinor ?: pending.amountMinor
-        if (amountMinor !in 1L..MAX_SAFE_MINOR_UNIT) {
+        // 金额口径的单一出处：PendingConfirmReadiness.isValidAmount（UI 就绪判据共用）。
+        if (!PendingConfirmReadiness.isValidAmount(amountMinor)) {
             return Outcome.Invalid("amountMinor must be a positive safe integer minor unit")
         }
         // 阶段五 T1 时机二：确认入账前最终执行规则。ignore/send_to_review

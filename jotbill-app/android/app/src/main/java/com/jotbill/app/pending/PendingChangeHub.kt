@@ -42,11 +42,30 @@ internal object PendingSourceTypes {
 }
 
 /**
- * 用户断言通道落库时写入 conflictReason 的协议常量
+ * 用户断言通道落库时写入 conflictReason 的**前缀基**
  * (产生方:CheckoutPaymentMatcher.promoteAssertedSessionToPending)。
- * 弹窗与通知消费方据此识别"无支付证据、仅用户点击断言"的条目并静默处理。
+ *
+ * 该通道的变体只区分"AI 是否识别到金额"——USER_ASSERTED(识别到)与
+ * USER_ASSERTED_AMOUNT_MISSING(未识别到)——渠道语义不变,故本常量按
+ * **前缀**使用;判定一律走 [isUserAssertedConflictReason],勿再写精确相等。
  */
 internal const val PENDING_CONFLICT_REASON_USER_ASSERTED = "USER_ASSERTED"
+
+/**
+ * 是否为"用户断言通道"条目(Z2:断言条目静默进待确认中心,不得弹窗/通知打扰)。
+ *
+ * **单一出处**:弹窗策略([PendingPromptPolicy])与系统通知([PendingReminderNotifier])
+ * 必须共用本判据 —— 二者此前各自写了一份精确相等判断,同时漏掉
+ * USER_ASSERTED_AMOUNT_MISSING 变体(2026-09-16 批 V-1b/D-21 实施时核查发现)。
+ *
+ * 实测边界(2026-09-16):全仓写入 pending.conflictReason 的 USER_ASSERTED*
+ * 取值仅 2 个(USER_ASSERTED / USER_ASSERTED_AMOUNT_MISSING);另一处同前缀
+ * 字面量 USER_ASSERTED_THROTTLED(断言截图节流,见 CheckoutAccessibilityService)
+ * 只作截图状态码,不写 conflictReason ⇒ 前缀判定当前不会过度排除。
+ * 若将来出现"应当打扰"的同前缀变体,必须改为显式集合,不得继续沿用前缀。
+ */
+internal fun isUserAssertedConflictReason(reason: String?): Boolean =
+    reason?.startsWith(PENDING_CONFLICT_REASON_USER_ASSERTED) == true
 
 /**
  * 待确认交易创建/更新的进程内分发中心。

@@ -7,6 +7,8 @@ import android.graphics.Typeface
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.text.Editable
+import android.text.TextWatcher
 import android.util.Log
 import android.view.Gravity
 import android.view.LayoutInflater
@@ -27,6 +29,7 @@ import com.jotbill.app.data.entity.CategoryEntity
 import com.jotbill.app.data.entity.PendingTransactionEntity
 import com.jotbill.app.pending.PendingChangeHub
 import com.jotbill.app.pending.PendingChangeInfo
+import com.jotbill.app.pending.PendingConfirmReadiness
 import com.jotbill.app.pending.PendingConfirmService
 import com.jotbill.app.pending.PendingPromptPolicy
 import kotlinx.coroutines.CancellationException
@@ -103,6 +106,9 @@ internal object PendingConfirmOverlayManager {
     private val categoryViews = mutableListOf<Pair<TextView, CategoryEntity>>()
     private val accountViews = mutableListOf<Pair<TextView, AccountEntity>>()
     private var currentConfirmButton: Button? = null
+
+    /** 当前弹窗的金额输入框。金额参与就绪判据（D-21），输入变化时重算按钮状态。 */
+    private var currentAmountInput: EditText? = null
     private var displayedPendingId: String? = null
 
     fun init(context: Context) {
@@ -288,16 +294,36 @@ internal object PendingConfirmOverlayManager {
             val inflater = LayoutInflater.from(context)
             val view = inflater.inflate(R.layout.pending_confirm_overlay, null)
             val sourceText = view.findViewById<TextView>(R.id.tv_source)
-            sourceText.text = when (pendingRow.sourceType) {
-                "notification" -> "检测到支付通知，待确认入账"
-                "accessibility" -> "检测到支付结果页，待确认入账"
-                "ai_vision" -> "截图识别到一笔支付，待确认"
-                else -> "检测到一笔待确认支付"
+            // D-21：0 金额占位（AI 失败/金额缺失）允许弹窗，但用户必须看懂
+            // "为什么是 0、下一步做什么" ⇒ 金额缺失文案优先于来源文案
+            // （否则会显示"截图识别到一笔支付"，与空金额自相矛盾）。
+            sourceText.text = if (pendingRow.amountMinor <= 0L) {
+                "未识别到金额，请补充金额后确认"
+            } else {
+                when (pendingRow.sourceType) {
+                    "notification" -> "检测到支付通知，待确认入账"
+                    "accessibility" -> "检测到支付结果页，待确认入账"
+                    "ai_vision" -> "截图识别到一笔支付，待确认"
+                    else -> "检测到一笔待确认支付"
+                }
             }
             val merchantText = view.findViewById<TextView>(R.id.tv_merchant)
             merchantText.text = "商户：${pendingRow.merchant?.take(24) ?: "未知"}"
             val amountInput = view.findViewById<EditText>(R.id.et_amount)
             amountInput.setText(formatYuan(pendingRow.amountMinor))
+            currentAmountInput = amountInput
+            // 金额参与就绪判据（D-21）⇒ 必须监听输入变化重算按钮，否则 0 金额
+            // 条目打开时按钮置灰后再无时机变亮（功能死锁）。顺序：先 setText 再挂
+            // 监听，避免预填触发一次无意义的重算。
+            amountInput.addTextChangedListener(object : TextWatcher {
+                override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+
+                override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) = Unit
+
+                override fun afterTextChanged(s: Editable?) {
+                    updateConfirmEnabled(currentConfirmButton)
+                }
+            })
             displayedPendingId = pendingRow.id
             selectedCategory = null
             // 账户不造占位实体：待确认携带的账户 ID 由 loadAccounts 在列表中匹配预选，
@@ -614,9 +640,21 @@ internal object PendingConfirmOverlayManager {
         updateConfirmEnabled(currentConfirmButton)
     }
 
-    /** 分类与账户都就绪才允许入账：弹窗是显式确认入口，不允许无分类/无账户写入。 */
+    /**
+     * 分类、账户与金额都就绪才允许入账：弹窗是显式确认入口，不允许无分类/
+     * 无账户/无金额写入。D-21：0 金额占位允许弹窗，但确认前强制补金额 ⇒
+     * 判据由"分类 + 账户"扩展为"分类 + 账户 + 金额 > 0"。
+     *
+     * 金额口径走 [PendingConfirmReadiness]（与服务端 [PendingConfirmService]
+     * 同一出处）；本方法由金额输入监听回调（见 displayOverlay），分类/账户
+     * 选择回调三处触发 —— 缺任一处都会让按钮状态卡死。
+     */
     private fun updateConfirmEnabled(confirmButton: Button?) {
-        val ready = selectedCategory != null && selectedAccount != null
+        val ready = PendingConfirmReadiness.isReady(
+            hasCategory = selectedCategory != null,
+            hasAccount = selectedAccount != null,
+            amountMinor = parseYuan(currentAmountInput?.text?.toString())
+        )
         confirmButton?.isEnabled = ready
         confirmButton?.alpha = if (ready) 1.0f else 0.5f
     }
@@ -687,6 +725,7 @@ internal object PendingConfirmOverlayManager {
             categoryViews.clear()
             accountViews.clear()
             currentConfirmButton = null
+            currentAmountInput = null
             displayedPendingId = null
             waitingCandidate = null
             candidateExpiryRunnable?.let(mainHandler::removeCallbacks)
