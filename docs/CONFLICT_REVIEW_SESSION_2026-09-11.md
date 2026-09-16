@@ -1688,8 +1688,27 @@ val startsNewSession = previous == null ||
   另：**`SnapshotCoordinator:279-290` `canEstablishUserRetrySession` 与 `:1089` `hasAutomaticCandidate` 守卫已正确实现该边界，不动**（前者有真机故障背书）。
 - [ ] **【D-17】** ~~断言通道与自动会话通道的 sessionId 归并评估~~ ⇒ **✅ 已裁定不归并（G3.3），本条作废，不需改动**。
 - [ ] **【D-19 金额容差】** 实施面为 **2 层**（本轮核实）：
-  **① `CheckoutPaymentMatcher.evaluate:1995-2009`** —— 金额分支由单边不等式（`candidate < evidence` 才冲突）改为 `abs(candidate.amountMinor - evidence.amountMinor) <= maxOf(100L, evidence.amountMinor * 5 / 100)`；超界新增冲突原因（如 `AI_AMOUNT_DIFFERS_FROM_PAYMENT`）⇒ 转待确认；容差常量（`¥1.00` / `5%`）集中定义、可配置。
-  **② `TransactionCandidateDao.findUnoccupiedByAmountCovering`（`TransactionCandidateDao.kt:75-87`）** —— SQL 由 `candidates.amount_minor >= :amountMinor` 改为**双向带**（`ABS(...) <= MAX(100, :amountMinor * 5 / 100)`），并同步修正其 KDoc（`:70-73`）。**不改则下行方向（AI 更低）在会话解析阶段即被滤掉，证据落孤儿待确认，走不到 `evaluate()`，新容差完全失效。**
+  > ✅ **2026-09-16 实施细节裁定（3 项）**：
+  >
+  > **Q1｜带外超限的冲突码 → 方向保留（双码）**
+  > - 保留 `AI_AMOUNT_LOWER_THAN_PAYMENT`（AI 低 / 支付高）
+  > - **新增** `AI_AMOUNT_HIGHER_THAN_PAYMENT`（AI 高 / 支付低）
+  > - **依据**：该码**已被 RN 消费为面向用户的方向性文案** —— `src/screens/review/ReviewScreen.tsx:1014` = 「实际支付金额高于 AI 识别金额」。单码双向会使文案退化为「金额不符」，用户无法知道该往哪个方向核对。
+  > - ⚠️ **必须同步 RN**：`ReviewScreen.tsx:1011` 的 `CONFLICT_LABELS` 映射表要**加一行新码文案**。该表有兜底（`:1010` 注释："未知代码原样展示供排查"）⇒ 漏加不会崩，但**用户会看到裸码**（体验退化）。**此项列入改动清单。**
+  >
+  > **Q2｜DAO 容差如何传入 SQL → 绑定参数（不接受内联公式）**
+  > - 签名扩为 `findUnoccupiedByAmountCovering(amountMinor: Long, toleranceMinor: Long, at: Long)`
+  > - SQL 改为 `ABS(candidates.amount_minor - :amountMinor) <= :toleranceMinor`
+  > - **依据（单一出处）**：内联公式（`MAX(100, :amountMinor * 5 / 100)`）会把容差规则在 **SQL 与 Kotlin 两处各实现一遍** ⇒ 将来调整规则（如改 10%）必然漏改一处。本项目已被"同类逻辑散落多处"坑过 **3 次**（去重键 2 生成点 / 转账桶 / 同指纹保护 3 实现点）⇒ 容差**只在 Kotlin 侧定义一次**，SQL 仅消费绑定值。
+  > - 调用方（`Matcher`）本已持有 `evidence.amountMinor` ⇒ 可直接算出容差传入。
+  >
+  > **Q3｜容差带内放行分支的 `amountRule` 取值 → 改名 `WITHIN_TOLERANCE`**
+  > - 现名 `AI_AMOUNT_COVERS_PAYMENT`（`Matcher:2014`）语义为"AI 金额**覆盖**支付金额" ⇒ 只描述"AI 更高"单一方向；D-19 后容差带内**两个方向都放行** ⇒ 旧名失真。
+  > - **实测确认无程序消费方**：全仓仅 `Matcher:2014` 一处产出，RN 侧零引用（仅进 `appliedRules` 诊断 JSON）⇒ 改名风险低。
+  > - ⚠️ 诊断 JSON 会存在**新旧字面值混存**（历史记录）⇒ 建议在 KDoc 注明改名时点，供后续日志分析时对齐口径。
+
+  **① `CheckoutPaymentMatcher.evaluate`**（编写时 `:1995-2009`，**行号可能已漂，以符号名定位**）—— 金额分支由单边不等式（`candidate < evidence` 才冲突）改为 `abs(candidate.amountMinor - evidence.amountMinor) <= maxOf(100L, evidence.amountMinor * 5 / 100)`；超界新增冲突原因（见 Q1：按方向分双码）⇒ 转待确认；容差常量（`¥1.00` / `5%`）集中定义、可配置。
+  **② `TransactionCandidateDao.findUnoccupiedByAmountCovering`**（编写时 `TransactionCandidateDao.kt:75-87`）—— SQL 由 `candidates.amount_minor >= :amountMinor` 改为**双向带**（见 Q2：**用绑定参数**，不在 SQL 内联公式），并同步修正其 KDoc（编写时 `:70-73`，原文"候选金额 >= 支付金额（优惠后下降视为正常）"需改述）。**不改则下行方向（AI 更低）在会话解析阶段即被滤掉，证据落孤儿待确认，走不到 `evaluate()`，新容差完全失效。**
   **③ 复核项**：`candidateAfterPayment:1968-1972`（`conflictReason == null` 时以 `evidence.amountMinor` 覆盖候选金额）语义与"以支付金额入账"一致，预期不需改动；`resolveSessionForPayment:285-295` 放宽后 `Ambiguous` 概率上升，属安全侧（落待确认不误账），需确认可接受。
   **④ 新增测试**：AI 金额低于支付金额但落在容差内 ⇒ 正常匹配入账，而非落孤儿待确认。
 - [ ] **【D-18 置信度】** ~~新增置信度闸门~~ ⇒ **✅ 已裁定不做，无代码改动**；`confidence`（`:1956` 写入 rules JSON）**保留为诊断记录**，不加拦截逻辑。
