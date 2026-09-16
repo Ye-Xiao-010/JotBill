@@ -74,7 +74,27 @@ cd jotbill-app/android
 
 ## 四、构建与验证（已实测有效）
 
-**必须用 `gradlew.bat`，不能用 `./gradlew`** —— 本机 Git Bash 缺 `uname`/`xargs`，bash 版脚本会直接失败（报 `uname: command not found`）。
+**命令用 `gradlew.bat` 或 `./gradlew` 均可**（2026-09-16 起 bash 环境已修复；下方命令沿用 `gradlew.bat`，以兼容其他未修复的机器）。
+
+> ### 背景：本机 Bash 曾缺一批常用命令（已修复）
+>
+> **症状**：`ls` / `cat` / `grep` / `head` / `tail` / `sed` / `awk` / `wc` / `uname` / `xargs` / `dirname` 全部不可用 ⇒ bash 版 gradlew 直接失败，只能用 `gradlew.bat`。
+> **根因**：Git for Windows 只把 `C:\Program Files\Git\cmd` 写进系统 PATH；`usr\bin` 是 `git-bash.exe` 启动时才注入的。而本环境的 Bash 工具**直接调 `bash.exe`**（`...\PortableGit\versions\1.2.0\bin\bash.exe`），**从不经过 git-bash** ⇒ `usr\bin` 永远不在 PATH 里。
+> **连带现象**：BASH_ENV 脚本 `shell-runtime-bash-env.sh:3` 的 `$(dirname ...)` 因此失败，每次 bash 调用都打印 `dirname: command not found` + `cd: null directory`，并导致 **safe-bin 安全脚本静默未加载**。
+> **修复**：`C:\Program Files\Git\usr\bin` 已**追加**（未前置）到 Windows **用户级** PATH —— 注册表 `HKCU\Environment\Path`，**值类型保持 `ExpandString`**（未降级为 `REG_SZ`，`%DevEco Studio%` 等引用完好）；原值备份于 `D:\JotBill_backup_20260915\user_path_backup_20260916.txt`。
+> **验证（重启后实测）**：11 个命令全部恢复；**BASH_ENV 报错消失**；`rm` / `unlink` / `rmdir` 的安全包装函数层**已激活**（此前静默未加载）；`./gradlew --version` 输出 `Gradle 8.14.3`。`find` 仍解析到 `C:\Windows\system32\find` —— 追加不前置的预期结果，未覆盖系统工具。
+
+⚠️ **若换到未修复的机器上工作**（两招 + 两类误判）：
+
+- Bash 调用开头加一行：`export PATH="/c/Program Files/Git/usr/bin:$PATH"`
+- 判断文件是否存在**只能用 `test -f`** —— 不能用 `cat x || echo "不存在"` 推断（`cat` 缺失会让 `||` 分支误触发，**本项目已两次踩此坑**）
+- **`cmd | grep ... || echo 兜底` 会给假阴性** —— 同样因 `grep` 缺失直接走到 `||`（2026-09-15 实测误判为「无告警」，实际有）
+
+⚠️ **仍然有效（与上述修复无关）**：
+
+- **删文件优先用 PowerShell `Remove-Item -LiteralPath`，一次只给一个路径** —— `rm` 被 safe-bin 安全包装拦截，且可能"删一部分后静默失败"。
+- **PowerShell 写日志必须 `Out-File -Encoding utf8`** —— `Tee-Object` 产出 UTF-16LE，Read 工具会报 "Cannot display content of binary file"。
+- **测试计数只看** `android/app/build/reports/tests/testDebugUnitTest/index.html` 的 `<div class="counter">`；用 `[int]$d.testsuite.tests` 粗聚合会得虚高值（曾误得 378，真实 261）。
 
 ```bash
 cd jotbill-app/android

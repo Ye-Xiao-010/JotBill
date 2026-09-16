@@ -1661,8 +1661,29 @@ val startsNewSession = previous == null ||
 - [ ] **【死入口清理】✅ 2026-09-15 定案：4 个方法全部「删除」，不做"重定位"**（依据见 `IMPL_PLAN` §8.8）：`requestSubmitAction`（D-11 删整链路）/ `requestPaymentAppHandoff`（改造 B 改为 `onEvent` 内部搬运，不再需要外部触发入口）/ `requestPaymentPageVisible`（D-10 死枚举）/ **`requestUserRetry`（实测已被 `requestUserRetryForSession`（`Service:255`）取代 —— 后者带 sessionId、实现完整、且负责"回写到指定失败会话"）**。另 `PAYMENT_PAGE_VISIBLE` 死枚举一并删除。**共删 5 个符号，不保留任何"搬家"形式。**
 - [ ] **【D-11 删除】** 删除 `PurchaseIntent.SUBMIT_ACTION` 及其链路：`shouldTriggerSubmitAction`/`triggerSubmitAction`（`Service:934-935`/`:2953-2989`）、`CheckoutSubmitActionDetector`（整文件，含 `submitLabels`/`submitResourceMarkers`）、`IntentCoordinator` 中 `SUBMIT_ACTION` 分支。**注意**：`checkoutActionTerms`（`Collector:133-141`）属页面角色判定，**不随之删除**。
 - [ ] **【D-16 = B，已定案】** 三处实施改动：
-  1. `Buffer.store:302-309` `MANUAL_CANDIDATE_PROTECTED` 的**存废/收窄**——同指纹即"自动也认得出这一页"，按"自动负责认得出的页面"原则应**放行自动覆盖**（或不再拒绝）；
-  2. `Buffer:681-698` 无指纹消费由"手动优先"改为**自动优先 + 自动被拒才回退手动**；
+  > ⚠️ **2026-09-16 核查补正（实施前必读）**：**"同指纹 + 已有手动候选 ⇒ 拦自动"这个判断在代码里有 3 个实现点，不是 1 个**：
+  >
+  > | # | 位置 | 角色 |
+  > |---|---|---|
+  > | 1 | `Buffer.store:302-309` | store 内层守卫 ⇒ 返回 `SnapshotStoreRejection.MANUAL_CANDIDATE_PROTECTED`（协调器把它映射成 `SnapshotCaptureStatus.REJECTED`，**不是** PROTECTED） |
+  > | **2** | **`Coordinator:1575-1585`** | **前置守卫**（实时自动截图）：`buffer.hasCandidate(同指纹, MANUAL_CAPTURE)` ⇒ `publish(protectedResult(...))` 后直接 return，**根本走不到 `store`** |
+  > | **3** | **`Coordinator:2194-2203`** | **前置守卫**（排队自动截图），同上 |
+  >
+  > ⇒ **只改 #1 则 D-16 完全不生效**（#2 会先拦截）；而**现有测试直接调 buffer、测不到 #2/#3 ⇒ 会假绿**。
+  > ⇒ **#2/#3 才是主战场**；`protectedResult()`（`Coordinator:2344-2355`）与 `SnapshotCaptureStatus.PROTECTED` 的真实产出方也在那里（**并非只由 store 产出**）。
+  > ⇒ **验证要求**：必须补**走协调器路径**的判别性用例（同指纹 + 已有手动候选 + 自动截图 ⇒ 改前 `PROTECTED`、改后 `STORED`），否则测不出 #2/#3 的漏改。
+
+  1. `Buffer.store:302-309` `MANUAL_CANDIDATE_PROTECTED` 的**存废/收窄**——同指纹即"自动也认得出这一页"，按"自动负责认得出的页面"原则应**放行自动覆盖**（或不再拒绝）。
+     **⚠️ 顺序**：先删**全部 3 个触发点**（#1 + #2 + #3），`MANUAL_CANDIDATE_PROTECTED` / `SnapshotCaptureStatus.PROTECTED` **才**成为真正的死枚举 ⇒ **此时再"彻底删除"**，顺序不可颠倒。
+     **彻底删除的连带清单（9 处）**：① `Buffer:308` 删拒绝分支 ②③ `Coordinator:1575-1585` / `:2194-2203` 删前置守卫 ④ `Coordinator:2143-2146` 删 when 分支 ⑤ `Coordinator:2344-2355` 删 `protectedResult()` ⑥ `Buffer:85` 删 `SnapshotStoreRejection.MANUAL_CANDIDATE_PROTECTED` ⑦ `Coordinator:26+` 删 `SnapshotCaptureStatus.PROTECTED` ⑧ `CheckoutCaptureOverlayManager:429-431` / `:446-448` 删消费分支（**UI 现把它当"成功结果"**）⑨ `CheckoutSnapshotBufferTest:242` 删/改用例。
+  2. `Buffer:681-698` 无指纹消费由"手动优先"改为**自动优先 + 自动被拒才回退手动**。
+     **✅ 2026-09-16 裁定：一律自动优先（B1）** —— 即**删掉** `:690` 的 `|| intent == PurchaseIntent.USER_RETRY` 条件，无指纹分支统一自动优先。
+     **依据（实测核实）**：`USER_RETRY` **恒带有效指纹**，进入不了无指纹分支：
+     - `UserRetryCaptureContext.isComplete()`（`CheckoutContract.kt:125-127`）要求 `hasSafeDisplayContext()`，其中含 **`pageFingerprint.isSha256PageFingerprint()`**（`:113-123`，要求非空 + 长度 64 + 全 hex）；
+     - 且唯一可传空指纹的 `USER_RETRY` 公开入口 **`requestUserRetry` 已在批 V-1a 删除**（`88e5ceb`）；
+     - ⇒ 现存入口仅 `triggerUserRetry`，其 `isComplete()` 门禁保证指纹有效。
+     ⇒ 该 `|| intent == USER_RETRY` 在**生产路径上不可达**，属死条件 ⇒ **删掉比保留更干净**（B2 会让读者误以为该组合真实存在）。
+     ⚠️ **测试注意**：现有相关用例是**合成场景**（直接调 buffer 构造无指纹 + USER_RETRY）⇒ 保留测试时应**注明"该组合生产不可达，仅作防御性覆盖"**，避免后人误判为真实路径。
   3. `Buffer:726`/`:877-884` `releaseCandidates` **释放粒度**复核——现无条件释放两张，会连带抹掉未被消费的正确自动图。
   另：**`SnapshotCoordinator:279-290` `canEstablishUserRetrySession` 与 `:1089` `hasAutomaticCandidate` 守卫已正确实现该边界，不动**（前者有真机故障背书）。
 - [ ] **【D-17】** ~~断言通道与自动会话通道的 sessionId 归并评估~~ ⇒ **✅ 已裁定不归并（G3.3），本条作废，不需改动**。
