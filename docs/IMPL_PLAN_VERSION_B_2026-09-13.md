@@ -855,5 +855,7 @@ fun trigger(
 | **`res/layout/payment_overlay.xml`** | D-20 删除 `PaymentOverlayManager.kt` 后成为**孤儿资源**（唯一引用者已删）。本批范围仅"整文件 + 模块注册" ⇒ **不删**，登记待清理 | ⏸ 待清理 |
 | **`PaymentNotificationModule` 的 `LifecycleEventListener` + 3 个空回调** | D-20 后回调已无行为（`onHostResume/onHostPause/onHostDestroy` 均为 `= Unit`），但 `addLifecycleEventListener(this)` 注册仍在。本批按 Q5 裁定**保留**（摘除属行为面改动）⇒ 登记为后续可评估项 | ⏸ 待评估 |
 | **`PaymentNotificationHeadlessService.kt:9` 的死 import** | `LocalBroadcastManager` import 存在但未被使用（D-20 前即如此）⇒ 可清理，**但清理前须确认 gradle 依赖是否仍被其他文件使用**（否则不能移除依赖） | ⏸ 待评估 |
+| **`recordPersonalTransfer` 的 2 分钟时间桶**（`Matcher` 内，`effectiveOccurredAt / 120_000L`） | **同类缺陷（与 D-6 同源）**：同一收款人 + 同金额 + 2 分钟内两笔转账 ⇒ `pendingId` 相同 ⇒ **第二笔被静默吞**（其 KDoc 自述"包名 + 2 分钟桶 + 金额 + 收款人"）。**不属 D-6 范围**（D-6 只讲"结果页事件去重键"），且**性质不同** —— 它是**待确认幂等 ID**（非事件去重键），收窄会使同额转账**产生两条待确认**（安全侧，但与现设计不同）⇒ 需**单独裁定** | ⏸ **待裁定** |
+| **0 金额待确认条目的去重键退化**（D-21 的 R2，2026-09-16 登记） | AI 失败占位条目的 `merchant = null` ⇒ `dedupKey` 退化为 `"\|0"` ⇒ **5 分钟内多笔不同 0 金额条目互相去重**，仅第一条弹窗（其余静默）。**不属 D-21 范围**（D-21 是"0 金额允许弹窗"，属**去重策略**的另一语义），且需独立设计判断（0 金额时是否以 `pendingId` 参与键）⇒ 混入 D-21 会让其验证复杂化 | ⏸ **待裁定** |
 
 > ⚠️ **清理 `payment_overlay.xml` 时的红线**：该布局涉及的 `R.id.*` 与 `btn_category_*` 系列 drawable **与 `PendingConfirmOverlayManager` 共用** ⇒ **不得连带删除这些 id / drawable**（2026-09-15 实现时已核实）。

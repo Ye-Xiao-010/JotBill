@@ -1715,7 +1715,36 @@ val startsNewSession = previous == null ||
 - [ ] **【D-3/G3.1 通知停用】** `recordPaymentEvidence` 入口按 `sourceType == "notification"` 短路 + 开关；`recordOrphanPaymentSignal` 的通知来源分支（`Service:2360`/`:2367`）一并纳入开关。
 - [ ] **【D-20 = A，删除死代码】** 删除 `notification/PaymentOverlayManager.kt` **整文件**（全仓无实例化）；删除 `PaymentNotificationModule` 的 `BroadcastReceiver` + `LocalBroadcastManager` 注册（`:317-337` 一带）及相关字段/调用点；核实 `sendBillCreatedEventToJS()` 是否仍有其他 caller（无则一并清理）；全仓 grep 确认 `ACTION_BILL_CREATED` 无残留。**风险控制**：删除前确认 `onBillCreated` 仍由 `sharedJsEventEmitter` 提供（`ROADMAP §13:342-343`），删除后回归"确认入账 → 前端缓存刷新"。
 - [ ] **【D-21 = B+C，0 金额允许弹窗】⚠️ 前置必改**：
-  **① 前置（不改则违反 Z2）**：`PendingPromptPolicy:75-80` 的断言排除为**精确相等**（`conflictReason == "USER_ASSERTED"`），**不覆盖** `USER_ASSERTED_AMOUNT_MISSING`（`Matcher:44`）⇒ 直接移除 `ZERO_AMOUNT` 会让**断言通道 + 金额缺失**条目弹出 ⇒ 须同步扩展为集合/前缀匹配（如 `in setOf("USER_ASSERTED", "USER_ASSERTED_AMOUNT_MISSING")` 或 `startsWith("USER_ASSERTED")`）。
+  > ✅ **2026-09-16 实施前核查裁定（复述阶段，含一处规格漏项）**：
+  >
+  > **🔴 阻断级漏项（规格未提，实读发现）——③ 必须连带给 `et_amount` 挂 `TextWatcher`**
+  > 实测 `PendingConfirmOverlayManager`：`et_amount` 仅出现在 `:299`（findViewById）与 `:354`（读取文本），**`TextWatcher`/`addTextChangedListener` 零命中**；`updateConfirmEnabled` 只在 `:311`（打开）/`:600`（选分类）/`:614`（选账户）被调用。
+  > ⇒ **若只按 ③ 加"金额>0"判据**：0 金额条目打开时按钮**初始即置灰**，而用户输入金额**再无任何时机重算** ⇒ **按钮永久置灰** ⇒ D-21 的"允许弹窗 + 强制补金额"退化为"**允许弹窗但永远确认不了**" ⇒ **功能死锁**。
+  > ⇒ **③ 的必要组成部分 = 挂 `TextWatcher` 触发重算**（非范围外改动）。
+  >
+  > **裁定 (a)｜① 用「前缀匹配」+ 收敛为共享判定函数** ✅
+  > - 不做显式集合，改用 `isUserAssertedConflictReason(reason) = reason?.startsWith("USER_ASSERTED") == true`，与常量同址（`PendingChangeHub.kt`），**Policy 与 Notifier 共用**。
+  > - **依据**：① 语义按**渠道**而非按变体成立（差别只是"AI 是否识别到金额"，"用户点击断言、无支付证据"这一渠道事实不变，而 Z2 排除理由正是基于渠道）；② 实测全仓写 `conflictReason` 的 `USER_ASSERTED*` 取值**只有 2 个**，唯一同前缀的第三处 `"USER_ASSERTED_THROTTLED"`（`Service:2573`）**只流向截图状态码、不写 `conflictReason`** ⇒ 不会过度排除；③ **失败方向更安全** —— 前缀的失败模式是"未来新变体自动纳入静默"（按定义仍属断言通道，排除**正确**），集合的失败模式是"新变体漏加 ⇒ 断言条目弹窗 ⇒ **违反 Z2 且用户可见**"；④ 一次消灭双实现（本项目已 3 次踩"同模式散落多处"）。
+  > - **护栏**：共享函数 KDoc 写死升级条件（若将来出现**应当打扰**的同前缀变体，须改显式集合）+ 测试钉住当前边界。
+  >
+  > **裁定 (b)｜② 清理枚举** ✅
+  > - `grep ZERO_AMOUNT` 全仓**仅 3 处**：定义（`PendingPromptPolicy:30`）/ 唯一产出（`:82`）/ 测试断言（`PendingPromptPolicyTest:108`）。唯一消费方 `PendingConfirmOverlayManager:181` 只读 `reason.wireValue` **打日志、无分支**，RN/JS 零引用 ⇒ 删产出后为**零产出 + 零消费**的死枚举。
+  > - **依据**：与 D-16 的 B1 裁定同构 —— "删掉比保留更干净，避免读者误判虚假组合"。
+  >
+  > **裁定 (c)｜④ 纳入本批** ✅（**零行为变化**，如实标注）
+  > - 实读确认 `PendingReminderNotifier:85-91` 与 Policy **逐字相同**的精确相等判断 ⇒ 同样漏掉变体。但该变体恒带 `amountMinor = 0L`（`:104` KDoc 自述"落 0 金额占位"），被其 `:92-95` 的 0 金额闸拦下 ⇒ **改前改后都是"不通知"，仅日志文案归属不同**。
+  > - **纳入理由**：两者是**同一条 Z2 策略的两个投递渠道**（弹窗 vs 系统通知），判据必须一致；今天恰好等价，但一旦将来有人放开任一闸，**Z2 会在单侧静默失效**。用共享函数一次性消除，代价≈0。
+  > - ⚠️ **不为 ④ 编造判别性用例**（今天不可观测，硬写即假绿）—— 改为测试共享判定函数本身 + 真机判定点＝日志文案归属。**该判断正确，予以认可。**
+  >
+  > **裁定 (d)｜R4 接受改 `PendingConfirmService:71`** ✅
+  > - 抽 `PendingConfirmReadiness.isValidAmount(...)`（纯 Kotlin、可 JVM 单测），让 **UI 判据与服务端校验同一出处**。
+  > - **依据**：这正是本项目反复强调的"单一出处"纪律，杜绝"UI 放行 / 服务拒绝"漂移；且属**纯等价重构**（`1L..MAX_SAFE_MINOR_UNIT` 语义不变，已有用例兜底）。
+  >
+  > **裁定 (e)｜R2（0 金额 `dedupKey = "|0"` 退化）→ 本批不动，单列待办** ⏸
+  > - 现象：AI 失败占位条目 `merchant = null` ⇒ `dedupKey = "|0"` ⇒ 5 分钟内**多笔不同 0 金额条目互相去重**，仅第一条弹窗。
+  > - **裁定**：它与 D-21 的目标**相关但独立** —— 改去重键属"证据去重策略"的另一个语义，需独立设计判断（0 金额时以 `pendingId` 参与键？），混入本批会让 D-21 验证复杂化。⇒ **单列**（已登记 `IMPL_PLAN` §8.9）。**实施方未擅自改，处置正确。**
+
+  **① 前置（不改则违反 Z2）**：`PendingPromptPolicy:75-80` 的断言排除为**精确相等**（`conflictReason == "USER_ASSERTED"`），**不覆盖** `USER_ASSERTED_AMOUNT_MISSING`（实测 `Matcher:102`/`:105`，**非文档所写的 `:41`/`:44`，已漂 61 行**）⇒ 直接移除 `ZERO_AMOUNT` 会让**断言通道 + 金额缺失**条目弹出 ⇒ 须同步扩展（见裁定 (a)：改用共享前缀判定函数）。
   **② 策略**：`PendingPromptPolicy` 移除 `amountMinor <= 0` 的 `ZERO_AMOUNT` 跳过（`:82`）；`SkipReason.ZERO_AMOUNT` 一并清理或保留但不再触发。
   **③ 弹窗**：`PendingConfirmOverlayManager` 确认按钮启用条件由"分类+账户就绪"扩展为"分类+账户+**金额 > 0**"（`updateConfirmEnabled:618-621`）；0 金额给出专用提示文案（现 `sourceText:291-296` 按 `sourceType` 取值，需增设金额缺失分支）。
   **④ 关联核查**：`PendingReminderNotifier:86-87` 存在**完全相同**的 `sourceType == AI_VISION && conflictReason == USER_ASSERTED` 模式 ⇒ 核对是否同样漏掉 `USER_ASSERTED_AMOUNT_MISSING` 变体。
