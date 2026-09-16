@@ -40,7 +40,18 @@ data class CheckoutPageObservation(
      * isVisibleToUser=false，hasCheckoutActionSignal 随之丢失。该标记让检测器
      * 在动作信号缺失时仍能凭类名证据放行，避免页面角色在结算态与浏览态之间抖动。
      */
-    val hasCheckoutClassSemantic: Boolean = false
+    val hasCheckoutClassSemantic: Boolean = false,
+    /**
+     * 页面上的**订单总额**（分）。口径见 `docs/tdd/08_phase4_journey_spec.md` §3.1
+     * （订单总额、分；订单号可见时订单号优先为身份，金额降为校验字段）。
+     *
+     * **null = 无法判定**（页面无货币金额，或存在多金额歧义）⇒ 消费方必须保守处理：
+     * 改造 C / Y4 判据 1 在任一侧为 null 时**沿用旧会话**（宁可少新建，不可误新建）。
+     *
+     * 由 [PageAmountAccumulator] 从**原始**节点文本提取（脱敏会抹掉 ≥3 位数字，
+     * 脱敏后无从取数 —— P2-8 同一根因）。
+     */
+    val finalAmountMinor: Long? = null
 )
 
 enum class CheckoutDetectionRejection(val wireValue: String) {

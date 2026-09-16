@@ -110,26 +110,6 @@ internal object AccessibilityPageSummaryCollector {
         "MarqueeTextView"
     )
 
-    private val finalAmountTerms = listOf(
-        "应付",
-        "实付",
-        "订单金额",
-        "订单总额",
-        "优惠后合计",
-        "优惠后金额",
-        "优惠后应付",
-        "待支付",
-        "待付款",
-        "需付款",
-        "付款金额",
-        // 拼多多确认订单页常见金额标签：折后/券后/大促价/到手价。
-        "折后",
-        "券后",
-        "大促价",
-        "到手价",
-        "拼单价",
-        "单买价"
-    )
     private val checkoutActionTerms = listOf(
         "提交订单",
         "去支付",
@@ -313,7 +293,11 @@ internal object AccessibilityPageSummaryCollector {
         // isProductSpecSelectionLayer 判定，语义门禁不因指纹稳定化而削弱。
         val normalizedText = normalizeTokens(accumulator.signalTokens)
         val lowerText = normalizedText.lowercase(Locale.ROOT)
-        val hasFinalAmountSignal = hasFinalAmountSignal(lowerText)
+        // P2-8：兜底分支不能再看【已脱敏】文本里的数字（3 位以上已被抹成
+        // " number "，¥128.00 → currency number .00 ⇒ 正则不匹配 ⇒ 整链失效）。
+        // 改用同一次遍历从【原始】文本得到的"页面是否存在货币金额"。
+        val hasCurrencyAmount = accumulator.amountAccumulator.hasCurrencyAmount
+        val hasFinalAmountSignal = hasFinalAmountSignal(lowerText, hasCurrencyAmount)
         val hasCheckoutActionSignal = containsAny(lowerText, checkoutActionTerms)
         if (accumulator.textDropped) {
             Log.w(
@@ -358,7 +342,9 @@ internal object AccessibilityPageSummaryCollector {
             windowClass = normalizedWindowClass,
             normalizedTextHash = normalizedTextHash,
             observedAt = observedAt,
-            hasCheckoutClassSemantic = checkoutClassSemantic
+            hasCheckoutClassSemantic = checkoutClassSemantic,
+            // 订单总额（分）；null = 无法判定（无金额/多金额歧义）⇒ 调用方保守沿用旧会话。
+            finalAmountMinor = accumulator.amountAccumulator.resolveFinalAmountMinor()
         )
     }
 
@@ -496,16 +482,25 @@ internal object AccessibilityPageSummaryCollector {
         return token.take(MAX_TOKEN_LENGTH).takeIf { it.isNotBlank() }
     }
 
-    private fun hasFinalAmountSignal(text: String): Boolean {
-        if (containsAny(text, finalAmountTerms)) {
+    /**
+     * 最终金额信号。
+     *
+     * @param text 已归一化（含脱敏）的信号文本。
+     * @param hasCurrencyAmount 页面是否出现过货币金额。**必须来自原始文本提取**
+     *   （[PageAmountExtractor]）——脱敏把 ≥3 位连续数字抹成 ` number `，若仍从
+     *   [text] 里找数字，`¥128.00` 这类百元订单会系统性漏判（P2-8：PDD 无标签
+     *   结算页 ≥¥100 订单整链失效）。
+     */
+    internal fun hasFinalAmountSignal(text: String, hasCurrencyAmount: Boolean): Boolean {
+        if (containsAny(text, FINAL_AMOUNT_TERMS)) {
             return true
         }
         // 拼多多确认订单页可能只出现“提交订单 + ¥55.70”，没有“实付/合计”等标签；
         // 这种情况下把“提交/支付动作 + 货币金额”作为最终金额信号。
-        if (
-            containsAny(text, checkoutActionTerms) &&
-            Regex("""currency\s*[0-9]{1,9}(?:\.[0-9]{1,2})?""").containsMatchIn(text)
-        ) {
+        // ⚠️ 用**非严格**的 hasCurrencyAmount（任一候选存在），不用提取出的单值：
+        // 提取在“多金额歧义”时返回 null，若用它会让“动作词 + 两个小额金额”的
+        // 页面由 true 变 false —— 那才是新引入的漏判。
+        if (containsAny(text, checkoutActionTerms) && hasCurrencyAmount) {
             return true
         }
         return (text.contains("合计") || text.contains("总计")) &&
@@ -602,6 +597,9 @@ internal object AccessibilityPageSummaryCollector {
 
         /** 指纹通道：只含稳定文本（易变位置剔除后）与语义标记。 */
         val fingerprintTokens = ArrayList<String>()
+
+        /** 页面金额（分）候选累积器；由 [addText] 逐节点喂**原始**文本。 */
+        val amountAccumulator = PageAmountAccumulator()
         var visitedNodes: Int = 0
         var sensitive: Boolean = false
 
@@ -640,12 +638,17 @@ internal object AccessibilityPageSummaryCollector {
             val normalized = sensitiveNumberPattern.replace(value, " number ")
                 .take(MAX_TOKEN_LENGTH)
             signalTokens += normalized
+            // 页面金额（分）提取：必须在**脱敏之前**喂原始文本 —— 脱敏会把
+            // 3 位以上连续数字抹成 " number "（P2-8 的根因），脱敏之后已无从取数。
+            amountAccumulator.observe(value)
 
-            // L3 易变检测（护栏前置）：命中 finalAmountTerms 语义的 token
+            // L3 易变检测（护栏前置）：命中"最终金额"语义的 token
             // 永不进入易变判定——结算页应付金额是静态文本不会轮播，轮播的
             // 是商品页到手价/折扣；金额 token 留在指纹中保证换商品必触发
             // 新订单边界。轮播容器子树（rotating）已在上游跳过，不会到这。
-            val hitsFinalAmount = finalAmountTerms.any { value.contains(it) }
+            // 判据必须与金额提取同源（PageAmountExtractor.isFinalAmountToken），
+            // 否则两通道判据分叉即 P8"信号通道认、指纹通道不认"。
+            val hitsFinalAmount = PageAmountExtractor.isFinalAmountToken(value)
             val volatile = !hitsFinalAmount &&
                 volatileTracker.observeAndCheck(scopeKey, positionKey, normalized)
             if (!volatile) {

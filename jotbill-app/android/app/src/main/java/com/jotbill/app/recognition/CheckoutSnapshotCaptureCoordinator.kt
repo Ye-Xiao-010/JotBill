@@ -357,6 +357,27 @@ internal class CheckoutSnapshotCaptureCoordinator(
         private const val EVENT_DISPATCH_TIMEOUT_MILLIS = 5_000L
         /** 熔断后"跳过观察事件"日志的采样间隔，兼顾可观测与防刷屏。 */
         private const val CLOSED_EVENT_SKIP_LOG_INTERVAL_MILLIS = 5_000L
+
+        /**
+         * 会话沿用上限（改造 C / Y4 判据 2）。// 可调常量
+         *
+         * 初值 2 分钟：覆盖"正常结算 → 支付"全流程，且短于会话上限 5 分钟。
+         * 超龄 ⇒ 旧会话**不被沿用** ⇒ 新建会话。
+         *
+         * 🔴 **不得与 `PAYMENT_PROCESS_TTL_MILLIS` 联动**（`IMPL_PLAN` §2.3 C-2）——
+         * 两者**初值同为 2 分钟，但语义与起算点完全不同**：
+         *
+         * | 常量 | 语义 | 起算点 | 超时后果 |
+         * |---|---|---|---|
+         * | `MAX_SESSION_REUSE_MILLIS`（本常量） | **会话沿用上限** | `ActiveCheckout.sessionCreatedAt`（会话建立） | 旧会话不被沿用 ⇒ **新建会话** |
+         * | `PAYMENT_PROCESS_TTL_MILLIS`（V-3 引入，§2.2 B-4） | **支付过程槽位存活时长** | **搬入时刻**（前台切换） | 图**过期释放** ⇒ 支付成功时无图 ⇒ 落待确认 |
+         *
+         * ⇒ "用户在结算页停留很久"时两者会**同时**参与判定，代价方向却相反
+         * （前者拆会话、后者丢图）⇒ **改一个不要顺手改另一个**。
+         * ⇒ 本常量属"过渡期启发式"，journey 落地后本判据整体退役（金额提取保留），
+         *   故**不再追加真机测量投入**（`IMPL_PLAN` §2.3 C-2 末段）。
+         */
+        internal const val MAX_SESSION_REUSE_MILLIS = 2 * 60 * 1000L
         private const val MAIN_HANDLER_UNAVAILABLE = "MAIN_HANDLER_UNAVAILABLE"
         private const val EVENT_PROCESSING_FAILED = "EVENT_PROCESSING_FAILED"
         private const val SCREENSHOT_HANDLER_UNAVAILABLE = "SCREENSHOT_HANDLER_UNAVAILABLE"
@@ -383,7 +404,14 @@ internal class CheckoutSnapshotCaptureCoordinator(
         val sessionId: String,
         val slotId: String,
         val page: StableCheckoutPage,
-        val captureTarget: SnapshotCaptureTarget
+        val captureTarget: SnapshotCaptureTarget,
+        /**
+         * 会话建立时刻（改造 C / Y4 判据 2 的**起算点**）。
+         *
+         * 沿用旧会话（`copy(page = page)`）时**不刷新** —— 它衡量的是"这个会话
+         * 已被沿用了多久"，而不是"页面最近何时稳定"。
+         */
+        val sessionCreatedAt: Long
     ) {
         val key: CaptureKey
             get() = CaptureKey(sessionId, page.observation.pageFingerprint)
@@ -1095,7 +1123,8 @@ internal class CheckoutSnapshotCaptureCoordinator(
                             observation = resolvedContext.observation,
                             stableAt = nowMillis()
                         ),
-                        captureTarget = SnapshotCaptureTarget.USER_RETRY
+                        captureTarget = SnapshotCaptureTarget.USER_RETRY,
+                        sessionCreatedAt = nowMillis()
                     )
                     userRetryContext = resolvedContext.copy(sessionId = sessionId)
                 }
@@ -1391,6 +1420,20 @@ internal class CheckoutSnapshotCaptureCoordinator(
         if (previous.captureTarget != SnapshotCaptureTarget.CHECKOUT) {
             return false
         }
+        // 改造 C / Y4 判据 1（金额）：两侧都能判定且不相等 ⇒ 真的是另一笔订单 ⇒ 不沿用。
+        // 任一侧为 null（页面无货币金额，或存在多金额歧义）⇒ 视为"无法判定" ⇒
+        // **保守沿用**（§2.3 R3：宁可少新建，不可误新建）。
+        val previousAmount = previous.page.observation.finalAmountMinor
+        val currentAmount = observation.finalAmountMinor
+        if (previousAmount != null && currentAmount != null && previousAmount != currentAmount) {
+            return false
+        }
+        // 改造 C / Y4 判据 2（时间上限）：会话已沿用超龄 ⇒ 不再沿用 ⇒ 新建会话。
+        // 起算点 = sessionCreatedAt（沿用期间不刷新）。⚠️ 与 PAYMENT_PROCESS_TTL_MILLIS
+        // 同值不同义、不得联动，见 MAX_SESSION_REUSE_MILLIS 的 KDoc。
+        if (nowMillis() - previous.sessionCreatedAt > MAX_SESSION_REUSE_MILLIS) {
+            return false
+        }
         return try {
             buffer.currentCandidates(previous.slotId).any { candidate ->
                 candidate.sessionId == previous.sessionId
@@ -1486,6 +1529,11 @@ internal class CheckoutSnapshotCaptureCoordinator(
         // 若旧会话已有未消费且未过期的截图，沿用旧会话与槽位：既避免把"已截到的图"
         // 在提交订单前清零（真机上曾导致支付交接只剩 NO_BUFFERED_SNAPSHOT），
         // 也让后续截图落在同一会话内由 buffer 按指纹去重。
+        //
+        // ⚠️ Y4 判据 1/2 落在 hasRetainableCandidate 内 ⇒ 只在指纹变化时才参与。
+        // 有人会怀疑"指纹不变但金额变 ⇒ 仍沿用"是漏洞 —— **该组合不可达，不是缺陷**：
+        // 指纹与金额同源于同一份页面文本，文本变则指纹必变；"指纹不变却金额变"
+        // 要求同一份文本同时含两个不同金额。⇒ 勿为此"顺手修"（用户 2026-09-16 评估）。
         val driftWithinSameCheckout = previous != null &&
             previous.page.observation.shoppingPackage == observation.shoppingPackage &&
             previous.page.observation.pageFingerprint != observation.pageFingerprint &&
@@ -1511,7 +1559,8 @@ internal class CheckoutSnapshotCaptureCoordinator(
                 sessionId = sessionIdFactory(),
                 slotId = slotIdFor(observation.shoppingPackage),
                 page = page,
-                captureTarget = SnapshotCaptureTarget.CHECKOUT
+                captureTarget = SnapshotCaptureTarget.CHECKOUT,
+                sessionCreatedAt = nowMillis()
             )
         } else {
             if (driftWithinSameCheckout) {
