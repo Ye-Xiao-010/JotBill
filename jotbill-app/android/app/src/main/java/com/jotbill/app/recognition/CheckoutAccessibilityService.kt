@@ -473,6 +473,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
         activeService = this
         configureSnapshotCaptureResultListener()
         configurePurchaseIntentResultConsumer()
+        configurePaymentSignalOrphanSink()
         initializePaymentMatcher()
         initializeAiClient()
         setObservationListener(snapshotCaptureCoordinator)
@@ -1346,6 +1347,43 @@ class CheckoutAccessibilityService : AccessibilityService() {
     // 重命名为 Internal 后缀，避免与 Companion 中同名的 @JvmStatic 方法产生 JVM 签名冲突。
     private fun setPurchaseIntentResultConsumerInternal(consumer: PurchaseIntentResultCallback?) {
         purchaseIntentResultConsumer = consumer
+    }
+
+    /**
+     * 接入改造 B-3 / E-2 的孤儿落库出口：支付结果无法自动归属（0 命中 / Ambiguous）
+     * 或支付过程槽位缺图（PAYMENT_PROCESS_SNAPSHOT_MISSING）时，统一落待确认，
+     * 不静默丢弃。协调器是纯内存调度器，落库必须由本层完成。
+     */
+    private fun configurePaymentSignalOrphanSink() {
+        purchaseIntentCoordinator?.setPaymentSignalOrphanSink { signal, conflictReason, _, sessionIds ->
+            val matcher = synchronized(aiLifecycleLock) { paymentMatcher }
+            if (matcher == null) {
+                Log.w(
+                    TAG,
+                    "支付信号无法落待确认(匹配器不可用): reason=$conflictReason, " +
+                        "amount=${signal.amountMinor}"
+                )
+                return@setPaymentSignalOrphanSink
+            }
+            val scope = synchronized(aiLifecycleLock) { matchingScope } ?: evidenceFallbackScope
+            scope.launch {
+                try {
+                    matcher.recordOrphanPaymentSignal(
+                        signal.toPaymentNotificationFallbackSignal(),
+                        sourceType = "ACCESSIBILITY",
+                        conflictReason = conflictReason,
+                        sessionIds = sessionIds
+                    )
+                    Log.i(
+                        TAG,
+                        "支付信号已转待确认: reason=$conflictReason, amount=${signal.amountMinor}, " +
+                            "sessions=${sessionIds.size}"
+                    )
+                } catch (error: RuntimeException) {
+                    Log.w(TAG, "支付信号落待确认失败", error)
+                }
+            }
+        }
     }
 
     /**
@@ -2886,6 +2924,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
             }
             configureSnapshotCaptureResultListener()
             configurePurchaseIntentResultConsumer()
+            configurePaymentSignalOrphanSink()
             setObservationListener(snapshotCaptureCoordinator)
             Log.i(TAG, "截图协调器重建完成，截图能力已恢复")
             true
@@ -3136,10 +3175,35 @@ class CheckoutAccessibilityService : AccessibilityService() {
         }
         checkoutCaptureOverlayManager?.onObservationEvent(event)
         try {
-            purchaseIntentCoordinator?.onEvent(event)
+            // §8.3 sessionId 传递链路第③环：会话标识是截图协调器处理本帧时的决策
+            // （新建 / 漂移沿用 / 支付返回恢复），因此只能在它之后解析并补进事件，
+            // 购买意图协调器才拿得到会话标识（改造 B/E 的键空间来源）。
+            purchaseIntentCoordinator?.onEvent(resolveSessionIdOf(event))
         } catch (error: RuntimeException) {
             Log.w(TAG, "分发购买意图事件失败", error)
         }
+    }
+
+    /**
+     * 给稳定帧补上本帧对应会话的 sessionId（§8.3）。
+     *
+     * 解析不到时**原样返回**（sessionId 保持 null）：该帧由截图协调器判定为"不建立/不沿用
+     * 会话"（交接过渡窗内被有意忽略、协调器已关闭），此时既不得凭空造会话，也不得
+     * 回退上一帧的会话——那正是改造 E 要消除的错误归属。
+     */
+    private fun resolveSessionIdOf(event: CheckoutObservationEvent): CheckoutObservationEvent {
+        if (event !is CheckoutObservationEvent.Stable) {
+            return event
+        }
+        val observation = event.page.observation
+        val sessionId = snapshotCaptureCoordinator?.currentCheckoutSessionId(
+            shoppingPackage = observation.shoppingPackage,
+            pageFingerprint = observation.pageFingerprint
+        )
+        if (sessionId.isNullOrBlank()) {
+            return event
+        }
+        return CheckoutObservationEvent.Stable(event.page.copy(sessionId = sessionId))
     }
 }
 

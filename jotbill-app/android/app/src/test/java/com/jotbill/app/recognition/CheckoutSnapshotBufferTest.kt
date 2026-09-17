@@ -738,4 +738,201 @@ class CheckoutSnapshotBufferTest {
         assertTrue(ready is CheckoutAiTriggerResult.Ready)
         (ready as CheckoutAiTriggerResult.Ready).snapshot.release()
     }
+
+    // ---------- 改造 B：支付过程槽位 ----------
+
+    /**
+     * R1 红线（搬移只摘引用、不抹零）的契约测试：
+     * 搬入后源槽位无该候选，但目标槽位取回的字节**逐字节等于原始内容**（非全零）。
+     * 若搬移路径误走会 release 的摘除（removeCandidate + release），本用例必红。
+     */
+    @Test
+    fun moveToPaymentProcessDetachesReferenceWithoutZeroingBytes() {
+        val f = Fixture()
+        val bytes = ByteArray(16) { 1 }
+        f.buffer.store(captureRequest(bytes = bytes))
+
+        val result = f.buffer.moveToPaymentProcess(SLOT, SESSION, FP_A)
+        assertTrue(result is PaymentProcessMoveResult.Moved)
+        result as PaymentProcessMoveResult.Moved
+        assertEquals(paymentProcessSlotId(SESSION), result.targetSlotId)
+        assertEquals(FP_A, result.pageFingerprint)
+
+        // 源槽位：引用已摘除
+        assertTrue(f.buffer.currentCandidates(SLOT).isEmpty())
+
+        // 目标槽位：可取回，字节与原始内容逐字节一致（不是全零、不是空数组）
+        val consume = f.buffer.consumeForAi(result.targetSlotId, PurchaseIntent.PAYMENT_RESULT, null)
+        assertTrue(consume is CheckoutAiTriggerResult.Ready)
+        consume as CheckoutAiTriggerResult.Ready
+        assertTrue(
+            "搬移不得抹零：目标槽位字节必须逐字节等于原始内容",
+            consume.snapshot.imageBytes.contentEquals(bytes)
+        )
+        (consume as CheckoutAiTriggerResult.Ready).snapshot.release()
+    }
+
+    /**
+     * 两槽位 TTL 分离（改造 B-4）：结算页槽位用会话上限（5 分钟），支付过程槽位
+     * 自搬入时刻起算支付 TTL（2 分钟）—— 搬入必须**显式重置** expiresAt，
+     * 不得沿用源候选"store 时刻 + 结算页 TTL"的旧值。
+     */
+    @Test
+    fun moveResetsExpiresAtToMoveTimePlusPaymentTtl() {
+        val f = Fixture(ttl = SESSION_TTL_MILLIS)
+        f.buffer.store(captureRequest())
+        val result = f.buffer.moveToPaymentProcess(SLOT, SESSION, FP_A)
+        assertTrue(result is PaymentProcessMoveResult.Moved)
+        assertEquals(START_NOW + PAYMENT_PROCESS_TTL_MILLIS, (result as PaymentProcessMoveResult.Moved).expiresAt)
+    }
+
+    /**
+     * 一单一图幂等：同一 sessionId 的重复交接（源槽位已空）不得在支付槽位里
+     * 造出第二张。临时去掉幂等 ⇒ 本用例必红（第二张覆盖/追加）。
+     */
+    @Test
+    fun repeatedMoveForSameSessionKeepsSinglePicture() {
+        val f = Fixture()
+        f.buffer.store(captureRequest())
+        assertTrue(f.buffer.moveToPaymentProcess(SLOT, SESSION, FP_A) is PaymentProcessMoveResult.Moved)
+        val second = f.buffer.moveToPaymentProcess(SLOT, SESSION, FP_A)
+        assertTrue(second is PaymentProcessMoveResult.AlreadyOccupied)
+
+        // 消费时槽内只有一张，requestKey 也只生成一次
+        val consume = f.buffer.consumeForAi(paymentProcessSlotId(SESSION), PurchaseIntent.PAYMENT_RESULT, null)
+        assertTrue(consume is CheckoutAiTriggerResult.Ready)
+        (consume as CheckoutAiTriggerResult.Ready).snapshot.release()
+    }
+
+    /**
+     * 源槽位可并存手动 + 自动两张（SlotState 双字段）：第一次搬走自动后，
+     * 第二次交接事件若把手动也搬进同一支付槽位 ⇒ 歧义。一单一图不变式必须挡下。
+     */
+    @Test
+    fun secondMoveOfRemainingManualCandidateIsRejectedByIdempotency() {
+        val f = Fixture()
+        val automaticBytes = ByteArray(8) { 1 }
+        val manualBytes = ByteArray(8) { 2 }
+        f.buffer.store(captureRequest(fingerprint = FP_A, bytes = automaticBytes))
+        f.buffer.store(
+            captureRequest(
+                fingerprint = FP_B,
+                bytes = manualBytes,
+                sourceReason = SnapshotSourceReason.MANUAL_CAPTURE,
+                target = SnapshotCaptureTarget.USER_RETRY
+            )
+        )
+        assertTrue(f.buffer.moveToPaymentProcess(SLOT, SESSION, FP_A) is PaymentProcessMoveResult.Moved)
+        // 手动候选仍在源槽位，第二次搬运必须被幂等挡下
+        assertTrue(f.buffer.moveToPaymentProcess(SLOT, SESSION, FP_B) is PaymentProcessMoveResult.AlreadyOccupied)
+
+        val consume = f.buffer.consumeForAi(paymentProcessSlotId(SESSION), PurchaseIntent.PAYMENT_RESULT, null)
+        assertTrue(consume is CheckoutAiTriggerResult.Ready)
+        consume as CheckoutAiTriggerResult.Ready
+        assertEquals(FP_A, consume.snapshot.pageFingerprint)
+        assertTrue(consume.snapshot.imageBytes.contentEquals(automaticBytes))
+        consume.snapshot.release()
+    }
+
+    /** 指纹漂移（京东/拼多多常态）：交接指纹与槽内候选不同 ⇒ 仍按自动优先搬走，不得漏搬。 */
+    @Test
+    fun moveWithDriftedFingerprintStillMovesAutomaticCandidate() {
+        val f = Fixture()
+        val bytes = ByteArray(16) { 3 }
+        f.buffer.store(captureRequest(fingerprint = FP_A, bytes = bytes))
+        val result = f.buffer.moveToPaymentProcess(SLOT, SESSION, FP_B)
+        assertTrue(result is PaymentProcessMoveResult.Moved)
+        assertEquals(FP_A, (result as PaymentProcessMoveResult.Moved).pageFingerprint)
+
+        val consume = f.buffer.consumeForAi(paymentProcessSlotId(SESSION), PurchaseIntent.PAYMENT_RESULT, null)
+        assertTrue(consume is CheckoutAiTriggerResult.Ready)
+        (consume as CheckoutAiTriggerResult.Ready).snapshot.release()
+    }
+
+    /** 非 CHECKOUT 角色候选不搬：PAYMENT_RESULT 消费受角色守卫，搬了也消费不掉。 */
+    @Test
+    fun moveSkipsNonCheckoutRoleCandidates() {
+        val f = Fixture()
+        f.buffer.store(
+            captureRequest(
+                fingerprint = FP_A,
+                pageRole = CheckoutPageRole.UNKNOWN,
+                sourceReason = SnapshotSourceReason.MANUAL_CAPTURE,
+                target = SnapshotCaptureTarget.USER_RETRY
+            )
+        )
+        val result = f.buffer.moveToPaymentProcess(SLOT, SESSION, FP_A)
+        assertEquals(
+            PaymentProcessMoveRejection.NO_MOVABLE_CANDIDATE,
+            (result as PaymentProcessMoveResult.Rejected).reason
+        )
+        // 源槽位原样保留（未摘除、未释放）
+        assertEquals(1, f.buffer.currentCandidates(SLOT).size)
+    }
+
+    @Test
+    fun moveRejectsSessionMismatch() {
+        val f = Fixture()
+        f.buffer.store(captureRequest(sessionId = SESSION_2))
+        val result = f.buffer.moveToPaymentProcess(SLOT, SESSION)
+        assertEquals(
+            PaymentProcessMoveRejection.SESSION_MISMATCH,
+            (result as PaymentProcessMoveResult.Rejected).reason
+        )
+    }
+
+    @Test
+    fun moveFromMissingSourceSlotIsRejected() {
+        val f = Fixture()
+        val result = f.buffer.moveToPaymentProcess(SLOT, SESSION)
+        assertEquals(
+            PaymentProcessMoveRejection.NO_SOURCE_SLOT,
+            (result as PaymentProcessMoveResult.Rejected).reason
+        )
+    }
+
+    /** 支付槽位已消费后再搬运 ⇒ ALREADY_CONSUMED（复活无意义，只会得到 AlreadyTriggered）。 */
+    @Test
+    fun moveAfterPaymentSlotConsumedIsRejected() {
+        val f = Fixture()
+        f.buffer.store(captureRequest())
+        assertTrue(f.buffer.moveToPaymentProcess(SLOT, SESSION, FP_A) is PaymentProcessMoveResult.Moved)
+        val consume = f.buffer.consumeForAi(paymentProcessSlotId(SESSION), PurchaseIntent.PAYMENT_RESULT, null)
+        assertTrue(consume is CheckoutAiTriggerResult.Ready)
+        (consume as CheckoutAiTriggerResult.Ready).snapshot.release()
+
+        f.buffer.store(captureRequest(fingerprint = FP_B))
+        val again = f.buffer.moveToPaymentProcess(SLOT, SESSION, FP_B)
+        assertEquals(
+            PaymentProcessMoveRejection.ALREADY_CONSUMED,
+            (again as PaymentProcessMoveResult.Rejected).reason
+        )
+    }
+
+    /** 支付过程槽位按 2 分钟到期回收，且不误伤结算页槽位的其余候选。 */
+    @Test
+    fun paymentSlotExpiresAtPaymentTtlWithoutTouchingCheckoutSlot() {
+        val f = Fixture(ttl = SESSION_TTL_MILLIS)
+        val movedBytes = ByteArray(8) { 4 }
+        val manualBytes = ByteArray(8) { 5 }
+        f.buffer.store(captureRequest(fingerprint = FP_A, bytes = movedBytes))
+        assertTrue(f.buffer.moveToPaymentProcess(SLOT, SESSION, FP_A) is PaymentProcessMoveResult.Moved)
+        f.buffer.store(
+            captureRequest(
+                fingerprint = FP_B,
+                bytes = manualBytes,
+                sourceReason = SnapshotSourceReason.MANUAL_CAPTURE,
+                target = SnapshotCaptureTarget.USER_RETRY
+            )
+        )
+
+        f.advance(PAYMENT_PROCESS_TTL_MILLIS + 1_000L)
+        // 支付槽位已被 purgeExpired 释放
+        assertTrue(f.buffer.currentCandidates(paymentProcessSlotId(SESSION)).isEmpty())
+        // 结算页槽位的手动候选（会话级 TTL）不受影响
+        val remaining = f.buffer.currentCandidates(SLOT)
+        assertEquals(listOf(FP_B), remaining.map { it.pageFingerprint })
+        assertTrue(remaining.single().imageBytes.contentEquals(manualBytes))
+        remaining.forEach { it.release() }
+    }
 }

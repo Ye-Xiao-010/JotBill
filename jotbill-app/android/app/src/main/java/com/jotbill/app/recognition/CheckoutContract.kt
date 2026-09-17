@@ -43,6 +43,11 @@ enum class CheckoutPageRole(val storageValue: String) {
 enum class PurchaseIntent(val wireValue: String) {
     SUBMIT_ACTION("SUBMIT_ACTION"),
     PAYMENT_APP_HANDOFF("PAYMENT_APP_HANDOFF"),
+    /**
+     * 自动通道的唯一 AI 触发器（版本 B / 改造 A-1，批 V-3 先落地消费侧：
+     * 归属判定 → `payment:<sessionId>` 取图 → 派 AI；服务层结果页接线在批 V-4）。
+     */
+    PAYMENT_RESULT("PAYMENT_RESULT"),
     PAYMENT_NOTIFICATION_FALLBACK("PAYMENT_NOTIFICATION_FALLBACK"),
     USER_RETRY("USER_RETRY")
 }

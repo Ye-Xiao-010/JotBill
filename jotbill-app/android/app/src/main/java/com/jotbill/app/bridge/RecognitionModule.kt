@@ -244,8 +244,13 @@ class RecognitionModule(
     /** 把无障碍服务的拒绝原因映射为 RN 契约可识别的错误码。 */
     private fun mapRejectionCode(reasonCode: String): String = when (reasonCode) {
         "SERVICE_NOT_CONNECTED", "COORDINATOR_CLOSED" -> "SERVICE_UNAVAILABLE"
+        // PAYMENT_HANDOFF_ALREADY_ATTEMPTED 已随改造 B-2 删除（交接改为搬运后无单次门禁）。
         "NO_CHECKOUT_CONTEXT", "NOT_CHECKOUT_PAGE", "SENSITIVE_PAGE",
-        "BUFFER_UNAVAILABLE", "PAYMENT_HANDOFF_ALREADY_ATTEMPTED" -> "SESSION_EXPIRED"
+        "BUFFER_UNAVAILABLE" -> "SESSION_EXPIRED"
+        // 改造 B-3/E-2：支付结果无法自动归属（0 命中/歧义/信号缺失）⇒ 会话不可用。
+        "INVALID_PAYMENT_RESULT",
+        "PAYMENT_RESULT_NO_MATCHING_SESSION",
+        "PAYMENT_RESULT_AMBIGUOUS_SESSION" -> "SESSION_EXPIRED"
         "REQUEST_BUDGET_EXHAUSTED" -> "AI_BUDGET_EXCEEDED"
         "INVALID_PAYMENT_NOTIFICATION", "PAYMENT_NOTIFICATION_ALREADY_ATTEMPTED" ->
             "DUPLICATE_TRANSACTION"

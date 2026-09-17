@@ -81,10 +81,23 @@ enum class CheckoutInvalidationReason(val wireValue: String) {
     SERVICE_DESTROYED("SERVICE_DESTROYED")
 }
 
-/** 经过稳定窗口确认的结算页，不包含截图、商户推断或网络请求。 */
+/**
+ * 经过稳定窗口确认的结算页，不包含截图、商户推断或网络请求。
+ *
+ * @property sessionId 本帧对应的**会话标识**（§8.3 sessionId 传递链路）。
+ *
+ * 该值**只能由截图协调器给出**：会话是 `CheckoutSnapshotCaptureCoordinator.handleStable`
+ * 建立/沿用的（新建取 `sessionIdFactory()`、漂移沿用旧会话、支付返回恢复旧会话），
+ * 因此必须等它处理完本帧之后才能解析，见 `currentCheckoutSessionId`。
+ *
+ * **null = 本次稳定帧未建立任何会话**（交接过渡窗内被有意忽略、协调器已关闭）。
+ * 消费方不得凭空造会话，也不得回退到"上一帧的会话"——那正是改造 E 要消除的错误归属。
+ * 默认值 null 只为兼容不关心会话的既有构造点（检测器纯判据与截图预检测试）。
+ */
 data class StableCheckoutPage(
     val observation: CheckoutPageObservation,
-    val stableAt: Long
+    val stableAt: Long,
+    val sessionId: String? = null
 )
 
 /** 页面离开结算候选或服务生命周期中断时发送的失效事件。 */

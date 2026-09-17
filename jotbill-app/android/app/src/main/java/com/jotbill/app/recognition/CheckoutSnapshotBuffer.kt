@@ -6,16 +6,43 @@ import android.util.Log
 import java.util.UUID
 
 /**
- * 结算截图缓冲 TTL。结算页稳定截图后用户还需经过收银台、选支付方式、输密码等
- * 环节，实际切到支付应用常超过 30 秒；过短会导致支付交接时快照已过期
- * （NO_BUFFERED_SNAPSHOT），AI 无法派发。与支付证据收敛窗口对齐取 2 分钟。
+ * 结算页槽位存活时长（会话上限，5 分钟）。
+ *
+ * 结算页稳定截图后用户还需经过收银台、选支付方式、输密码等环节，且可能在结算页
+ * 比价、等优惠券、犹豫 —— 该槽位"等的是用户决定"，停留数分钟是常态。
+ * TTL 只作内存兜底，"当前结算页最新状态"主要靠新截图覆盖（见 `store()`）。
+ *
+ * ⚠️ 与 [PAYMENT_PROCESS_TTL_MILLIS] **同值域不同义、不得联动修改**：
+ *
+ * | 常量 | 起算点 | 超时后果 |
+ * |---|---|---|
+ * | 本常量（结算页槽位） | `store()` 时刻 | 结算页快照过期 ⇒ 支付交接时**无图可搬** |
+ * | [PAYMENT_PROCESS_TTL_MILLIS]（支付过程槽位） | **搬入时刻** | 支付成功时**无图可送** ⇒ 落待确认 |
+ *
+ * 若把两者统一为 2 分钟，会出现"用户在结算页停留 >2 分钟后才提交订单 ⇒ 交接时结算页
+ * 槽位已空 ⇒ 支付成功时无图 ⇒ 落待确认"的回归 —— TTL 分离要修的正是这个形态。
  */
-private const val DEFAULT_SNAPSHOT_TTL_MILLIS = 120_000L
+internal const val SESSION_TTL_MILLIS = 5 * 60 * 1000L
+
+/**
+ * 支付过程槽位存活时长（2 分钟，自**搬入时刻**起算）。
+ *
+ * 语义是"事件驱动 + 兜底超时"：主终点是支付结果页到达（消费即释放），本 TTL 只兜底
+ * 慢支付（换卡 / 验证码延迟）。超时后果 = 图过期 ⇒ 支付成功时无图 ⇒ 落待确认（安全侧）。
+ */
+internal const val PAYMENT_PROCESS_TTL_MILLIS = 120_000L
 internal const val CHECKOUT_SNAPSHOT_SLOT_PREFIX = "shopping-package:"
+
+/** 支付过程槽位前缀：key = `payment:<sessionId>`（一单一图，见 [CheckoutSnapshotBuffer.moveToPaymentProcess]）。 */
+internal const val PAYMENT_PROCESS_SLOT_PREFIX = "payment:"
 
 /** 结算截图和购买意图必须共用同一购物包槽位命名。 */
 internal fun checkoutSnapshotSlotId(shoppingPackage: String): String =
     CHECKOUT_SNAPSHOT_SLOT_PREFIX + shoppingPackage
+
+/** 支付过程槽位命名：按会话键控，与结算页槽位（按购物包）不同名，二者不会互相覆盖。 */
+internal fun paymentProcessSlotId(sessionId: String): String =
+    PAYMENT_PROCESS_SLOT_PREFIX + sessionId
 
 /**
  * 仅存在于内存中的结算页截图。
@@ -96,6 +123,51 @@ sealed class SnapshotStoreResult {
     data class Unchanged(val snapshot: CheckoutSnapshot) : SnapshotStoreResult()
 
     data class Rejected(val reason: SnapshotStoreRejection) : SnapshotStoreResult()
+}
+
+/** 支付过程槽位搬运（改造 B-1）的失败原因；成功路径见 [PaymentProcessMoveResult.Moved]。 */
+enum class PaymentProcessMoveRejection(val wireValue: String) {
+    INVALID_ARGUMENT("INVALID_ARGUMENT"),
+    NO_SOURCE_SLOT("NO_SOURCE_SLOT"),
+    SESSION_MISMATCH("SESSION_MISMATCH"),
+    NO_MOVABLE_CANDIDATE("NO_MOVABLE_CANDIDATE"),
+    CANDIDATE_EXPIRED("CANDIDATE_EXPIRED"),
+    ALREADY_CONSUMED("ALREADY_CONSUMED")
+}
+
+/**
+ * 结算页槽位 → 支付过程槽位的搬运结果。
+ *
+ * 只暴露元数据、**不携带图片字节**：`CheckoutBufferGateway` 是 public 接口而
+ * [CheckoutSnapshotReference] 是 internal 类型，故此处不能直接返回引用；消费侧本就按
+ * `intent` + 槽位定位，无需引用。
+ */
+sealed class PaymentProcessMoveResult {
+    /** 搬运成功；`expiresAt` 已按"搬入时刻 + 支付过程 TTL"显式重置（改造 B-4）。 */
+    data class Moved(
+        val sessionId: String,
+        val targetSlotId: String,
+        val pageFingerprint: String,
+        val sourceReason: SnapshotSourceReason,
+        val expiresAt: Long
+    ) : PaymentProcessMoveResult()
+
+    /**
+     * 目标槽位已有未消费候选：一单一图不变式生效，本次**不搬第二张**（幂等成功）。
+     *
+     * 该分支真实存在：同一 sessionId 可收到多次支付交接事件（服务侧补发、多个构造点），
+     * 且源槽位结构上可并存手动 + 自动两张候选 —— 首次只摘一张，第二次交接会再搬一次。
+     */
+    data class AlreadyOccupied(
+        val sessionId: String,
+        val targetSlotId: String
+    ) : PaymentProcessMoveResult()
+
+    data class Rejected(val reason: PaymentProcessMoveRejection) : PaymentProcessMoveResult()
+
+    /** true 表示支付过程槽位当前持有本会话的图（含幂等跳过的情形）。 */
+    val occupied: Boolean
+        get() = this is Moved || this is AlreadyOccupied
 }
 
 enum class SnapshotConsumeRejection(val wireValue: String) {
@@ -200,7 +272,7 @@ internal class MainLooperSnapshotExpirationScheduler : SnapshotExpirationSchedul
  * 意图时才会产生请求键并消费快照，普通观察、通知重放和 RN 重渲染无法触发上传。
  */
 class CheckoutSnapshotBuffer internal constructor(
-    private val snapshotTtlMillis: Long = DEFAULT_SNAPSHOT_TTL_MILLIS,
+    private val snapshotTtlMillis: Long = SESSION_TTL_MILLIS,
     private val nowMillis: () -> Long = { System.currentTimeMillis() },
     private val snapshotIdFactory: () -> String = { UUID.randomUUID().toString() },
     private val expirationScheduler: SnapshotExpirationScheduler = MainLooperSnapshotExpirationScheduler(),
@@ -546,6 +618,184 @@ logSink.w(
         ) {
             state.handoffPageFingerprint = null
         }
+    }
+
+    /**
+     * 把结算页槽位中"本会话的候选图"搬进支付过程专用槽位（改造 B-1）。
+     *
+     * - 目的：让图在"用户进入支付应用 → 完成支付"整段期间**不被后续截图覆盖**，
+     *   也不被同包新会话的 [SlotState] 替换连带释放。
+     * - 语义：**所有权转移**（不复制字节）——源槽位中该候选经 [detachCandidate] 摘除
+     *   但**不 release**；若误走会 release 的路径，图会在搬入前被抹零，
+     *   支付成功时无图可送（改造 B 最容易出错的一点）。
+     * - 目标槽位：[paymentProcessSlotId]，即 `payment:<sessionId>`，**一单一图**；
+     *   搬入时**显式重置** `expiresAt` = 搬入时刻 + [paymentProcessTtlMillis]
+     *   （不得沿用源候选"store 时刻 + 结算页 TTL"的旧值，见改造 B-4）。
+     *
+     * 候选选择（与 [consumeForAi] 的无指纹路径同源）：
+     * 1. 指纹命中优先（要求 CHECKOUT 角色）；
+     * 2. 未命中/未传指纹 ⇒ 自动候选优先，其次手动候选 —— 结算页指纹高频漂移
+     *    （京东/拼多多）会让交接指纹与槽内候选**几乎必然不同**，严格按指纹搬运会
+     *    静默漏搬；这是"指纹优先 + 槽内选择"而非"强制指纹匹配"的原因。
+     * 3. 一律要求 CHECKOUT 角色：支付结果意图的消费受"非结算角色不可消费"守卫
+     *    （[consumeForAi] 角色守卫），搬一张注定消费不掉的图只会白占槽位。
+     *
+     * @return 见 [PaymentProcessMoveResult]；源无候选 / 已过期 / 已消费时为 Rejected。
+     */
+    override fun moveToPaymentProcess(
+        sourceSlotId: String,
+        sessionId: String,
+        pageFingerprint: String?
+    ): PaymentProcessMoveResult =
+        moveToPaymentProcessLocked(
+            sourceSlotId = sourceSlotId,
+            sessionId = sessionId,
+            pageFingerprint = pageFingerprint,
+            paymentProcessTtlMillis = PAYMENT_PROCESS_TTL_MILLIS
+        )
+
+    /**
+     * [moveToPaymentProcess] 的完整实现。
+     *
+     * ⚠️ 网关方法为 public 而 [CheckoutSnapshotReference] 是 internal 类型，且 override
+     * 不得增加参数 ⇒ TTL 以私有参数形式保留在此实现上（规格 B-1 签名的落点），
+     * 网关侧固定使用 [PAYMENT_PROCESS_TTL_MILLIS]。
+     */
+    @Synchronized
+    private fun moveToPaymentProcessLocked(
+        sourceSlotId: String,
+        sessionId: String,
+        pageFingerprint: String?,
+        paymentProcessTtlMillis: Long
+    ): PaymentProcessMoveResult {
+        if (
+            closed ||
+            sourceSlotId.isBlank() ||
+            sessionId.isBlank() ||
+            paymentProcessTtlMillis <= 0L
+        ) {
+            return PaymentProcessMoveResult.Rejected(PaymentProcessMoveRejection.INVALID_ARGUMENT)
+        }
+        val now = nowMillis()
+        purgeExpired(now)
+        val targetSlotId = paymentProcessSlotId(sessionId)
+
+        // 一单一图不变式（§2.0 方案丙）：目标槽位已消费 ⇒ 重复搬运只会得到 AlreadyTriggered，
+        // 无意义；已有未消费候选 ⇒ 本次不搬第二张（幂等），防止同一会话的两张候选
+        // 在支付槽位里形成新的歧义。
+        slots[targetSlotId]?.let { target ->
+            if (target.consumedRequestKey != null) {
+                logSink.i(
+                    TAG,
+                    "支付过程搬运跳过(槽位已消费): target=$targetSlotId, " +
+                        "session=${sessionId.take(8)}, tombstone=${target.consumedRequestKey?.value?.take(24)}"
+                )
+                return PaymentProcessMoveResult.Rejected(PaymentProcessMoveRejection.ALREADY_CONSUMED)
+            }
+            if (candidateList(target).isNotEmpty()) {
+                logSink.i(
+                    TAG,
+                    "支付过程槽位已占用，跳过重复搬运: target=$targetSlotId, " +
+                        "session=${sessionId.take(8)}, existing=${describeCandidates(target)}"
+                )
+                return PaymentProcessMoveResult.AlreadyOccupied(sessionId, targetSlotId)
+            }
+        }
+
+        val state = slots[sourceSlotId] ?: run {
+            logSink.w(
+                TAG,
+                "支付过程搬运失败(源槽位不存在): source=$sourceSlotId, " +
+                    "session=${sessionId.take(8)}, liveSlots=" +
+                    slots.keys.joinToString(",").ifBlank { "none" }
+            )
+            return PaymentProcessMoveResult.Rejected(PaymentProcessMoveRejection.NO_SOURCE_SLOT)
+        }
+        if (state.sessionId != sessionId) {
+            logSink.w(
+                TAG,
+                "支付过程搬运失败(会话不匹配): source=$sourceSlotId, " +
+                    "slotSession=${state.sessionId.take(8)}, requestSession=${sessionId.take(8)}"
+            )
+            return PaymentProcessMoveResult.Rejected(PaymentProcessMoveRejection.SESSION_MISMATCH)
+        }
+        if (state.consumedRequestKey != null) {
+            logSink.i(
+                TAG,
+                "支付过程搬运跳过(源会话已消费): source=$sourceSlotId, " +
+                    "session=${sessionId.take(8)}"
+            )
+            return PaymentProcessMoveResult.Rejected(PaymentProcessMoveRejection.ALREADY_CONSUMED)
+        }
+
+        val candidate = resolveMovableCandidate(state, pageFingerprint)
+        if (candidate == null) {
+            logSink.w(
+                TAG,
+                "支付过程搬运失败(无可搬候选): source=$sourceSlotId, " +
+                    "session=${sessionId.take(8)}, requested=${pageFingerprint?.take(12) ?: "null"}, " +
+                    "candidates=${describeCandidates(state)}"
+            )
+            return PaymentProcessMoveResult.Rejected(PaymentProcessMoveRejection.NO_MOVABLE_CANDIDATE)
+        }
+        if (now >= candidate.expiresAt) {
+            // 过期候选按消费路径同样处理：摘除 + 抹零 + 记入过期墓碑。
+            removeCandidate(state, candidate)?.release()
+            state.expiredPageFingerprints += candidate.pageFingerprint
+            scheduleNextExpirationLocked(now)
+            logSink.i(
+                TAG,
+                "支付过程搬运失败(候选已过期): source=$sourceSlotId, " +
+                    "session=${sessionId.take(8)}, fingerprint=${candidate.pageFingerprint.take(12)}"
+            )
+            return PaymentProcessMoveResult.Rejected(PaymentProcessMoveRejection.CANDIDATE_EXPIRED)
+        }
+
+        val detached = detachCandidate(state, candidate)
+            ?: return PaymentProcessMoveResult.Rejected(PaymentProcessMoveRejection.NO_MOVABLE_CANDIDATE)
+        val moved = detached.copy(
+            slotId = targetSlotId,
+            // 显式重置过期时刻（B-4）：起算点 = 搬入时刻，而非沿用源候选的 store 时刻。
+            expiresAt = now + paymentProcessTtlMillis
+        )
+        val targetState = SlotState(sessionId).also { slots[targetSlotId] = it }
+        when (moved.sourceReason) {
+            SnapshotSourceReason.MANUAL_CAPTURE -> targetState.manualCandidate = moved
+            SnapshotSourceReason.CHECKOUT_STABLE -> targetState.automaticCandidate = moved
+        }
+        targetState.nextCandidateRevision = moved.candidateRevision
+        scheduleNextExpirationLocked(now)
+        logSink.i(
+            TAG,
+            "支付过程槽位已搬入: target=$targetSlotId, session=${sessionId.take(8)}, " +
+                "fingerprint=${moved.pageFingerprint.take(12)}, source=${moved.sourceReason.wireValue}, " +
+                "bytes=${moved.imageBytes.size}, expiresAt=+$paymentProcessTtlMillis" +
+                "ms, 源槽位剩余=${describeCandidates(state)}"
+        )
+        return PaymentProcessMoveResult.Moved(
+            sessionId = sessionId,
+            targetSlotId = targetSlotId,
+            pageFingerprint = moved.pageFingerprint,
+            sourceReason = moved.sourceReason,
+            expiresAt = moved.expiresAt
+        )
+    }
+
+    /**
+     * 搬运的候选选择：指纹命中优先，否则按 D-16 自动优先、再手动候选。
+     * 见 [moveToPaymentProcess] 的选择规则说明。
+     */
+    private fun resolveMovableCandidate(
+        state: SlotState,
+        pageFingerprint: String?
+    ): CheckoutSnapshot? {
+        if (pageFingerprint != null) {
+            findCandidate(state, pageFingerprint)
+                ?.takeIf { it.pageRole == CheckoutPageRole.CHECKOUT }
+                ?.let { return it }
+        }
+        return state.automaticCandidate?.takeIf { it.pageRole == CheckoutPageRole.CHECKOUT }
+            ?: state.manualCandidate?.takeIf { it.pageRole == CheckoutPageRole.CHECKOUT }
     }
 
     /** 只读取与页面键对应的引用，避免为支付匹配复制或暴露图片。 */
@@ -922,4 +1172,18 @@ logSink.i(TAG, "缓冲清空(无槽位): reason=$reason")
             else -> null
         }
     }
+
+    /**
+     * 摘除候选的引用但**不释放图片字节**（改造 B-1 红线路径）。
+     *
+     * 语义 = [removeCandidate]（本身只置空字段），差别只在**约定**：
+     * - [removeCandidate] 的调用方**负责**随后 `release()`（消费 / 覆盖路径，字节已用完）；
+     * - 本方法只被 [moveToPaymentProcess] 使用，摘除后字节**必须继续存活**，
+     *   由支付过程槽位接管（过期回收 / clear / close 统一释放）。
+     *
+     * ⚠️ 若在搬移路径误加 `release()`，图会在搬入前被抹零 ⇒ 支付成功时无图可送，
+     * 且单测"搬移后字节逐字节等于原始内容"会红 —— 不要删那条断言。
+     */
+    private fun detachCandidate(state: SlotState, snapshot: CheckoutSnapshot): CheckoutSnapshot? =
+        removeCandidate(state, snapshot)
 }

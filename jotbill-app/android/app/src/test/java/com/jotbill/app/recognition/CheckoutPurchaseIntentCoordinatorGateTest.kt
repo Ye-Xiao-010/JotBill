@@ -30,6 +30,10 @@ class CheckoutPurchaseIntentCoordinatorGateTest {
         var candidates: List<CheckoutSnapshot> = emptyList()
         val consumeCalls = mutableListOf<Triple<String, PurchaseIntent, String?>>()
 
+        var moveResult: PaymentProcessMoveResult =
+            PaymentProcessMoveResult.Rejected(PaymentProcessMoveRejection.NO_SOURCE_SLOT)
+        val moveCalls = mutableListOf<Triple<String, String, String?>>()
+
         override fun consumeForAi(
             slotId: String,
             intent: PurchaseIntent,
@@ -41,17 +45,47 @@ class CheckoutPurchaseIntentCoordinatorGateTest {
         }
 
         override fun currentCandidates(slotId: String): List<CheckoutSnapshot> = candidates
+
+        override fun moveToPaymentProcess(
+            sourceSlotId: String,
+            sessionId: String,
+            pageFingerprint: String?
+        ): PaymentProcessMoveResult {
+            moveCalls.add(Triple(sourceSlotId, sessionId, pageFingerprint))
+            return moveResult
+        }
     }
 
+    private class MutableClock(var now: Long = 1_000_000L)
+
+    /** 孤儿出口的调用记录（改造 B-3/E-2 判别断言用）。 */
+    private data class OrphanRecord(
+        val conflictReason: String,
+        val sessionId: String?,
+        val sessionIds: List<String>,
+        val amountMinor: Long
+    )
+
     private class Fixture(private val maxRequests: Int = 2) {
+        val clock = MutableClock()
         val gateway = FakeBufferGateway()
-        val coordinator = CheckoutPurchaseIntentCoordinator(gateway, maxRequests)
+        val coordinator = CheckoutPurchaseIntentCoordinator(
+            gateway,
+            maxRequests,
+            nowMillis = { clock.now }
+        )
         val dispatched = mutableListOf<CheckoutAiTriggerResult.Ready>()
+        val orphanSignals = mutableListOf<OrphanRecord>()
 
         init {
             coordinator.setReadyDispatcher { ready ->
                 dispatched.add(ready)
                 true
+            }
+            coordinator.setPaymentSignalOrphanSink { signal, conflictReason, sessionId, sessionIds ->
+                orphanSignals.add(
+                    OrphanRecord(conflictReason, sessionId, sessionIds, signal.amountMinor)
+                )
             }
         }
 
@@ -64,10 +98,50 @@ class CheckoutPurchaseIntentCoordinatorGateTest {
             snapshot = snapshot(fingerprint = fingerprint, sessionId = sessionId)
         )
 
-        fun stable(fingerprint: String = FP_A) {
+        fun stable(fingerprint: String = FP_A, sessionId: String? = SESSION) {
             coordinator.onEvent(
                 CheckoutObservationEvent.Stable(
-                    StableCheckoutPage(observation(fingerprint = fingerprint), stableAt = 1L)
+                    StableCheckoutPage(
+                        observation = observation(fingerprint = fingerprint),
+                        stableAt = 1L,
+                        sessionId = sessionId
+                    )
+                )
+            )
+        }
+
+        /**
+         * 造一次"交接"：稳定帧建立会话 → 支付交接失效事件触发搬运与映射登记（改造 B-2/E-2）。
+         * 金额写入页面观察（finalAmountMinor），作为归属判定的输入。
+         */
+        fun handoff(
+            fingerprint: String = FP_A,
+            sessionId: String = SESSION,
+            amountMinor: Long? = 12_800L,
+            at: Long = clock.now
+        ) {
+            clock.now = at
+            coordinator.onEvent(
+                CheckoutObservationEvent.Stable(
+                    StableCheckoutPage(
+                        observation = observation(
+                            fingerprint = fingerprint,
+                            amountMinor = amountMinor
+                        ),
+                        stableAt = at,
+                        sessionId = sessionId
+                    )
+                )
+            )
+            coordinator.onEvent(
+                CheckoutObservationEvent.Invalidated(
+                    CheckoutObservationInvalidation(
+                        reason = CheckoutInvalidationReason.PAYMENT_APP_HANDOFF,
+                        shoppingPackage = PKG,
+                        pageFingerprint = fingerprint,
+                        invalidatedAt = at,
+                        foregroundPackage = "com.tencent.mm"
+                    )
                 )
             )
         }
@@ -81,6 +155,19 @@ class CheckoutPurchaseIntentCoordinatorGateTest {
         occurredAt = 1L,
         sourceEventKey = "evt-1"
     )
+
+    private fun paymentResultSignal(
+        amountMinor: Long,
+        occurredAt: Long
+    ) = PaymentResultAttributionSignal(
+        paymentPackage = "com.tencent.mm",
+        amountMinor = amountMinor,
+        occurredAt = occurredAt,
+        sourceEventKey = "evt-$occurredAt-$amountMinor"
+    )
+
+    /** 生成互不相同的 64 位十六进制指纹（a~e 覆盖 5 个会话以内）。 */
+    private fun fingerprintOf(index: Int): String = ('a' + index).toString().repeat(64)
 
     // ---------- 上下文与关闭门禁 ----------
 
@@ -118,6 +205,47 @@ class CheckoutPurchaseIntentCoordinatorGateTest {
             (result as PurchaseIntentCoordinationResult.Rejected).gateReason
         )
         assertTrue(f.gateway.consumeCalls.isEmpty())
+    }
+
+    // ---------- §8.3 会话标识链路 ----------
+
+    /**
+     * sessionId 为空的稳定帧（截图协调器有意忽略交接过渡窗内的迟到帧）不得建立上下文。
+     *
+     * 若此处放行，就会凭空造出没有会话的上下文；改造 B/E 依赖 sessionId 作为槽位键与
+     * 映射键，无会话的上下文只能靠"回退猜测"补键——这正是改造 E 要消除的错误归属。
+     */
+    @Test
+    fun stableFrameWithoutSessionDoesNotEstablishContext() {
+        val f = Fixture()
+        f.stable(sessionId = null)
+        val result = f.coordinator.trigger(PurchaseIntent.SUBMIT_ACTION, FP_A)
+        assertEquals(
+            PurchaseIntentGateRejection.NO_CHECKOUT_CONTEXT,
+            (result as PurchaseIntentCoordinationResult.Rejected).gateReason
+        )
+        assertTrue(f.gateway.consumeCalls.isEmpty())
+    }
+
+    /**
+     * sessionId 为空的稳定帧不得清空、也不得覆盖既有上下文。
+     *
+     * 真机形态：订单1 交接后支付应用在前台，购物包偶发上报一个同包迟到稳定帧，
+     * 截图协调器判定"不代表新订单"而保留挂起会话；购买意图协调器必须做同样的决定，
+     * 否则订单1 的上下文会在支付过程中被抹掉。
+     */
+    @Test
+    fun stableFrameWithoutSessionKeepsExistingContext() {
+        val f = Fixture()
+        f.stable()
+        f.stable(fingerprint = FP_B, sessionId = null)
+        f.gateway.consumeResult = f.ready()
+        val result = f.coordinator.trigger(PurchaseIntent.SUBMIT_ACTION, FP_A)
+        assertTrue(result is PurchaseIntentCoordinationResult.AiDispatched)
+        assertEquals(
+            listOf(Triple(SLOT, PurchaseIntent.SUBMIT_ACTION, FP_A)),
+            f.gateway.consumeCalls
+        )
     }
 
     // ---------- Ready 派发与所有权 ----------
@@ -180,10 +308,17 @@ class CheckoutPurchaseIntentCoordinatorGateTest {
 
     // ---------- 一次性标记:被拒不烧,成功才烧 ----------
 
+    /**
+     * 改造 B-2 后交接改为搬运，"交接单次门禁"不复存在：
+     * 被拒不烧重试机会，成功也不置位任何标记；显式 PAYMENT_APP_HANDOFF 触发
+     * （公共桥入口）可重复到达消费层，只受每会话请求预算约束。
+     */
     @Test
-    fun handoffRejectionDoesNotBurnOneShotButSuccessDoes() {
+    fun handoffTriggerHasNoOneShotGateAnymore() {
         val f = Fixture()
         f.stable()
+        // 预算预检读取槽内候选；不给候选则预检跳过，预算约束不生效
+        f.gateway.candidates = listOf(snapshot())
         f.gateway.consumeResult =
             CheckoutAiTriggerResult.Rejected(SnapshotConsumeRejection.NO_BUFFERED_SNAPSHOT)
         val rejected = f.coordinator.trigger(PurchaseIntent.PAYMENT_APP_HANDOFF, FP_A)
@@ -191,23 +326,27 @@ class CheckoutPurchaseIntentCoordinatorGateTest {
             SnapshotConsumeRejection.NO_BUFFERED_SNAPSHOT,
             (rejected as PurchaseIntentCoordinationResult.Rejected).consumeResult?.reason
         )
-        // 被拒不烧标记:修复 buffer 后重试仍能到达消费层
+        // 被拒不烧预算：重试仍能到达消费层
         f.gateway.consumeResult = f.ready()
         assertTrue(
             f.coordinator.trigger(PurchaseIntent.PAYMENT_APP_HANDOFF, FP_A)
                 is PurchaseIntentCoordinationResult.AiDispatched
         )
-        // 成功后标记置位:第三次直接门禁拒绝,不再触碰 buffer
-        val third = f.coordinator.trigger(PurchaseIntent.PAYMENT_APP_HANDOFF, FP_A)
-        assertEquals(
-            PurchaseIntentGateRejection.PAYMENT_HANDOFF_ALREADY_ATTEMPTED,
-            (third as PurchaseIntentCoordinationResult.Rejected).gateReason
+        // 第二次成功消费（预算 2/2），第三次被预算门禁拒绝 —— 约束只来自预算
+        assertTrue(
+            f.coordinator.trigger(PurchaseIntent.PAYMENT_APP_HANDOFF, FP_A)
+                is PurchaseIntentCoordinationResult.AiDispatched
         )
-        assertEquals(2, f.gateway.consumeCalls.size)
+        assertEquals(
+            PurchaseIntentGateRejection.REQUEST_BUDGET_EXHAUSTED,
+            (f.coordinator.trigger(PurchaseIntent.PAYMENT_APP_HANDOFF, FP_A)
+                as PurchaseIntentCoordinationResult.Rejected).gateReason
+        )
+        assertEquals(3, f.gateway.consumeCalls.size)
     }
 
     @Test
-    fun newStableContextResetsHandoffOneShot() {
+    fun newStableContextServesExplicitHandoffWithNewFingerprint() {
         val f = Fixture()
         f.stable()
         f.gateway.consumeResult = f.ready()
@@ -215,12 +354,19 @@ class CheckoutPurchaseIntentCoordinatorGateTest {
             f.coordinator.trigger(PurchaseIntent.PAYMENT_APP_HANDOFF, FP_A)
                 is PurchaseIntentCoordinationResult.AiDispatched
         )
-        // 新的稳定上下文(指纹漂移出的新指纹)重置一次性标记
+        // 新的稳定上下文(指纹漂移出的新指纹)后：显式交接触发按新上下文/新指纹消费
         f.stable(FP_B)
         f.gateway.consumeResult = f.ready(FP_B)
         assertTrue(
             f.coordinator.trigger(PurchaseIntent.PAYMENT_APP_HANDOFF, FP_B)
                 is PurchaseIntentCoordinationResult.AiDispatched
+        )
+        assertEquals(
+            listOf(
+                Triple(SLOT, PurchaseIntent.PAYMENT_APP_HANDOFF, FP_A),
+                Triple(SLOT, PurchaseIntent.PAYMENT_APP_HANDOFF, FP_B)
+            ),
+            f.gateway.consumeCalls
         )
     }
 
@@ -368,6 +514,320 @@ class CheckoutPurchaseIntentCoordinatorGateTest {
         )
     }
 
+    // ---------- 改造 B-2：交接只搬运，不再派发 AI ----------
+
+    private fun paymentHandoffEvent(
+        fingerprint: String = FP_A
+    ) = CheckoutObservationEvent.Invalidated(
+        CheckoutObservationInvalidation(
+            reason = CheckoutInvalidationReason.PAYMENT_APP_HANDOFF,
+            shoppingPackage = PKG,
+            pageFingerprint = fingerprint,
+            invalidatedAt = 1L,
+            foregroundPackage = "com.tencent.mm"
+        )
+    )
+
+    /** 交接失效 ⇒ 搬运（不 consumeForAi、不派 AI），搬运参数 = 挂起会话 + 交接指纹。 */
+    @Test
+    fun paymentHandoffInvalidationMovesSnapshotInsteadOfDispatchingAi() {
+        val f = Fixture()
+        f.stable()
+        f.gateway.moveResult = PaymentProcessMoveResult.Moved(
+            sessionId = SESSION,
+            targetSlotId = paymentProcessSlotId(SESSION),
+            pageFingerprint = FP_A,
+            sourceReason = SnapshotSourceReason.CHECKOUT_STABLE,
+            expiresAt = 1L
+        )
+        f.coordinator.onEvent(paymentHandoffEvent())
+        assertEquals(listOf(Triple(SLOT, SESSION, FP_A)), f.gateway.moveCalls)
+        // 交接不再消费快照、不再派发 AI：AI 由支付成功信号（PAYMENT_RESULT）触发
+        assertTrue(f.gateway.consumeCalls.isEmpty())
+        assertTrue(f.dispatched.isEmpty())
+    }
+
+    @Test
+    fun paymentHandoffWithoutContextDoesNotMoveAnything() {
+        val f = Fixture()
+        f.coordinator.onEvent(paymentHandoffEvent())
+        assertTrue(f.gateway.moveCalls.isEmpty())
+        assertTrue(f.gateway.consumeCalls.isEmpty())
+        assertTrue(f.dispatched.isEmpty())
+    }
+
+    /** 搬运失败（如源槽位已空）只记日志：不得退化成消费/派发，兜底在 PAYMENT_RESULT 路径。 */
+    @Test
+    fun handoffMoveFailureDoesNotFallBackToConsumeOrDispatch() {
+        val f = Fixture()
+        f.stable()
+        f.gateway.moveResult =
+            PaymentProcessMoveResult.Rejected(PaymentProcessMoveRejection.NO_SOURCE_SLOT)
+        f.gateway.consumeResult = f.ready()
+        f.coordinator.onEvent(paymentHandoffEvent())
+        assertEquals(1, f.gateway.moveCalls.size)
+        assertTrue(f.gateway.consumeCalls.isEmpty())
+        assertTrue(f.dispatched.isEmpty())
+    }
+
+    /** 同一会话的重复交接事件必须重复搬运（幂等由 buffer 的一单一图不变式兜住）。 */
+    @Test
+    fun repeatedHandoffInvalidationMovesAgainForSameSession() {
+        val f = Fixture()
+        f.stable()
+        f.coordinator.onEvent(paymentHandoffEvent())
+        f.coordinator.onEvent(paymentHandoffEvent())
+        assertEquals(2, f.gateway.moveCalls.size)
+        assertTrue(f.gateway.moveCalls.all { it.second == SESSION })
+        assertTrue(f.gateway.consumeCalls.isEmpty())
+    }
+
+    // ---------- 改造 E：归属判定三态 + 改造 B-3 取图与兜底 ----------
+
+    /** 恰好 1 命中 ⇒ 用其 sessionId 定位支付过程槽位（无指纹消费）⇒ 派 AI。 */
+    @Test
+    fun paymentResultWithSingleAmountMatchAttributesThatSession() {
+        val f = Fixture()
+        f.handoff(fingerprint = FP_A, sessionId = "session-1", amountMinor = 12_800L, at = 1_000_000L)
+        f.gateway.consumeResult = f.ready(fingerprint = FP_A, sessionId = "session-1")
+        val result = f.coordinator.trigger(
+            PurchaseIntent.PAYMENT_RESULT,
+            paymentResult = paymentResultSignal(amountMinor = 12_800L, occurredAt = 1_100_000L)
+        )
+        assertTrue(result is PurchaseIntentCoordinationResult.AiDispatched)
+        assertEquals(1, f.dispatched.size)
+        assertEquals(
+            listOf(Triple("payment:session-1", PurchaseIntent.PAYMENT_RESULT, null)),
+            f.gateway.consumeCalls
+        )
+        assertTrue(f.orphanSignals.isEmpty())
+    }
+
+    /** 0 命中 ⇒ 孤儿待确认（不猜测、不回退最近活跃会话）。 */
+    @Test
+    fun paymentResultWithNoMatchGoesOrphanWithoutGuessing() {
+        val f = Fixture()
+        f.handoff(sessionId = "session-1", amountMinor = 12_800L, at = 1_000_000L)
+        val result = f.coordinator.trigger(
+            PurchaseIntent.PAYMENT_RESULT,
+            paymentResult = paymentResultSignal(amountMinor = 5_500L, occurredAt = 1_000_000L)
+        )
+        val rejected = result as PurchaseIntentCoordinationResult.Rejected
+        assertEquals(
+            PurchaseIntentGateRejection.PAYMENT_RESULT_NO_MATCHING_SESSION,
+            rejected.gateReason
+        )
+        assertTrue(f.gateway.consumeCalls.isEmpty())
+        assertTrue(f.dispatched.isEmpty())
+        assertEquals(1, f.orphanSignals.size)
+        assertEquals(PAYMENT_RESULT_NO_MATCHING_SESSION, f.orphanSignals.single().conflictReason)
+    }
+
+    /** 页面金额无法判定（null）的会话不参与归属 —— 不猜。 */
+    @Test
+    fun handoffContextWithoutPageAmountIsNotAttributed() {
+        val f = Fixture()
+        f.handoff(sessionId = "session-1", amountMinor = null, at = 1_000_000L)
+        val result = f.coordinator.trigger(
+            PurchaseIntent.PAYMENT_RESULT,
+            paymentResult = paymentResultSignal(amountMinor = 12_800L, occurredAt = 1_000_000L)
+        )
+        assertEquals(
+            PurchaseIntentGateRejection.PAYMENT_RESULT_NO_MATCHING_SESSION,
+            (result as PurchaseIntentCoordinationResult.Rejected).gateReason
+        )
+        assertTrue(f.gateway.consumeCalls.isEmpty())
+    }
+
+    /**
+     * ≥2 命中 ⇒ Ambiguous ⇒ 待确认（安全侧，不误账）。
+     * 判别性：若实现退化为"任取一个候选"，consumeCalls 非空 ⇒ 本用例必红。
+     */
+    @Test
+    fun paymentResultWithTwoAmountMatchesIsAmbiguous() {
+        val f = Fixture()
+        f.handoff(fingerprint = FP_A, sessionId = "session-1", amountMinor = 12_800L, at = 1_000_000L)
+        f.handoff(fingerprint = FP_B, sessionId = "session-2", amountMinor = 12_800L, at = 1_000_000L)
+        val result = f.coordinator.trigger(
+            PurchaseIntent.PAYMENT_RESULT,
+            paymentResult = paymentResultSignal(amountMinor = 12_800L, occurredAt = 1_000_000L)
+        )
+        val rejected = result as PurchaseIntentCoordinationResult.Rejected
+        assertEquals(
+            PurchaseIntentGateRejection.PAYMENT_RESULT_AMBIGUOUS_SESSION,
+            rejected.gateReason
+        )
+        assertEquals(listOf("session-1", "session-2"), rejected.sessionIds)
+        assertTrue(f.gateway.consumeCalls.isEmpty())
+        assertTrue(f.dispatched.isEmpty())
+        assertEquals(1, f.orphanSignals.size)
+        assertEquals(
+            "AMBIGUOUS_SESSION_IDS:session-1,session-2",
+            f.orphanSignals.single().conflictReason
+        )
+        assertEquals(listOf("session-1", "session-2"), f.orphanSignals.single().sessionIds)
+    }
+
+    /**
+     * 核心场景（改造 E 要修的 E-1）：订单1 支付中 → 订单2 交接 → **订单1 结果页到达**
+     * ⇒ 仍能定位订单1。回退为单槽覆盖（旧实现）⇒ 本用例必红。
+     */
+    @Test
+    fun firstOrderResultPageStillAttributedAfterSecondOrderHandoff() {
+        val f = Fixture()
+        f.handoff(fingerprint = FP_A, sessionId = "session-1", amountMinor = 12_800L, at = 1_000_000L)
+        f.handoff(fingerprint = FP_B, sessionId = "session-2", amountMinor = 5_500L, at = 1_050_000L)
+        f.gateway.consumeResult = f.ready(fingerprint = FP_A, sessionId = "session-1")
+        val result = f.coordinator.trigger(
+            PurchaseIntent.PAYMENT_RESULT,
+            paymentResult = paymentResultSignal(amountMinor = 12_800L, occurredAt = 1_200_000L)
+        )
+        assertTrue(result is PurchaseIntentCoordinationResult.AiDispatched)
+        assertEquals(
+            listOf(Triple("payment:session-1", PurchaseIntent.PAYMENT_RESULT, null)),
+            f.gateway.consumeCalls
+        )
+    }
+
+    /** 消费成功后映射移除（"未占用"）：同一会话再次到达的结果页 ⇒ 0 命中 ⇒ 孤儿。 */
+    @Test
+    fun consumedHandoffContextIsRemovedFromAttribution() {
+        val f = Fixture()
+        f.handoff(sessionId = "session-1", amountMinor = 12_800L, at = 1_000_000L)
+        f.gateway.consumeResult = f.ready(fingerprint = FP_A, sessionId = "session-1")
+        f.coordinator.trigger(
+            PurchaseIntent.PAYMENT_RESULT,
+            paymentResult = paymentResultSignal(amountMinor = 12_800L, occurredAt = 1_000_000L)
+        )
+        f.gateway.consumeResult =
+            CheckoutAiTriggerResult.Rejected(SnapshotConsumeRejection.NO_BUFFERED_SNAPSHOT)
+        f.coordinator.trigger(
+            PurchaseIntent.PAYMENT_RESULT,
+            paymentResult = paymentResultSignal(amountMinor = 12_800L, occurredAt = 1_000_000L)
+        )
+        // 第二次：0 命中（映射已移除）⇒ 孤儿，而不是再次消费/派发
+        assertEquals(1, f.gateway.consumeCalls.size)
+        assertEquals(1, f.orphanSignals.size)
+        assertEquals(PAYMENT_RESULT_NO_MATCHING_SESSION, f.orphanSignals.single().conflictReason)
+    }
+
+    /** 容量上限 4（D-24 已定值）：第 5 笔交接淘汰最旧 ⇒ 最旧会话的结果页 0 命中。 */
+    @Test
+    fun handoffMapEvictsOldestBeyondCapacityOfFour() {
+        val f = Fixture()
+        listOf(1_100L, 2_200L, 3_300L, 4_400L, 5_500L).forEachIndexed { index, amount ->
+            f.handoff(
+                fingerprint = fingerprintOf(index),
+                sessionId = "session-${index + 1}",
+                amountMinor = amount,
+                at = 1_000_000L + index * 1_000L
+            )
+        }
+        val eldest = f.coordinator.trigger(
+            PurchaseIntent.PAYMENT_RESULT,
+            paymentResult = paymentResultSignal(amountMinor = 1_100L, occurredAt = 1_004_000L)
+        )
+        assertEquals(
+            PurchaseIntentGateRejection.PAYMENT_RESULT_NO_MATCHING_SESSION,
+            (eldest as PurchaseIntentCoordinationResult.Rejected).gateReason
+        )
+        // 次旧（session-2）仍在 ⇒ 归属命中
+        f.gateway.consumeResult = f.ready(fingerprint = fingerprintOf(1), sessionId = "session-2")
+        val second = f.coordinator.trigger(
+            PurchaseIntent.PAYMENT_RESULT,
+            paymentResult = paymentResultSignal(amountMinor = 2_200L, occurredAt = 1_004_000L)
+        )
+        assertTrue(second is PurchaseIntentCoordinationResult.AiDispatched)
+        assertEquals(
+            listOf(Triple("payment:session-2", PurchaseIntent.PAYMENT_RESULT, null)),
+            f.gateway.consumeCalls
+        )
+    }
+
+    /** 同 sessionId 重新交接 = 覆盖：若错误地"追加"，映射会超限并把本会话挤出。 */
+    @Test
+    fun repeatedHandoffForSameSessionOverwritesInsteadOfGrowing() {
+        val f = Fixture()
+        listOf(1_100L, 2_200L, 3_300L, 4_400L).forEachIndexed { index, amount ->
+            f.handoff(
+                fingerprint = fingerprintOf(index),
+                sessionId = "session-${index + 1}",
+                amountMinor = amount,
+                at = 1_000_000L + index * 1_000L
+            )
+        }
+        f.handoff(
+            fingerprint = fingerprintOf(0),
+            sessionId = "session-1",
+            amountMinor = 1_100L,
+            at = 1_005_000L
+        )
+        f.handoff(
+            fingerprint = fingerprintOf(0),
+            sessionId = "session-1",
+            amountMinor = 1_100L,
+            at = 1_006_000L
+        )
+        f.gateway.consumeResult = f.ready(fingerprint = fingerprintOf(0), sessionId = "session-1")
+        val result = f.coordinator.trigger(
+            PurchaseIntent.PAYMENT_RESULT,
+            paymentResult = paymentResultSignal(amountMinor = 1_100L, occurredAt = 1_006_000L)
+        )
+        assertTrue(result is PurchaseIntentCoordinationResult.AiDispatched)
+        assertEquals(
+            listOf(Triple("payment:session-1", PurchaseIntent.PAYMENT_RESULT, null)),
+            f.gateway.consumeCalls
+        )
+    }
+
+    /**
+     * R2 红线：归属命中但支付槽位缺图 ⇒ 不得静默丢弃，必须上报
+     * PAYMENT_PROCESS_SNAPSHOT_MISSING（判别性：删掉该兜底分支 ⇒ 本用例必红）。
+     */
+    @Test
+    fun paymentResultWithMissingSnapshotReportsSnapshotMissing() {
+        val f = Fixture()
+        f.handoff(sessionId = "session-1", amountMinor = 12_800L, at = 1_000_000L)
+        f.gateway.consumeResult =
+            CheckoutAiTriggerResult.Rejected(SnapshotConsumeRejection.NO_BUFFERED_SNAPSHOT)
+        val result = f.coordinator.trigger(
+            PurchaseIntent.PAYMENT_RESULT,
+            paymentResult = paymentResultSignal(amountMinor = 12_800L, occurredAt = 1_000_000L)
+        )
+        val rejected = result as PurchaseIntentCoordinationResult.Rejected
+        assertEquals(SnapshotConsumeRejection.NO_BUFFERED_SNAPSHOT, rejected.consumeResult?.reason)
+        assertEquals("payment:session-1", rejected.slotId)
+        assertTrue(f.dispatched.isEmpty())
+        assertEquals(1, f.orphanSignals.size)
+        val orphan = f.orphanSignals.single()
+        assertEquals(PAYMENT_PROCESS_SNAPSHOT_MISSING, orphan.conflictReason)
+        assertEquals("session-1", orphan.sessionId)
+        assertEquals(12_800L, orphan.amountMinor)
+    }
+
+    /** PAYMENT_RESULT 必须携带归属信号；其他意图不得携带（防误接线）。 */
+    @Test
+    fun paymentResultRequiresAttributionSignal() {
+        val f = Fixture()
+        val missing = f.coordinator.trigger(PurchaseIntent.PAYMENT_RESULT)
+        assertEquals(
+            PurchaseIntentGateRejection.INVALID_PAYMENT_RESULT,
+            (missing as PurchaseIntentCoordinationResult.Rejected).gateReason
+        )
+        f.stable()
+        f.gateway.consumeResult = f.ready()
+        val mismatched = f.coordinator.trigger(
+            PurchaseIntent.SUBMIT_ACTION,
+            FP_A,
+            paymentResult = paymentResultSignal(amountMinor = 100L, occurredAt = 1L)
+        )
+        assertEquals(
+            PurchaseIntentGateRejection.INVALID_PAYMENT_RESULT,
+            (mismatched as PurchaseIntentCoordinationResult.Rejected).gateReason
+        )
+        assertTrue(f.gateway.consumeCalls.isEmpty())
+    }
+
     // ---------- 用户重试内部通道 ----------
 
     @Test
@@ -434,7 +894,8 @@ private fun snapshot(
 private fun observation(
     fingerprint: String = "a".repeat(64),
     role: CheckoutPageRole = CheckoutPageRole.CHECKOUT,
-    sensitive: Boolean = false
+    sensitive: Boolean = false,
+    amountMinor: Long? = null
 ) = CheckoutPageObservation(
     shoppingPackage = "com.xunmeng.pinduoduo",
     pageRole = role,
@@ -442,5 +903,6 @@ private fun observation(
     hasFinalAmountSignal = true,
     hasCheckoutActionSignal = true,
     isSensitivePage = sensitive,
-    observedAt = 1L
+    observedAt = 1L,
+    finalAmountMinor = amountMinor
 )

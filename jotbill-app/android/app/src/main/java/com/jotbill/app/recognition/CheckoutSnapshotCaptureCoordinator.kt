@@ -151,6 +151,42 @@ private fun CheckoutObservationEvent.diagnosticName(): String = when (this) {
 }
 
 /**
+ * 解析"某一稳定帧对应哪个会话"（§8.3 sessionId 传递链路的第③环）。
+ *
+ * 会话由截图协调器在 `handleStable` 内建立或沿用（新建 / 漂移沿用 / 支付返回恢复），
+ * 因此**只能在它处理完本帧之后**解析；服务层在 `onStable` 时刻读取只会拿到上一帧的会话。
+ *
+ * 三条判据缺一不可（包名 + 指纹 + 会话非空）：
+ * - 包名不符 ⇒ 本帧已被别的购物包的会话接管；
+ * - 指纹不符 ⇒ 本帧没有建立/沿用任何会话（交接过渡窗内被有意忽略、
+ *   `attemptedAutomaticCaptures` 复用等早退分支都会走到这里）；
+ * - 会话为空 ⇒ 协调器尚未建立过会话。
+ *
+ * 提取为纯函数以便单测覆盖：返回错的会话会把"订单2 的帧"标成"订单1 的 sessionId"，
+ * 正是改造 E 要消除的错误归属，且真机只能靠事后日志追查。
+ *
+ * @return 本帧对应会话的 sessionId；无对应会话时返回 null（调用方**不得**回退猜测）。
+ */
+internal fun stableFrameSessionId(
+    activeSessionId: String?,
+    activeShoppingPackage: String?,
+    activePageFingerprint: String?,
+    observedShoppingPackage: String,
+    observedPageFingerprint: String
+): String? {
+    if (activeSessionId.isNullOrBlank()) {
+        return null
+    }
+    if (activeShoppingPackage != observedShoppingPackage) {
+        return null
+    }
+    if (activePageFingerprint != observedPageFingerprint) {
+        return null
+    }
+    return activeSessionId
+}
+
+/**
  * 判断一次页面失效是否属于“同购物包内的支付中间页”。
  *
  * 中间页（拼多多提交订单后的收银台、京东提交后的加载页）不是结算页，却是
@@ -1274,6 +1310,32 @@ internal class CheckoutSnapshotCaptureCoordinator(
             requestFailClosedFromAnyThread(reason = MAIN_HANDLER_UNAVAILABLE)
             Log.w(TAG, "主线程不可用时手动截图未能发布结果")
         }
+    }
+
+    /**
+     * 返回某个稳定帧所对应会话的 sessionId（§8.3 sessionId 传递链路的第③环）。
+     *
+     * 只回答会话标识，不暴露槽位、图片或页面文本；判据见 [stableFrameSessionId]。
+     * **仅可在主线程调用**：`activeCheckout` 由主线程独占读写，服务层在
+     * `dispatchEvent` 内（稳定协调器的回调，主线程）紧接 `onEvent` 之后调用它。
+     *
+     * @return 会话标识；本帧未建立/沿用任何会话时返回 null —— 调用方不得回退猜测。
+     */
+    fun currentCheckoutSessionId(
+        shoppingPackage: String,
+        pageFingerprint: String
+    ): String? {
+        if (closed || shoppingPackage.isBlank() || pageFingerprint.isBlank()) {
+            return null
+        }
+        val current = activeCheckout ?: return null
+        return stableFrameSessionId(
+            activeSessionId = current.sessionId,
+            activeShoppingPackage = current.page.observation.shoppingPackage,
+            activePageFingerprint = current.page.observation.pageFingerprint,
+            observedShoppingPackage = shoppingPackage,
+            observedPageFingerprint = pageFingerprint
+        )
     }
 
     /**
