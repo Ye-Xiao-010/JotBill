@@ -507,6 +507,52 @@ val driftWithinSameCheckout = previous != null &&
 
 **⇒ 本改造的核心动作只有一条**：把 `pendingFromEvidenceOnly()` 的调用**从"证据落库时"推迟到"AI 定论且定论为需 review 时"**。
 
+> ✅ **2026-09-17 V-5 实施前核查补正（9 处落差已核实 + 4 项拍板裁定）**
+>
+> **🔴 落差 1｜调用点数是 3 个，不是 1 个** —— 已核实
+> `pendingFromEvidenceOnly`（定义 `Matcher:1847`）有 **3 个调用点**：`:871`（证据先到、无候选）/ `:934`（同会话第二笔证据到达、AI 仍未返回）/ **`:1062`（就在 `backfillEvidenceOnlyCandidates` 内，定义 `:1011`）**。
+> ⇒ ①②**必须都删**（只删一处会留半条早弹窗路径 —— 与 V-1b「D-6 两个生成点必须同改」同构的教训）；③**保留**（它就是本批要求的兜底 2 的落卡出口；启动时不会再有 AI 定论 ⇒ 不存在"早一步"）。
+>
+> **🔴 落差 2｜兜底 2 不是「新增扫描」，而是「扩条件」** —— 已核实
+> `backfillEvidenceOnlyCandidates`（`:1011`）**已存在**（`Service:1111` 调用，测试零覆盖）⇒ D-3 写"新增一条启动期兜底扫描"**不准确**。
+> 更关键：其现有条件「**无候选**」在 V-5 后**永不覆盖目标会话**（证据先到的会话**有** `EVIDENCE_ONLY` 占位）⇒ 照文档"新增"会写出**第二套扫描**，与既有扫描**重复且互相打架**。
+> ⇒ **扩条件**（有 `EVIDENCE_ONLY` 占位 **且** `journeyState == WAITING_ENRICHMENT` ⇒ 落卡），**不新增第二套扫描**。
+>
+> **🔴 落差 3｜「派发失败即落卡」会造同笔双卡** —— 已核实
+> 派发失败的**三条子路径已有两条落卡**（V-3/V-4 孤儿出口：槽位缺图 `PAYMENT_PROCESS_SNAPSHOT_MISSING` / 归属 0 命中 / ≥2 命中 Ambiguous）⇒ 无差别补卡必然**同笔双卡**。
+>
+> **🔴 落差 4｜`AiDispatched` 不足以表达「派发成功」** —— 已核实
+> `Accepted(AlreadyTriggered)` 也是"AI 已派发"（AI 在飞或已回）⇒ 按 Boolean「非 `AiDispatched` 即失败」判定会**重现 P5 的过早弹窗**。
+> ⇒ 需**三态**分类：`AI_HANDED_OFF` / `NOT_DISPATCHED` / `COORDINATOR_ALREADY_RECORDED`（纯函数，JVM 可测 —— 同 V-4 `buildPaymentResultAttributionSignal` 的手法）。
+>
+> **🔴 落差 5｜截图兜底路径不派发结算页 AI，D-2 未列该路径** —— 已核实（核查方独立验证）
+> `Service:1803` 的截图兜底路径用 `client.recognizePaymentResult(...)` **客户端直调** AI（失败直接 `return`，成功则落证据）⇒ 其 AI **不经过 matcher 的 AI 定论链路**（不触发 `pendingFromConflict`）⇒ 它此前靠的正是**分支①的落卡**（`:871`）⇒ **V-5 删掉分支①后该路径会静默悬置**。
+> ⇒ 必须为该路径补 promote 出口（否则其证据要等到重启扫描才出现）。
+>
+> **落差 6｜`ignore` 的显式终态未指定具体状态** ⇒ 见裁定 Q-A。
+> **落差 7｜验收 (b) 的 `categoryId` 有值当前不可满足**（session-linked 待确认的 `categoryId` 恒为 `null`，分类在**入账时**才确定）⇒ 见裁定 Q-D。
+> **落差 8｜存量用例 `aiUnverifiedEvidenceNeverAutoCommitsBill` 会因推迟落卡转红** ⇒ 属**预期契约变更**（"证据先到 ⇒ 无卡"是新契约），**不是回归**；已同意按其建议适配（保留原用例"不自动入账"的核心意图）。
+> **落差 9｜边界未覆盖**：会话被杀在 `AI_PENDING` 且已有证据的形态不在扫描查询内 ⇒ 实测**不可达**（证据一定会把会话推出 `AI_PENDING`）⇒ 按规格只扫 `WAITING_ENRICHMENT`，**登记存疑不擅自扩**。
+>
+> ---
+>
+> **✅ 拍板裁定（4 项，全部采纳实施方推荐）**
+>
+> **Q-A｜`ignore` 的显式终态 = `updateTerminalStateIfActive(status=CANCELLED, journeyState=DISMISSED)`** ✅
+> 理由：① 复用既有终态写入口，**不动状态机契约**（`WAITING_ENRICHMENT` 的允许集合里没有 `DISMISSED`/`CANCELLED`，硬走 `advanceStatus` 需改契约 + 测试面）；② 与"用户忽略待确认"**同码同路径**（`LedgerRepository:553`），前端已有处置；③ **不撒谎成 `COMPLETED`** —— 那会被当成"已入账"，**污染自动入账率统计**；④ 候选侧仍留 `appliedRules.decision=IGNORED` + `rule-ignore:<id>` 审计，可与"用户忽略"区分。
+> **备选均不采纳**：(i) `AUTO_COMMITTED→COMPLETED`（语义欺骗）；(ii) 改 `CheckoutContract` 状态机加 `DISMISSED`（更"正统"但要动跨层契约与既有映射测试，收益不抵成本）。
+>
+> **Q-B｜兜底 2 的落卡键 = session-linked（`pending:<sessionId>`）** ✅
+> 理由：带来"**AI 定论后自愈**"（`autoCommitMatchedCandidate` 按 sessionId 删卡）+ 会话关联；**孤儿键会让卡在后续 AI 定论时无法自动清理**（陈旧幽灵卡）。已有 4 道守卫消除与孤儿卡重复。
+>
+> **Q-C｜已有孤儿卡的场景本批不再补 session-linked 卡** ✅（沿用 V-3/V-4 现状）
+> 理由：改 V-3/V-4 的孤儿出口语义属**另一批**的改动。
+> ⚠️ 但**登记为已知不一致**："不是每张卡都能关联会话"；若要"每张卡都必须能关联"，须单开小批改 V-3/V-4 出口语义。
+>
+> **Q-D｜验收 (b) 的判据改为"`productDescription` 非空 + 金额/商户/时间非空"** ✅
+> 理由：`categoryId` 在 session-linked 待确认上**恒为 `null`**（分类在入账时才确定）⇒ 原判据**不可能满足**（写了也是假红/假绿）；用 `productDescription` 表达"AI 定论后字段完整"**等价**。
+> `categoryId` 透传（把规则 `categoryId` 透传进 `pendingFromConflict`）**属规格外行为改动** ⇒ **登记待裁定**（不混入本批）。
+
 #### D-2｜改造后的完整数据流
 
 ```
