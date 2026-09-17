@@ -139,16 +139,26 @@ class CheckoutPageDetector {
                 CheckoutDetectionRejection.UNSUPPORTED_SHOPPING_PACKAGE
             )
         }
-        if (observation.pageRole != CheckoutPageRole.CHECKOUT) {
+        // 改造 A-2（批 V-4）：页面角色门禁改用可截角色集合（单一出处：CheckoutContract）。
+        // 放宽到 PRODUCT_DETAIL / CART 是"详情页直达收银台"场景的前提；仍不放开
+        // UNKNOWN / SHOPPING_HOME（见 AUTO_DISPATCHABLE_PAGE_ROLES 的说明）。
+        if (observation.pageRole !in AUTO_DISPATCHABLE_PAGE_ROLES) {
             return CheckoutPageDetection.Rejected(CheckoutDetectionRejection.NOT_CHECKOUT_PAGE)
         }
-        if (!observation.hasFinalAmountSignal) {
-            return CheckoutPageDetection.Rejected(CheckoutDetectionRejection.MISSING_FINAL_AMOUNT)
-        }
-        // 动作信号缺失时允许类名结算语义替代：弹窗结算页的提交按钮会间歇不可见，
-        // 与 classifyPageRole 保持同一放行条件，否则角色判为 CHECKOUT 仍会被此处拒掉。
-        if (!observation.hasCheckoutActionSignal && !observation.hasCheckoutClassSemantic) {
-            return CheckoutPageDetection.Rejected(CheckoutDetectionRejection.MISSING_CHECKOUT_ACTION)
+        // 批 V-4b：下面两条是**结算页专属**证据（订单总额 + 结算动作词）。它们与
+        // `classifyPageRole` 的 CHECKOUT 分支**同源**（同一组布尔）⇒ 若对非结算角色
+        // 沿用这两条，角色门禁的放宽会完全空转（真机不存在"角色非 CHECKOUT 且带结算
+        // 证据"的帧，见 CheckoutWideIngestTest 的类注释）。故按角色分档：
+        // 非结算角色只受【白名单包 / 非敏感页 / 合法指纹】三条红线约束。
+        if (observation.pageRole == CheckoutPageRole.CHECKOUT) {
+            if (!observation.hasFinalAmountSignal) {
+                return CheckoutPageDetection.Rejected(CheckoutDetectionRejection.MISSING_FINAL_AMOUNT)
+            }
+            // 动作信号缺失时允许类名结算语义替代：弹窗结算页的提交按钮会间歇不可见，
+            // 与 classifyPageRole 保持同一放行条件，否则角色判为 CHECKOUT 仍会被此处拒掉。
+            if (!observation.hasCheckoutActionSignal && !observation.hasCheckoutClassSemantic) {
+                return CheckoutPageDetection.Rejected(CheckoutDetectionRejection.MISSING_CHECKOUT_ACTION)
+            }
         }
         if (observation.isSensitivePage) {
             return CheckoutPageDetection.Rejected(CheckoutDetectionRejection.SENSITIVE_PAGE)

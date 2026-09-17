@@ -789,13 +789,17 @@ logSink.w(
         state: SlotState,
         pageFingerprint: String?
     ): CheckoutSnapshot? {
+        // 批 V-4b：宽进后自动候选的角色可能是 PRODUCT_DETAIL / CART（详情页直达支付）
+        // ⇒ 选择判据改用可截角色集合（单一出处 CheckoutContract）。若仍硬编 CHECKOUT，
+        // B-1 搬运会搬不到图 ⇒ 恒落 PAYMENT_PROCESS_SNAPSHOT_MISSING。
+        // 安全前提不变：目标槽位 `payment:<sessionId>` 是一单一图，槽内不会出现他单候选。
         if (pageFingerprint != null) {
             findCandidate(state, pageFingerprint)
-                ?.takeIf { it.pageRole == CheckoutPageRole.CHECKOUT }
+                ?.takeIf { it.pageRole in AUTO_DISPATCHABLE_PAGE_ROLES }
                 ?.let { return it }
         }
-        return state.automaticCandidate?.takeIf { it.pageRole == CheckoutPageRole.CHECKOUT }
-            ?: state.manualCandidate?.takeIf { it.pageRole == CheckoutPageRole.CHECKOUT }
+        return state.automaticCandidate?.takeIf { it.pageRole in AUTO_DISPATCHABLE_PAGE_ROLES }
+            ?: state.manualCandidate?.takeIf { it.pageRole in AUTO_DISPATCHABLE_PAGE_ROLES }
     }
 
     /** 只读取与页面键对应的引用，避免为支付匹配复制或暴露图片。 */
@@ -929,8 +933,9 @@ logSink.w(
                 }
         } else {
             // 无指纹消费：D-16 = B ⇒ 自动优先 + 自动不可消费才回退手动。
-            // 判据与下方统一角色守卫同源，只保留 CHECKOUT 半边（自动候选由 store 的
-            // target 门禁保证恒为 CHECKOUT 角色；手动候选可为非结算角色，如断言通道）。
+            // 判据与下方统一角色守卫同源（批 V-4b 起两者同为 AUTO_DISPATCHABLE_PAGE_ROLES：
+            // 自动候选的角色由 store 的 target 门禁保证落在该集合内；手动候选可为更宽的
+            // 页面，如断言通道的首页/未知页）。
             // 不满足角色判据的候选不得被选中——否则会先选中再被角色守卫拒绝，
             // 丢失本应保留的歧义语义；此时回退 singleOrNull：槽内只剩自动候选时
             // 唯一即无歧义。
@@ -939,9 +944,9 @@ logSink.w(
             // 此前一律 AMBIGUOUS_CANDIDATES 拒绝，导致手动补截后支付交接反而消费不到
             // 任何快照；purgeExpired 已在上方执行，此处候选必然未过期。
             val automatic = state.automaticCandidate
-                ?.takeIf { it.pageRole == CheckoutPageRole.CHECKOUT }
+                ?.takeIf { it.pageRole in AUTO_DISPATCHABLE_PAGE_ROLES }
             val manual = state.manualCandidate
-                ?.takeIf { it.pageRole == CheckoutPageRole.CHECKOUT }
+                ?.takeIf { it.pageRole in AUTO_DISPATCHABLE_PAGE_ROLES }
             automatic
                 ?: manual
                 ?: candidates.singleOrNull()
@@ -949,11 +954,14 @@ logSink.w(
                     SnapshotConsumeRejection.AMBIGUOUS_CANDIDATES
                 )
         }
-        // 页面角色守卫：只有 USER_RETRY（手动截图重试）允许消费非结算页快照；
-        // CHECKOUT 快照必须允许 SUBMIT_ACTION / PAYMENT_APP_HANDOFF 等真实购买意图
-        // 消费——此前误用 canBufferUserRetrySnapshot()（含 CHECKOUT），导致结算页
-        // 快照对自动购买意图一律被拒，AI 永远无法派发。
-        if (snapshot.pageRole != CheckoutPageRole.CHECKOUT && intent != PurchaseIntent.USER_RETRY) {
+        // 页面角色守卫：只有 USER_RETRY（手动截图重试）允许消费任意非敏感页快照；
+        // 自动意图必须落在可截角色集合内（批 V-4b 起为 AUTO_DISPATCHABLE_PAGE_ROLES，
+        // 含 PRODUCT_DETAIL / CART / CHECKOUT —— 支撑"详情页直达收银台"）。
+        // 此前误用 canBufferUserRetrySnapshot()（含 CHECKOUT），导致结算页快照对
+        // 自动购买意图一律被拒，AI 永远无法派发。
+        // ⚠️ USER_RETRY 的豁免分支**必须保留**：断言通道是"用户显式点击绕过页面分类"
+        // 的独立旁路（Service.performUserAssertedCapture），不受宽进改动影响。
+        if (snapshot.pageRole !in AUTO_DISPATCHABLE_PAGE_ROLES && intent != PurchaseIntent.USER_RETRY) {
             logSink.i(
                 TAG,
                 "快照页面角色不可消费: role=${snapshot.pageRole}, intent=${intent.wireValue}"

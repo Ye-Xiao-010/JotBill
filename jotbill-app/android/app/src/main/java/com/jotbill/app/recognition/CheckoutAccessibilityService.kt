@@ -279,10 +279,6 @@ class CheckoutAccessibilityService : AccessibilityService() {
     }
 
     private val pageDetector = CheckoutPageDetector()
-    private data class StableCheckoutKey(
-        val shoppingPackage: String,
-        val pageFingerprint: String
-    )
 
     /** 支付结果异步任务使用的不可变交接上下文，不再回读可变的页面状态。 */
     private data class PaymentResultHandoffContext(
@@ -369,7 +365,6 @@ class CheckoutAccessibilityService : AccessibilityService() {
 
     /** 采样间隔内被抑制的"截图兜底已禁止"次数，随下次输出一并汇报。 */
     private val suppressedScreenshotFallbackBlockCount = mutableMapOf<String, Int>()
-    private var submitActionTriggeredKey: StableCheckoutKey? = null
     @Volatile
     private var serviceConnected = false
     private val stabilityCoordinator = CheckoutStabilityCoordinator(
@@ -380,7 +375,6 @@ class CheckoutAccessibilityService : AccessibilityService() {
             currentStableCheckout = page
             handoffStableCheckout = null
             handoffForegroundPackage = null
-            submitActionTriggeredKey = null
             dispatchEvent(CheckoutObservationEvent.Stable(page))
         },
         onInvalidated = { detail ->
@@ -391,7 +385,6 @@ class CheckoutAccessibilityService : AccessibilityService() {
                     handoffForegroundPackage = null
                 }
             }
-            submitActionTriggeredKey = null
             dispatchEvent(CheckoutObservationEvent.Invalidated(detail))
         }
     )
@@ -432,7 +425,6 @@ class CheckoutAccessibilityService : AccessibilityService() {
         currentStableCheckout = null
         handoffStableCheckout = null
         handoffForegroundPackage = null
-        submitActionTriggeredKey = null
         userRetryCaptureContext = null
         val configuredInfo = serviceInfo ?: AccessibilityServiceInfo()
         configuredInfo.eventTypes =
@@ -740,7 +732,6 @@ class CheckoutAccessibilityService : AccessibilityService() {
             lastWindowPackage = null
             lastWindowClass = null
             currentStableCheckout = null
-            submitActionTriggeredKey = null
             val invalidationReason = if (pageDetector.supportsPaymentPackage(shoppingPackage)) {
                 CheckoutInvalidationReason.PAYMENT_APP_HANDOFF
             } else {
@@ -910,19 +901,9 @@ class CheckoutAccessibilityService : AccessibilityService() {
                     // 以为识别未工作（截图链路实际照常运行）。后续 Stable 事件、
                     // Invalidated 或截图结果会自然覆盖该状态。
                     checkoutCaptureOverlayManager?.onCheckoutCandidate(observation)
-                    val stable = currentStableCheckout
-                    val sameStableCheckout = stable?.let { stablePage ->
-                        stablePage.observation.shoppingPackage == observation.shoppingPackage &&
-                            stablePage.observation.pageFingerprint == observation.pageFingerprint &&
-                            pageDetector.detect(stablePage.observation) is CheckoutPageDetection.Accepted
-                    } == true
-
                     // 新指纹只是“候选观察”，要等稳定窗口确认后才能替换当前结算页；
                     // 提前清空会在 PDD 内部支付中间页切微信时丢掉手头正在提交的会话。
                     stabilityCoordinator.observe(detection.observation)
-                    if (sameStableCheckout && shouldTriggerSubmitAction(observation, event, eventSource)) {
-                        triggerSubmitAction(observation.pageFingerprint)
-                    }
                 }
 
                 is CheckoutPageDetection.Rejected -> {
@@ -944,7 +925,6 @@ class CheckoutAccessibilityService : AccessibilityService() {
                         handoffStableCheckout = null
                         handoffForegroundPackage = null
                     }
-                    submitActionTriggeredKey = null
                     val userRetryCaptureAvailable = if (reason == CheckoutInvalidationReason.NON_CHECKOUT_PAGE) {
                         // 手动重试上下文就绪，或用户断言通道可用（服务存活且 AI 已配置），
                         // 都让按钮进入 READY：识别失败/普通购物页不再表现为"按钮不可用"，
@@ -1013,7 +993,6 @@ class CheckoutAccessibilityService : AccessibilityService() {
         currentStableCheckout = null
         handoffStableCheckout = null
         handoffForegroundPackage = null
-        submitActionTriggeredKey = null
         clearUserRetryCaptureContext()
         snapshotCaptureCoordinator?.onServiceInterrupted()
         purchaseIntentCoordinator?.onServiceInterrupted()
@@ -1034,7 +1013,6 @@ class CheckoutAccessibilityService : AccessibilityService() {
         currentStableCheckout = null
         handoffStableCheckout = null
         handoffForegroundPackage = null
-        submitActionTriggeredKey = null
         clearUserRetryCaptureContext()
         if (activeService === this) {
             activeService = null
@@ -1054,7 +1032,6 @@ class CheckoutAccessibilityService : AccessibilityService() {
         currentStableCheckout = null
         handoffStableCheckout = null
         handoffForegroundPackage = null
-        submitActionTriggeredKey = null
         clearUserRetryCaptureContext()
         purchaseIntentCoordinator?.setReadyDispatcher(null)
         purchaseIntentCoordinator?.setResultConsumer(null)
@@ -1627,6 +1604,11 @@ class CheckoutAccessibilityService : AccessibilityService() {
                                 evidence = evidence,
                                 handoffContext = handoffContext
                             )
+                            // 改造 A-3（批 V-4）：证据落库返回后**在同一协程内**派发 AI。
+                            // 顺序保证：suspend 函数返回即证据已落库（含"落待确认"分支），
+                            // 故 trigger 必然晚于落库；写在本 launch 之外则 trigger 会先执行。
+                            // ⚠️ 只接主路径：截图兜底路径自己已送 AI，不得二次派发。
+                            dispatchPaymentResultIntent(paymentPackage, evidence)
                         } catch (error: Exception) {
                             Log.w(TAG, "支付结果页证据落库失败", error)
                             try {
@@ -2107,6 +2089,43 @@ class CheckoutAccessibilityService : AccessibilityService() {
             reference = reference,
             handoffAt = System.currentTimeMillis()
         )
+    }
+
+    /**
+     * 改造 A-3（批 V-4）：结果页主路径的 AI 派发接线。
+     *
+     * **位置约束（三条，均有实测依据）**：
+     * 1. 必须在 `recordPaymentResultEvidence` 返回之后，且与它**同一协程**顺序执行
+     *    —— 写在该 `scope.launch { }` 之外时，`launch` 只是提交任务，
+     *    `trigger` 会先于证据落库执行（即"证据未落库就派 AI"）；
+     * 2. **只接结果页主路径**（文本解析成功），**不接截图兜底路径** ——
+     *    后者在 `consumePaymentResultScreenshot` 里已自行调用
+     *    `client.recognizePaymentResult` 送 AI，再接一次会让同一支付事件
+     *    产生 2 次 AI 请求（违反"完成支付 ⇒ 恰好 1 次 AI 请求"）；
+     * 3. **不触碰断言通道** —— 断言通道是 `performUserAssertedCapture` 内
+     *    `buffer.consumeForAi(USER_RETRY) → dispatchReadyToAi` 的独立旁路，
+     *    与本次接线无交集。
+     *
+     * 派发语义 = 消费支付过程槽位 `payment:<sessionId>` 的图并送 AI；无图/过期/
+     * 归属歧义时经协调器孤儿出口落待确认（不静默丢弃）。
+     */
+    private fun dispatchPaymentResultIntent(
+        paymentPackage: String,
+        evidence: PaymentResultEvidence
+    ) {
+        val coordinator = purchaseIntentCoordinator
+        if (coordinator == null) {
+            Log.w(TAG, "支付结果页派发跳过: 购买意图协调器不可用")
+            return
+        }
+        try {
+            coordinator.trigger(
+                intent = PurchaseIntent.PAYMENT_RESULT,
+                paymentResult = buildPaymentResultAttributionSignal(paymentPackage, evidence)
+            )
+        } catch (error: RuntimeException) {
+            Log.w(TAG, "支付结果页 AI 派发失败", error)
+        }
     }
 
     /**
@@ -2912,7 +2931,6 @@ class CheckoutAccessibilityService : AccessibilityService() {
             currentStableCheckout = null
             handoffStableCheckout = null
             handoffForegroundPackage = null
-            submitActionTriggeredKey = null
             userRetryCaptureContext = null
 
             val sharedBuffer = CheckoutSnapshotBuffer()
@@ -2978,45 +2996,6 @@ class CheckoutAccessibilityService : AccessibilityService() {
             callback.onResult(result)
         } catch (error: RuntimeException) {
             Log.w(TAG, "结算页 AI 结果消费者失败", error)
-        }
-    }
-
-    /** 只有同一稳定结算指纹的第一次明确点击才会进入 SUBMIT_ACTION。 */
-    private fun shouldTriggerSubmitAction(
-        observation: CheckoutPageObservation,
-        event: AccessibilityEvent,
-        eventSource: AccessibilityNodeInfo?
-    ): Boolean {
-        if (observation.isSensitivePage || observation.pageRole != CheckoutPageRole.CHECKOUT) {
-            return false
-        }
-        if (!CheckoutSubmitActionDetector.isSubmitActionEvent(
-                event = event,
-                source = eventSource,
-                shoppingPackage = observation.shoppingPackage
-            )
-        ) {
-            return false
-        }
-
-        val key = StableCheckoutKey(
-            shoppingPackage = observation.shoppingPackage,
-            pageFingerprint = observation.pageFingerprint
-        )
-        if (submitActionTriggeredKey == key) {
-            return false
-        }
-        submitActionTriggeredKey = key
-        return true
-    }
-
-    /** 提交动作只调用已有购买意图协调器，不直接触碰截图或 AI。 */
-    private fun triggerSubmitAction(pageFingerprint: String) {
-        val coordinator = purchaseIntentCoordinator ?: return
-        try {
-            coordinator.trigger(PurchaseIntent.SUBMIT_ACTION, pageFingerprint)
-        } catch (error: RuntimeException) {
-            Log.w(TAG, "提交订单购买意图触发失败", error)
         }
     }
 

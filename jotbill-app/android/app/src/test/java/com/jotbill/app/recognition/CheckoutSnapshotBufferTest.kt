@@ -103,18 +103,18 @@ class CheckoutSnapshotBufferTest {
         assertEquals(1, stored.candidateRevision)
         assertFalse(stored.requiresDisambiguation)
 
-        val result = f.buffer.consumeForAi(SLOT, PurchaseIntent.SUBMIT_ACTION, FP_A)
+        val result = f.buffer.consumeForAi(SLOT, PurchaseIntent.PAYMENT_APP_HANDOFF, FP_A)
         assertTrue(result is CheckoutAiTriggerResult.Ready)
         result as CheckoutAiTriggerResult.Ready
         assertEquals(
             CheckoutRequestKey.from(SESSION, "com.test.app", FP_A),
             result.requestKey
         )
-        assertEquals(PurchaseIntent.SUBMIT_ACTION, result.intent)
+        assertEquals(PurchaseIntent.PAYMENT_APP_HANDOFF, result.intent)
         assertTrue(result.snapshot.imageBytes.contentEquals(ByteArray(16) { 1 }))
         assertNull(f.buffer.current(SLOT))
 
-        val again = f.buffer.consumeForAi(SLOT, PurchaseIntent.SUBMIT_ACTION, FP_A)
+        val again = f.buffer.consumeForAi(SLOT, PurchaseIntent.PAYMENT_APP_HANDOFF, FP_A)
         assertTrue(again is CheckoutAiTriggerResult.AlreadyTriggered)
         assertEquals(result.requestKey, (again as CheckoutAiTriggerResult.AlreadyTriggered).requestKey)
     }
@@ -126,7 +126,7 @@ class CheckoutSnapshotBufferTest {
         val stored = f.buffer.store(captureRequest(bytes = original)) as SnapshotStoreResult.Stored
         original[0] = 9
         // 请求字节数组在 store 内被复制,外部修改不影响内部候选
-        val consumed = f.buffer.consumeForAi(SLOT, PurchaseIntent.SUBMIT_ACTION, FP_A)
+        val consumed = f.buffer.consumeForAi(SLOT, PurchaseIntent.PAYMENT_APP_HANDOFF, FP_A)
             as CheckoutAiTriggerResult.Ready
         assertTrue(consumed.snapshot.imageBytes[0] == 7.toByte())
         stored.snapshot.release()
@@ -136,7 +136,7 @@ class CheckoutSnapshotBufferTest {
     fun consumeReleasesInternalCandidateSoReturnedCopyIsIndependent() {
         val f = Fixture()
         f.buffer.store(captureRequest())
-        val ready = f.buffer.consumeForAi(SLOT, PurchaseIntent.SUBMIT_ACTION, FP_A)
+        val ready = f.buffer.consumeForAi(SLOT, PurchaseIntent.PAYMENT_APP_HANDOFF, FP_A)
             as CheckoutAiTriggerResult.Ready
         ready.snapshot.release()
         assertTrue(ready.snapshot.imageBytes.all { it == 0.toByte() })
@@ -200,7 +200,7 @@ class CheckoutSnapshotBufferTest {
         )
         assertEquals(
             SnapshotConsumeRejection.NO_BUFFERED_SNAPSHOT,
-            (f.buffer.consumeForAi(SLOT, PurchaseIntent.SUBMIT_ACTION, FP_A)
+            (f.buffer.consumeForAi(SLOT, PurchaseIntent.PAYMENT_APP_HANDOFF, FP_A)
                 as CheckoutAiTriggerResult.Rejected).reason
         )
         assertNull(f.buffer.current(SLOT))
@@ -263,7 +263,7 @@ class CheckoutSnapshotBufferTest {
         assertEquals(1, candidates.size)
         assertEquals(FP_B, candidates[0].pageFingerprint)
         assertTrue(
-            f.buffer.consumeForAi(SLOT, PurchaseIntent.SUBMIT_ACTION)
+            f.buffer.consumeForAi(SLOT, PurchaseIntent.PAYMENT_APP_HANDOFF)
                 is CheckoutAiTriggerResult.Ready
         )
     }
@@ -312,7 +312,7 @@ class CheckoutSnapshotBufferTest {
 
     @Test
     fun fingerprintlessConsumeUsesAutomaticWhenManualIsNotConsumableForIntent() {
-        // 手动候选为非结算角色（如商品页手动截图）时对 SUBMIT_ACTION 不可消费，
+        // 手动候选为非结算角色（如商品页手动截图）时对 PAYMENT_APP_HANDOFF 不可消费，
         // 但槽内还有可消费的自动候选 ⇒ 自动优先直接取用，不再落到歧义。
         val f = Fixture()
         f.buffer.store(
@@ -325,7 +325,7 @@ class CheckoutSnapshotBufferTest {
         )
         f.buffer.store(captureRequest(fingerprint = FP_B))
 
-        val result = f.buffer.consumeForAi(SLOT, PurchaseIntent.SUBMIT_ACTION)
+        val result = f.buffer.consumeForAi(SLOT, PurchaseIntent.PAYMENT_APP_HANDOFF)
         assertTrue(result is CheckoutAiTriggerResult.Ready)
         assertEquals(FP_B, (result as CheckoutAiTriggerResult.Ready).snapshot.pageFingerprint)
     }
@@ -418,7 +418,7 @@ class CheckoutSnapshotBufferTest {
     fun userRetryStoreClearsConsumedTombstoneAndCanConsumeAgain() {
         val f = Fixture()
         f.buffer.store(captureRequest())
-        val first = f.buffer.consumeForAi(SLOT, PurchaseIntent.SUBMIT_ACTION, FP_A)
+        val first = f.buffer.consumeForAi(SLOT, PurchaseIntent.PAYMENT_APP_HANDOFF, FP_A)
         assertTrue(first is CheckoutAiTriggerResult.Ready)
         // 会话未变时再次自动存储被消费墓碑拦截
         assertEquals(
@@ -451,7 +451,7 @@ class CheckoutSnapshotBufferTest {
         )
         assertEquals(
             SnapshotConsumeRejection.NO_MATCHING_PAGE_FINGERPRINT,
-            (f.buffer.consumeForAi(SLOT, PurchaseIntent.SUBMIT_ACTION, FP_A)
+            (f.buffer.consumeForAi(SLOT, PurchaseIntent.PAYMENT_APP_HANDOFF, FP_A)
                 as CheckoutAiTriggerResult.Rejected).reason
         )
         assertTrue(
@@ -466,7 +466,7 @@ class CheckoutSnapshotBufferTest {
         f.buffer.store(captureRequest(fingerprint = FP_A))
         assertEquals(
             SnapshotConsumeRejection.NO_MATCHING_PAGE_FINGERPRINT,
-            (f.buffer.consumeForAi(SLOT, PurchaseIntent.SUBMIT_ACTION, FP_B)
+            (f.buffer.consumeForAi(SLOT, PurchaseIntent.PAYMENT_APP_HANDOFF, FP_B)
                 as CheckoutAiTriggerResult.Rejected).reason
         )
     }
@@ -493,7 +493,7 @@ class CheckoutSnapshotBufferTest {
         f.buffer.store(captureRequest())
         f.advance(TTL + 1)
         assertNull(f.buffer.current(SLOT))
-        val expired = f.buffer.consumeForAi(SLOT, PurchaseIntent.SUBMIT_ACTION, FP_A)
+        val expired = f.buffer.consumeForAi(SLOT, PurchaseIntent.PAYMENT_APP_HANDOFF, FP_A)
         assertEquals(
             SnapshotConsumeRejection.SNAPSHOT_EXPIRED,
             (expired as CheckoutAiTriggerResult.Rejected).reason
@@ -501,7 +501,7 @@ class CheckoutSnapshotBufferTest {
         // 首次过期消费移除整个槽位,第二次是普通无缓冲
         assertEquals(
             SnapshotConsumeRejection.NO_BUFFERED_SNAPSHOT,
-            (f.buffer.consumeForAi(SLOT, PurchaseIntent.SUBMIT_ACTION, FP_A)
+            (f.buffer.consumeForAi(SLOT, PurchaseIntent.PAYMENT_APP_HANDOFF, FP_A)
                 as CheckoutAiTriggerResult.Rejected).reason
         )
     }
@@ -604,7 +604,7 @@ class CheckoutSnapshotBufferTest {
         assertEquals(FP_A, reference.pageFingerprint)
         // 读引用不消费:后续仍可正常消费
         assertTrue(
-            f.buffer.consumeForAi(SLOT, PurchaseIntent.SUBMIT_ACTION, FP_A)
+            f.buffer.consumeForAi(SLOT, PurchaseIntent.PAYMENT_APP_HANDOFF, FP_A)
                 is CheckoutAiTriggerResult.Ready
         )
         assertNull(f.buffer.findReference(SLOT, FP_A))
@@ -661,7 +661,7 @@ class CheckoutSnapshotBufferTest {
         assertEquals(1, f.scheduler.scheduled.size)
         assertEquals(TTL, f.scheduler.scheduled.single().second)
         // 消费后无候选,只剩取消
-        f.buffer.consumeForAi(SLOT, PurchaseIntent.SUBMIT_ACTION, FP_A)
+        f.buffer.consumeForAi(SLOT, PurchaseIntent.PAYMENT_APP_HANDOFF, FP_A)
         assertTrue(f.scheduler.scheduled.isEmpty())
     }
 
@@ -715,7 +715,7 @@ class CheckoutSnapshotBufferTest {
             as CheckoutAiTriggerResult.Ready
         ready.snapshot.release()
         // 结算槽位的自动候选原样保留，仍可被真实购买意图消费
-        val auto = f.buffer.consumeForAi(SLOT, PurchaseIntent.SUBMIT_ACTION, FP_A)
+        val auto = f.buffer.consumeForAi(SLOT, PurchaseIntent.PAYMENT_APP_HANDOFF, FP_A)
         assertTrue(auto is CheckoutAiTriggerResult.Ready)
         (auto as CheckoutAiTriggerResult.Ready).snapshot.release()
     }

@@ -94,7 +94,7 @@ class CheckoutPurchaseIntentCoordinatorGateTest {
             sessionId: String = SESSION
         ): CheckoutAiTriggerResult.Ready = CheckoutAiTriggerResult.Ready(
             requestKey = CheckoutRequestKey.from(sessionId, PKG, fingerprint),
-            intent = PurchaseIntent.SUBMIT_ACTION,
+            intent = PurchaseIntent.PAYMENT_APP_HANDOFF,
             snapshot = snapshot(fingerprint = fingerprint, sessionId = sessionId)
         )
 
@@ -174,7 +174,7 @@ class CheckoutPurchaseIntentCoordinatorGateTest {
     @Test
     fun triggerWithoutStableContextIsNoCheckoutContext() {
         val f = Fixture()
-        val result = f.coordinator.trigger(PurchaseIntent.SUBMIT_ACTION, FP_A)
+        val result = f.coordinator.trigger(PurchaseIntent.PAYMENT_APP_HANDOFF, FP_A)
         assertEquals(
             PurchaseIntentGateRejection.NO_CHECKOUT_CONTEXT,
             (result as PurchaseIntentCoordinationResult.Rejected).gateReason
@@ -187,7 +187,7 @@ class CheckoutPurchaseIntentCoordinatorGateTest {
         val f = Fixture()
         f.stable()
         f.coordinator.onServiceInterrupted()
-        val result = f.coordinator.trigger(PurchaseIntent.SUBMIT_ACTION, FP_A)
+        val result = f.coordinator.trigger(PurchaseIntent.PAYMENT_APP_HANDOFF, FP_A)
         assertEquals(
             PurchaseIntentGateRejection.NO_CHECKOUT_CONTEXT,
             (result as PurchaseIntentCoordinationResult.Rejected).gateReason
@@ -199,7 +199,7 @@ class CheckoutPurchaseIntentCoordinatorGateTest {
         val f = Fixture()
         f.stable()
         f.coordinator.close()
-        val result = f.coordinator.trigger(PurchaseIntent.SUBMIT_ACTION, FP_A)
+        val result = f.coordinator.trigger(PurchaseIntent.PAYMENT_APP_HANDOFF, FP_A)
         assertEquals(
             PurchaseIntentGateRejection.COORDINATOR_CLOSED,
             (result as PurchaseIntentCoordinationResult.Rejected).gateReason
@@ -219,7 +219,7 @@ class CheckoutPurchaseIntentCoordinatorGateTest {
     fun stableFrameWithoutSessionDoesNotEstablishContext() {
         val f = Fixture()
         f.stable(sessionId = null)
-        val result = f.coordinator.trigger(PurchaseIntent.SUBMIT_ACTION, FP_A)
+        val result = f.coordinator.trigger(PurchaseIntent.PAYMENT_APP_HANDOFF, FP_A)
         assertEquals(
             PurchaseIntentGateRejection.NO_CHECKOUT_CONTEXT,
             (result as PurchaseIntentCoordinationResult.Rejected).gateReason
@@ -240,10 +240,10 @@ class CheckoutPurchaseIntentCoordinatorGateTest {
         f.stable()
         f.stable(fingerprint = FP_B, sessionId = null)
         f.gateway.consumeResult = f.ready()
-        val result = f.coordinator.trigger(PurchaseIntent.SUBMIT_ACTION, FP_A)
+        val result = f.coordinator.trigger(PurchaseIntent.PAYMENT_APP_HANDOFF, FP_A)
         assertTrue(result is PurchaseIntentCoordinationResult.AiDispatched)
         assertEquals(
-            listOf(Triple(SLOT, PurchaseIntent.SUBMIT_ACTION, FP_A)),
+            listOf(Triple(SLOT, PurchaseIntent.PAYMENT_APP_HANDOFF, FP_A)),
             f.gateway.consumeCalls
         )
     }
@@ -256,12 +256,12 @@ class CheckoutPurchaseIntentCoordinatorGateTest {
         f.stable()
         f.gateway.consumeResult = f.ready()
         f.gateway.candidates = listOf(snapshot())
-        val result = f.coordinator.trigger(PurchaseIntent.SUBMIT_ACTION, FP_A)
+        val result = f.coordinator.trigger(PurchaseIntent.PAYMENT_APP_HANDOFF, FP_A)
         assertTrue(result is PurchaseIntentCoordinationResult.AiDispatched)
         result as PurchaseIntentCoordinationResult.AiDispatched
         assertEquals(1, f.dispatched.size)
         assertEquals(result.requestKey, f.dispatched.single().requestKey)
-        assertEquals(listOf(Triple(SLOT, PurchaseIntent.SUBMIT_ACTION, FP_A)), f.gateway.consumeCalls)
+        assertEquals(listOf(Triple(SLOT, PurchaseIntent.PAYMENT_APP_HANDOFF, FP_A)), f.gateway.consumeCalls)
     }
 
     @Test
@@ -272,11 +272,11 @@ class CheckoutPurchaseIntentCoordinatorGateTest {
         val snap = snapshot()
         f.gateway.consumeResult = CheckoutAiTriggerResult.Ready(
             requestKey = CheckoutRequestKey.from(SESSION, PKG, FP_A),
-            intent = PurchaseIntent.SUBMIT_ACTION,
+            intent = PurchaseIntent.PAYMENT_APP_HANDOFF,
             snapshot = snap
         )
         f.gateway.candidates = listOf(snapshot())
-        val result = f.coordinator.trigger(PurchaseIntent.SUBMIT_ACTION, FP_A)
+        val result = f.coordinator.trigger(PurchaseIntent.PAYMENT_APP_HANDOFF, FP_A)
         assertTrue(result is PurchaseIntentCoordinationResult.ReleasedWithoutConsumer)
         assertEquals(
             "SNAPSHOT_RELEASED_NO_CONSUMER",
@@ -292,12 +292,12 @@ class CheckoutPurchaseIntentCoordinatorGateTest {
         val snap = snapshot()
         f.gateway.consumeResult = CheckoutAiTriggerResult.Ready(
             requestKey = CheckoutRequestKey.from(SESSION, PKG, FP_A),
-            intent = PurchaseIntent.SUBMIT_ACTION,
+            intent = PurchaseIntent.PAYMENT_APP_HANDOFF,
             snapshot = snap
         )
         f.gateway.candidates = listOf(snapshot())
         f.coordinator.setReadyDispatcher { false }
-        val result = f.coordinator.trigger(PurchaseIntent.SUBMIT_ACTION, FP_A)
+        val result = f.coordinator.trigger(PurchaseIntent.PAYMENT_APP_HANDOFF, FP_A)
         assertTrue(result is PurchaseIntentCoordinationResult.ReleasedWithoutConsumer)
         assertEquals(
             "SNAPSHOT_RELEASED_AI_DISPATCH_FAILED",
@@ -426,7 +426,7 @@ class CheckoutPurchaseIntentCoordinatorGateTest {
         assertEquals(
             PurchaseIntentGateRejection.INVALID_PAYMENT_NOTIFICATION,
             (f.coordinator.trigger(
-                PurchaseIntent.SUBMIT_ACTION,
+                PurchaseIntent.PAYMENT_APP_HANDOFF,
                 FP_A,
                 paymentNotification = paymentSignal()
             ) as PurchaseIntentCoordinationResult.Rejected).gateReason
@@ -443,16 +443,16 @@ class CheckoutPurchaseIntentCoordinatorGateTest {
         f.gateway.candidates = listOf(snapshot())
         f.gateway.consumeResult = f.ready()
         assertTrue(
-            f.coordinator.trigger(PurchaseIntent.SUBMIT_ACTION, FP_A)
+            f.coordinator.trigger(PurchaseIntent.PAYMENT_APP_HANDOFF, FP_A)
                 is PurchaseIntentCoordinationResult.AiDispatched
         )
         assertTrue(
-            f.coordinator.trigger(PurchaseIntent.SUBMIT_ACTION, FP_A)
+            f.coordinator.trigger(PurchaseIntent.PAYMENT_APP_HANDOFF, FP_A)
                 is PurchaseIntentCoordinationResult.AiDispatched
         )
         assertEquals(
             PurchaseIntentGateRejection.REQUEST_BUDGET_EXHAUSTED,
-            (f.coordinator.trigger(PurchaseIntent.SUBMIT_ACTION, FP_A)
+            (f.coordinator.trigger(PurchaseIntent.PAYMENT_APP_HANDOFF, FP_A)
                 as PurchaseIntentCoordinationResult.Rejected).gateReason
         )
         assertEquals(2, f.gateway.consumeCalls.size)
@@ -465,7 +465,7 @@ class CheckoutPurchaseIntentCoordinatorGateTest {
         val f = Fixture()
         f.stable()
         f.gateway.consumeError = IllegalStateException("slots corrupted")
-        val result = f.coordinator.trigger(PurchaseIntent.SUBMIT_ACTION, FP_A)
+        val result = f.coordinator.trigger(PurchaseIntent.PAYMENT_APP_HANDOFF, FP_A)
         assertEquals(
             PurchaseIntentGateRejection.BUFFER_UNAVAILABLE,
             (result as PurchaseIntentCoordinationResult.Rejected).gateReason
@@ -478,7 +478,7 @@ class CheckoutPurchaseIntentCoordinatorGateTest {
         f.stable()
         f.gateway.consumeResult =
             CheckoutAiTriggerResult.Rejected(SnapshotConsumeRejection.SNAPSHOT_EXPIRED)
-        val result = f.coordinator.trigger(PurchaseIntent.SUBMIT_ACTION, FP_A)
+        val result = f.coordinator.trigger(PurchaseIntent.PAYMENT_APP_HANDOFF, FP_A)
         result as PurchaseIntentCoordinationResult.Rejected
         assertEquals(SnapshotConsumeRejection.SNAPSHOT_EXPIRED, result.consumeResult?.reason)
         assertEquals("SNAPSHOT_EXPIRED", result.reasonCode)
@@ -501,18 +501,11 @@ class CheckoutPurchaseIntentCoordinatorGateTest {
         )
     }
 
-    @Test
-    fun nonHandoffIntentKeepsRequestedFingerprintUnchanged() {
-        val f = Fixture()
-        f.stable(FP_A)
-        f.gateway.candidates = listOf(snapshot(fingerprint = FP_B))
-        f.gateway.consumeResult = f.ready(FP_B)
-        f.coordinator.trigger(PurchaseIntent.SUBMIT_ACTION, FP_A)
-        assertEquals(
-            listOf(Triple(SLOT, PurchaseIntent.SUBMIT_ACTION, FP_A)),
-            f.gateway.consumeCalls
-        )
-    }
+    // D-11（批 V-4）：原 `nonHandoffIntentKeepsRequestedFingerprintUnchanged` 用例已删除。
+    // 它用 SUBMIT_ACTION 表达"除支付交接外的自动意图不做指纹校正"；该意图随 D-11
+    // 整链路删除后，自动通道只剩 PAYMENT_RESULT —— 而它走**无指纹消费**（交接指纹由
+    // buffer 的槽内选择决定），根本不进入校正分支 ⇒ 该用例失去表达对象。
+    // 校正行为由上方 `handoffFingerprintCorrectedToSingleCandidateBeforeConsume` 正向覆盖。
 
     // ---------- 改造 B-2：交接只搬运，不再派发 AI ----------
 
@@ -817,7 +810,7 @@ class CheckoutPurchaseIntentCoordinatorGateTest {
         f.stable()
         f.gateway.consumeResult = f.ready()
         val mismatched = f.coordinator.trigger(
-            PurchaseIntent.SUBMIT_ACTION,
+            PurchaseIntent.PAYMENT_APP_HANDOFF,
             FP_A,
             paymentResult = paymentResultSignal(amountMinor = 100L, occurredAt = 1L)
         )

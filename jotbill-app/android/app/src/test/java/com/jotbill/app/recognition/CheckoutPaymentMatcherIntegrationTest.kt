@@ -6,6 +6,7 @@ import androidx.test.core.app.ApplicationProvider
 import com.jotbill.app.data.JotBillDatabase
 import com.jotbill.app.data.entity.PaymentEvidenceEntity
 import com.jotbill.app.data.entity.TransactionCandidateEntity
+import com.jotbill.app.pending.isUserAssertedConflictReason
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -97,6 +98,84 @@ class CheckoutPaymentMatcherIntegrationTest {
         // 同一 sourceEventKey 重复处理(通知与无障碍双路径竞态)不产生第二行
         matcher.recordOrphanPaymentSignal(paymentSignal(), sourceType = "ACCESSIBILITY")
         assertEquals(1, database.pendingTransactionDao().getPage(10, 0).size)
+    }
+
+    /**
+     * 实测（批 V-4）：改造 A-3 接线后，同一笔支付可能经**两条路径**各落一次孤儿。
+     *
+     * 调用序（由 A-3 的接线位置决定，实测确认）：
+     * 1. **Service 侧先落** —— 主路径 `scope.launch { recordPaymentResultEvidence(...) }`
+     *    在同一协程内**同步挂起**到事务提交，才轮到 `dispatchPaymentResultIntent`；
+     * 2. **协调器侧后落** —— `trigger(PAYMENT_RESULT)` → 归属成功但支付过程槽位无图 ⇒
+     *    `PAYMENT_PROCESS_SNAPSHOT_MISSING`，其落库出口是**另一个协程**
+     *    （`configurePaymentSignalOrphanSink` 内 `scope.launch`）⇒ 必然晚于第 1 步。
+     *
+     * 两条路径共用 `stableId("pending-orphan", sourceEventKey)`。**改前实测**：后到的
+     * `PAYMENT_PROCESS_SNAPSHOT_MISSING` 被幂等跳过并丢弃 ⇒ R2 的"量化搬运漏检率"
+     * 锚点丢失。**处置后**：合并保留（既有码在前 + 新码追加），本用例钉死该行为。
+     */
+    @Test
+    fun 孤儿双落库_后到的搬运漏检原因被合并保留() = runBlocking {
+        val signal = paymentSignal(sourceEventKey = "evt-orphan-dual-path")
+
+        // ① Service 侧（先）
+        matcher.recordOrphanPaymentSignal(
+            signal,
+            sourceType = "ACCESSIBILITY",
+            conflictReason = "NO_ACTIVE_SESSION"
+        )
+        // ② 协调器侧（后）—— 搬运漏检的量化锚点
+        matcher.recordOrphanPaymentSignal(
+            signal,
+            sourceType = "ACCESSIBILITY",
+            conflictReason = PAYMENT_PROCESS_SNAPSHOT_MISSING
+        )
+
+        val rows = database.pendingTransactionDao().getPage(10, 0)
+        assertEquals("同一 sourceEventKey 只落一条待确认（无重复卡片）", 1, rows.size)
+        assertEquals(
+            "既有码必须在前（保住 startsWith 前缀语义），新码追加在后",
+            "NO_ACTIVE_SESSION,$PAYMENT_PROCESS_SNAPSHOT_MISSING",
+            rows.single().conflictReason
+        )
+
+        // ③ 再次重复落库：不得重复追加同一码（幂等）
+        matcher.recordOrphanPaymentSignal(
+            signal,
+            sourceType = "ACCESSIBILITY",
+            conflictReason = PAYMENT_PROCESS_SNAPSHOT_MISSING
+        )
+        assertEquals(
+            "重复落库不得重复追加",
+            "NO_ACTIVE_SESSION,$PAYMENT_PROCESS_SNAPSHOT_MISSING",
+            database.pendingTransactionDao().getPage(10, 0).single().conflictReason
+        )
+    }
+
+    /**
+     * 合并不得破坏 D-21 的 `isUserAssertedConflictReason` 前缀语义。
+     *
+     * 手动断言通道的冲突码以 `USER_ASSERTED` 开头，`PendingChangeHub` 用
+     * `startsWith` 识别"用户断言"分支；若合并时把新码插到前面，该分支会失效
+     * ⇒ 手动断言产生的待确认会被当成普通冲突（弹窗与文案都错）。
+     */
+    @Test
+    fun 孤儿冲突码合并保住用户断言前缀语义() = runBlocking {
+        val signal = paymentSignal(sourceEventKey = "evt-orphan-asserted")
+        matcher.recordOrphanPaymentSignal(
+            signal,
+            sourceType = "MANUAL",
+            conflictReason = "USER_ASSERTED_AMOUNT_MISSING"
+        )
+        matcher.recordOrphanPaymentSignal(
+            signal,
+            sourceType = "MANUAL",
+            conflictReason = PAYMENT_PROCESS_SNAPSHOT_MISSING
+        )
+        val reason = database.pendingTransactionDao().getPage(10, 0).single().conflictReason
+        assertTrue("前缀语义必须保留，实际=$reason", reason!!.startsWith("USER_ASSERTED"))
+        assertTrue("锚点必须同时保留，实际=$reason", reason.contains(PAYMENT_PROCESS_SNAPSHOT_MISSING))
+        assertTrue(isUserAssertedConflictReason(reason))
     }
 
     @Test

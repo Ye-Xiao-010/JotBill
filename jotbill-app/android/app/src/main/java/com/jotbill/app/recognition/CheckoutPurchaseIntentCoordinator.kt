@@ -67,6 +67,27 @@ internal fun PaymentResultAttributionSignal.toPaymentNotificationFallbackSignal(
 internal const val PAYMENT_RESULT_NO_MATCHING_SESSION = "PAYMENT_RESULT_NO_MATCHING_SESSION"
 
 /**
+ * 结果页证据 → 归属信号（改造 A-3，批 V-4）。
+ *
+ * 纯映射、无副作用，**供 JVM 单测直接断言字段是否无损透传**（服务层是
+ * `AccessibilityService`，接线点本身在 JVM 测不到，故把可测部分抽到这里）。
+ * `occurredAt` 缺失时补当前时刻，与 Service 侧证据落库链路的同一纪律一致。
+ */
+internal fun buildPaymentResultAttributionSignal(
+    paymentPackage: String,
+    evidence: PaymentResultEvidence,
+    nowMillis: () -> Long = { System.currentTimeMillis() }
+): PaymentResultAttributionSignal = PaymentResultAttributionSignal(
+    paymentPackage = paymentPackage,
+    amountMinor = evidence.amountMinor,
+    occurredAt = evidence.occurredAt ?: nowMillis(),
+    merchant = evidence.merchant,
+    orderId = evidence.orderId,
+    sourceEventKey = evidence.sourceEventKey,
+    rawTextHash = evidence.rawTextHash
+)
+
+/**
  * 孤儿待确认 conflictReason：支付过程槽位缺图/过期（改造 B-3 兜底）。
  * 该标记同时是量化"搬运漏检率"的日志锚点，不得改名。
  */
@@ -556,8 +577,6 @@ internal class CheckoutPurchaseIntentCoordinator(
     }
 
     private fun contextFor(intent: PurchaseIntent): SafeCheckoutContext? = when (intent) {
-        PurchaseIntent.SUBMIT_ACTION -> activeContext
-
         // 改造 E-2：单槽 handoffContext 的映射化版本 —— 取"最近一次交接"。
         PurchaseIntent.PAYMENT_APP_HANDOFF ->
             handoffContexts.values.lastOrNull() ?: activeContext
@@ -663,7 +682,12 @@ internal class CheckoutPurchaseIntentCoordinator(
         }
         val isInternalNonCheckoutRetry =
             intent == PurchaseIntent.USER_RETRY && explicitUserRetryContext != null
-        if (context.pageRole != CheckoutPageRole.CHECKOUT && !isInternalNonCheckoutRetry) {
+        // 改造 A-2（批 V-4）：门禁 2 改用"可派发角色集合"（单一出处 CheckoutContract，
+        // 与 canBufferSnapshot() / CheckoutPageDetector.detect() 同一常量）。
+        // 宽进后交接上下文的角色可能是 PRODUCT_DETAIL / CART，用 `!= CHECKOUT` 会把
+        // 它们误拒为 NOT_CHECKOUT_PAGE。
+        // ⚠️ 只作用于自动通道（coordinator）；断言通道是独立旁路，不经过本函数。
+        if (context.pageRole !in AUTO_DISPATCHABLE_PAGE_ROLES && !isInternalNonCheckoutRetry) {
             return PurchaseIntentCoordinationResult.Rejected(
                 intent = intent,
                 gateReason = PurchaseIntentGateRejection.NOT_CHECKOUT_PAGE,

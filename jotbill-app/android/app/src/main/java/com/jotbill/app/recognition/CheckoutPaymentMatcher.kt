@@ -517,12 +517,32 @@ internal class CheckoutPaymentMatcher(
             val sourceEventKey = sourceEventKey(signal)
             val pendingId = stableId("pending-orphan", sourceEventKey)
             val dao = database.pendingTransactionDao()
-            if (dao.getById(pendingId) != null) {
-                android.util.Log.i(
-                    "CheckoutPaymentMatcher",
-                    "孤立支付证据已存在待确认(幂等跳过): pending=${pendingId.take(16)}, " +
-                        "amount=${signal.amountMinor}, reason=$conflictReason"
+            val existingOrphan = dao.getById(pendingId)
+            if (existingOrphan != null) {
+                // 批 V-4 处置：同一笔支付可能被**两条路径**各落一次孤儿（服务层证据落库
+                // 路径 + 协调器归属出口路径）。幂等键保证不产生第二条待确认，但后到
+                // 路径的 conflictReason 不得被静默丢弃 —— `PAYMENT_PROCESS_SNAPSHOT_MISSING`
+                // 是量化"搬运漏检率"的锚点（R2 目标）。
+                // ⇒ 合并而非丢弃；口径与 RN 侧 translateConflictReason 的多码拆分一致
+                //   （逗号分隔、既有码在前，保住 D-21 的 startsWith 前缀语义）。
+                val mergedReason = mergeOrphanConflictReason(
+                    existing = existingOrphan.conflictReason,
+                    incoming = conflictReason
                 )
+                if (mergedReason != existingOrphan.conflictReason) {
+                    dao.updateConflictReason(pendingId, mergedReason)
+                    android.util.Log.i(
+                        "CheckoutPaymentMatcher",
+                        "孤立支付证据冲突原因已合并: pending=${pendingId.take(16)}, " +
+                            "from=${existingOrphan.conflictReason}, to=$mergedReason"
+                    )
+                } else {
+                    android.util.Log.i(
+                        "CheckoutPaymentMatcher",
+                        "孤立支付证据已存在待确认(幂等跳过): pending=${pendingId.take(16)}, " +
+                            "amount=${signal.amountMinor}, reason=$conflictReason"
+                    )
+                }
                 return@withTransaction
             }
             // 阶段五 T1 时机一：纯通知待确认创建前执行规则；
@@ -2437,3 +2457,35 @@ internal fun CheckoutSnapshot.reference(): CheckoutSnapshotReference =
         candidateRevision = candidateRevision,
         sourceReason = sourceReason
     )
+
+/** 孤儿冲突原因合并后允许的最大段数（防异常路径反复追加）。 */
+internal const val MAX_MERGED_ORPHAN_REASONS = 3
+
+/**
+ * 同一笔支付的孤儿冲突原因合并（批 V-4 处置）。
+ *
+ * **背景**：改造 A-3 接线后，同一笔支付可能经两条路径各落一次孤儿 ——
+ * 服务层的证据落库路径（`NO_ACTIVE_SESSION` 等）与协调器的归属出口路径
+ * （`PAYMENT_RESULT_NO_MATCHING_SESSION` / `PAYMENT_PROCESS_SNAPSHOT_MISSING`）。
+ * 两者共用 `stableId("pending-orphan", sourceEventKey)` ⇒ 第二条被幂等跳过。
+ * **直接丢弃后到原因会让 `PAYMENT_PROCESS_SNAPSHOT_MISSING`（"搬运漏检率"的
+ * 量化锚点，R2 目标）消失**，故改为合并。
+ *
+ * **口径**：
+ * - 逗号分隔多码 —— 与 RN 侧 `translateConflictReason` 的 `split(',')` 展示逻辑一致；
+ * - **既有码在前**、新码追加在后 —— D-21 的 `isUserAssertedConflictReason` 依赖
+ *   `startsWith` 前缀语义，顺序颠倒会把手动断言的冲突误判为普通冲突；
+ * - 最多 [MAX_MERGED_ORPHAN_REASONS] 段；
+ * - 已含同一码（按段精确匹配）时保持原值 ⇒ 幂等。
+ */
+internal fun mergeOrphanConflictReason(existing: String?, incoming: String?): String {
+    val current = existing?.trim().orEmpty()
+    val next = incoming?.trim().orEmpty()
+    if (next.isEmpty()) return current
+    if (current.isEmpty()) return next
+    if (current == next) return current
+    val codes = current.split(',').map { it.trim() }.filter { it.isNotEmpty() }
+    if (next in codes) return current
+    if (codes.size >= MAX_MERGED_ORPHAN_REASONS) return current
+    return (codes + next).joinToString(",")
+}

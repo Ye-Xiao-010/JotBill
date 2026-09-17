@@ -1022,6 +1022,10 @@ const CONFLICT_LABELS: Record<string, string> = {
   PAYMENT_EVIDENCE_MISSING: '缺少支付成功证据',
   ACCOUNT_UNAVAILABLE: '支付账户不存在或已停用，请手动选择账户',
   NO_ACTIVE_SESSION: '未关联结算页，请核对后确认',
+  // 批 V-4：改造 A-3 接线后，协调器归属出口也会落孤儿待确认。这三条与上面的
+  // 服务层码可能按逗号合并展示（见 translateConflictReason）。
+  PAYMENT_RESULT_NO_MATCHING_SESSION: '未找到对应的结算页会话，请核对后确认',
+  PAYMENT_PROCESS_SNAPSHOT_MISSING: '未找到结算页快照，无法自动记账，请核对后确认',
   AI_RECOGNITION_FAILED: 'AI 识别失败，金额未知，请重试识别',
   // 阶段五 T2/T3/T4/T6 新增冲突码
   ACCOUNT_UNRESOLVED: '账户无法自动判定，请手动选择账户与目标账户',

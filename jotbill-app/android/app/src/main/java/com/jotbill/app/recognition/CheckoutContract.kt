@@ -18,7 +18,13 @@ enum class CheckoutPageRole(val storageValue: String) {
     PAYMENT_HANDOFF("PAYMENT_APP"),
     PAYMENT_RESULT("PAYMENT_RESULT");
 
-    fun canBufferSnapshot(): Boolean = this == CHECKOUT
+    /**
+     * 自动通道可截图判据（`Buffer.store()` 的 `targetAllowed`）。
+     *
+     * 改造 A-2（批 V-4）：由"仅结算页"放宽为 [AUTO_DISPATCHABLE_PAGE_ROLES]
+     * （商品详情页直达收银台的场景下，用户可能全程不停留在结算页）。
+     */
+    fun canBufferSnapshot(): Boolean = this in AUTO_DISPATCHABLE_PAGE_ROLES
 
     /** 用户主动截图允许引用任何非敏感的购物普通页；未知页与结算页由手动截图放宽稳定窗口。 */
     internal fun canBufferUserRetrySnapshot(): Boolean = this in setOf(
@@ -39,13 +45,37 @@ enum class CheckoutPageRole(val storageValue: String) {
     }
 }
 
+/**
+ * 自动通道"可截图 / 可派发"的页面角色集合（改造 A-2，批 V-4 定案：`IMPL_PLAN` §8.5）。
+ *
+ * **单一出处**：本常量是该集合的唯一定义点，下列消费点**只允许写 `in/!in` 判定**：
+ * 1. [CheckoutPageRole.canBufferSnapshot]（`Buffer.store()` 的 `targetAllowed`）；
+ * 2. `CheckoutPageDetector.detect()` 的页面角色门禁；
+ * 3. `CheckoutPurchaseIntentCoordinator.routeLocked` 的门禁 2；
+ * 4. 批 V-4b：`CheckoutSnapshotBuffer` 的消费守卫与"槽内选择"判据。
+ *
+ * ⚠️ **严禁复用 `canBufferUserRetrySnapshot()`**：该集合含 `SHOPPING_HOME` / `UNKNOWN`
+ *（G2.7 已证实为死配置集合），按字面复用会把首页与未知页放进自动通道门禁，
+ * 与"宽进仅到可截三类、不放开 UNKNOWN/BROWSING"的红线冲突。
+ *
+ * ⚠️ 该集合**只约束自动通道**；断言通道（用户显式点击）不受页面分类约束，
+ * 其判据是 [CheckoutPageRole.canBufferUserRetrySnapshot]，两者是不同分支、不得合并。
+ */
+internal val AUTO_DISPATCHABLE_PAGE_ROLES: Set<CheckoutPageRole> = setOf(
+    CheckoutPageRole.PRODUCT_DETAIL,
+    CheckoutPageRole.CART,
+    CheckoutPageRole.CHECKOUT
+)
+
 /** 会话中允许产生 AI 请求的购买意图信号。普通页面观察不属于此枚举。 */
 enum class PurchaseIntent(val wireValue: String) {
-    SUBMIT_ACTION("SUBMIT_ACTION"),
+    // SUBMIT_ACTION 已随 D-11 删除（批 V-4）：自动通道的 AI 由 PAYMENT_RESULT 触发，
+    // "提交订单点击"不再产生任何 AI 请求。
     PAYMENT_APP_HANDOFF("PAYMENT_APP_HANDOFF"),
     /**
-     * 自动通道的唯一 AI 触发器（版本 B / 改造 A-1，批 V-3 先落地消费侧：
-     * 归属判定 → `payment:<sessionId>` 取图 → 派 AI；服务层结果页接线在批 V-4）。
+     * 自动通道的唯一 AI 触发器（版本 B / 改造 A-1，批 V-3 落地消费侧、
+     * 批 V-4 完成服务层结果页接线：证据落库后 trigger → 归属判定 →
+     * `payment:<sessionId>` 取图 → 派 AI）。
      */
     PAYMENT_RESULT("PAYMENT_RESULT"),
     PAYMENT_NOTIFICATION_FALLBACK("PAYMENT_NOTIFICATION_FALLBACK"),

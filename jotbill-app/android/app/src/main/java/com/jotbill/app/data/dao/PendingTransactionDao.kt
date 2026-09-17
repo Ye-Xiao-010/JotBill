@@ -58,6 +58,24 @@ interface PendingTransactionDao {
     suspend fun findPendingBySessionId(sessionId: String): PendingTransactionEntity?
 
     /**
+     * 只更新冲突原因列（批 V-4）：用于同一笔支付被两条路径各落一次孤儿时的
+     * **诊断信息保全**——幂等键保证不产生第二条待确认，但后到路径的
+     * `conflictReason`（如 `PAYMENT_PROCESS_SNAPSHOT_MISSING`，量化"搬运漏检率"
+     * 的日志锚点）不得被静默丢弃。
+     *
+     * 只改该列、**不递增 version**：version 服务于确认/忽略的乐观锁，
+     * 诊断信息合并不应使前端已持有的版本失效。
+     */
+    @Query(
+        """
+        UPDATE pending_transactions
+        SET conflict_reason = :conflictReason
+        WHERE id = :id AND status = 'pending'
+        """
+    )
+    suspend fun updateConflictReason(id: String, conflictReason: String): Int
+
+    /**
      * 基于版本号的乐观锁忽略：版本一致时置为 ignored 并递增版本，返回受影响行数。
      * 返回 0 表示版本不一致或记录不存在，调用方应拒绝忽略。
      */
