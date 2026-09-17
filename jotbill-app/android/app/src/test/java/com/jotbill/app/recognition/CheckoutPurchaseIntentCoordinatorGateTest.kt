@@ -863,6 +863,98 @@ class CheckoutPurchaseIntentCoordinatorGateTest {
             (result as PurchaseIntentCoordinationResult.Rejected).gateReason
         )
     }
+    // ---------- 批 V-5：支付结果页"派发尝试"档位（决定服务层是否补落待确认）----------
+
+    /**
+     * 三类形态必须被区分开 —— 否则要么重现 P5 的过早弹窗，要么同一笔支付出现两张卡。
+     *
+     * - `AiDispatched` / `Accepted(AlreadyTriggered)` ⇒ AI 定论必到 ⇒ **不落卡**；
+     * - `ReleasedWithoutConsumer`（AI 未配置 / 派发失败）与**未落卡**的门禁拒绝 ⇒ 立即落卡；
+     * - 槽位缺图（`consumeResult != null`）与两个归属失败门禁 ⇒ 协调器**已落孤儿卡** ⇒ 不重复落。
+     */
+    @Test
+    fun 支付结果派发档位区分三类形态() {
+        val key = CheckoutRequestKey.from(
+            SESSION,
+            PKG,
+            FP_A
+        )
+
+        assertEquals(
+            PaymentResultDispatchOutcome.AI_HANDED_OFF,
+            PurchaseIntentCoordinationResult.AiDispatched(
+                intent = PurchaseIntent.PAYMENT_RESULT,
+                requestKey = key,
+                snapshotId = "snap-1",
+                sessionId = SESSION,
+                slotId = "payment:$SESSION",
+                pageFingerprint = FP_A
+            ).paymentResultDispatchOutcome()
+        )
+        // ⚠️ 判别项：AlreadyTriggered 表示"该 requestKey 此前已派发"（AI 在飞/已返回）。
+        // 若按"非 AiDispatched 即派发失败"处理，会在此处补落待确认 ⇒ 重现 P5 的过早弹窗。
+        assertEquals(
+            PaymentResultDispatchOutcome.AI_HANDED_OFF,
+            PurchaseIntentCoordinationResult.Accepted(
+                intent = PurchaseIntent.PAYMENT_RESULT,
+                aiResult = CheckoutAiTriggerResult.AlreadyTriggered(key),
+                snapshotOwnership = PurchaseIntentSnapshotOwnership.NOT_OWNED
+            ).paymentResultDispatchOutcome()
+        )
+        assertEquals(
+            PaymentResultDispatchOutcome.NOT_DISPATCHED,
+            PurchaseIntentCoordinationResult.ReleasedWithoutConsumer(
+                intent = PurchaseIntent.PAYMENT_RESULT,
+                requestKey = key,
+                snapshotId = "snap-1",
+                sessionId = SESSION,
+                slotId = "payment:$SESSION",
+                pageFingerprint = FP_A,
+                reasonCode = "SNAPSHOT_RELEASED_NO_CONSUMER"
+            ).paymentResultDispatchOutcome()
+        )
+        assertEquals(
+            PaymentResultDispatchOutcome.NOT_DISPATCHED,
+            PurchaseIntentCoordinationResult.Rejected(
+                intent = PurchaseIntent.PAYMENT_RESULT,
+                gateReason = PurchaseIntentGateRejection.REQUEST_BUDGET_EXHAUSTED
+            ).paymentResultDispatchOutcome()
+        )
+        assertEquals(
+            PaymentResultDispatchOutcome.NOT_DISPATCHED,
+            PurchaseIntentCoordinationResult.Rejected(
+                intent = PurchaseIntent.PAYMENT_RESULT,
+                gateReason = PurchaseIntentGateRejection.SENSITIVE_PAGE
+            ).paymentResultDispatchOutcome()
+        )
+        // 支付过程槽位缺图/过期：routeLocked 在该分支内已同步调用孤儿出口 ⇒ 已落卡
+        assertEquals(
+            PaymentResultDispatchOutcome.COORDINATOR_ALREADY_RECORDED,
+            PurchaseIntentCoordinationResult.Rejected(
+                intent = PurchaseIntent.PAYMENT_RESULT,
+                consumeResult = CheckoutAiTriggerResult.Rejected(
+                    SnapshotConsumeRejection.NO_BUFFERED_SNAPSHOT
+                ),
+                slotId = "payment:$SESSION"
+            ).paymentResultDispatchOutcome()
+        )
+        // 归属 0 命中 / 归属歧义：同样已在 routeLocked 内落孤儿卡
+        assertEquals(
+            PaymentResultDispatchOutcome.COORDINATOR_ALREADY_RECORDED,
+            PurchaseIntentCoordinationResult.Rejected(
+                intent = PurchaseIntent.PAYMENT_RESULT,
+                gateReason = PurchaseIntentGateRejection.PAYMENT_RESULT_NO_MATCHING_SESSION
+            ).paymentResultDispatchOutcome()
+        )
+        assertEquals(
+            PaymentResultDispatchOutcome.COORDINATOR_ALREADY_RECORDED,
+            PurchaseIntentCoordinationResult.Rejected(
+                intent = PurchaseIntent.PAYMENT_RESULT,
+                gateReason = PurchaseIntentGateRejection.PAYMENT_RESULT_AMBIGUOUS_SESSION,
+                sessionIds = listOf(SESSION, "session-2")
+            ).paymentResultDispatchOutcome()
+        )
+    }
 }
 
 private var snapshotCounter = 0

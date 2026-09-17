@@ -105,6 +105,14 @@ internal const val USER_ASSERTED_REASON = "USER_ASSERTED"
 internal const val USER_ASSERTED_AMOUNT_MISSING_REASON = "USER_ASSERTED_AMOUNT_MISSING"
 
 /**
+ * 启动期兜底落卡的冲突原因（批 V-5，`IMPL_PLAN` §2.4 D-3 兜底 2）。
+ *
+ * 语义：会话已有支付成功证据，但 AI 定论**永远不会到来**（进程被杀后在飞请求随作用域
+ * 消失），启动期扫描必须把该笔落待确认，避免"证据在、用户看不到"的静默窗口。
+ */
+internal const val AI_RESULT_MISSING_ON_STARTUP = "AI_RESULT_MISSING_ON_STARTUP"
+
+/**
  * 仅由截图 AI 视觉推断出的支付结果状态。
  *
  * 与 "SUCCESS" 的区别：截图 AI 只看到一张图，无法证明支付真的完成
@@ -193,6 +201,19 @@ internal sealed class CheckoutPaymentMatchResult {
         val reason: String
     ) : CheckoutPaymentMatchResult()
 }
+
+/**
+ * 启动期证据兜底扫描的产出计数（批 V-5，`IMPL_PLAN` §2.4 D-3 兜底 2）。
+ *
+ * 两个计数分开上报，是为了让"补齐候选"与"兜底落卡"各自可量化 ——
+ * 后者对应"AI 定论不可得"的真实发生率（进程被杀 / 派发失败未补），是需要被观测的指标。
+ */
+internal data class EvidenceBackfillOutcome(
+    /** 为"无候选"的历史会话补出的 EVIDENCE_ONLY 占位候选数。 */
+    val candidatesBackfilled: Int,
+    /** 因"会话仍在等 AI 定论、但定论不会到来"而落待确认（或确认已有卡）的会话数。 */
+    val pendingsPromoted: Int
+)
 
 /**
  * 阶段四 T4：支付证据归属会话的解析决策。
@@ -867,13 +888,14 @@ internal class CheckoutPaymentMatcher(
                 )
                 database.checkoutSessionDao().update(session)
                 session = advanceStatus(session, WAITING_ENRICHMENT_STATUS, now)
-                // 阶段四 T6：AI 未就绪时用证据金额转待确认，候选和会话 ID 均已关联。
-                pendingFromEvidenceOnly(
-                    session = session,
-                    evidence = storedEvidence,
-                    now = now,
-                    candidateId = persistedProvisional.id
-                )?.let { upsertPendingForSession(it) }
+                // 批 V-5（改造 D-2 ①）：**不再**在此处落待确认 —— 旧实现"证据一到就落卡"
+                // 会让弹窗早于 AI 定论出现（AI 未返回 ⇒ 字段为空），AI 返回无冲突后又会
+                // 自动入账并清掉该卡（弹窗自消失），即 P5。
+                // `WAITING_ENRICHMENT` 本身就是"等待 AI 定论"的显式中间态且写在 Room 里
+                // （进程被杀可恢复）⇒ 落卡时机推迟到：
+                //   · AI 定论为需 review / 失败超时（本文件后续分支）；
+                //   · 定论**不可得**时 —— 服务层 [promoteEvidenceOnlySessionToPending]
+                //     （派发失败立即补）与 [backfillEvidenceOnlyCandidates]（启动期兜底）。
                 return@withTransaction CheckoutPaymentMatchResult.Accepted(
                     sessionId = reference.sessionId,
                     status = session.status,
@@ -931,12 +953,8 @@ internal class CheckoutPaymentMatcher(
                 }
                 session = session.copy(candidateId = enriched.id, updatedAt = now)
                 database.checkoutSessionDao().update(session)
-                pendingFromEvidenceOnly(
-                    session = session,
-                    evidence = storedEvidence,
-                    now = now,
-                    candidateId = enriched.id
-                )?.let { upsertPendingForSession(it) }
+                // 批 V-5（改造 D-2 ①）：与上一个分支同源 —— 候选仍是证据占位即"AI 未返回"，
+                // 第二笔证据同样不得抢在 AI 定论前落卡（否则又会得到一次过早弹窗）。
                 return@withTransaction CheckoutPaymentMatchResult.Accepted(
                     sessionId = reference.sessionId,
                     status = session.status,
@@ -1003,16 +1021,35 @@ internal class CheckoutPaymentMatcher(
     }
 
     /**
-     * 升级到 EVIDENCE_ONLY 候选逻辑后，为历史“证据先到、AI 未返回”的会话补齐候选关联。
+     * 启动期证据兜底扫描（批 V-5 起同时承担两件事）。
      *
-     * 只处理尚无候选的活跃会话；每笔证据只补一次，已有待确认交易会被幂等升级为
-     * candidateId/sessionId 完整关联，不改变用户已忽略或已确认的状态。
+     * ## ① 历史会话补齐候选（原职责）
+     * 为"证据先到、AI 未返回且**尚无候选**"的会话补 EVIDENCE_ONLY 占位候选关联，
+     * 每笔证据只补一次，不改变用户已忽略或已确认的状态。
+     *
+     * ## ② 「AI 定论不可得」兜底落待确认（批 V-5 新增，`IMPL_PLAN` §2.4 D-3 兜底 2）
+     * 改造 D 把落待确认推迟到 AI 定论之后 ⇒ 进程被杀时在飞 AI 请求随作用域一起消失，
+     * 定论永不返回，会话会停在 `WAITING_ENRICHMENT` + EVIDENCE_ONLY 占位候选上
+     * ⇒ 用户永远看不到该笔。
+     *
+     * ⚠️ **必须在本方法内扩条件，而不是另起一套扫描**（批 V-5 实施前核查发现）：
+     * 旧判据是"**无候选**"，而改造 D 之后目标会话**必然已有** EVIDENCE_ONLY 占位候选
+     * ⇒ 旧判据永远命中不到它们；另写一套扫描则会出现两套扫描互相打架（同一会话被
+     * 两条路径各处理一次）。故本方法用同一循环覆盖两种形态：
+     * - 无候选 + 有支付成功证据 ⇒ 先补占位候选，再落待确认；
+     * - 有 EVIDENCE_ONLY 占位候选 + 会话仍在 `WAITING_ENRICHMENT` ⇒ 说明无 AI 结果
+     *   （`candidateFromAi` 在 AI 返回时会重建 `appliedRules.decision`，占位标记随即消失
+     *   —— 见 [isEvidenceOnlyProvisionalCandidate]）⇒ 直接落待确认。
+     *
+     * 落卡统一走 [promoteEvidenceOnlySessionToPending]：主键与会话一对一（幂等）、
+     * 已有孤儿卡时跳过（防同一笔两张卡）、AI 已定论时跳过（不抢跑）。
+     * 兼容已过期的历史会话：证据已落库的会话即使过了匹配窗口也应让用户看到。
      */
-    suspend fun backfillEvidenceOnlyCandidates(): Int {
-        var backfilled = 0
+    suspend fun backfillEvidenceOnlyCandidates(): EvidenceBackfillOutcome {
+        var candidatesBackfilled = 0
+        var pendingsPromoted = 0
         database.withTransaction {
             val now = nowMillis()
-            // 兼容已过期的历史会话：证据已落库的会话即使过了 5 分钟窗口也应补齐候选关联。
             val sessions = database.checkoutSessionDao().getByStatuses(
                 listOf("WAITING_ENRICHMENT", "PAYMENT_CONFIRMED", "NEEDS_CONFIRMATION")
             )
@@ -1021,6 +1058,19 @@ internal class CheckoutPaymentMatcher(
                     .getBySession(session.id)
                     .singleOrNull()
                 if (existingCandidate != null) {
+                    // ② 兜底 2：占位候选 + 仍在 WAITING_ENRICHMENT ⇒ 无 AI 结果。
+                    // 会话已被推进到其它旅程状态（如已落卡的 NEEDS_CONFIRMATION）时不介入。
+                    if (
+                        (session.journeyState ?: session.status) != WAITING_ENRICHMENT_STATUS ||
+                        !isEvidenceOnlyProvisionalCandidate(existingCandidate)
+                    ) {
+                        continue
+                    }
+                    if (
+                        promoteEvidenceOnlySessionToPending(session.id, AI_RESULT_MISSING_ON_STARTUP)
+                    ) {
+                        pendingsPromoted += 1
+                    }
                     continue
                 }
                 val evidence = database.paymentEvidenceDao()
@@ -1053,22 +1103,20 @@ internal class CheckoutPaymentMatcher(
                 val persisted = database.transactionCandidateDao()
                     .getById(provisionalCandidate.id)
                     ?: provisionalCandidate
-                var updatedSession = session.copy(
+                val updatedSession = session.copy(
                     candidateId = persisted.id,
                     updatedAt = now
                 )
                 database.checkoutSessionDao().update(updatedSession)
-                updatedSession = advanceStatus(updatedSession, WAITING_ENRICHMENT_STATUS, now)
-                pendingFromEvidenceOnly(
-                    session = updatedSession,
-                    evidence = evidence,
-                    now = now,
-                    candidateId = persisted.id
-                )?.let { upsertPendingForSession(it) }
-                backfilled += 1
+                advanceStatus(updatedSession, WAITING_ENRICHMENT_STATUS, now)
+                // ① 的历史形态同样"没有 AI 定论会到来" ⇒ 落卡出口与 ② 完全一致。
+                if (promoteEvidenceOnlySessionToPending(session.id, AI_RESULT_MISSING_ON_STARTUP)) {
+                    pendingsPromoted += 1
+                }
+                candidatesBackfilled += 1
             }
         }
-        return backfilled
+        return EvidenceBackfillOutcome(candidatesBackfilled, pendingsPromoted)
     }
 
     /** 保存 AI 结果；AI 先到时只建立 WAITING_PAYMENT 候选。 */
@@ -1463,6 +1511,92 @@ internal class CheckoutPaymentMatcher(
         true
     }
 
+    /**
+     * 批 V-5（改造 D-2 ② / D-3 兜底）：把"证据已落库、但**不会有 AI 定论**"的会话落待确认。
+     *
+     * ## 为什么需要它
+     *
+     * 改造 D 把"创建待确认 + 弹窗"从"证据落库时"推迟到"AI 定论时" ⇒ 必须有一个出口
+     * 覆盖"定论永远不会来"的形态，否则证据会停在中间态、用户永远看不到（静默丢失）。
+     * 两个调用面：
+     * 1. **服务层**：`trigger(PAYMENT_RESULT)` 判定为未派发/派发失败（AI 未配置、
+     *    预算耗尽、门禁拒绝）时立即调用；截图兜底路径同样调用 —— 它直调视觉客户端
+     *    （`recognizePaymentResult`），**不经** matcher 的 AI 定论链路，本就不会有定论；
+     * 2. **启动期**：[backfillEvidenceOnlyCandidates] 对"仍是 EVIDENCE_ONLY 占位"的历史
+     *    会话调用（进程被杀 ⇒ 在飞请求随作用域消失，定论永不返回）。
+     *
+     * ## 幂等与防重复（关键）
+     *
+     * 待确认主键 = `stableId("pending", sessionId)`，与会话一对一 ⇒ 任何一条兜底触发
+     * 都只产生**一张**卡；且具备**自愈**能力：若 AI 定论随后到达，无冲突时
+     * [autoCommitMatchedCandidate] 按 sessionId 删除本卡，需 review 时 [pendingFromConflict]
+     * 覆盖同一主键 ⇒ 不会出现第二张。
+     *
+     * @param reason 写入 `conflictReason`（同时是日志锚点，前端按码分档展示）。
+     * @return true 表示该会话当前**有待确认卡**（本次新建或本就存在）；
+     *   false 表示未落卡（会话不存在 / 已入账 / 已有孤儿卡覆盖 / AI 已定论 / 证据金额无效）。
+     */
+    suspend fun promoteEvidenceOnlySessionToPending(sessionId: String, reason: String): Boolean =
+        database.withTransaction {
+            val session = database.checkoutSessionDao().getById(sessionId)
+                ?: return@withTransaction false
+            // 已入账（自动入账或用户手动确认）：用户已经/正在看到该笔，不再落卡
+            if (
+                database.billDao().getById(stableId("bill", session.id)) != null ||
+                database.billDao().findByOriginalTransactionId(session.id) != null
+            ) {
+                return@withTransaction false
+            }
+            val candidate = database.transactionCandidateDao()
+                .getBySession(session.id)
+                .singleOrNull()
+            // 候选不再是"证据占位" ⇒ AI 已定论 ⇒ 交回正常链路（入账 / 冲突待确认 / 显式终态），
+            // 本方法不得抢跑（否则会与 AI 定论竞争出第二张卡）。
+            if (!isEvidenceOnlyProvisionalCandidate(candidate)) {
+                return@withTransaction false
+            }
+            val now = nowMillis()
+            // 会话已有待确认（含 Ambiguous 形态，其行带 sessionId）⇒ 幂等，无需重复写
+            if (database.pendingTransactionDao().findPendingBySessionId(session.id) != null) {
+                return@withTransaction true
+            }
+            val evidence = database.paymentEvidenceDao()
+                .getBySession(session.id)
+                .firstOrNull { it.indicatesPaidOutcome() && (it.amountMinor ?: 0L) > 0L }
+                ?: return@withTransaction false
+            // 该证据此前已由**孤儿出口**（协调器 B-3/E-2 兜底：槽位缺图 / 归属 0 命中 /
+            // Ambiguous）落过卡。孤儿卡 sessionId 为空，靠会话主键去重**抓不到**它 ⇒
+            // 此处必须按 `sourceEventKey` 显式判重，否则同一笔支付会出现两张卡。
+            if (orphanPendingExists(evidence.sourceEventKey)) {
+                return@withTransaction false
+            }
+            val pending = pendingFromEvidenceOnly(
+                session = session,
+                evidence = evidence,
+                now = now,
+                candidateId = candidate?.id,
+                conflictReason = reason
+            ) ?: return@withTransaction false
+            upsertPendingForSession(pending)
+            // 推进到 NEEDS_CONFIRMATION：既是语义上的"等用户确认"，也让启动扫描的
+            // "仍在 WAITING_ENRICHMENT 且无 AI 结果"条件不再命中 ⇒ 二次扫描天然幂等。
+            advanceStatus(session, NEEDS_CONFIRMATION_STATUS, now)
+            true
+        }
+
+    /**
+     * 该支付事件是否已由孤儿出口落过待确认。
+     *
+     * 主键口径与 [recordOrphanPaymentSignal] 完全一致（`pending-orphan` + sourceEventKey），
+     * 而 `PaymentEvidenceEntity.sourceEventKey` 与该函数内 `sourceEventKey(signal)` 同值
+     * （落库时即由同一函数算出）⇒ 可直接查表，无需重算。
+     */
+    private suspend fun orphanPendingExists(sourceEventKey: String?): Boolean {
+        val key = sourceEventKey?.takeIf { it.isNotBlank() } ?: return false
+        return database.pendingTransactionDao()
+            .getById(stableId("pending-orphan", key)) != null
+    }
+
     private suspend fun upsertSession(
         reference: CheckoutSnapshotReference,
         initialStatus: String,
@@ -1604,9 +1738,10 @@ internal class CheckoutPaymentMatcher(
         val amountMinor = requireNotNull(candidate.amountMinor) {
             "自动入账候选金额缺失：sessionId=${session.id}"
         }
-        // 阶段五 T1：候选生成时规则 ignore 已标记的交易不再入账（规则先标、证据后到的时序）
+        // 阶段五 T1：候选生成时规则 ignore 已标记的交易不再入账（规则先标、证据后到的时序）。
+        // 批 V-5（§8.4 定案）：命中 ignore 时给会话**显式终态**，不再悬置等过期（P18）。
         if (ruleEngine.decisionOf(candidate.appliedRules) == RuleEngine.DECISION_IGNORED) {
-            return AutoCommitOutcome(session, null)
+            return AutoCommitOutcome(closeIgnoredSession(session, now), null)
         }
         // 阶段五 T1 时机二：自动入账前最终执行规则（规则可能在候选生成后被用户修改/删除）；
         // ignore 跳过记账，send_to_review 强制转待确认，set_* 按优先级补全账单字段
@@ -1632,8 +1767,10 @@ internal class CheckoutPaymentMatcher(
                         version = candidate.version + 1
                     )
                 )
-                // 不写 Bill、不进待确认；会话保持 WAITING_ENRICHMENT 等待过期回收
-                return AutoCommitOutcome(session, null)
+                // 不写 Bill、不进待确认、不弹窗；但**必须给会话显式终态** ——
+                // 旧实现的"保持 WAITING_ENRICHMENT 等待过期回收"会让会话悬置到过期
+                // （P18 静默态；改造 D 之后更是没人会再来推进它）。批 V-5（§8.4 定案）。
+                return AutoCommitOutcome(closeIgnoredSession(session, now), null)
             }
             is RuleEngine.Decision.ToReview -> {
                 database.transactionCandidateDao().update(
@@ -1809,6 +1946,48 @@ internal class CheckoutPaymentMatcher(
     }
 
     /**
+     * 批 V-5（`IMPL_PLAN` §8.4 定案）：规则 `ignore` 命中后的**显式终态**。
+     *
+     * ## 语义
+     * `ignore` 是规则引擎（用户可配置）的**正常结论**，不是失败路径 ⇒ 不写 Bill、
+     * 不进待确认、不弹窗；但会话必须离开"等待回收"的悬置态（P18）。
+     *
+     * ## 为什么是 CANCELLED / DISMISSED，而不是 COMPLETED
+     * - **不得写 `COMPLETED`/`AUTO_COMMITTED`**：那会伪造"已入账"语义，账单表里却没有
+     *   对应记录 ⇒ 自动入账率、账单一致性都会失真（用户看到"已完成"却查不到账）。
+     * - `CANCELLED` / `DISMISSED` 与"用户忽略待确认"完全同码同路径
+     *   （`LedgerRepository` 的忽略分支），前端已有该码的处置；规则命中证据仍保留在候选的
+     *   `appliedRules.decision=IGNORED` 与 `rule-ignore:<candidateId>` 审计行中，
+     *   可与"用户忽略"区分。
+     *
+     * ## 实现要点
+     * 走 `updateTerminalStateIfActive`（SQL 内自守"仅活动会话可写终态"）⇒ **不需要**
+     * 给 `CheckoutJourneyState` 增加转换边，避免改动跨层契约（`CheckoutContract`）。
+     * 并发下会话若已进入其它终态，则以库内状态为准，不覆盖别人的结论。
+     */
+    private suspend fun closeIgnoredSession(
+        session: CheckoutSessionEntity,
+        now: Long
+    ): CheckoutSessionEntity {
+        val terminal = session.copy(
+            status = SessionStatus.CANCELLED.wireValue,
+            journeyState = CheckoutJourneyState.DISMISSED.wireValue,
+            updatedAt = now
+        )
+        val rows = database.checkoutSessionDao().updateTerminalStateIfActive(
+            id = session.id,
+            status = terminal.status,
+            journeyState = CheckoutJourneyState.DISMISSED.wireValue,
+            updatedAt = now
+        )
+        return if (rows == 1) {
+            terminal
+        } else {
+            database.checkoutSessionDao().getById(session.id) ?: session
+        }
+    }
+
+    /**
      * 阶段四 T6：把会话推进到旅程终态 COMPLETED（公开 SessionStatus 亦为 COMPLETED）。
      *
      * NEEDS_CONFIRMATION 只允许直达 COMPLETED（手动确认入账后的路径）；
@@ -1843,12 +2022,17 @@ internal class CheckoutPaymentMatcher(
      * AI 尚未返回时仍传入 EVIDENCE_ONLY 候选 ID，保证候选、会话、待确认三者关联；
      * 商户缺失时按会话购物包名兜底。sourceType 继承证据来源；
      * 证据金额无效时返回 null（不生成待确认）。
+     *
+     * @param conflictReason 批 V-5 新增：落卡原因（如
+     *   `PAYMENT_RESULT_AI_DISPATCH_UNAVAILABLE` / `AI_RESULT_MISSING_ON_STARTUP`）。
+     *   旧调用面（启动补齐历史会话）保持 null —— 前端按码分档展示提示文案。
      */
     private suspend fun pendingFromEvidenceOnly(
         session: CheckoutSessionEntity,
         evidence: PaymentEvidenceEntity,
         now: Long,
-        candidateId: String? = null
+        candidateId: String? = null,
+        conflictReason: String? = null
     ): PendingTransactionEntity? {
         val amountMinor = evidence.amountMinor?.takeIf { it > 0L } ?: return null
         return PendingTransactionEntity(
@@ -1865,7 +2049,7 @@ internal class CheckoutPaymentMatcher(
             orderId = evidence.orderId,
             accountId = defaultAccountIdForPayment(evidence.platform),
             categoryId = null,
-            conflictReason = null,
+            conflictReason = conflictReason,
             sourceType = normalizePaymentEvidenceSourceType(evidence.sourceType) ?: "notification",
             createdAt = now,
             version = 1

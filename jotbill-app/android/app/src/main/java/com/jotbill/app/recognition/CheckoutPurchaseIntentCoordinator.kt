@@ -94,6 +94,23 @@ internal fun buildPaymentResultAttributionSignal(
 internal const val PAYMENT_PROCESS_SNAPSHOT_MISSING = "PAYMENT_PROCESS_SNAPSHOT_MISSING"
 
 /**
+ * 待确认/日志锚点：支付结果页证据**拿不到 AI 定论**（批 V-5，改造 D-2 ②）。
+ *
+ * 覆盖三种"定论不可得"形态：
+ * 1. AI 未配置或派发失败（`readyDispatcher` 缺失 / 抛异常 ⇒ `ReleasedWithoutConsumer`）；
+ * 2. 未进入快照消费的分支（预算耗尽、页面/敏感页/上下文门禁拒绝）；
+ * 3. 截图兜底路径 —— 它直调视觉客户端 `recognizePaymentResult`，**不经**结算页 AI
+ *    定论链路，本就不会有定论（由服务层显式落卡）。
+ *
+ * "定论会到来"的形态**不属于**本码：`AiDispatched` 与 `Accepted(AlreadyTriggered)`。
+ *
+ * ⚠️ **也不属于本码**：支付过程槽位缺图（[PAYMENT_PROCESS_SNAPSHOT_MISSING]）、归属
+ * 0 命中（[PAYMENT_RESULT_NO_MATCHING_SESSION]）、归属歧义 —— 这三者已在
+ * `routeLocked` 内各自调用孤儿出口落卡，本码不得再补一条（同一笔支付会出两张卡）。
+ */
+internal const val PAYMENT_RESULT_AI_DISPATCH_UNAVAILABLE = "PAYMENT_RESULT_AI_DISPATCH_UNAVAILABLE"
+
+/**
  * 支付结果无法自动归属时的落库出口（改造 B-3 / E-2 的兜底）。
  *
  * 协调器是纯内存调度器、不触碰数据库；"落待确认"由服务层接入
@@ -127,6 +144,64 @@ enum class PurchaseIntentGateRejection(val wireValue: String) {
     PAYMENT_RESULT_NO_MATCHING_SESSION("PAYMENT_RESULT_NO_MATCHING_SESSION"),
     /** 改造 E-2：归属判定 ≥2 命中 ⇒ Ambiguous ⇒ 待确认（安全侧，不误账）。 */
     PAYMENT_RESULT_AMBIGUOUS_SESSION("PAYMENT_RESULT_AMBIGUOUS_SESSION")
+}
+
+/**
+ * 支付结果页"派发尝试"之后的处置档位（批 V-5，改造 D-2 ②）。
+ *
+ * 服务层据此决定是否**立即补落待确认**（AI 定论不可得时的第一道安全网）。
+ */
+internal enum class PaymentResultDispatchOutcome {
+    /** 图已交给 AI（本次派发成功，或该 requestKey 此前已派发）⇒ 定论必到 ⇒ 不落待确认。 */
+    AI_HANDED_OFF,
+
+    /** 协调器已在内部把该笔转入孤儿待确认（槽位缺图 / 归属 0 命中 / Ambiguous）⇒ 不重复落卡。 */
+    COORDINATOR_ALREADY_RECORDED,
+
+    /** 未派发且无人落卡（AI 未配置 / 派发失败 / 预算耗尽 / 门禁拒绝）⇒ 服务层立即落待确认。 */
+    NOT_DISPATCHED
+}
+
+/**
+ * `trigger(PAYMENT_RESULT)` 返回值的处置档位（纯映射，供 JVM 单测直接断言）。
+ *
+ * ⚠️ **不能用 Boolean 表达**：`Accepted(AlreadyTriggered)` 表示"该 requestKey 此前已派发"
+ * ⇒ AI 在飞或已返回；若按"非 `AiDispatched` 即失败"处理会**重现 P5 的过早弹窗**
+ * （在 AI 定论到达前就弹待确认）。
+ *
+ * ⚠️ **`Rejected.consumeResult != null` 与两个归属失败门禁**：`routeLocked` 在这三条
+ * 分支内**已同步调用孤儿出口**（`notifyOrphanSinkLocked`）⇒ 归入
+ * [PaymentResultDispatchOutcome.COORDINATOR_ALREADY_RECORDED]，服务层不得再补一条。
+ */
+internal fun PurchaseIntentCoordinationResult.paymentResultDispatchOutcome():
+    PaymentResultDispatchOutcome = when (this) {
+    is PurchaseIntentCoordinationResult.AiDispatched ->
+        PaymentResultDispatchOutcome.AI_HANDED_OFF
+
+    is PurchaseIntentCoordinationResult.ReleasedWithoutConsumer ->
+        PaymentResultDispatchOutcome.NOT_DISPATCHED
+
+    // `deliver()` 只在释放 Ready 后才返回 ReleasedWithoutConsumer；一旦返回 Accepted，
+    // aiResult 必为 AlreadyTriggered（Ready 已在交接中消费）。
+    is PurchaseIntentCoordinationResult.Accepted -> when (aiResult) {
+        is CheckoutAiTriggerResult.AlreadyTriggered ->
+            PaymentResultDispatchOutcome.AI_HANDED_OFF
+
+        // 不可达：Ready 不会以 Accepted 形态回到调用方。取保守侧（落卡好过静默）。
+        is CheckoutAiTriggerResult.Ready -> PaymentResultDispatchOutcome.NOT_DISPATCHED
+
+        is CheckoutAiTriggerResult.Rejected -> PaymentResultDispatchOutcome.NOT_DISPATCHED
+    }
+
+    is PurchaseIntentCoordinationResult.Rejected -> when {
+        consumeResult != null -> PaymentResultDispatchOutcome.COORDINATOR_ALREADY_RECORDED
+
+        gateReason == PurchaseIntentGateRejection.PAYMENT_RESULT_NO_MATCHING_SESSION ||
+            gateReason == PurchaseIntentGateRejection.PAYMENT_RESULT_AMBIGUOUS_SESSION ->
+            PaymentResultDispatchOutcome.COORDINATOR_ALREADY_RECORDED
+
+        else -> PaymentResultDispatchOutcome.NOT_DISPATCHED
+    }
 }
 
 /** Ready.snapshot 的所有权状态；协调器不会长期持有 AI 输入副本。 */

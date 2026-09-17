@@ -1105,12 +1105,22 @@ class CheckoutAccessibilityService : AccessibilityService() {
             matchingScope = scope
             activeAiReferences.clear()
         }
-        // 为历史“证据先到、AI 未返回”的会话补齐 EVIDENCE_ONLY 候选关联。
+        // 启动期证据兜底扫描（批 V-5 扩展为两件事）：
+        //   ① 为历史“证据先到、AI 未返回”的会话补齐 EVIDENCE_ONLY 候选关联；
+        //   ② 会话仍停在“等 AI 定论”而进程已被杀、定论永不返回 ⇒ 落待确认，
+        //      避免“证据在、用户看不到”的静默窗口（`IMPL_PLAN` §2.4 D-3 兜底 2）。
+        // 挂载点说明：这里（服务连接时）是唯一挂载点，且与正常流程不竞争 ——
+        // 上面刚执行过 `shutdownAiClient()` 取消旧 AI 作用域，此刻没有在飞请求，
+        // 因此“会话处于等待定论状态”必然是死状态。
         scope.launch {
             try {
-                val backfilled = matcher.backfillEvidenceOnlyCandidates()
-                if (backfilled > 0) {
-                    Log.i(TAG, "支付证据历史会话补齐候选: count=$backfilled")
+                val outcome = matcher.backfillEvidenceOnlyCandidates()
+                if (outcome.candidatesBackfilled > 0 || outcome.pendingsPromoted > 0) {
+                    Log.i(
+                        TAG,
+                        "支付证据启动期兜底扫描: candidates=${outcome.candidatesBackfilled}, " +
+                            "pendings=${outcome.pendingsPromoted}"
+                    )
                 }
             } catch (error: RuntimeException) {
                 Log.w(TAG, "支付证据历史会话补齐失败", error)
@@ -1598,7 +1608,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
                     val scope = synchronized(aiLifecycleLock) { matchingScope } ?: evidenceFallbackScope
                     scope.launch {
                         try {
-                            recordPaymentResultEvidence(
+                            val persistedSessionId = recordPaymentResultEvidence(
                                 matcher = matcher,
                                 paymentPackage = paymentPackage,
                                 evidence = evidence,
@@ -1608,7 +1618,13 @@ class CheckoutAccessibilityService : AccessibilityService() {
                             // 顺序保证：suspend 函数返回即证据已落库（含"落待确认"分支），
                             // 故 trigger 必然晚于落库；写在本 launch 之外则 trigger 会先执行。
                             // ⚠️ 只接主路径：截图兜底路径自己已送 AI，不得二次派发。
-                            dispatchPaymentResultIntent(paymentPackage, evidence)
+                            val outcome = dispatchPaymentResultIntent(paymentPackage, evidence)
+                            // 批 V-5（改造 D-2 ②）：派发**不可得**时立即落待确认 —— 改造 D 已把
+                            // 落卡推迟到 AI 定论之后，此处是"定论永不返回"的第一道安全网。
+                            // COORDINATOR_ALREADY_RECORDED ⇒ 协调器已落孤儿卡，不得重复落。
+                            if (outcome == PaymentResultDispatchOutcome.NOT_DISPATCHED) {
+                                promotePendingWhenAiUnavailable(matcher, persistedSessionId)
+                            }
                         } catch (error: Exception) {
                             Log.w(TAG, "支付结果页证据落库失败", error)
                             try {
@@ -1878,13 +1894,19 @@ class CheckoutAccessibilityService : AccessibilityService() {
                 CheckoutPaymentMatcher(database)
             }
         try {
-            recordPaymentResultEvidence(
+            val persistedSessionId = recordPaymentResultEvidence(
                 matcher = matcher,
                 paymentPackage = paymentPackage,
                 evidence = evidence,
                 handoffContext = handoffContext,
                 aiUnverified = true
             )
+            // 批 V-5（改造 D-2 ②）：本路径**不会有 AI 定论** —— 上面的
+            // `client.recognizePaymentResult`（:1803）是视觉客户端**直调**，不经 matcher 的
+            // AI 定论链路（`recordAiResult`）⇒ 没有任何后续结论会来推进该会话。
+            // 改造 D 之前，该形态靠"证据先到即落卡"侥幸可见；推迟落卡后必须在此显式补上，
+            // 否则截图兜底证据会静默悬置到下次启动扫描。
+            promotePendingWhenAiUnavailable(matcher, persistedSessionId)
         } catch (error: Exception) {
             Log.w(TAG, "支付结果页截图兜底证据落库失败", error)
         }
@@ -2108,23 +2130,72 @@ class CheckoutAccessibilityService : AccessibilityService() {
      *
      * 派发语义 = 消费支付过程槽位 `payment:<sessionId>` 的图并送 AI；无图/过期/
      * 归属歧义时经协调器孤儿出口落待确认（不静默丢弃）。
+     *
+     * @return 批 V-5（改造 D-2 ②）新增：派发档位。`NOT_DISPATCHED` 表示该会话**拿不到
+     *   AI 定论**（AI 未配置 / 派发失败 / 预算耗尽 / 门禁拒绝）⇒ 调用方必须立即落待确认
+     *   （改造 D 把落卡推迟到定论之后，此处是"定论永不返回"的第一道安全网）。
+     *   档位口径见 [paymentResultDispatchOutcome]。
      */
     private fun dispatchPaymentResultIntent(
         paymentPackage: String,
         evidence: PaymentResultEvidence
-    ) {
+    ): PaymentResultDispatchOutcome {
         val coordinator = purchaseIntentCoordinator
         if (coordinator == null) {
             Log.w(TAG, "支付结果页派发跳过: 购买意图协调器不可用")
-            return
+            return PaymentResultDispatchOutcome.NOT_DISPATCHED
         }
-        try {
+        return try {
             coordinator.trigger(
                 intent = PurchaseIntent.PAYMENT_RESULT,
                 paymentResult = buildPaymentResultAttributionSignal(paymentPackage, evidence)
-            )
+            ).paymentResultDispatchOutcome()
         } catch (error: RuntimeException) {
             Log.w(TAG, "支付结果页 AI 派发失败", error)
+            PaymentResultDispatchOutcome.NOT_DISPATCHED
+        }
+    }
+
+    /**
+     * 批 V-5（改造 D-2 ② / D-3）：**AI 定论不可得**时立即落待确认，并把
+     * [PAYMENT_RESULT_AI_DISPATCH_UNAVAILABLE] 作为日志锚点（"派发不可用率"可量化）。
+     *
+     * 两个调用面共用本方法：
+     * 1. 结果页主路径 —— 派发档位为 `NOT_DISPATCHED`（AI 未配置 / 派发失败 / 预算耗尽 /
+     *    门禁拒绝）；
+     * 2. 结果页截图兜底路径 —— 该路径本就直调视觉客户端、不派发结算页 AI。
+     *
+     * ⚠️ **不得**在 `COORDINATOR_ALREADY_RECORDED` 档位调用：那三条兜底（槽位缺图 /
+     * 归属 0 命中 / Ambiguous）已由协调器孤儿出口落卡，再补一条会让同一笔支付出现两张卡。
+     * 落卡本身的幂等与防重由 [CheckoutPaymentMatcher.promoteEvidenceOnlySessionToPending]
+     * 内部的四道守卫保证（已有卡 / 已入账 / 已有孤儿卡 / AI 已定论）。
+     *
+     * @param sessionId 证据成功落库的会话 id；为空说明无会话可关联，此时该笔已由
+     *   孤儿待确认（`NO_ACTIVE_SESSION` 等）承载，只需留日志。
+     */
+    private suspend fun promotePendingWhenAiUnavailable(
+        matcher: CheckoutPaymentMatcher,
+        sessionId: String?
+    ) {
+        if (sessionId.isNullOrBlank()) {
+            Log.w(
+                TAG,
+                "$PAYMENT_RESULT_AI_DISPATCH_UNAVAILABLE: 无会话可关联，已由孤儿待确认承载"
+            )
+            return
+        }
+        try {
+            val promoted = matcher.promoteEvidenceOnlySessionToPending(
+                sessionId = sessionId,
+                reason = PAYMENT_RESULT_AI_DISPATCH_UNAVAILABLE
+            )
+            Log.w(
+                TAG,
+                "$PAYMENT_RESULT_AI_DISPATCH_UNAVAILABLE: session=${sessionId.take(8)}, " +
+                    "promoted=$promoted"
+            )
+        } catch (error: RuntimeException) {
+            Log.w(TAG, "AI 定论不可用时落待确认失败", error)
         }
     }
 
@@ -2138,6 +2209,10 @@ class CheckoutAccessibilityService : AccessibilityService() {
      * 4. 无任何匹配会话时转纯通知待确认，证据不丢弃。
      *
      * 证据来源固定标记为 ACCESSIBILITY（无障碍结果页），与通知（NOTIFICATION）区分。
+     *
+     * @return 批 V-5（改造 D-2 ②）新增：证据**成功落库**时的会话 id（`Accepted.sessionId`）；
+     *   证据被拒（已转孤儿待确认）或无会话可关联时返回 null。调用方据此在"AI 定论不可得"
+     *   时调 [CheckoutPaymentMatcher.promoteEvidenceOnlySessionToPending] 立即补落待确认。
      */
     private suspend fun recordPaymentResultEvidence(
         matcher: CheckoutPaymentMatcher,
@@ -2145,7 +2220,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
         evidence: PaymentResultEvidence,
         handoffContext: PaymentResultHandoffContext?,
         aiUnverified: Boolean = false
-    ) {
+    ): String? {
         val signal = PaymentNotificationFallbackSignal(
             paymentPackage = paymentPackage,
             amountMinor = evidence.amountMinor,
@@ -2187,11 +2262,11 @@ class CheckoutAccessibilityService : AccessibilityService() {
                         TAG,
                         "支付结果页证据落库结果（最近活跃会话兜底）: ${formatMatchResult(recentResult)}"
                     )
-                } else {
-                    matcher.recordOrphanPaymentSignal(signal, sourceType = "ACCESSIBILITY")
-                    Log.i(TAG, "支付结果页交接引用已失效，证据已转待确认")
+                    return acceptedSessionIdOf(recentResult)
                 }
-                return
+                matcher.recordOrphanPaymentSignal(signal, sourceType = "ACCESSIBILITY")
+                Log.i(TAG, "支付结果页交接引用已失效，证据已转待确认")
+                return null
             }
             val result = matcher.recordPaymentEvidence(
                 handoffReference,
@@ -2207,7 +2282,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
                 )
             }
             Log.i(TAG, "支付结果页证据落库结果（交接上下文）: ${formatMatchResult(result)}")
-            return
+            return acceptedSessionIdOf(result)
         }
 
         // 路径二：订单号/金额+时间窗口综合解析
@@ -2237,6 +2312,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
                         (if (resolution.byOrderId) "订单号" else "金额+时间窗口") +
                         "）: ${formatMatchResult(result)}"
                 )
+                return acceptedSessionIdOf(result)
             }
             is PaymentSessionResolution.Ambiguous -> {
                 // 并发会话无法区分：不强行合并，保留证据交给已有待确认兜底。
@@ -2247,6 +2323,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
                     sessionIds = resolution.sessionIds
                 )
                 Log.i(TAG, "支付结果页命中并发会话(${resolution.sessionIds.size}个)，已转待确认")
+                return null
             }
             PaymentSessionResolution.NoMatch -> {
                 // 交接引用缺失时先做最近活跃结算会话兜底：AI 已派发的会话
@@ -2272,14 +2349,22 @@ class CheckoutAccessibilityService : AccessibilityService() {
                         TAG,
                         "支付结果页证据落库结果（最近活跃会话兜底）: ${formatMatchResult(result)}"
                     )
-                } else {
-                    // 无关联会话：证据不丢弃，转纯通知待确认（sessionId 为空，sourceType=accessibility）
-                    matcher.recordOrphanPaymentSignal(signal, sourceType = "ACCESSIBILITY")
-                    Log.i(TAG, "支付结果页无关联活跃会话，已转纯通知待确认")
+                    return acceptedSessionIdOf(result)
                 }
+                // 无关联会话：证据不丢弃，转纯通知待确认（sessionId 为空，sourceType=accessibility）
+                matcher.recordOrphanPaymentSignal(signal, sourceType = "ACCESSIBILITY")
+                Log.i(TAG, "支付结果页无关联活跃会话，已转纯通知待确认")
+                return null
             }
         }
     }
+
+    /**
+     * 批 V-5：从证据落库结果取会话 id —— 仅 `Accepted`（证据确实落库）才可用于
+     * "AI 定论不可得时补落待确认"；`Rejected` 已转孤儿待确认，不需要（也不应该）二次落卡。
+     */
+    private fun acceptedSessionIdOf(result: CheckoutPaymentMatchResult): String? =
+        (result as? CheckoutPaymentMatchResult.Accepted)?.sessionId
 
     /** 格式化匹配决策结果用于日志，billId 非空表示阶段四 T5 已自动入账。 */
     private fun formatMatchResult(result: CheckoutPaymentMatchResult): String = when (result) {

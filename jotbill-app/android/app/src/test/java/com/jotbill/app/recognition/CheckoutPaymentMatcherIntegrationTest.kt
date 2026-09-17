@@ -217,6 +217,15 @@ class CheckoutPaymentMatcherIntegrationTest {
 
     // ---------- 契约 3:AI 未验证证据永不自动落账 ----------
 
+    /**
+     * 批 V-5（改造 D）适配：证据先到**不再**立即落待确认（推迟到 AI 定论 / 定论不可得）。
+     *
+     * 本用例的不变量**未变**——「AI 未验证证据不得自动入账，必须进待确认等用户核对」；
+     * 变化的只是**落卡时点**：
+     * 旧行为 = 证据落库时落卡（P5 弹窗过早）→ 新行为 = AI 定论时落卡，而截图兜底路径
+     * 本就不会有结算页 AI 定论（它直调视觉客户端），故由服务层显式补落。
+     * 这里直接调用同一出口，钉死"该形态最终一定有卡"。
+     */
     @Test
     fun aiUnverifiedEvidenceNeverAutoCommitsBill() = runBlocking {
         val reference = checkoutReference()
@@ -235,12 +244,28 @@ class CheckoutPaymentMatcherIntegrationTest {
         val evidence = database.paymentEvidenceDao().getBySourceEventKey("evt-1")
         assertTrue("AI 未验证证据必须落库", evidence != null)
         assertEquals("SUCCESS_AI_UNVERIFIED", evidence!!.paymentStatus)
-        // 待确认侧:证据先于 AI 候选到达时以证据占位待确认,等待用户核对
-        val pendings = database.pendingTransactionDao().getPage(10, 0)
-        assertTrue(
-            "AI 未验证证据应转入待确认(result=$result)",
-            pendings.isNotEmpty()
+        // 批 V-5:证据先到时**不落卡**（弹窗推迟到 AI 定论之后）
+        assertEquals(
+            "证据先到不得立即落待确认(批 V-5,result=$result)",
+            0,
+            database.pendingTransactionDao().getPage(10, 0).size
         )
+        // 截图兜底形态没有结算页 AI 定论 ⇒ 由"定论不可得"出口落卡,证据不静默
+        assertTrue(
+            matcher.promoteEvidenceOnlySessionToPending(
+                sessionId = SESSION,
+                reason = PAYMENT_RESULT_AI_DISPATCH_UNAVAILABLE
+            )
+        )
+        val pendings = database.pendingTransactionDao().getPage(10, 0)
+        assertEquals("AI 未验证证据最终必须进待确认,等待用户核对", 1, pendings.size)
+        assertEquals(SESSION, pendings.single().sessionId)
+        assertEquals(
+            PAYMENT_RESULT_AI_DISPATCH_UNAVAILABLE,
+            pendings.single().conflictReason
+        )
+        // 落卡后仍不得入账
+        assertEquals(0, database.billDao().count())
     }
 
     // ---------- 契约 4:用户断言截图会话收口为待确认 ----------
