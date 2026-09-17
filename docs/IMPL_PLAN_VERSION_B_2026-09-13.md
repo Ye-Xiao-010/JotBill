@@ -818,6 +818,43 @@ fun trigger(
 
 > **实施要求**：本项是批 V-3（改造 B + E）的**前置**，**不可跳过**；建议**单独一个提交**，便于回归定位。
 
+> ✅ **2026-09-16 V-3 实施前核查补正（7 处落差已核实 + 5 项裁定）**
+>
+> **F1 🔴｜§8.3 链路候选①（"Service 在 `onStable` 时从 `ActiveCheckout` 取值填充"）时序倒置** —— 已核实
+> `onStable` lambda（`Service:379-385`）里**先赋值 `currentStableCheckout` 再 `dispatchEvent(Stable(page))`**，而 `Stable` 事件只携带 `page`；**sessionId 由截图协调器在 `dispatchEvent` → `observationListener.onEvent` 内生成/沿用**。
+> ⇒ 在 lambda 里查只能拿到**上一帧**的会话，首帧恒 null ⇒ 会把"订单2 的帧"标成"订单1 的 sessionId" —— **正是改造 E 要修的错误归属**。
+> ⇒ **裁定：采用候选②**（"由 `SnapshotCoordinator` 发事件时直接带上"）；候选① **否决**（时序倒置是硬伤，非风格问题）。
+>
+> **F2 🔴｜B-2 用 `pageFingerprint = handoffFingerprint` 搬运 ⇒ 漂移场景必然搬不到图** —— 已核实
+> `handoffFingerprint = retained.pageFingerprint`（取**最新观察帧**）；槽内候选指纹取自**建立会话那一帧**；而漂移沿用分支 `previous!!.copy(page = page)` + `attemptedAutomaticCaptures` 阻止重截 ⇒ **两者恒不同**（`Buffer:122-145` 的 KDoc 已载明真机证据"几乎必然不同"）。且唯一漂移校正 `resolveHandoffFingerprint` 随 B-2 删掉 consume 调用后**失去调用点**。
+> ⇒ 若不处理，搬运**静默返回 null ⇒ 支付成功时无图 ⇒ 恒落待确认**。
+>
+> **F5 🔴｜B-3 若按 §8.1 用 `handoffContexts[sessionId].pageFingerprint` 强制匹配 ⇒ 漂移场景恒失败**（同 F2 的指纹错位）
+>
+> ⇒ **裁定 1｜`moveToPaymentProcess` 与 B-3 消费均按「指纹优先 + 槽内选择回退」** ✅
+> **安全前提（须写入代码注释）**：目标槽位 `payment:<sessionId>` 是**一单一图**（一个 sessionId 一个槽位，前缀与 `shopping-package:` 不撞）⇒ 槽内不存在他单的图，**回退取槽内唯一候选不会取错**。
+> ⚠️ **实施时须核实**：槽内是否可能出现**多张**候选？若可能，"槽内选择回退"需明确选择规则（否则回退本身引入歧义）。
+>
+> **F3 🔴｜A-4 引用的 §9.2 不存在**（`IMPL_PLAN` 仅 §1~§8）⇒ 归属判定口径按 `DESIGN_REVIEW R4:151` + `Matcher.resolveSessionForPayment`（金额 + 时间窗 + 未占用）实现。
+>
+> **F4 🔴｜§8.1 与 §8.2 不可能同时成立** —— 已核实
+> §8.1 定"`trigger(PAYMENT_RESULT, callback)` **不传** sessionId/fingerprint"；而 §8.2 的归属判定**需要证据的 `amountMinor` / `occurredAt`** —— **这两个值不在 `trigger` 签名里**，只有 Service 侧持有 ⇒ 判定**无输入 ⇒ 恒 0 命中 ⇒ 恒走孤儿**。
+> ⇒ **裁定 2｜给 `trigger` 增可选证据入参** `paymentResult: PaymentResultAttributionSignal? = null`（含 amount/occurredAt）✅
+> ⇒ ⚠️ 这是**规格内部矛盾的取舍**，须回填 §8.1 的样例（V-4 的 A-3 调用点相应多传一参）。
+>
+> **F6 ⚠️｜B-4 要求结算页槽位 TTL = 5min，而现状 buffer 默认 `DEFAULT_SNAPSHOT_TTL_MILLIS = 120_000`（`Buffer:13`）** ⇒ **真行为变化**（结算页候选存活 2min → 5min）。
+> ⇒ **裁定 4｜按规格采纳**（B-4 表 + 回归 #4 明确要求）；commit message 须注明这是行为变化。
+>
+> **F7 ⚠️｜删 `handoffAttempted` 门禁的连带面**：`PAYMENT_HANDOFF_ALREADY_ATTEMPTED` 变死枚举值（`RecognitionModule:248` 有映射）+ `resolveHandoffFingerprint` 变死方法 + 3 个既有用例（`GateTest:184/210/345`）。
+> ⇒ **裁定 5｜一并删除**（符合 D-10 先例与 D-16-B1 的同构理由："删掉比保留更干净，避免读者误判"）。
+>
+> **裁定 3｜R2 的"落待确认"归属层：给协调器加孤儿出口回调** ✅
+> 同 `readyDispatcher` 的注入风格，由 Service 接到 `recordOrphanPaymentSignal`。
+> **理由**：否则 V-3 只能"只做日志、落库留 V-4" ⇒ R2 的"**不得静默丢弃**"在本批**不可验证**；加回调后本批即可断言"出口被调 + conflictReason"。
+>
+> **F8｜批次中间态（知会，接受）**：B-2 取消交接派发、而结果页触发要到 V-4 才接 ⇒ **V-3~V-4 之间自动通道 AI 派发停摆**（且老 `SUBMIT_ACTION` 会先消费导致搬运无图）。
+> ⇒ **接受，不做临时补丁**：批次表本就**串行**、V-3 验收只看 JVM 测试；临时补丁会让 V-4 更难（要拆）。**真机验证时须知悉该中间态。**
+
 ### 8.4 `ignore` 语义（定案：显式终态）
 
 **背景**：P18（`ISSUE_REGISTER:74`）—— 规则引擎命中 `ignore` ⇒ 不写 Bill、也不进待确认，会话停 `WAITING_ENRICHMENT` 等过期。原表述为"实现时二选一"。
