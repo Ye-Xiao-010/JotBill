@@ -195,6 +195,40 @@ if (!canDispatchAutoAi && !isInternalNonCheckoutRetry) {
 >
 > ⇒ 原代码清单中"核对 `classifyPageRole` 8 级短路顺序在宽进语境下是否仍需调整"一条，应扩充为**同时覆盖 `detect()` 的 Accepted 判定放宽**。
 
+> ✅ **2026-09-17 V-4 实施前核查补正（4 处落差已核实 + 3 项裁定 + 拆分方案）**
+>
+> **落差 1 ⚠️｜宽进落点是 3 组，不是 2 处**：除 A-2 主体（`routeLocked` 门禁 2）与"两处配套"（`canBufferSnapshot()` / `detect()`）外，`AUTO_DISPATCHABLE_PAGE_ROLES` 实际至少被 **3 处**引用。
+>
+> **🔴 落差 2｜`detect()` 的角色判据与 `classifyPageRole` 的 CHECKOUT 判据【同源】⇒ 只放宽角色判据 = 宽进空转** —— 已核实
+> `Collector` 一次算出的 `hasFinalAmountSignal` / `hasCheckoutActionSignal` / `hasCheckoutClassSemantic`，**既写进 `CheckoutPageObservation`，又直接喂 `classifyPageRole`**；而 `detect()`（`:142-152`）用的是**同一组布尔、同一组条件** —— `detect():149` 的注释**自己写明**"与 `classifyPageRole` 保持同一放行条件"。
+> ⇒ **数学后果**：任何能过 `detect()` 其余判据的帧，`classifyPageRole` 必然返回 `CHECKOUT` ⇒ **真机上永远不会出现"角色是 `PRODUCT_DETAIL`/`CART` 且能过 `detect`"的帧** ⇒ 只改角色判据 ⇒ **宽进空转（零行为变化）**，判别性用例只能靠人造帧。
+>
+> **🔴 落差 3｜消费侧（`Buffer`）有 6 处硬编 `CHECKOUT`，规格完全未列** —— 已核实
+> `Buffer:956`（消费角色守卫 ⇒ 宽进后 `PRODUCT_DETAIL` 的图仍被拒，支付成功时取不到图）、`Buffer:942/944`（无指纹消费的候选选择判据要求 `== CHECKOUT`）、`Buffer:794/797/798`（`moveToPaymentProcess` 槽内选择规则要求 `== CHECKOUT` ⇒ **详情页直达支付时 B-1 搬运搬不到图，恒落 `PAYMENT_PROCESS_SNAPSHOT_MISSING`**）。
+> ⇒ **不处理这 6 处，门禁放宽了图也照样取不到。**
+>
+> **落差 4 ⚠️｜A-3 的调用点是 2 个，不是 1 个**：主路径 `:1624`（在 `scope.launch` 块内）+ 截图兜底 `:1899`。
+>
+> ---
+>
+> **✅ 裁定 1｜采纳「乙（真生效）+ 独立提交」，即 V-4 分两次提交**
+> - **本批第一次提交（V-4a）**：D-11 删活链路 + A-3 接新链路 + 3 处共享常量（`AUTO_DISPATCHABLE_PAGE_ROLES`）⇒ **归因清晰**（本批已含一对语义切换，再叠宽进判据设计会让测试红无法归因，与 V-1 拆批同一理由）。
+> - **本批第二次提交（V-4b）**：宽进补齐 = ① `detect()` 对非 `CHECKOUT` 的三类角色**跳过结算页专属判据**（`MISSING_FINAL_AMOUNT` / `MISSING_CHECKOUT_ACTION`），**硬红线保留**（白名单包、非敏感、合法指纹）；② `Buffer` 6 处硬编 `CHECKOUT` 改用同一常量。
+> - **不采纳"甲（停在空转）"**：宽进真生效是规格的设计目标（G1-1"**宽进严出**"），且**验收 #19（≥¥100 真机回归）在空转状态下没有实义**。
+> - ⚠️ **V-4b 的两条硬约束**：① 改 `Buffer` 6 处后，**V-3 的搬运用例必须仍全绿**（不破坏 V-3 定稿的"幂等一单一图 + 只摘引用不抹零"）；② `detect()` 也被**手动截图路径**（`CaptureCoordinator:1213`）与 `Service:917` 的 `sameStableCheckout` 判据消费 ⇒ **须逐处核对等价性**。
+>
+> **✅ 裁定 2｜A-3 位置 = 主路径 `scope.launch` 块内、`recordPaymentResultEvidence(...)` 调用之后**（实施方推荐，采纳）
+> - 放 `scope.launch{}` **之后**（协程外）⇒ `launch` 只是提交任务，**trigger 会先于证据落库执行**；
+> - 放 `recordPaymentResultEvidence` **函数之内** ⇒ 截图兜底路径会在它**自己已送过 AI**（`:1821`）之后再派一次 ⇒ **同一支付事件 2 次 AI 请求**，违反回归 #17"恰好 1 次"；
+> - 放 **`launch` 块内、调用之后** ⇒ 同协程串行（`suspend` 函数返回即代表证据已落库）+ **只覆盖主路径** ⇒ 截图兜底不重复派发（它自己那次 AI 就是兜底，与回归 #21 不冲突）。
+>
+> **✅ 裁定 3｜`StableCheckoutKey` 一并删**（全仓仅 3 处引用、全在本链路 ⇒ 随 D-11 删除；符合 D-10 死符号清理先例）。
+>
+> **⚠️ 附加核实项（实施方未深入）｜孤儿双落库的 `conflictReason` 覆盖问题**
+> 实测：A-3 接线后 **Service 侧与 coordinator 侧都会落孤儿**；`recordOrphanPaymentSignal`（`:492-527`）用确定性 ID `stableId("pending-orphan", sourceEventKey)` + `getById != null ⇒ 幂等跳过` ⇒ **不重复出卡片**，但**后到的 `conflictReason` 会被丢弃**（先落者胜）。
+> ⇒ **若 Service 侧恒先落，则先落的是 `NO_ACTIVE_SESSION`，而 `PAYMENT_PROCESS_SNAPSHOT_MISSING` 永远看不到 ⇒ R2 的"量化搬运漏检率"目标失效。**
+> ⇒ **不可仅标"可接受"**：须实测两者先后顺序；若 Service 侧恒先，须处理（如 Service 侧在 coordinator 可处理时**不落**，或让 coordinator 侧优先）。
+
 #### A-3｜触发点接线（`Service` 结果页路径）
 
 **位置**：`Service:1596` 的 `scope.launch { recordPaymentResultEvidence(...) }` **之后**。
