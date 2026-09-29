@@ -10,7 +10,7 @@ import android.hardware.HardwareBuffer
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
-import android.util.Log
+import com.jotbill.app.utils.JotBillLog
 import android.view.Display
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
@@ -273,7 +273,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
                     )
                 )
             } catch (error: RuntimeException) {
-                Log.w(TAG, "购买意图不可用结果回调失败", error)
+                JotBillLog.w(TAG, "购买意图不可用结果回调失败", error)
             }
         }
     }
@@ -414,7 +414,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
 
         // 每次系统重连都会 close 旧协调器并新建一个：若真机上出现"截图突然全部
         // 不可用"，需要据此区分是协调器熔断还是服务被反复重连。
-        Log.i(
+        JotBillLog.i(
             TAG,
             "无障碍服务开始连接: 旧协调器=${if (snapshotCaptureCoordinator != null) "存在(将关闭)" else "无"}, " +
                 "previouslyConnected=$serviceConnected"
@@ -470,7 +470,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
         initializeAiClient()
         setObservationListener(snapshotCaptureCoordinator)
         serviceConnected = true
-        Log.i(TAG, "结算页无障碍观察服务已连接")
+        JotBillLog.i(TAG, "结算页无障碍观察服务已连接")
     }
 
     /**
@@ -491,7 +491,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
                 try {
                     callback.onResult(result)
                 } catch (error: RuntimeException) {
-                    Log.w(TAG, "失败会话重试结果回调失败", error)
+                    JotBillLog.w(TAG, "失败会话重试结果回调失败", error)
                 }
             }
         }
@@ -548,7 +548,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
                 try {
                     coordinator.triggerUserRetry(completedContext, guardedCallback)
                 } catch (error: RuntimeException) {
-                    Log.w(TAG, "失败会话重试触发失败", error)
+                    JotBillLog.w(TAG, "失败会话重试触发失败", error)
                     rejectUserRetry(guardedCallback, PurchaseIntentGateRejection.BUFFER_UNAVAILABLE)
                 } finally {
                     snapshotCaptureCoordinator?.setUserRetryContext(null)
@@ -573,7 +573,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
                 )
             )
         } catch (error: RuntimeException) {
-            Log.w(TAG, "失败会话重试结果回调失败", error)
+            JotBillLog.w(TAG, "失败会话重试结果回调失败", error)
         }
     }
 
@@ -588,7 +588,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
             return
         }
         lastObservedEventLogAt = now
-        Log.i(
+        JotBillLog.i(
             TAG,
             "无障碍事件采样: pkg=$shoppingPackage(eventPkg=${eventPackage.ifBlank { "null" }}, " +
                 "rootPkg=${activeRootPackage.ifBlank { "null" }}), " +
@@ -870,7 +870,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
                 now = shoppingObservedAt
             )
             if (latchReleased) {
-                Log.i(
+                JotBillLog.i(
                     TAG,
                     "敏感页锁存提前解除: 连续 ${SensitivePageLatch.RELEASE_FRAME_THRESHOLD} 帧明确非敏感购物页, " +
                         "pkg=$shoppingPackage, role=${observation.pageRole}"
@@ -955,7 +955,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
                 }
             }
         } catch (error: RuntimeException) {
-            Log.w(TAG, "读取无障碍节点摘要失败", error)
+            JotBillLog.w(TAG, "读取无障碍节点摘要失败", error)
             dispatchOverlayInvalidation(
                 reason = CheckoutInvalidationReason.NODE_TREE_UNAVAILABLE,
                 shoppingPackage = shoppingPackage
@@ -1001,7 +1001,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
         // 服务中断后页面观察不再连续，L3 跨帧易变观察窗口失去意义，
         // 清空防止陈旧观察污染重新连接后的判定。
         AccessibilityPageSummaryCollector.resetVolatileTracker()
-        Log.w(TAG, "结算页无障碍观察服务被中断")
+        JotBillLog.w(TAG, "结算页无障碍观察服务被中断")
         // AccessibilityService.onInterrupt() 是抽象方法，无法调用 super.onInterrupt()。
     }
 
@@ -1018,14 +1018,14 @@ class CheckoutAccessibilityService : AccessibilityService() {
             activeService = null
         }
         setObservationListener(null)
-        Log.i(TAG, "结算页无障碍观察服务已解除绑定")
+        JotBillLog.i(TAG, "结算页无障碍观察服务已解除绑定")
         return super.onUnbind(intent)
     }
 
     override fun onDestroy() {
         // 与协调器熔断相区分：本路径会把 snapshotCaptureCoordinator 置空，
         // 悬浮按钮回调走空引用；熔断则保留引用并返回 SERVICE_NOT_CONNECTED。
-        Log.i(TAG, "结算页无障碍观察服务开始销毁: previouslyConnected=$serviceConnected")
+        JotBillLog.i(TAG, "结算页无障碍观察服务开始销毁: previouslyConnected=$serviceConnected")
         serviceConnected = false
         lastWindowPackage = null
         lastWindowClass = null
@@ -1054,7 +1054,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
             activeService = null
         }
         setObservationListener(null)
-        Log.i(TAG, "结算页无障碍观察服务已销毁")
+        JotBillLog.i(TAG, "结算页无障碍观察服务已销毁")
         super.onDestroy()
     }
 
@@ -1066,7 +1066,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
                 secretStore = KeyStoreSecretStore(applicationContext)
             )
         } catch (error: RuntimeException) {
-            Log.w(TAG, "结算页 AI 客户端初始化失败", error)
+            JotBillLog.w(TAG, "结算页 AI 客户端初始化失败", error)
             null
         }
 
@@ -1092,7 +1092,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
         val database = try {
             JotBillDatabaseProvider.get(applicationContext)
         } catch (error: RuntimeException) {
-            Log.w(TAG, "支付匹配数据库初始化失败", error)
+            JotBillLog.w(TAG, "支付匹配数据库初始化失败", error)
             null
         }
         if (database == null) {
@@ -1116,14 +1116,14 @@ class CheckoutAccessibilityService : AccessibilityService() {
             try {
                 val outcome = matcher.backfillEvidenceOnlyCandidates()
                 if (outcome.candidatesBackfilled > 0 || outcome.pendingsPromoted > 0) {
-                    Log.i(
+                    JotBillLog.i(
                         TAG,
                         "支付证据启动期兜底扫描: candidates=${outcome.candidatesBackfilled}, " +
                             "pendings=${outcome.pendingsPromoted}"
                     )
                 }
             } catch (error: RuntimeException) {
-                Log.w(TAG, "支付证据历史会话补齐失败", error)
+                JotBillLog.w(TAG, "支付证据历史会话补齐失败", error)
             }
         }
     }
@@ -1170,7 +1170,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
 
         val reference = ready.snapshot.reference()
         val dispatchStartedAt = System.currentTimeMillis()
-        Log.i(
+        JotBillLog.i(
             TAG,
             "结算页 AI 派发: session=${reference.sessionId.take(8)}, " +
                 "intent=${ready.intent.wireValue}, requestKey=${requestKey.take(24)}"
@@ -1203,13 +1203,13 @@ class CheckoutAccessibilityService : AccessibilityService() {
                         try {
                             matcher.ensureSession(reference, ready.requestKey)
                         } catch (error: RuntimeException) {
-                            Log.w(TAG, "AI 会话预写入失败", error)
+                            JotBillLog.w(TAG, "AI 会话预写入失败", error)
                         }
                     }
                     clientOwnsSnapshot = true
                     val result = client.recognize(ready)
                     if (result is com.jotbill.app.ai.AiVisionResult.Failed) {
-                        Log.i(
+                        JotBillLog.i(
                             TAG,
                             "AI 视觉识别失败: code=${result.code}, attempts=${result.attempts}, " +
                                 "httpStatus=${result.httpStatus}, retryable=${result.retryable}, " +
@@ -1223,7 +1223,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
                         }
                         try {
                             val matchResult = matcher.recordAiResult(result)
-                            Log.i(TAG, "AI 结果匹配落库结果: ${formatMatchResult(matchResult)}")
+                            JotBillLog.i(TAG, "AI 结果匹配落库结果: ${formatMatchResult(matchResult)}")
                             if (isAssertedSession &&
                                 result is com.jotbill.app.ai.AiVisionResult.Succeeded
                             ) {
@@ -1232,26 +1232,26 @@ class CheckoutAccessibilityService : AccessibilityService() {
                                 val promoted = matcher.promoteAssertedSessionToPending(
                                     reference.sessionId
                                 )
-                                Log.i(
+                                JotBillLog.i(
                                     TAG,
                                     "断言截图会话收口: session=${reference.sessionId.take(8)}, " +
                                         "promoted=$promoted"
                                 )
                             }
                         } catch (error: RuntimeException) {
-                            Log.w(TAG, "AI 结果匹配写入失败", error)
+                            JotBillLog.w(TAG, "AI 结果匹配写入失败", error)
                         }
                     }
                     notifyAiResult(result)
                 } catch (error: CancellationException) {
-                    Log.i(
+                    JotBillLog.i(
                         TAG,
                         "结算页 AI 任务被取消: session=${reference.sessionId.take(8)}, " +
                             "elapsed=${System.currentTimeMillis() - dispatchStartedAt}ms"
                     )
                     throw error
                 } catch (error: Throwable) {
-                    Log.w(TAG, "结算页 AI 任务异常", error)
+                    JotBillLog.w(TAG, "结算页 AI 任务异常", error)
                 } finally {
                     if (!clientOwnsSnapshot) {
                         ready.snapshot.release()
@@ -1261,7 +1261,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
                             activeAiReferences.remove(reference.sessionId)
                         }
                     }
-                    Log.i(
+                    JotBillLog.i(
                         TAG,
                         "结算页 AI 任务结束: session=${reference.sessionId.take(8)}, " +
                             "elapsed=${System.currentTimeMillis() - dispatchStartedAt}ms"
@@ -1303,7 +1303,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
             try {
                 listener.onResult(result)
             } catch (error: RuntimeException) {
-                Log.w(TAG, "截图结果监听处理失败", error)
+                JotBillLog.w(TAG, "截图结果监听处理失败", error)
             }
         }
     }
@@ -1326,7 +1326,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
             try {
                 consumer.onResult(result)
             } catch (error: RuntimeException) {
-                Log.w(TAG, "购买意图结果监听处理失败", error)
+                JotBillLog.w(TAG, "购买意图结果监听处理失败", error)
             }
         }
     }
@@ -1345,7 +1345,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
         purchaseIntentCoordinator?.setPaymentSignalOrphanSink { signal, conflictReason, _, sessionIds ->
             val matcher = synchronized(aiLifecycleLock) { paymentMatcher }
             if (matcher == null) {
-                Log.w(
+                JotBillLog.w(
                     TAG,
                     "支付信号无法落待确认(匹配器不可用): reason=$conflictReason, " +
                         "amount=${signal.amountMinor}"
@@ -1361,13 +1361,13 @@ class CheckoutAccessibilityService : AccessibilityService() {
                         conflictReason = conflictReason,
                         sessionIds = sessionIds
                     )
-                    Log.i(
+                    JotBillLog.i(
                         TAG,
                         "支付信号已转待确认: reason=$conflictReason, amount=${signal.amountMinor}, " +
                             "sessions=${sessionIds.size}"
                     )
                 } catch (error: RuntimeException) {
-                    Log.w(TAG, "支付信号落待确认失败", error)
+                    JotBillLog.w(TAG, "支付信号落待确认失败", error)
                 }
             }
         }
@@ -1431,7 +1431,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
                         }
                     }
                 }
-                Log.i(TAG, "支付窗口列表(${inventory.size}): ${inventory.joinToString(" | ")}")
+                JotBillLog.i(TAG, "支付窗口列表(${inventory.size}): ${inventory.joinToString(" | ")}")
             } catch (_: RuntimeException) {
                 // 系统窗口列表不可读时保持原有空树语义。
             }
@@ -1460,7 +1460,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
         }
         val roots = findPaymentResultRoots(event, paymentPackage, includeWindows)
         if (roots.isEmpty()) {
-            Log.i(
+            JotBillLog.i(
                 TAG,
                 "支付结果页无可用节点树: pkg=$paymentPackage, " +
                     "type=${AccessibilityEvent.eventTypeToString(event.eventType)}, class=${event.className}"
@@ -1526,7 +1526,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
                         } catch (_: RuntimeException) {
                             -1
                         }
-                        Log.i(
+                        JotBillLog.i(
                             TAG,
                             "支付包页面未分类为结果页: pkg=$paymentPackage, role=${observation.pageRole}, " +
                                 "class=${observation.windowClass}, sensitive=${observation.isSensitivePage}, " +
@@ -1552,7 +1552,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
                         is PaymentResultParseResult.PersonalTransfer -> {
                             // 个人转账（好友收款）不落消费证据：直接转待确认转账，
                             // 避免 AI/文本两条路径各落一条消费金额。
-                            Log.i(
+                            JotBillLog.i(
                                 TAG,
                                 "支付结果页识别为个人转账: 金额=${parseResult.transfer.amountMinor}分, " +
                                     "收款人=${parseResult.transfer.recipient ?: "未知"}"
@@ -1564,7 +1564,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
                             return
                         }
                         is PaymentResultParseResult.Failure -> {
-                            Log.i(TAG, "支付结果页未生成成功证据: reason=${parseResult.reason}")
+                            JotBillLog.i(TAG, "支付结果页未生成成功证据: reason=${parseResult.reason}")
                             maybeCapturePaymentResultScreenshot(
                                 paymentPackage,
                                 handoffContext,
@@ -1573,7 +1573,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
                             return
                         }
                         PaymentResultParseResult.NotPaymentResult -> {
-                            Log.d(TAG, "支付结果页未命中可确认的结果语义")
+                            JotBillLog.d(TAG, "支付结果页未命中可确认的结果语义")
                             maybeCapturePaymentResultScreenshot(
                                 paymentPackage,
                                 handoffContext,
@@ -1584,11 +1584,11 @@ class CheckoutAccessibilityService : AccessibilityService() {
                     }
 
                     if (!markPaymentResultEvent(evidence.sourceEventKey, observation.observedAt)) {
-                        Log.d(TAG, "支付结果页同一事件已处理，跳过重复解析: ${evidence.sourceEventKey.take(12)}")
+                        JotBillLog.d(TAG, "支付结果页同一事件已处理，跳过重复解析: ${evidence.sourceEventKey.take(12)}")
                         return
                     }
                     lastSuccessfulPaymentEvidenceAt = System.currentTimeMillis()
-                    Log.i(
+                    JotBillLog.i(
                         TAG,
                         "支付结果页解析到证据: 金额=${evidence.amountMinor}分, 状态=${evidence.paymentStatus}, " +
                             "textLength=${pageText.length}"
@@ -1600,7 +1600,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
                             val database = try {
                                 JotBillDatabaseProvider.get(applicationContext)
                             } catch (error: RuntimeException) {
-                                Log.w(TAG, "支付结果页无法初始化证据数据库", error)
+                                JotBillLog.w(TAG, "支付结果页无法初始化证据数据库", error)
                                 return
                             }
                             CheckoutPaymentMatcher(database)
@@ -1626,7 +1626,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
                                 promotePendingWhenAiUnavailable(matcher, persistedSessionId)
                             }
                         } catch (error: Exception) {
-                            Log.w(TAG, "支付结果页证据落库失败", error)
+                            JotBillLog.w(TAG, "支付结果页证据落库失败", error)
                             try {
                                 matcher.recordOrphanPaymentSignal(
                                     PaymentNotificationFallbackSignal(
@@ -1642,13 +1642,13 @@ class CheckoutAccessibilityService : AccessibilityService() {
                                     conflictReason = "EVIDENCE_PERSIST_FAILED"
                                 )
                             } catch (fallbackError: Exception) {
-                                Log.w(TAG, "支付结果页证据兜底落库失败", fallbackError)
+                                JotBillLog.w(TAG, "支付结果页证据兜底落库失败", fallbackError)
                             }
                         }
                     }
                     return
                 } catch (error: RuntimeException) {
-                    Log.w(TAG, "支付结果页候选根节点解析失败，继续检查下一窗口", error)
+                    JotBillLog.w(TAG, "支付结果页候选根节点解析失败，继续检查下一窗口", error)
                 }
             }
         } finally {
@@ -1690,7 +1690,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
         // 此时截图会把聊天记录、朋友圈等无关内容编码后发往外部 AI——一律禁止。
         // 结果页文本解析主路径不受影响（无截图、无外发）。
         if (handoffContext == null) {
-            Log.i(TAG, "支付结果页截图兜底跳过: 无支付交接上下文 pkg=$paymentPackage")
+            JotBillLog.i(TAG, "支付结果页截图兜底跳过: 无支付交接上下文 pkg=$paymentPackage")
             return
         }
         val now = System.currentTimeMillis()
@@ -1715,7 +1715,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
         // AccessibilityService.takeScreenshot 为 API 30+；低版本系统直接禁用该兜底
         //（NoSuchMethodError 是 Error，不能靠外层 RuntimeException 捕获）。
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
-            Log.i(TAG, "支付结果页截图兜底不可用: 需要 Android 11+，当前 API ${Build.VERSION.SDK_INT}")
+            JotBillLog.i(TAG, "支付结果页截图兜底不可用: 需要 Android 11+，当前 API ${Build.VERSION.SDK_INT}")
             return
         }
         val activeRootPackage = try {
@@ -1727,12 +1727,12 @@ class CheckoutAccessibilityService : AccessibilityService() {
             activeRootPackage.isNotBlank() &&
             !pageDetector.supportsPaymentPackage(activeRootPackage)
         ) {
-            Log.i(TAG, "支付结果页截图兜底跳过: 当前前台不是支付应用 pkg=$activeRootPackage")
+            JotBillLog.i(TAG, "支付结果页截图兜底跳过: 当前前台不是支付应用 pkg=$activeRootPackage")
             return
         }
         val client = synchronized(aiLifecycleLock) { aiVisionClient }
         if (client == null) {
-            Log.i(TAG, "支付结果页截图兜底未启用: AI 客户端不可用")
+            JotBillLog.i(TAG, "支付结果页截图兜底未启用: AI 客户端不可用")
             return
         }
         lastPaymentScreenshotFallbackAt = now
@@ -1743,7 +1743,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
             delay(PAYMENT_SCREENSHOT_FALLBACK_WATCHDOG_MILLIS)
             if (paymentScreenshotFallbackInFlight) {
                 paymentScreenshotFallbackInFlight = false
-                Log.w(TAG, "支付结果页截图兜底看门狗复位（系统回调未达）")
+                JotBillLog.w(TAG, "支付结果页截图兜底看门狗复位（系统回调未达）")
             }
         }
         try {
@@ -1758,10 +1758,10 @@ class CheckoutAccessibilityService : AccessibilityService() {
                         val bytes = encodePaymentScreenshot(screenshot)
                         if (bytes == null || bytes.isEmpty()) {
                             bytes?.fill(0)
-                            Log.w(TAG, "支付结果页截图兜底编码失败")
+                            JotBillLog.w(TAG, "支付结果页截图兜底编码失败")
                             return
                         }
-                        Log.i(TAG, "支付结果页截图兜底已取得: ${bytes.size} bytes")
+                        JotBillLog.i(TAG, "支付结果页截图兜底已取得: ${bytes.size} bytes")
                         evidenceFallbackScope.launch {
                             consumePaymentResultScreenshot(client, bytes, paymentPackage, handoffContext)
                         }
@@ -1770,14 +1770,14 @@ class CheckoutAccessibilityService : AccessibilityService() {
                     override fun onFailure(errorCode: Int) {
                         watchdogJob.cancel()
                         paymentScreenshotFallbackInFlight = false
-                        Log.w(TAG, "支付结果页截图兜底失败: errorCode=$errorCode")
+                        JotBillLog.w(TAG, "支付结果页截图兜底失败: errorCode=$errorCode")
                     }
                 }
             )
         } catch (error: RuntimeException) {
             watchdogJob.cancel()
             paymentScreenshotFallbackInFlight = false
-            Log.w(TAG, "支付结果页截图兜底调用失败", error)
+            JotBillLog.w(TAG, "支付结果页截图兜底调用失败", error)
         }
     }
 
@@ -1803,7 +1803,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
                 occurredAt = transfer.occurredAt
             )
         } catch (error: Exception) {
-            Log.w(TAG, "个人转账待确认落库失败", error)
+            JotBillLog.w(TAG, "个人转账待确认落库失败", error)
         }
     }
 
@@ -1819,7 +1819,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
         val result = client.recognizePaymentResult(imageBytes, requestSourceKey)
         if (result !is CheckoutAiVisionClient.PaymentResultVisionResult.Succeeded) {
             val failed = result as CheckoutAiVisionClient.PaymentResultVisionResult.Failed
-            Log.i(
+            JotBillLog.i(
                 TAG,
                 "支付结果页截图兜底未生成证据: code=${failed.code}, attempts=${failed.attempts}, " +
                     "httpStatus=${failed.httpStatus}"
@@ -1830,7 +1830,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
         // 个人转账（好友收款）不落消费证据：直接转待确认转账，收款人即 merchant。
         // 与文本解析路径共用 Matcher 确定性 ID，两条路径识别同一笔只落一条。
         if (fields.transferType == CheckoutAiVisionClient.TRANSFER_TYPE_PERSONAL) {
-            Log.i(
+            JotBillLog.i(
                 TAG,
                 "支付结果页截图识别为个人转账: 金额=${fields.amountMinor}分, " +
                     "收款人=${fields.merchant ?: "未知"}"
@@ -1855,7 +1855,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
         // 截图 AI 时效闸门：AI 读到的显示时间距当前超过 30 分钟，说明截图是
         // 历史账单详情/聊天凭证而非当次支付结果（AI 偶发误判时兜底），拒绝落证据。
         if (kotlin.math.abs(occurredAt - System.currentTimeMillis()) > 30 * 60 * 1000L) {
-            Log.i(
+            JotBillLog.i(
                 TAG,
                 "支付结果页截图证据时间超出时效窗口，判定为历史信息回放: occurredAt=$occurredAt"
             )
@@ -1869,7 +1869,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
         )
         val now = System.currentTimeMillis()
         if (!markPaymentResultEvent(sourceEventKey, now)) {
-            Log.d(TAG, "支付结果页截图兜底同一事件已处理，跳过重复落库")
+            JotBillLog.d(TAG, "支付结果页截图兜底同一事件已处理，跳过重复落库")
             return
         }
         lastSuccessfulPaymentEvidenceAt = now
@@ -1887,7 +1887,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
             ),
             sourceEventKey = sourceEventKey
         )
-        Log.i(TAG, "支付结果页截图兜底解析到证据（未证实，需用户确认）: 金额=${evidence.amountMinor}分")
+        JotBillLog.i(TAG, "支付结果页截图兜底解析到证据（未证实，需用户确认）: 金额=${evidence.amountMinor}分")
         val matcher = synchronized(aiLifecycleLock) { paymentMatcher }
             ?: run {
                 val database = JotBillDatabaseProvider.get(applicationContext)
@@ -1908,7 +1908,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
             // 否则截图兜底证据会静默悬置到下次启动扫描。
             promotePendingWhenAiUnavailable(matcher, persistedSessionId)
         } catch (error: Exception) {
-            Log.w(TAG, "支付结果页截图兜底证据落库失败", error)
+            JotBillLog.w(TAG, "支付结果页截图兜底证据落库失败", error)
         }
     }
 
@@ -2097,7 +2097,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
         val loggedAt = System.currentTimeMillis()
         if (loggedAt - lastHandoffContextLogAt >= 1_000L) {
             lastHandoffContextLogAt = loggedAt
-            Log.i(
+            JotBillLog.i(
                 TAG,
                 "支付交接上下文: stable=${stableCheckout.observation.pageFingerprint.take(12)}, " +
                     "buffered=${bufferedReference != null}, " +
@@ -2142,7 +2142,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
     ): PaymentResultDispatchOutcome {
         val coordinator = purchaseIntentCoordinator
         if (coordinator == null) {
-            Log.w(TAG, "支付结果页派发跳过: 购买意图协调器不可用")
+            JotBillLog.w(TAG, "支付结果页派发跳过: 购买意图协调器不可用")
             return PaymentResultDispatchOutcome.NOT_DISPATCHED
         }
         return try {
@@ -2151,7 +2151,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
                 paymentResult = buildPaymentResultAttributionSignal(paymentPackage, evidence)
             ).paymentResultDispatchOutcome()
         } catch (error: RuntimeException) {
-            Log.w(TAG, "支付结果页 AI 派发失败", error)
+            JotBillLog.w(TAG, "支付结果页 AI 派发失败", error)
             PaymentResultDispatchOutcome.NOT_DISPATCHED
         }
     }
@@ -2178,7 +2178,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
         sessionId: String?
     ) {
         if (sessionId.isNullOrBlank()) {
-            Log.w(
+            JotBillLog.w(
                 TAG,
                 "$PAYMENT_RESULT_AI_DISPATCH_UNAVAILABLE: 无会话可关联，已由孤儿待确认承载"
             )
@@ -2189,13 +2189,13 @@ class CheckoutAccessibilityService : AccessibilityService() {
                 sessionId = sessionId,
                 reason = PAYMENT_RESULT_AI_DISPATCH_UNAVAILABLE
             )
-            Log.w(
+            JotBillLog.w(
                 TAG,
                 "$PAYMENT_RESULT_AI_DISPATCH_UNAVAILABLE: session=${sessionId.take(8)}, " +
                     "promoted=$promoted"
             )
         } catch (error: RuntimeException) {
-            Log.w(TAG, "AI 定论不可用时落待确认失败", error)
+            JotBillLog.w(TAG, "AI 定论不可用时落待确认失败", error)
         }
     }
 
@@ -2243,7 +2243,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
                 // 此前此处有「最近活跃结算会话」兜底（findRecentCheckoutReferenceForPayment），
                 // 与裁定「不回落猜测」冲突，已摘除（该方法已无调用点）。
                 matcher.recordOrphanPaymentSignal(signal, sourceType = "ACCESSIBILITY")
-                Log.i(TAG, "支付结果页交接引用已失效，证据已转待确认（不回落猜测）")
+                JotBillLog.i(TAG, "支付结果页交接引用已失效，证据已转待确认（不回落猜测）")
                 return null
             }
             val result = matcher.recordPaymentEvidence(
@@ -2259,7 +2259,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
                     conflictReason = result.reason
                 )
             }
-            Log.i(TAG, "支付结果页证据落库结果（交接上下文）: ${formatMatchResult(result)}")
+            JotBillLog.i(TAG, "支付结果页证据落库结果（交接上下文）: ${formatMatchResult(result)}")
             return acceptedSessionIdOf(result)
         }
 
@@ -2284,7 +2284,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
                         conflictReason = result.reason
                     )
                 }
-                Log.i(
+                JotBillLog.i(
                     TAG,
                     "支付结果页证据落库结果（" +
                         (if (resolution.byOrderId) "订单号" else "金额+时间窗口") +
@@ -2300,13 +2300,13 @@ class CheckoutAccessibilityService : AccessibilityService() {
                     conflictReason = "AMBIGUOUS_SESSION_IDS:${resolution.sessionIds.joinToString(",")}",
                     sessionIds = resolution.sessionIds
                 )
-                Log.i(TAG, "支付结果页命中并发会话(${resolution.sessionIds.size}个)，已转待确认")
+                JotBillLog.i(TAG, "支付结果页命中并发会话(${resolution.sessionIds.size}个)，已转待确认")
                 return null
             }
             PaymentSessionResolution.NoMatch -> {
                 // D-24 / R4：0 命中 ⇒ 落孤儿待确认，不猜（已摘除最近活跃会话兜底）。
                 matcher.recordOrphanPaymentSignal(signal, sourceType = "ACCESSIBILITY")
-                Log.i(TAG, "支付结果页无关联活跃会话，已转待确认（不回落猜测）")
+                JotBillLog.i(TAG, "支付结果页无关联活跃会话，已转待确认（不回落猜测）")
                 return null
             }
         }
@@ -2385,7 +2385,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
                 val database = try {
                     JotBillDatabaseProvider.get(applicationContext)
                 } catch (error: RuntimeException) {
-                    Log.w(TAG, "支付通知无法初始化证据数据库", error)
+                    JotBillLog.w(TAG, "支付通知无法初始化证据数据库", error)
                     null
                 }
                 database?.let(::CheckoutPaymentMatcher)
@@ -2425,7 +2425,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
                     // D-24 / R4：0 命中 ⇒ 落孤儿待确认，不猜（已摘除最近活跃会话兜底）。
                     // 注：本路径 sourceType = NOTIFICATION，D-3 生效后此处整体短路不落。
                     matcher.recordOrphanPaymentSignal(signal, sourceType = "NOTIFICATION")
-                    Log.i(TAG, "支付通知无结算会话可匹配，已转待确认（不回落猜测）")
+                    JotBillLog.i(TAG, "支付通知无结算会话可匹配，已转待确认（不回落猜测）")
                     return@launch
                 }
                 val result = matcher.recordPaymentEvidence(reference, signal)
@@ -2436,9 +2436,9 @@ class CheckoutAccessibilityService : AccessibilityService() {
                         conflictReason = result.reason
                     )
                 }
-                Log.i(TAG, "支付通知证据落库结果: ${formatMatchResult(result)}")
+                JotBillLog.i(TAG, "支付通知证据落库结果: ${formatMatchResult(result)}")
             } catch (error: RuntimeException) {
-                Log.w(TAG, "支付证据写入失败", error)
+                JotBillLog.w(TAG, "支付证据写入失败", error)
                 try {
                     matcher.recordOrphanPaymentSignal(
                         signal,
@@ -2446,7 +2446,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
                         conflictReason = "EVIDENCE_PERSIST_FAILED"
                     )
                 } catch (fallbackError: RuntimeException) {
-                    Log.w(TAG, "支付通知待确认兜底写入失败", fallbackError)
+                    JotBillLog.w(TAG, "支付通知待确认兜底写入失败", fallbackError)
                 }
             }
         }
@@ -2465,7 +2465,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
                 paymentNotification = signal
             )
         } catch (error: RuntimeException) {
-            Log.w(TAG, "支付通知回退路由失败", error)
+            JotBillLog.w(TAG, "支付通知回退路由失败", error)
             Companion.notifyPurchaseIntentRejected(
                 PurchaseIntent.PAYMENT_NOTIFICATION_FALLBACK,
                 PurchaseIntentGateRejection.BUFFER_UNAVAILABLE,
@@ -2501,14 +2501,14 @@ class CheckoutAccessibilityService : AccessibilityService() {
     private fun requestSessionBoundManualCapture() {
         val context = userRetryCaptureContext
         if (context != null) {
-            Log.i(
+            JotBillLog.i(
                 TAG,
                 "手动截图上下文: role=${context.pageRole}, amountSignal=${context.observation.hasFinalAmountSignal}, " +
                     "actionSignal=${context.observation.hasCheckoutActionSignal}, sensitive=${context.isSensitivePage}, " +
                     "class=${context.observation.windowClass}"
             )
         } else {
-            Log.i(TAG, "手动截图上下文缺失")
+            JotBillLog.i(TAG, "手动截图上下文缺失")
         }
         snapshotCaptureCoordinator?.requestManualCapture(SnapshotCaptureCallback { result ->
             if (context != null) {
@@ -2539,7 +2539,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
             purchaseIntentCoordinator?.setUserRetryContext(completedContext)
             purchaseIntentCoordinator?.triggerUserRetry(completedContext)
         } catch (error: RuntimeException) {
-            Log.w(TAG, "用户主动截图重试触发失败", error)
+            JotBillLog.w(TAG, "用户主动截图重试触发失败", error)
         } finally {
             snapshotCaptureCoordinator?.setUserRetryContext(null)
             purchaseIntentCoordinator?.setUserRetryContext(null)
@@ -2610,7 +2610,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
     private fun performUserAssertedCapture(foregroundPackage: String?) {
         val now = System.currentTimeMillis()
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
-            Log.i(TAG, "断言截图不可用: 需要 Android 11+，当前 API ${Build.VERSION.SDK_INT}")
+            JotBillLog.i(TAG, "断言截图不可用: 需要 Android 11+，当前 API ${Build.VERSION.SDK_INT}")
             publishAssertedOverlayResult(
                 SnapshotCaptureStatus.UNAVAILABLE,
                 SnapshotCaptureUnavailableReason.API_UNSUPPORTED.wireValue
@@ -2625,7 +2625,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
             return
         }
         if (foregroundPackage == null) {
-            Log.i(TAG, "断言截图拒绝: 前台不是白名单购物应用")
+            JotBillLog.i(TAG, "断言截图拒绝: 前台不是白名单购物应用")
             publishAssertedOverlayResult(
                 SnapshotCaptureStatus.REJECTED,
                 SnapshotCaptureRejection.NOT_CHECKOUT_PAGE.wireValue
@@ -2637,7 +2637,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
         // D-9：本通道（手动）是"提前解除"的唯一受益者 —— 读到明确非敏感购物页
         // 连续 N 帧后不再被锁存拦截；水位不作用于自动兜底（见 SensitivePageLatch）。
         if (sensitivePageLatch.isAssertionCaptureBlocked(now)) {
-            Log.w(
+            JotBillLog.w(
                 TAG,
                 "断言截图拒绝: 敏感页锁存窗口内 " +
                     "elapsed=${sensitivePageLatch.assertionLatchAgeMillis(now)}ms, pkg=$foregroundPackage"
@@ -2649,7 +2649,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
             return
         }
         if (userAssertedCaptureInFlight) {
-            Log.i(TAG, "断言截图拒绝: 截图在飞")
+            JotBillLog.i(TAG, "断言截图拒绝: 截图在飞")
             publishAssertedOverlayResult(
                 SnapshotCaptureStatus.REJECTED,
                 SnapshotCaptureRejection.CAPTURE_IN_FLIGHT.wireValue
@@ -2657,7 +2657,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
             return
         }
         if (now - lastUserAssertedCaptureAt < USER_ASSERTED_CAPTURE_MIN_INTERVAL_MILLIS) {
-            Log.i(TAG, "断言截图拒绝: 点击过快")
+            JotBillLog.i(TAG, "断言截图拒绝: 点击过快")
             // 必须发布结果：按钮此时已进入 CAPTURING，静默返回会让它在静态页面上
             // 一直卡住（没有后续观察事件来复位状态）。
             publishAssertedOverlayResult(
@@ -2668,7 +2668,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
         }
         val client = synchronized(aiLifecycleLock) { aiVisionClient }
         if (client == null) {
-            Log.i(TAG, "断言截图拒绝: AI 视觉客户端未配置")
+            JotBillLog.i(TAG, "断言截图拒绝: AI 视觉客户端未配置")
             publishAssertedOverlayResult(
                 SnapshotCaptureStatus.UNAVAILABLE,
                 "AI_NOT_CONFIGURED"
@@ -2682,10 +2682,10 @@ class CheckoutAccessibilityService : AccessibilityService() {
             delay(USER_ASSERTED_CAPTURE_WATCHDOG_MILLIS)
             if (userAssertedCaptureInFlight) {
                 userAssertedCaptureInFlight = false
-                Log.w(TAG, "断言截图看门狗复位（系统回调未达）")
+                JotBillLog.w(TAG, "断言截图看门狗复位（系统回调未达）")
             }
         }
-        Log.i(TAG, "断言截图受理: pkg=$foregroundPackage")
+        JotBillLog.i(TAG, "断言截图受理: pkg=$foregroundPackage")
         try {
             @Suppress("NewApi")
             takeScreenshot(
@@ -2698,14 +2698,14 @@ class CheckoutAccessibilityService : AccessibilityService() {
                         val bytes = encodePaymentScreenshot(screenshot)
                         if (bytes == null || bytes.isEmpty()) {
                             bytes?.fill(0)
-                            Log.w(TAG, "断言截图编码失败")
+                            JotBillLog.w(TAG, "断言截图编码失败")
                             publishAssertedOverlayResult(
                                 SnapshotCaptureStatus.FAILED,
                                 SnapshotCaptureUnavailableReason.ENCODE_FAILED.wireValue
                             )
                             return
                         }
-                        Log.i(TAG, "断言截图已取得: ${bytes.size} bytes")
+                        JotBillLog.i(TAG, "断言截图已取得: ${bytes.size} bytes")
                         evidenceFallbackScope.launch {
                             dispatchUserAssertedScreenshot(bytes, foregroundPackage)
                         }
@@ -2714,7 +2714,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
                     override fun onFailure(errorCode: Int) {
                         watchdogJob.cancel()
                         userAssertedCaptureInFlight = false
-                        Log.w(TAG, "断言截图失败: errorCode=$errorCode")
+                        JotBillLog.w(TAG, "断言截图失败: errorCode=$errorCode")
                         publishAssertedOverlayResult(
                             SnapshotCaptureStatus.UNAVAILABLE,
                             "SCREENSHOT_ERROR_$errorCode"
@@ -2725,7 +2725,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
         } catch (error: RuntimeException) {
             watchdogJob.cancel()
             userAssertedCaptureInFlight = false
-            Log.w(TAG, "断言截图调用失败", error)
+            JotBillLog.w(TAG, "断言截图调用失败", error)
             publishAssertedOverlayResult(
                 SnapshotCaptureStatus.UNAVAILABLE,
                 SnapshotCaptureUnavailableReason.SYSTEM_REJECTED.wireValue
@@ -2751,7 +2751,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
         val slotId = USER_ASSERTED_SLOT_PREFIX + shoppingPackage
         val buffer = checkoutSnapshotBuffer
         if (buffer == null) {
-            Log.w(TAG, "断言截图落库失败: 缓冲区不可用")
+            JotBillLog.w(TAG, "断言截图落库失败: 缓冲区不可用")
             imageBytes.fill(0)
             publishAssertedOverlayResult(
                 SnapshotCaptureStatus.UNAVAILABLE,
@@ -2776,12 +2776,12 @@ class CheckoutAccessibilityService : AccessibilityService() {
                     )
                 )
             } catch (error: RuntimeException) {
-                Log.w(TAG, "断言截图写入缓冲失败", error)
+                JotBillLog.w(TAG, "断言截图写入缓冲失败", error)
                 null
             }
             val stored = storeResult as? SnapshotStoreResult.Stored
             if (stored == null) {
-                Log.w(TAG, "断言截图落库被拒: ${storeResult}")
+                JotBillLog.w(TAG, "断言截图落库被拒: ${storeResult}")
                 publishAssertedOverlayResult(
                     SnapshotCaptureStatus.REJECTED,
                     (storeResult as? SnapshotStoreResult.Rejected)?.reason?.wireValue
@@ -2811,7 +2811,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
                 pageFingerprint = pageFingerprint
             )
             if (trigger !is CheckoutAiTriggerResult.Ready) {
-                Log.w(TAG, "断言截图消费失败: ${trigger}")
+                JotBillLog.w(TAG, "断言截图消费失败: ${trigger}")
                 publishAssertedOverlayResult(
                     SnapshotCaptureStatus.REJECTED,
                     (trigger as? CheckoutAiTriggerResult.Rejected)?.reason?.wireValue
@@ -2820,7 +2820,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
                 return
             }
             synchronized(aiLifecycleLock) { assertedSessionIds += sessionId }
-            Log.i(TAG, "断言截图派发 AI: session=${sessionId.take(8)}, pkg=$shoppingPackage")
+            JotBillLog.i(TAG, "断言截图派发 AI: session=${sessionId.take(8)}, pkg=$shoppingPackage")
             val dispatched = dispatchReadyToAi(trigger)
             if (!dispatched) {
                 // dispatchReadyToAi 返回 false 表示未进入 AI 任务，所有权归还本调用方。
@@ -2890,7 +2890,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
             return
         }
         lastCheckoutGateLogAt[key] = now
-        Log.i(
+        JotBillLog.i(
             TAG,
             "结算页门禁: ${rejection?.wireValue ?: "ACCEPTED"}, " +
                 "pkg=${observation.shoppingPackage}, role=${observation.pageRole}, " +
@@ -2933,7 +2933,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
             return false
         }
         lastCoordinatorRecoveryAt = now
-        Log.w(
+        JotBillLog.w(
             TAG,
             "检测到截图协调器已熔断，开始重建截图链路: " +
                 "coordinator=${if (coordinator == null) "null" else "closed"}"
@@ -2963,10 +2963,10 @@ class CheckoutAccessibilityService : AccessibilityService() {
             configurePurchaseIntentResultConsumer()
             configurePaymentSignalOrphanSink()
             setObservationListener(snapshotCaptureCoordinator)
-            Log.i(TAG, "截图协调器重建完成，截图能力已恢复")
+            JotBillLog.i(TAG, "截图协调器重建完成，截图能力已恢复")
             true
         } catch (error: RuntimeException) {
-            Log.w(TAG, "重建截图协调器失败，截图能力仍不可用", error)
+            JotBillLog.w(TAG, "重建截图协调器失败，截图能力仍不可用", error)
             false
         }
     }
@@ -2997,7 +2997,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
         }
         lastScreenshotFallbackBlockLogAt[reason] = now
         val suppressed = suppressedScreenshotFallbackBlockCount.remove(reason) ?: 0
-        Log.i(
+        JotBillLog.i(
             TAG,
             "支付结果页截图兜底已禁止: $reason pkg=$paymentPackage" +
                 (extra?.let { ", $it" } ?: "") +
@@ -3014,7 +3014,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
         try {
             callback.onResult(result)
         } catch (error: RuntimeException) {
-            Log.w(TAG, "结算页 AI 结果消费者失败", error)
+            JotBillLog.w(TAG, "结算页 AI 结果消费者失败", error)
         }
     }
 
@@ -3046,7 +3046,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
         lastPaymentHandoffRedispatchAt = now
         val retainedFingerprint = handoffStableCheckout?.observation?.pageFingerprint
             ?: currentStableCheckout?.observation?.pageFingerprint
-        Log.i(
+        JotBillLog.i(
             TAG,
             "支付交接事件补发: stable=${handoffStableCheckout != null || currentStableCheckout != null}, " +
                 "fingerprint=${retainedFingerprint?.take(12) ?: "null"}, foreground=$foregroundPackage"
@@ -3089,9 +3089,9 @@ class CheckoutAccessibilityService : AccessibilityService() {
                     pageFingerprint = reference.pageFingerprint
                 )
                 matcher.ensureSession(reference, requestKey)
-                Log.i(TAG, "支付交接会话预写入: session=${reference.sessionId.take(8)}")
+                JotBillLog.i(TAG, "支付交接会话预写入: session=${reference.sessionId.take(8)}")
             } catch (error: RuntimeException) {
-                Log.w(TAG, "支付交接会话预写入失败", error)
+                JotBillLog.w(TAG, "支付交接会话预写入失败", error)
             }
         }
     }
@@ -3106,7 +3106,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
             return
         }
         lastHandoffDiagnosticsAt = now
-        Log.i(
+        JotBillLog.i(
             TAG,
             "支付交接诊断: payment=$paymentPackage, currentStable=${currentStableCheckout != null}, " +
                 "handoffStable=${handoffStableCheckout != null}, previousShopping=$previousShoppingPackage, " +
@@ -3168,7 +3168,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
             try {
                 listener.onEvent(event)
             } catch (error: RuntimeException) {
-                Log.w(TAG, "分发结算页观察事件失败", error)
+                JotBillLog.w(TAG, "分发结算页观察事件失败", error)
             }
         }
         checkoutCaptureOverlayManager?.onObservationEvent(event)
@@ -3178,7 +3178,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
             // 购买意图协调器才拿得到会话标识（改造 B/E 的键空间来源）。
             purchaseIntentCoordinator?.onEvent(resolveSessionIdOf(event))
         } catch (error: RuntimeException) {
-            Log.w(TAG, "分发购买意图事件失败", error)
+            JotBillLog.w(TAG, "分发购买意图事件失败", error)
         }
     }
 

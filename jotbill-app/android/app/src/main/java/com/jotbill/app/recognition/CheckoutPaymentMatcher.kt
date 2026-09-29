@@ -15,6 +15,7 @@ import com.jotbill.app.data.entity.TransactionCandidateEntity
 import com.jotbill.app.data.entity.PaymentEvidenceEntity
 import com.jotbill.app.rules.DuplicateGuard
 import com.jotbill.app.rules.RuleEngine
+import com.jotbill.app.utils.JotBillLog
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 import java.time.Instant
@@ -480,7 +481,7 @@ internal class CheckoutPaymentMatcher(
                 )
             )
         }
-        android.util.Log.i(
+        JotBillLog.i(
             "CheckoutPaymentMatcher",
             "个人转账已转待确认: amount=$amountMinor, recipient=${recipient ?: "未知"}, " +
                 "package=$paymentPackage, pendingId=${pendingId.take(12)}"
@@ -505,7 +506,7 @@ internal class CheckoutPaymentMatcher(
         val now = nowMillis()
         database.withTransaction {
             if (!signal.isValid()) {
-                android.util.Log.w(
+                JotBillLog.w(
                     "CheckoutPaymentMatcher",
                     "孤立支付证据未落待确认(信号非法): pkg=${signal.paymentPackage}, " +
                         "amount=${signal.amountMinor}, reason=$conflictReason"
@@ -514,7 +515,7 @@ internal class CheckoutPaymentMatcher(
             }
             val normalizedSourceType = normalizePaymentEvidenceSourceType(sourceType)
                 ?: run {
-                    android.util.Log.w(
+                    JotBillLog.w(
                         "CheckoutPaymentMatcher",
                         "孤立支付证据未落待确认(来源类型非法): sourceType=$sourceType, " +
                             "amount=${signal.amountMinor}"
@@ -525,7 +526,7 @@ internal class CheckoutPaymentMatcher(
             // 与 recordPaymentEvidence 的出口开关成对，否则通知仍会经孤儿路径
             // 产生纯通知待确认（这正是 D-3 要消除的形态）。
             if (isNotificationSourceDisabledInV1(normalizedSourceType)) {
-                android.util.Log.i(
+                JotBillLog.i(
                     "CheckoutPaymentMatcher",
                     "孤立支付证据来源在 v1 已停用(D-3)，未落待确认: pkg=${signal.paymentPackage}, " +
                         "amount=${signal.amountMinor}, reason=$conflictReason"
@@ -549,13 +550,13 @@ internal class CheckoutPaymentMatcher(
                 )
                 if (mergedReason != existingOrphan.conflictReason) {
                     dao.updateConflictReason(pendingId, mergedReason)
-                    android.util.Log.i(
+                    JotBillLog.i(
                         "CheckoutPaymentMatcher",
                         "孤立支付证据冲突原因已合并: pending=${pendingId.take(16)}, " +
                             "from=${existingOrphan.conflictReason}, to=$mergedReason"
                     )
                 } else {
-                    android.util.Log.i(
+                    JotBillLog.i(
                         "CheckoutPaymentMatcher",
                         "孤立支付证据已存在待确认(幂等跳过): pending=${pendingId.take(16)}, " +
                             "amount=${signal.amountMinor}, reason=$conflictReason"
@@ -577,7 +578,7 @@ internal class CheckoutPaymentMatcher(
             )
             if (ruleDecision is RuleEngine.Decision.Ignored) {
                 recordRuleDecisionAudit(pendingId, "ignore", ruleDecision.hits)
-                android.util.Log.i(
+                JotBillLog.i(
                     "CheckoutPaymentMatcher",
                     "孤立支付证据被规则忽略: pending=${pendingId.take(16)}, " +
                         "amount=${signal.amountMinor}, hits=${ruleDecision.hits.size}"
@@ -662,7 +663,7 @@ internal class CheckoutPaymentMatcher(
                   if (!insertedAmbiguousPending) {
                       dao.insertIfAbsent(pending)
                   }
-                android.util.Log.i(
+                JotBillLog.i(
                     "CheckoutPaymentMatcher",
                     "孤立支付证据已落待确认(并发会话): pending=${pendingId.take(16)}, " +
                         "amount=${signal.amountMinor}, sessions=${sessionIds.size}, " +
@@ -684,7 +685,7 @@ internal class CheckoutPaymentMatcher(
                 return@withTransaction
             }
             val inserted = dao.insertIfAbsent(pending)
-            android.util.Log.i(
+            JotBillLog.i(
                 "CheckoutPaymentMatcher",
                 "孤立支付证据已落待确认: pending=${pendingId.take(16)}, " +
                     "amount=${signal.amountMinor}, merchant=${resolvedMerchant ?: "null"}, " +
@@ -734,7 +735,7 @@ internal class CheckoutPaymentMatcher(
         // D-3 / G3.1：v1 通知链路停用 —— 通知证据不参与匹配与入账。
         // 采集与解析代码保留，新版本删除此闸即恢复。
         if (isNotificationSourceDisabledInV1(normalizedSourceType)) {
-            android.util.Log.i(
+            JotBillLog.i(
                 "CheckoutPaymentMatcher",
                 "支付证据来源在 v1 已停用(D-3)，本次通知证据不参与匹配: pkg=${signal.paymentPackage}, " +
                     "amount=${signal.amountMinor}"
@@ -982,7 +983,7 @@ internal class CheckoutPaymentMatcher(
                     version = candidate.version + 1
                 )
                 database.transactionCandidateDao().update(backfilled)
-                android.util.Log.i(
+                JotBillLog.i(
                     "CheckoutPaymentMatcher",
                     "AI 未识别时间，证据后到回填: session=${reference.sessionId.take(8)}, " +
                         "occurredAt=${storedEvidence.occurredAt}"
@@ -1366,7 +1367,7 @@ internal class CheckoutPaymentMatcher(
                             persistedCandidate = database.transactionCandidateDao()
                                 .getById(persistedCandidate.id)
                                 ?: persistedCandidate
-                            android.util.Log.i(
+                            JotBillLog.i(
                                 "CheckoutPaymentMatcher",
                                 "AI 未识别时间，回填证据时间: session=${reference.sessionId.take(8)}, " +
                                     "occurredAt=$occurredAt"
@@ -2394,7 +2395,7 @@ internal class CheckoutPaymentMatcher(
             dao.delete(similar)
             dao.insert(merged)
         }
-        android.util.Log.i(
+        JotBillLog.i(
             "CheckoutPaymentMatcher",
             "支付证据跨来源收敛: session=${sessionId.take(8)}, amount=${merged.amountMinor}, " +
                 "sources=${similar.sourceType}+${incoming.sourceType}, evidenceId=${merged.id.take(12)}"

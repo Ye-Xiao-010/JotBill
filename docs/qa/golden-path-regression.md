@@ -49,6 +49,28 @@ adb shell settings put secure accessibility_enabled 1
 
 ## 二、执行命令
 
+### 方式 A：应用内诊断日志（**推荐，一次回归一个文件**）
+
+> 2026-09-29 起可用。App 会把日志直接写到外部私有目录，**无需 adb、无需权限、无 UI 入口**。
+
+```bash
+# 1. 干净安装（debug 包才有诊断日志）
+adb uninstall com.jotbill.app 2>/dev/null; adb install -r app-debug.apk
+
+# 2. 照常跑用例（不需要开 adb logcat）
+
+# 3. 取文件 —— 手机文件管理器进 Android/data/com.jotbill.app/files/ 复制，或：
+adb pull /sdcard/Android/data/com.jotbill.app/files/jotbill-diag.log
+```
+
+- 文件名固定 `jotbill-diag.log`，**追加写**，所以**先删旧文件再跑**可让文件只含本轮。
+- 单文件上限 10MB，溢出后重命名为 `.log.1` 重新开始。
+- 启动时首行含 `版本号 / build 号`，便于对齐代码。
+- ⚠️ **本文件替代不了 logcat 的两种情况**：① 崩溃 / ANR（进程死前来不及 flush）
+  ② 系统侧事件（如 MIUI `Reject RestartService` 拒绑服务）。这两种仍需方式 B。
+
+### 方式 B：logcat（疑难现场用）
+
 ```bash
 # 1. 确认设备
 adb devices
@@ -59,9 +81,13 @@ adb uninstall com.jotbill.app 2>/dev/null; adb install -r app-debug.apk
 # 3. 清日志
 adb logcat -c
 
-# 4. 组合过滤（日常调试推荐）
+# 4. 组合过滤（**务必带 tag 过滤** —— 曾因未过滤产出 85MB 文件）
 adb logcat -s PendingReminder:* PendingChangeHub:* PaymentNotificationService:* CheckoutPaymentMatcher:* CheckoutAccessibilityService:* > .tmp-golden.logcat.txt
 ```
+
+> ⚠️ **体积提醒**：`docs/qa/device/` 已累计 **153 MB**（单文件最大 85.6 MB），
+> 且该目录按项目纪律「只增不改」。**日常回归请用方式 A**；
+> 方式 B 的产物请放 `.tmp-` 前缀目录（已被 `.gitignore` 覆盖），不要直接进 `qa/device/`。
 
 ---
 

@@ -1,6 +1,6 @@
 package com.jotbill.app.pending
 
-import android.util.Log
+import com.jotbill.app.utils.JotBillLog
 
 /**
  * 待确认交易的变更事件(进程内)。
@@ -94,7 +94,7 @@ internal object PendingChangeHub {
     }
 
     fun emit(info: PendingChangeInfo) {
-        Log.i(
+        JotBillLog.i(
             TAG,
             "pending变更事件: id=${info.pendingId.take(16)}, type=${info.type}, " +
                 "amount=${info.amountMinor}, source=${info.sourceType}, " +
@@ -102,14 +102,14 @@ internal object PendingChangeHub {
         )
         val current = listeners
         if (current.isEmpty()) {
-            Log.i(TAG, "无消费者,事件丢弃(数据已持久化,提醒尽力而为)")
+            JotBillLog.i(TAG, "无消费者,事件丢弃(数据已持久化,提醒尽力而为)")
             return
         }
         current.forEach { listener ->
             try {
                 listener(info)
             } catch (error: RuntimeException) {
-                Log.w(TAG, "pending事件消费者异常(不影响其余消费者)", error)
+                JotBillLog.w(TAG, "pending事件消费者异常(不影响其余消费者)", error)
             }
         }
     }

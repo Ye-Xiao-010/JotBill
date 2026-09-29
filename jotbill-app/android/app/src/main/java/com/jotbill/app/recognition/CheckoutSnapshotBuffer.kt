@@ -2,7 +2,7 @@ package com.jotbill.app.recognition
 
 import android.os.Handler
 import android.os.Looper
-import android.util.Log
+import com.jotbill.app.utils.JotBillLog
 import java.util.UUID
 
 /**
@@ -231,11 +231,11 @@ internal interface SnapshotBufferLogSink {
 
 internal object AndroidSnapshotBufferLogSink : SnapshotBufferLogSink {
     override fun i(tag: String, message: String) {
-        Log.i(tag, message)
+        JotBillLog.i(tag, message)
     }
 
     override fun w(tag: String, message: String) {
-        Log.w(tag, message)
+        JotBillLog.w(tag, message)
     }
 }
 

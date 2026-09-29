@@ -1,6 +1,6 @@
 package com.jotbill.app.recognition
 
-import android.util.Log
+import com.jotbill.app.utils.JotBillLog
 import kotlin.math.abs
 
 /**
@@ -448,7 +448,7 @@ internal class CheckoutPurchaseIntentCoordinator(
                 pageFingerprint = pageFingerprint
             )
         } catch (error: RuntimeException) {
-            Log.w(TAG, "支付交接搬运失败", error)
+            JotBillLog.w(TAG, "支付交接搬运失败", error)
             return
         }
         val detail = when (result) {
@@ -460,7 +460,7 @@ internal class CheckoutPurchaseIntentCoordinator(
             is PaymentProcessMoveResult.Rejected ->
                 "Rejected(${result.reason.wireValue})"
         }
-        Log.i(
+        JotBillLog.i(
             TAG,
             "支付交接搬运: session=${retained.sessionId.take(8)}, source=${retained.slotId}, " +
                 "requested=${pageFingerprint?.take(12) ?: "null"}, result=$detail"
@@ -643,7 +643,7 @@ internal class CheckoutPurchaseIntentCoordinator(
         while (handoffContexts.size > MAX_PENDING_HANDOFF_CONTEXTS) {
             val eldestKey = handoffContexts.keys.first()
             handoffContexts.remove(eldestKey)
-            Log.i(
+            JotBillLog.i(
                 TAG,
                 "交接映射超限淘汰最旧: session=${eldestKey.take(8)}, " +
                     "上限=$MAX_PENDING_HANDOFF_CONTEXTS, 剩余=${handoffContexts.size}"
@@ -710,7 +710,7 @@ internal class CheckoutPurchaseIntentCoordinator(
             when (val attribution = attributePaymentResultLocked(signal)) {
                 is PaymentResultAttribution.Attributed -> attribution.context
                 is PaymentResultAttribution.NoCandidate -> {
-                    Log.w(
+                    JotBillLog.w(
                         TAG,
                         "支付结果归属 0 命中，转孤儿待确认: amount=${signal.amountMinor}, " +
                             "occurredAt=${signal.occurredAt}, pendingHandoffs=${handoffContexts.size}"
@@ -727,7 +727,7 @@ internal class CheckoutPurchaseIntentCoordinator(
                     )
                 }
                 is PaymentResultAttribution.Ambiguous -> {
-                    Log.w(
+                    JotBillLog.w(
                         TAG,
                         "支付结果归属歧义(${attribution.sessionIds.size}个)，转待确认: " +
                             "amount=${signal.amountMinor}, sessions=" +
@@ -863,7 +863,7 @@ internal class CheckoutPurchaseIntentCoordinator(
                 pageFingerprint = effectiveFingerprint
             )
         } catch (error: RuntimeException) {
-            Log.w(TAG, "消费结算快照失败", error)
+            JotBillLog.w(TAG, "消费结算快照失败", error)
             return PurchaseIntentCoordinationResult.Rejected(
                 intent = intent,
                 gateReason = PurchaseIntentGateRejection.BUFFER_UNAVAILABLE,
@@ -879,7 +879,7 @@ internal class CheckoutPurchaseIntentCoordinator(
             // 改造 B-3 兜底（必须）：支付过程槽位缺图/过期/无匹配 ⇒ **不得静默丢弃**。
             // conflictReason 固定携带 PAYMENT_PROCESS_SNAPSHOT_MISSING（量化"搬运漏检率"
             // 的日志锚点），原始消费原因保留在 consumeResult 中一并上报。
-            Log.w(
+            JotBillLog.w(
                 TAG,
                 "PAYMENT_PROCESS_SNAPSHOT_MISSING: session=${context.sessionId.take(8)}, " +
                     "slot=$consumeSlotId, reason=${consumeResult.reason.wireValue}, " +
@@ -969,7 +969,7 @@ internal class CheckoutPurchaseIntentCoordinator(
                 selected != null &&
                 selected.pageFingerprint != requestedFingerprint
             ) {
-                Log.i(
+                JotBillLog.i(
                     TAG,
                     "支付交接指纹校正: intent=${requestedFingerprint.take(12)}, " +
                         "slotCandidate=${selected.pageFingerprint.take(12)}, " +
@@ -995,7 +995,7 @@ internal class CheckoutPurchaseIntentCoordinator(
         val candidates = try {
             buffer.currentCandidates(slotId)
         } catch (error: RuntimeException) {
-            Log.w(TAG, "预检结算快照失败", error)
+            JotBillLog.w(TAG, "预检结算快照失败", error)
             return null
         }
         return try {
@@ -1060,7 +1060,7 @@ internal class CheckoutPurchaseIntentCoordinator(
     ) {
         val sink = orphanSink
         if (sink == null) {
-            Log.w(
+            JotBillLog.w(
                 TAG,
                 "支付信号待落库但孤儿出口未接入: reason=$conflictReason, " +
                     "amount=${signal.amountMinor}, sessions=" +
@@ -1071,7 +1071,7 @@ internal class CheckoutPurchaseIntentCoordinator(
         try {
             sink.onUnattributed(signal, conflictReason, sessionId, sessionIds)
         } catch (error: RuntimeException) {
-            Log.w(TAG, "孤儿落库出口处理失败: reason=$conflictReason", error)
+            JotBillLog.w(TAG, "孤儿落库出口处理失败: reason=$conflictReason", error)
         }
     }
 
@@ -1079,7 +1079,7 @@ internal class CheckoutPurchaseIntentCoordinator(
         result: PurchaseIntentCoordinationResult,
         consumer: PurchaseIntentResultCallback?
     ): PurchaseIntentCoordinationResult {
-        Log.i(TAG, "购买意图结果: ${describe(result)}")
+        JotBillLog.i(TAG, "购买意图结果: ${describe(result)}")
         if (
             result !is PurchaseIntentCoordinationResult.Accepted ||
             result.aiResult !is CheckoutAiTriggerResult.Ready
@@ -1094,7 +1094,7 @@ internal class CheckoutPurchaseIntentCoordinator(
             val dispatched = try {
                 dispatcher.dispatch(ready)
             } catch (error: RuntimeException) {
-                Log.w(TAG, "AI Ready 派发失败", error)
+                JotBillLog.w(TAG, "AI Ready 派发失败", error)
                 false
             }
             if (dispatched) {
@@ -1106,7 +1106,7 @@ internal class CheckoutPurchaseIntentCoordinator(
                     slotId = ready.snapshot.slotId,
                     pageFingerprint = ready.snapshot.pageFingerprint
                 )
-                Log.i(
+                JotBillLog.i(
                     TAG,
                     "购买意图已派发 AI: session=${handoff.sessionId.take(8)}, " +
                         "intent=${handoff.intent.wireValue}, requestKey=${handoff.requestKey.value.take(24)}"
@@ -1116,7 +1116,7 @@ internal class CheckoutPurchaseIntentCoordinator(
             }
         }
 
-        Log.i(
+        JotBillLog.i(
             TAG,
             "购买意图无 AI 接管，快照已释放: intent=${result.intent.wireValue}, " +
                 "reason=${if (dispatcher == null) "DISPATCHER_MISSING" else "DISPATCH_FAILED"}"
@@ -1162,7 +1162,7 @@ internal class CheckoutPurchaseIntentCoordinator(
         try {
             consumer.onResult(result)
         } catch (error: RuntimeException) {
-            Log.w(TAG, "购买意图结果消费者处理失败", error)
+            JotBillLog.w(TAG, "购买意图结果消费者处理失败", error)
         }
     }
 

@@ -6,7 +6,7 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.os.Build
-import android.util.Log
+import com.jotbill.app.utils.JotBillLog
 
 /**
  * 待确认交易的系统通知提醒。
@@ -51,7 +51,7 @@ internal object PendingReminderNotifier {
             manager.createNotificationChannel(channel)
         }
         PendingChangeHub.addListener(::onPendingChange)
-        Log.i(TAG, "待确认提醒已初始化: channel=$CHANNEL_ID")
+        JotBillLog.i(TAG, "待确认提醒已初始化: channel=$CHANNEL_ID")
     }
 
     /** 用户开关,默认开启。提醒只影响通知,不影响落库与 JS 事件。 */
@@ -62,7 +62,7 @@ internal object PendingReminderNotifier {
     fun setEnabled(context: Context, enabled: Boolean) {
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .edit().putBoolean(KEY_ENABLED, enabled).apply()
-        Log.i(TAG, "待确认提醒开关已切换: enabled=$enabled")
+        JotBillLog.i(TAG, "待确认提醒开关已切换: enabled=$enabled")
     }
 
     private fun onPendingChange(info: PendingChangeInfo) {
@@ -72,11 +72,11 @@ internal object PendingReminderNotifier {
             // 否则通知挂到用户手动划掉为止
             val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
             manager?.cancel(info.pendingId.hashCode())
-            Log.i(TAG, "已消除待确认通知: id=${info.pendingId.take(16)}")
+            JotBillLog.i(TAG, "已消除待确认通知: id=${info.pendingId.take(16)}")
             return
         }
         if (!info.isNew) {
-            Log.i(TAG, "跳过提醒: 内容更新事件 id=${info.pendingId.take(16)}")
+            JotBillLog.i(TAG, "跳过提醒: 内容更新事件 id=${info.pendingId.take(16)}")
             return
         }
         // 用户断言通道产生的待确认不发送系统通知:断言是用户主动点击,
@@ -91,27 +91,27 @@ internal object PendingReminderNotifier {
             info.sourceType == PendingSourceTypes.AI_VISION &&
             isUserAssertedConflictReason(info.conflictReason)
         ) {
-            Log.i(TAG, "跳过提醒: 用户断言条目待支付证据 id=${info.pendingId.take(16)}")
+            JotBillLog.i(TAG, "跳过提醒: 用户断言条目待支付证据 id=${info.pendingId.take(16)}")
             return
         }
         if (info.amountMinor <= 0L) {
-            Log.i(TAG, "跳过提醒: 0 金额占位条目 id=${info.pendingId.take(16)}")
+            JotBillLog.i(TAG, "跳过提醒: 0 金额占位条目 id=${info.pendingId.take(16)}")
             return
         }
         if (!isEnabled(context)) {
-            Log.i(TAG, "跳过提醒: 用户已关闭开关")
+            JotBillLog.i(TAG, "跳过提醒: 用户已关闭开关")
             return
         }
         val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
         if (manager == null || !manager.areNotificationsEnabled()) {
-            Log.w(TAG, "跳过提醒: 应用通知权限未授予(API 33+ 需运行时授权)")
+            JotBillLog.w(TAG, "跳过提醒: 应用通知权限未授予(API 33+ 需运行时授权)")
             return
         }
         val now = System.currentTimeMillis()
         synchronized(this) {
             if (now - lastNotifiedAt < MIN_NOTIFY_INTERVAL_MILLIS) {
                 suppressedCount++
-                Log.i(
+                JotBillLog.i(
                     TAG,
                     "节流抑制提醒: suppressed=$suppressedCount, id=${info.pendingId.take(16)}"
                 )
@@ -122,13 +122,13 @@ internal object PendingReminderNotifier {
         }
         try {
             manager.notify(info.pendingId.hashCode(), buildNotification(context, info))
-            Log.i(
+            JotBillLog.i(
                 TAG,
                 "待确认提醒已发送: id=${info.pendingId.take(16)}, type=${info.type}, " +
                     "amount=${info.amountMinor}, source=${info.sourceType}"
             )
         } catch (error: RuntimeException) {
-            Log.w(TAG, "待确认提醒发送失败", error)
+            JotBillLog.w(TAG, "待确认提醒发送失败", error)
         }
     }
 
