@@ -33,9 +33,15 @@
 
 ## 二、根因（已定位到行）
 
-### 主因：`finalAmountMinor` 恒为 null ⇒ 归属判定恒 0 命中
+> ## ⚠️ 2026-09-29 复核更正：本文早期版本把 ① 写成「`labeledAmounts` 从不去重 ⇒ 同值双标签判 null」，
+> **该结论错误，已作废。** 实际字段是 `LinkedHashSet<Long>`（`PageAmountExtractor.kt:140`），天然去重；
+> `singleOrNull()` 对同值双标签本就返回该值。现有用例 `repeatedSameValueIsNotAmbiguous`
+> （`PageAmountExtractorTest.kt:85`）已钉死该行为。
+> **下面 §二 的 ① 与 §三 的 ① 均已替换为「取证优先」。**
 
-`CheckoutPurchaseIntentCoordinator.kt:1041-1046`（改造 E-2 的归属判定，纯内存）：
+### 已确证的事实：归属判定 0 命中，直接原因是 `finalAmountMinor` 为 null
+
+`CheckoutPurchaseIntentCoordinator.kt:1041-1046`（改造 E-2 归属判定，纯内存）：
 
 ```kotlin
 val matched = handoffContexts.values.filter { context ->
@@ -45,26 +51,34 @@ val matched = handoffContexts.values.filter { context ->
 }
 ```
 
-`finalAmountMinor` 来自 `PageAmountExtractor.kt:167`：
+`finalAmountMinor` 只在两种情况为 null（`PageAmountExtractor.kt:167-173`）：**无金额** / **多金额歧义**。
 
 ```kotlin
+private val amounts = ArrayList<Long>(4)           // List，不去重
+private val labeledAmounts = LinkedHashSet<Long>()  // Set，去重
+...
 fun resolveFinalAmountMinor(): Long? {
-    if (labeledAmounts.isNotEmpty()) {
-        return labeledAmounts.singleOrNull()   // ★ 2 个带标签金额 ⇒ null
-    }
-    val distinct = amounts.distinct()          // ★ 兜底路径才去重，且够不着
-    return distinct.singleOrNull()
+    if (labeledAmounts.isNotEmpty()) return labeledAmounts.singleOrNull()
+    val distinct = amounts.distinct()
+    return distinct.singleOrNull()                   // ★ 兜底路径才去重
 }
 ```
 
-**`labeledAmounts` 按出现次数累加，从不去重。** 拼多多结算页几乎必然同时显示「订单金额」与
-「实付」两个标签 —— 即使两个数值**完全相同**，也是 2 个元素 ⇒ `singleOrNull()` 返回 null。
+**真机证据**：结算页门禁日志 `amountSignal=true`，金额**确实被检测到**——但那走的是
+**另一条通道**（`hasFinalAmountSignal`，`Collector:494-508`，带 PDD 无标签兜底），
+与 `finalAmountMinor` 的 accumulator **不是同一条路**。这正是需要取证分辨的地方。
 
-⚠️ **这不是实现 bug，是裁定的后果没被评估。** `MEMORY.md` V-2 记载的裁定：
-「`订单金额`+`实付`并存 ⇒ 返回 null（不得用词表顺序当优先级）」。裁定本身正确（保守、不猜），
-但下一步没人算到：拼多多 100% 命中该形态 ⇒ 归属判定结构性失效。
+### 两条待分辨的假设（均未证实，⚠️ 不得当裁定引用）
 
-**真机证据**：结算页门禁日志明确 `amountSignal=true`，金额**检测到了**，只是收口时被判成歧义丢弃。
+| 假设 | 内容 | 现有旁证 |
+|---|---|---|
+| **A** | **带标签通道在真机上根本不成立**：PDD 结算页「实付」与「¥11.76」是两个 TextView。`observe(rawValue)` 要求**同一节点文本内**标签与金额共存 ⇒ 标签节点无金额提前 return（`:153-155`），金额节点无标签只进 `amounts` ⇒ `labeledAmounts` 恒空 ⇒ 落到兜底 `amounts.distinct().singleOrNull()`（`:171`）⇒ 页面有 ≥2 个不同金额（单价/优惠/运费/实付）即 null | `CONFLICTS_2026-09-10.md` **C3** 原文（引 `Collector:500-508`）：「**拼多多确认订单页可能只出现「提交订单 + ¥55.70」，没有「实付/合计」等标签**」 |
+| **B** | 两个**带标签**的金额确实不同（订单金额 ¥15.00 + 实付 ¥11.76）⇒ 返回 null 是**裁定 (A) 的正确行为** | `IMPL_PLAN_VERSION_B:444-448` 明写「若将来要提高命中率：用**显式分组**，**不得**依赖词表顺序」；`PageAmountExtractor.kt:129-133` KDoc 亦已记载该裁定 |
+
+**关键差异**：假设 A 是**实现缺口**（标签与金额跨节点无法配对，可修）；假设 B 是**需要新裁定**（分组优先级要走
+`CONFLICT_REVIEW_SESSION → DECISIONS.md` 流程，不能顺手改）。
+
+**现有诊断设施分辨不了** —— 门禁日志只打布尔（`amountSignal=…`），没打候选金额。
 
 ### 由主因派生的三条重复路径
 
@@ -78,18 +92,35 @@ fun resolveFinalAmountMinor(): Long? {
 
 ## 三、待修项（按优先级）
 
-### ① `PageAmountExtractor.resolveFinalAmountMinor()` — 一行改动
+> ⚠️ 原 ①「`labeledAmounts.distinct()`」**已作废**（对 `LinkedHashSet` 是空操作，见 §二 更正框）。
 
-`labeledAmounts.distinct().singleOrNull()` —— **先去重再判唯一**。
+### ① 【先取证，再改判定】在 collector 收口处落诊断日志
 
-同一金额的多个标签（订单金额 = 实付）是**无歧义**的，不该判 null。这不违反裁定精神：
-裁定禁的是「用词表顺序随便挑一个」，这里是「去重后仍唯一才算唯一」。
+**不要先改 `resolveFinalAmountMinor`** —— 假设 A 与 B 的修法完全不同（实现缺口 vs 需要新裁定），
+改错方向的成本远高于多打一行日志。
 
-配套：`PageAmountExtractorTest` 补一例「订单金额 = 实付 同值双标签 ⇒ 期望返回该值而非 null」。
+**改动点**：`AccessibilityPageSummaryCollector.kt:347` 附近，`resolveFinalAmountMinor()` 调用处，
+加一条 WARN，把三个值落进已有的 `jotbill-diag.log`：
 
-**预期效果**：归属判定恢复 ⇒ 自动入账 ⇒ 重复来源 ① ② 消失。
+- `labeledAmounts`（去重后的带标签金额集合）
+- `amounts.distinct()`（无标签兜底候选）
+- `finalAmountMinor`（最终结果）
 
-### ② 孤儿落库加「同金额 + 时间窗」二次去重
+建议顺带把 `hasFinalAmountSignal` 的判定依据也打出来，因为它走的是**另一条通道**
+（`:494-508`，带 PDD 无标签兜底），两者不一致正是线索所在。
+
+配套：抽一个纯函数便于补单测。
+
+**取证结果决定下一步**：
+
+| 若为 | 修法性质 | 走不走裁定流程 |
+|---|---|---|
+| **假设 A**（标签与金额跨节点无法配对） | **实现缺口**：改「标签与金额跨节点配对」，或按 `IMPL_PLAN:469` 已指出的先例（复用 `finalAmountTerms` 定位金额区域）补强 | 否，但**须先补单测钉住负例** |
+| **假设 B**（两个带标签金额确实不同） | **需要新裁定**：分组优先级 | **是**，须走 `CONFLICT_REVIEW_SESSION → DECISIONS.md`，不能顺手改 |
+
+**真机验一次即可分辨**：付一笔，看日志里 `labeledAmounts` 是空还是有值。
+
+### ② 孤儿落库加「同金额 + 时间窗」二次去重（**不受 ① 取证阻塞，可并行**）
 
 不只靠 `source_event_key`。`recordOrphanPaymentSignal` 目前只按 `stableId("pending-orphan", sourceEventKey)` 幂等，
 而 `source_event_key` 含时间桶 ⇒ 跨桶即失效。
