@@ -2239,33 +2239,11 @@ class CheckoutAccessibilityService : AccessibilityService() {
                 at = handoffContext.handoffAt
             )?.takeIf { reference -> reference.capturedAt <= handoffContext.handoffAt }
             if (handoffReference == null) {
-                // 交接引用失效不等于没有会话：AI 已派发的会话（AI_PENDING）仍可
-                // 通过最近活跃结算会话兜底关联，避免直接落 NO_ACTIVE_SESSION 孤儿。
-                val recentReference = matcher.findRecentCheckoutReferenceForPayment(
-                    occurredAt = evidence.occurredAt ?: System.currentTimeMillis()
-                )
-                if (recentReference != null) {
-                    val recentResult = matcher.recordPaymentEvidence(
-                        recentReference,
-                        signal,
-                        sourceType = "ACCESSIBILITY",
-                        aiUnverified = aiUnverified
-                    )
-                    if (recentResult is CheckoutPaymentMatchResult.Rejected) {
-                        matcher.recordOrphanPaymentSignal(
-                            signal,
-                            sourceType = "ACCESSIBILITY",
-                            conflictReason = recentResult.reason
-                        )
-                    }
-                    Log.i(
-                        TAG,
-                        "支付结果页证据落库结果（最近活跃会话兜底）: ${formatMatchResult(recentResult)}"
-                    )
-                    return acceptedSessionIdOf(recentResult)
-                }
+                // D-24 / R4：0 命中 ⇒ 落孤儿待确认，**不猜**。
+                // 此前此处有「最近活跃结算会话」兜底（findRecentCheckoutReferenceForPayment），
+                // 与裁定「不回落猜测」冲突，已摘除（该方法已无调用点）。
                 matcher.recordOrphanPaymentSignal(signal, sourceType = "ACCESSIBILITY")
-                Log.i(TAG, "支付结果页交接引用已失效，证据已转待确认")
+                Log.i(TAG, "支付结果页交接引用已失效，证据已转待确认（不回落猜测）")
                 return null
             }
             val result = matcher.recordPaymentEvidence(
@@ -2326,34 +2304,9 @@ class CheckoutAccessibilityService : AccessibilityService() {
                 return null
             }
             PaymentSessionResolution.NoMatch -> {
-                // 交接引用缺失时先做最近活跃结算会话兜底：AI 已派发的会话
-                //（AI_PENDING）即使内存快照过期也应关联证据，而非直接落孤儿。
-                val recentReference = matcher.findRecentCheckoutReferenceForPayment(
-                    occurredAt = evidence.occurredAt ?: System.currentTimeMillis()
-                )
-                if (recentReference != null) {
-                    val result = matcher.recordPaymentEvidence(
-                        recentReference,
-                        signal,
-                        sourceType = "ACCESSIBILITY",
-                        aiUnverified = aiUnverified
-                    )
-                    if (result is CheckoutPaymentMatchResult.Rejected) {
-                        matcher.recordOrphanPaymentSignal(
-                            signal,
-                            sourceType = "ACCESSIBILITY",
-                            conflictReason = result.reason
-                        )
-                    }
-                    Log.i(
-                        TAG,
-                        "支付结果页证据落库结果（最近活跃会话兜底）: ${formatMatchResult(result)}"
-                    )
-                    return acceptedSessionIdOf(result)
-                }
-                // 无关联会话：证据不丢弃，转纯通知待确认（sessionId 为空，sourceType=accessibility）
+                // D-24 / R4：0 命中 ⇒ 落孤儿待确认，不猜（已摘除最近活跃会话兜底）。
                 matcher.recordOrphanPaymentSignal(signal, sourceType = "ACCESSIBILITY")
-                Log.i(TAG, "支付结果页无关联活跃会话，已转纯通知待确认")
+                Log.i(TAG, "支付结果页无关联活跃会话，已转待确认（不回落猜测）")
                 return null
             }
         }
@@ -2469,29 +2422,10 @@ class CheckoutAccessibilityService : AccessibilityService() {
                         pageFingerprint = observation.pageFingerprint
                     )
                 if (reference == null) {
-                    // 交接引用与 buffer 均失效时，尝试最近活跃结算会话兜底，
-                    // 避免 AI 已派发的会话被通知证据绕过而落 NO_ACTIVE_SESSION 孤儿。
-                    val recentReference = matcher.findRecentCheckoutReferenceForPayment(
-                        occurredAt = signal.occurredAt
-                    )
-                    if (recentReference != null) {
-                        val recentResult = matcher.recordPaymentEvidence(recentReference, signal)
-                        if (recentResult is CheckoutPaymentMatchResult.Rejected) {
-                            matcher.recordOrphanPaymentSignal(
-                                signal,
-                                sourceType = "NOTIFICATION",
-                                conflictReason = recentResult.reason
-                            )
-                        }
-                        Log.i(
-                            TAG,
-                            "支付通知证据落库结果（最近活跃会话兜底）: ${formatMatchResult(recentResult)}"
-                        )
-                        return@launch
-                    }
-                    // 支付先到但无法关联任何结算会话：证据不丢弃，转纯通知待确认（sessionId 为空）
+                    // D-24 / R4：0 命中 ⇒ 落孤儿待确认，不猜（已摘除最近活跃会话兜底）。
+                    // 注：本路径 sourceType = NOTIFICATION，D-3 生效后此处整体短路不落。
                     matcher.recordOrphanPaymentSignal(signal, sourceType = "NOTIFICATION")
-                    Log.i(TAG, "支付通知无结算会话可匹配，已转纯通知待确认")
+                    Log.i(TAG, "支付通知无结算会话可匹配，已转待确认（不回落猜测）")
                     return@launch
                 }
                 val result = matcher.recordPaymentEvidence(reference, signal)

@@ -112,6 +112,21 @@ data class PaymentNotificationFallbackSignal(
         value == null || (value.isNotBlank() && value.length <= 256)
 }
 
+/**
+ * D-3 / G3.1：v1 信号源收敛为「支付结果页」单一来源，支付通知整体推迟到版本更新。
+ *
+ * 依据：`CONFLICT_REVIEW_SESSION` G3.1「v1 只做支付结果页，通知整体推迟到版本更新；
+ * 通知代码全部保留，仅摘除证据作用」，处置方式为**粒度 2**（出口开关）——
+ * 在 `recordPaymentEvidence` / `recordOrphanPaymentSignal` 内按已归一化的
+ * sourceType 短路，采集与解析代码全部保留，新版本打开此闸即恢复。
+ *
+ * ⚠️ 必须比对**归一化后**的值：调用方传的是 `"NOTIFICATION"` 等大写形式。
+ * ⚠️ 只约束**通知来源**；`accessibility`（结果页主路径 / 截图兜底）与
+ * `manual`（用户断言通道）不受影响。
+ */
+internal fun isNotificationSourceDisabledInV1(normalizedSourceType: String): Boolean =
+    normalizedSourceType == "notification"
+
 /** 将支付证据来源收敛为 Native.d.ts 允许的三个小写值。 */
 internal fun normalizePaymentEvidenceSourceType(value: String?): String? =
     when (value?.trim()?.lowercase(Locale.ROOT)) {

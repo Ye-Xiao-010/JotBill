@@ -277,8 +277,13 @@ internal class CheckoutPaymentMatcher(
             at = at
         )
         val session = sessions.singleOrNull() ?: return null
+        // 批 V-4 遗留修正：判据与 CheckoutPurchaseIntentCoordinator:765 /
+        // CheckoutSnapshotBuffer:798 / CheckoutPageDetector:145 同源，统一用
+        // AUTO_DISPATCHABLE_PAGE_ROLES。此处此前硬判 == CHECKOUT，而该集合含
+        // PRODUCT_DETAIL / CART ⇒ 详情页直达支付时会话角色为 PRODUCT_DETAIL，
+        // 证据落库路径判 null，"宽进真生效"被打折（同批改造已在其余三处放宽）。
         val pageRole = CheckoutPageRole.fromStorageValue(session.pageRole)
-        if (pageRole != CheckoutPageRole.CHECKOUT) {
+        if (pageRole !in AUTO_DISPATCHABLE_PAGE_ROLES) {
             return null
         }
         return CheckoutSnapshotReference(
@@ -295,32 +300,13 @@ internal class CheckoutPaymentMatcher(
         )
     }
 
-    /**
-     * 页面指纹不可用时的最后兜底：在匹配时间窗内查找唯一可关联的活跃结算会话。
-     *
-     * 适用场景：AI 已派发、ensureSession 已落库（AI_PENDING），但内存交接引用与
-     * buffer 快照都已失效（如收银台停留超过截图 TTL），支付证据晚到时仍应关联
-     * 该会话生成 EVIDENCE_ONLY 候选，而不是落 NO_ACTIVE_SESSION 孤儿待确认。
-     * 窗口内存在多个候选会话时无法区分，返回 null 交由调用方走原有保守路径。
-     */
-    suspend fun findRecentCheckoutReferenceForPayment(
-        occurredAt: Long,
-        at: Long = nowMillis()
-    ): CheckoutSnapshotReference? {
-        val activeSessions = try {
-            database.checkoutSessionDao().getActiveSessions(at)
-        } catch (_: RuntimeException) {
-            return null
-        }
-        val candidates = activeSessions.filter { session ->
-            val shoppingPackage = session.shoppingPackage.orEmpty()
-            shoppingPackage in DEFAULT_SUPPORTED_SHOPPING_PACKAGES &&
-                CheckoutPageRole.fromStorageValue(session.pageRole) == CheckoutPageRole.CHECKOUT &&
-                abs(occurredAt - session.createdAt) <= PAYMENT_MATCH_WINDOW_MILLIS
-        }
-        val session = candidates.singleOrNull() ?: return null
-        return referenceForSession(session)
-    }
+    // D-24 / R4（2026-09-29 实施）：原 findRecentCheckoutReferenceForPayment
+    // （"最近活跃结算会话"兜底）已随三处调用点一并摘除并删除。
+    // 理由：归属判定 0 命中时退到"最近活跃会话"＝**猜测**，可能把证据配到错误的会话；
+    // 映射化把同一情形变为"可检测的歧义"⇒ 落孤儿待确认（安全侧），严格更安全。
+    // 原有 KDoc（供考古）："AI 已派发、ensureSession 已落库（AI_PENDING），但内存交接引用与
+    // buffer 快照都已失效（如收银台停留超过截图 TTL），支付证据晚到时仍应关联该会话生成
+    // EVIDENCE_ONLY 候选，而不是落 NO_ACTIVE_SESSION 孤儿待确认。"
 
     /**
      * 阶段四 T4：按订单号优先、金额+时间窗口+会话未占用综合解析支付证据应归属的会话。
@@ -535,6 +521,17 @@ internal class CheckoutPaymentMatcher(
                     )
                     return@withTransaction
                 }
+            // D-3 / G3.1：v1 通知链路停用 —— 通知来源的孤儿待确认同样不落。
+            // 与 recordPaymentEvidence 的出口开关成对，否则通知仍会经孤儿路径
+            // 产生纯通知待确认（这正是 D-3 要消除的形态）。
+            if (isNotificationSourceDisabledInV1(normalizedSourceType)) {
+                android.util.Log.i(
+                    "CheckoutPaymentMatcher",
+                    "孤立支付证据来源在 v1 已停用(D-3)，未落待确认: pkg=${signal.paymentPackage}, " +
+                        "amount=${signal.amountMinor}, reason=$conflictReason"
+                )
+                return@withTransaction
+            }
             val sourceEventKey = sourceEventKey(signal)
             val pendingId = stableId("pending-orphan", sourceEventKey)
             val dao = database.pendingTransactionDao()
@@ -734,6 +731,19 @@ internal class CheckoutPaymentMatcher(
                 reference.sessionId,
                 "PAYMENT_SOURCE_TYPE_INVALID"
             )
+        // D-3 / G3.1：v1 通知链路停用 —— 通知证据不参与匹配与入账。
+        // 采集与解析代码保留，新版本删除此闸即恢复。
+        if (isNotificationSourceDisabledInV1(normalizedSourceType)) {
+            android.util.Log.i(
+                "CheckoutPaymentMatcher",
+                "支付证据来源在 v1 已停用(D-3)，本次通知证据不参与匹配: pkg=${signal.paymentPackage}, " +
+                    "amount=${signal.amountMinor}"
+            )
+            return CheckoutPaymentMatchResult.Rejected(
+                reference.sessionId,
+                "PAYMENT_NOTIFICATION_DISABLED_V1"
+            )
+        }
 
         return database.withTransaction {
             val now = nowMillis()

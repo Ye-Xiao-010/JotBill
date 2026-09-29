@@ -84,18 +84,28 @@ class CheckoutPaymentMatcherIntegrationTest {
 
     // ---------- 契约 1:孤儿支付信号落待确认 ----------
 
+    /**
+     * ⚠️ 2026-09-29 修正：本用例原先以 `sourceType = "NOTIFICATION"` 作为主路径。
+     *
+     * D-3 / G3.1 已裁定「v1 信号源收敛为支付结果页单一来源，通知整体推迟到版本更新」，
+     * 处置方式为**粒度 2**（出口开关）：通知来源的孤儿待确认**不再落**。本次在
+     * `recordOrphanPaymentSignal` 内补上该闸（此前只补了 `recordPaymentEvidence`，
+     * 属漏实现），故本用例改为以结果页路径（`ACCESSIBILITY`）为主路径。
+     *
+     * 通知闸本身的判别性用例见 `CheckoutAttributionLeftoversTest`。
+     */
     @Test
     fun orphanPendingInsertedWithNormalizedSourceAndIdempotentKey() = runBlocking {
-        matcher.recordOrphanPaymentSignal(paymentSignal(), sourceType = "NOTIFICATION")
+        matcher.recordOrphanPaymentSignal(paymentSignal(), sourceType = "ACCESSIBILITY")
         val rows = database.pendingTransactionDao().getPage(10, 0)
         assertEquals(1, rows.size)
         val row = rows.single()
         assertEquals("expense", row.type)
-        assertEquals("notification", row.sourceType)
+        assertEquals("accessibility", row.sourceType)
         assertEquals("NO_ACTIVE_SESSION", row.conflictReason)
         assertEquals(1234L, row.amountMinor)
 
-        // 同一 sourceEventKey 重复处理(通知与无障碍双路径竞态)不产生第二行
+        // 同一 sourceEventKey 重复处理不产生第二行（幂等键与来源类型无关）
         matcher.recordOrphanPaymentSignal(paymentSignal(), sourceType = "ACCESSIBILITY")
         assertEquals(1, database.pendingTransactionDao().getPage(10, 0).size)
     }
