@@ -53,6 +53,10 @@ coverage/
 /tmp-*.xml
 /commit-msg.txt
 
+# 本地 JDK 工具链(2026-09-29):构建/验证用的 Microsoft Build of OpenJDK 17,不进仓库
+/jdk17/
+/msjdk17.zip
+
 # 隐私兜底:任何真实数据库文件(adb run-as 拉取件等)不得入库
 *.db
 

@@ -1,4 +1,6 @@
 # 改造映射表 (MIGRATION_MAP.md)
+> **状态**：[参考] —— 稳定
+> 入口：`00-现状正本.md`
 
 > 基于 LiteNote (https://github.com/GystuG/LiteNote) 实际代码结构,定义每个文件的迁移策略。
 >
