@@ -138,6 +138,9 @@ class MainApplication : Application(), ReactApplication {
     // 诊断日志落盘最先初始化:越早开,崩溃/服务假死前的日志留得越多。
     // 无 UI 开关,debug 包自动生效;取文件见 JotBillLog.FILE_NAME 的 KDoc。
     com.jotbill.app.utils.JotBillLog.init(this)
+    // 开发期数据库明文导出(仅 debug):让外部 sqlite3 能审计表内容,SQLCipher 的
+    // passphrase 在 Keystore 内不可导出,没有这条路就只能靠肉眼点 UI。异步执行不拖慢启动。
+    com.jotbill.app.utils.DiagDbDump.dumpAsync(this)
     // 待确认提醒先于 RN 初始化:通知监听/无障碍路径在 RN 未启动时也要能发系统通知
     PendingReminderNotifier.init(this)
     // 付款确认弹窗:订阅待确认创建事件,悬浮权限+非敏感帧门禁通过时就地弹窗
