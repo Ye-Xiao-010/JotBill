@@ -64,11 +64,12 @@
 | [`IMPL_READINESS_RISKS_2026-09-15.md`](./IMPL_READINESS_RISKS_2026-09-15.md) | 实施就绪风险 | 8 项待定已全部定案 |
 | [`DOC_VERIFICATION_2026-09-13.md`](./DOC_VERIFICATION_2026-09-13.md) | 文档核查 | 核出的 2 处缺陷已修 |
 
-### 🗑 已失效（1 份）
+### 🗑 已失效（2 份）
 
 | 文档 | 说明 |
 |---|---|
 | `PROMPT_BATCH1_DEADCODE_CLEANUP.md` | 给其他 AI 的一次性开工提示词，**批 V-1 已于 2026-09-17 完成**。🗑 勿再使用 |
+| [`PROMPT_HANDOFF_2026-09-29_attribution_fix.md`](./PROMPT_HANDOFF_2026-09-29_attribution_fix.md) | 一次性接力提示词（"本轮任务：只做 ① 取证，不是修"）。**取证已于 2026-09-29 完成并落成裁定 D-25**。🗑 勿再使用；排查思路看 `FIX_TASK_2026-09-29` §二，当天全貌看 [`worklog/2026-09-29.md`](./worklog/2026-09-29.md) |
 
 ### 🗄 归档（3 份）
 
@@ -91,7 +92,8 @@
 | `screenshots/` | 产品界面截图与演示动图 | — |
 | `archive/` | 旧版设计文档，仅作考古 | 🗄 |
 | `types/` | 原生契约类型定义 | — |
-| `showcase/` | 展示站（HTML/CSS/JS） | ⚠️ **未纳入版本控制**（2026-09-22） |
+| `worklog/` | **每日工作日志**（`YYYY-MM-DD.md`）—— 那天做了什么、发现了什么、踩了什么坑、还欠什么 | 追加，不改历史日期的文件 |
+| `showcase/` | 展示站（HTML/CSS/JS） | ⚠️ **未纳入版本控制**（2026-09-22，56.9MB） |
 
 ---
 
