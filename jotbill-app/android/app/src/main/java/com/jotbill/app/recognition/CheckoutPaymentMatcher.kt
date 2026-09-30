@@ -88,6 +88,26 @@ internal fun classifyPaymentAmount(
  * ⇒ **不得随事件桶一并收窄**，否则跨桶重复读会落成两条证据（D-6 裁定：本常量值不动）。
  */
 private const val PAYMENT_EVIDENCE_MERGE_WINDOW_MILLIS = 2 * 60 * 1000L
+
+/**
+ * 孤儿待确认去重窗口（D-25，2026-09-29）。
+ *
+ * ⚠️ **为什么必须窄于 [PAYMENT_EVIDENCE_MERGE_WINDOW_MILLIS]**：
+ * [PAYMENT_EVIDENCE_MERGE_WINDOW_MILLIS] 的 KDoc 假设"跨桶重复读靠它收敛为一条证据"——
+ * 该假设**只对证据行成立**。孤儿待确认由 [recordOrphanPaymentSignal] 独立新建，
+ * 幂等键取自**新解析证据**的 `sourceEventKey`（跨桶即不同），与证据行的合并结果无关。
+ * 2026-09-29 真机实测：同一笔 ¥19.90 的结果页在 21:08:42 / 21:09:02 被观测两次
+ * （间隔 20 秒，跨 30 秒桶），证据正确合并为同一条 `payment-2493`，
+ * 却仍落了两条孤儿待确认（`pending-orphan-2` / `pending-orphan-4`）。
+ *
+ * 取 60 秒的依据：
+ * - 覆盖实测的 20 秒跨桶重复观测；
+ * - 与 `CheckoutAccessibilityService.markPaymentResultEvent` 的进程内记忆窗同口径；
+ * - **远小于 D-6 关心的 2 分钟**——D-6 要求"同包同金额、2 分钟内两单"不得撞键，
+ *   本窗口不得把那个风险重新引进来。
+ */
+private const val ORPHAN_DEDUP_WINDOW_MILLIS = 60_000L
+
 private const val PAYMENT_CONFIRMED_STATUS = "PAYMENT_CONFIRMED"
 private const val AI_PENDING_STATUS = "AI_PENDING"
 private const val WAITING_PAYMENT_STATUS = "WAITING_PAYMENT"
@@ -495,7 +515,11 @@ internal class CheckoutPaymentMatcher(
      * 会话解析 NoMatch），不丢弃证据：直接落一条纯通知待确认交易
      * （sessionId 为空、candidateId 为空），由用户在待确认中心处理。
      *
-     * 幂等：待确认 ID 由 sourceEventKey 确定性生成，重复信号不产生第二条。
+     * 幂等：两道。
+     * 1. **同 sourceEventKey** —— 待确认 ID 由 sourceEventKey 确定性生成，重复信号不产生第二条；
+     * 2. **D-25 跨桶重复观测** —— 同支付包 + 同金额 + [ORPHAN_DEDUP_WINDOW_MILLIS]
+     *    窗内已有 pending 时不新建第二张卡，只把 `conflictReason` 合并进既有记录。
+     *    （第 1 道挡不住：结果页事件键含 30 秒时间桶，跨桶即换键。）
      */
     suspend fun recordOrphanPaymentSignal(
         signal: PaymentNotificationFallbackSignal,
@@ -563,6 +587,37 @@ internal class CheckoutPaymentMatcher(
                     )
                 }
                 return@withTransaction
+            }
+            // ---- D-25：跨桶重复观测去重（孤儿待确认专用）----
+            // 上面的幂等键按 sourceEventKey 判重，而结果页事件键含 30 秒时间桶
+            // （D-6 为防"同额两单撞键"而定的窄桶），跨桶即换键 ⇒ 挡不住重复观测。
+            // 证据层有 mergeSessionEvidence 的 2 分钟窗口兜底，孤儿卡没有 ⇒ 补这一道。
+            // 口径：同支付包 + 同金额 + 60 秒窗内已有 pending ⇒ 判为同一笔的重复观测，
+            // 合并 conflictReason 而不新建第二张卡（证据不丢弃，冲突码照旧保全）。
+            if (signal.occurredAt > 0L) {
+                val duplicate = dao.findRecentPendingByPlatformAndAmount(
+                    platform = signal.paymentPackage,
+                    amountMinor = signal.amountMinor,
+                    windowStart = signal.occurredAt - ORPHAN_DEDUP_WINDOW_MILLIS,
+                    windowEnd = signal.occurredAt + ORPHAN_DEDUP_WINDOW_MILLIS
+                )
+                if (duplicate != null) {
+                    val mergedReason = mergeOrphanConflictReason(
+                        duplicate.conflictReason,
+                        conflictReason
+                    )
+                    if (mergedReason != duplicate.conflictReason) {
+                        dao.updateConflictReason(duplicate.id, mergedReason)
+                    }
+                    JotBillLog.i(
+                        "CheckoutPaymentMatcher",
+                        "孤立支付证据判为重复观测(同包同额" +
+                            "${ORPHAN_DEDUP_WINDOW_MILLIS / 1000}秒内)，未新建待确认: " +
+                            "pending=${duplicate.id.take(16)}, incoming=${pendingId.take(16)}, " +
+                            "amount=${signal.amountMinor}, reason=$conflictReason"
+                    )
+                    return@withTransaction
+                }
             }
             // 阶段五 T1 时机一：纯通知待确认创建前执行规则；
             // set_platform 不应用于 pending.platform（该列承担支付包名语义），

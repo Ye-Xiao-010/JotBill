@@ -338,7 +338,10 @@ internal class CheckoutPurchaseIntentCoordinator(
         val isSensitivePage: Boolean,
         /**
          * 页面上的订单总额（分），改造 C 新增字段的透传；null = 无法判定。
-         * 归属判定（E-2）遇 null **不命中** —— 不猜。
+         *
+         * ⚠️ D-25（2026-09-29 裁定）：null **不再一律判不命中**——时间窗内唯一候选时
+         * 按"无矛盾信息"放行归属；多候选时仍不参与金额消歧（无金额可比）。详见
+         * [attributePaymentResultLocked] 的判别表。
          */
         val finalAmountMinor: Long? = null,
         /**
@@ -1022,15 +1025,36 @@ internal class CheckoutPurchaseIntentCoordinator(
     }
 
     /**
-     * 归属判定（改造 E-2）：在 [handoffContexts] 中按"页面金额 + 交接时间窗"挑出本笔
-     * 支付属于哪个会话。纯内存判定，复用 `Matcher.resolveSessionForPayment` 的纪律
+     * 归属判定（改造 E-2 / D-25）：在 [handoffContexts] 中按"页面金额 + 交接时间窗"挑出
+     * 本笔支付属于哪个会话。纯内存判定，复用 `Matcher.resolveSessionForPayment` 的纪律
      * （金额 + 时间窗 + 未占用），不调用该函数本身（它需 DB 访问，见 §8.2）。
      *
-     * - 金额：**精确相等**。页面金额口径 = 订单总额/实付（改造 C，`finalAmountMinor`），
-     *   与支付证据金额同源同币种；不等 ⇒ 不命中。页面金额为 null（"订单金额 + 实付"
-     *   并存等歧义，改造 C 裁定 A）⇒ 无法判定 ⇒ 不命中 —— 宁可落待确认，不猜。
-     * - 时间窗：|occurredAt - handoffAtMillis| ≤ [PAYMENT_RESULT_MATCH_WINDOW_MILLIS]。
+     * - 时间窗：|occurredAt - handoffAtMillis| ≤ [PAYMENT_RESULT_MATCH_WINDOW_MILLIS]，
+     *   全部分支的硬性前提。
+     * - 金额：**精确相等**，但只在**存在矛盾**时才否决（D-25）。判别口径见下表。
      * - 未占用：派发成功即从映射移除 ⇒ 已消费会话天然不参与（见 routeLocked）。
+     *
+     * | 时间窗内候选 | 页面金额                       | 结果                          |
+     * |--------------|--------------------------------|-------------------------------|
+     * | 0            | —                              | 0 命中（孤儿待确认）          |
+     * | 1            | 可判定且相等                   | 归属                          |
+     * | 1            | **不可判定（null）**           | **归属**（D-25：无矛盾信息）  |
+     * | 1            | 可判定但不等                   | 0 命中（矛盾信息，不硬归）    |
+     * | ≥2           | 唯一金额相等                   | 归属                          |
+     * | ≥2           | ≥2 个金额相等                  | Ambiguous（待确认）           |
+     * | ≥2           | 无金额相等                     | 0 命中                        |
+     *
+     * ⚠️ **为什么单候选 + 金额可判定但不等仍判 0 命中**：存在具体反例——用户在拼多多
+     * 下单后切到支付宝付另一单，支付宝结果页会落进拼多多 handoff 的 5 分钟窗内，
+     * 硬归会把账单记到错的订单。**自动入错账比多落一张待确认严重得多**。
+     * D-25 只放行"无矛盾信息"（金额不可判定），不放行"矛盾信息"。
+     *
+     * ⚠️ **D-25 的由来（2026-09-29 真机取证，拼多多 build 0.0.98）**：旧口径对
+     * `finalAmountMinor == null` 一律不命中。实测结算页该字段**时有时无**——
+     * 渲染出 `合计` 标签时为 1799（归属成功、自动入账），未渲染时为 null
+     * （4 个商品价无标签 ⇒ 提取器判歧义，保守取 null）。null 是提取器的**正确
+     * 保守行为**而非实现缺陷，却让归属判定恒 0 命中 ⇒ 同一笔支付落 2 条孤儿待确认。
+     * 提取通道本身不动（见 FIX_TASK_2026-09-29 §二）。
      *
      * 根本限制（E-3，不因本判定消除）：结果页不携带订单号 ⇒ 同金额两单无法自动区分，
      * 判定为 Ambiguous 落待确认即为本设计的正确行为。
@@ -1038,16 +1062,37 @@ internal class CheckoutPurchaseIntentCoordinator(
     private fun attributePaymentResultLocked(
         signal: PaymentResultAttributionSignal
     ): PaymentResultAttribution {
-        val matched = handoffContexts.values.filter { context ->
-            val pageAmount = context.finalAmountMinor ?: return@filter false
-            pageAmount == signal.amountMinor &&
-                abs(signal.occurredAt - context.handoffAtMillis) <=
+        val inWindow = handoffContexts.values.filter { context ->
+            abs(signal.occurredAt - context.handoffAtMillis) <=
                 PAYMENT_RESULT_MATCH_WINDOW_MILLIS
         }
+        if (inWindow.size == 1) {
+            val sole = inWindow.single()
+            // D-25：页面金额不可判定 = 没有信息，不是矛盾信息；此时唯一候选即答案。
+            // 金额可判定但不等 = 明确矛盾 ⇒ 仍判 0 命中（见上方反例说明）。
+            return if (sole.finalAmountMinor == null) {
+                JotBillLog.i(
+                    TAG,
+                    "支付结果归属按唯一候选放行(页面金额不可判定): " +
+                        "session=${sole.sessionId.take(8)}, amount=${signal.amountMinor}, " +
+                        "pendingHandoffs=${handoffContexts.size}"
+                )
+                PaymentResultAttribution.Attributed(sole)
+            } else if (sole.finalAmountMinor == signal.amountMinor) {
+                PaymentResultAttribution.Attributed(sole)
+            } else {
+                PaymentResultAttribution.NoCandidate
+            }
+        }
+        if (inWindow.isEmpty()) {
+            return PaymentResultAttribution.NoCandidate
+        }
+        // ≥2 候选：金额恢复为硬性消歧条件，判别口径与旧实现完全一致。
+        val byAmount = inWindow.filter { it.finalAmountMinor == signal.amountMinor }
         return when {
-            matched.size == 1 -> PaymentResultAttribution.Attributed(matched.single())
-            matched.isEmpty() -> PaymentResultAttribution.NoCandidate
-            else -> PaymentResultAttribution.Ambiguous(matched.map { it.sessionId })
+            byAmount.size == 1 -> PaymentResultAttribution.Attributed(byAmount.single())
+            byAmount.isEmpty() -> PaymentResultAttribution.NoCandidate
+            else -> PaymentResultAttribution.Ambiguous(byAmount.map { it.sessionId })
         }
     }
 

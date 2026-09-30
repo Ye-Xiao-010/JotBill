@@ -58,11 +58,13 @@ class CheckoutPaymentMatcherIntegrationTest {
 
     private fun paymentSignal(
         amountMinor: Long = 1234,
-        sourceEventKey: String = "evt-1"
+        sourceEventKey: String = "evt-1",
+        paymentPackage: String = "com.tencent.mm",
+        occurredAt: Long = now
     ) = PaymentNotificationFallbackSignal(
-        paymentPackage = "com.tencent.mm",
+        paymentPackage = paymentPackage,
         amountMinor = amountMinor,
-        occurredAt = now,
+        occurredAt = occurredAt,
         sourceEventKey = sourceEventKey
     )
 
@@ -190,12 +192,15 @@ class CheckoutPaymentMatcherIntegrationTest {
 
     @Test
     fun orphanSourceTypeVariantsNormalizeToWireValues() = runBlocking {
+        // ⚠️ 两笔用不同金额：D-25 起同支付包 + 同金额 + 60 秒内的信号会被判为同一笔的
+        // 重复观测而不再建卡（见下方 `孤儿跨桶重复观测_*` 系列用例）。本用例验的是
+        // 来源类型归一化，两条必须互相独立，否则第二个信号会被去重挡掉、验不到归一化。
         matcher.recordOrphanPaymentSignal(
-            paymentSignal(sourceEventKey = "evt-a"),
+            paymentSignal(amountMinor = 1234, sourceEventKey = "evt-a"),
             sourceType = "ACCESSIBILITY_RESULT"
         )
         matcher.recordOrphanPaymentSignal(
-            paymentSignal(sourceEventKey = "evt-b"),
+            paymentSignal(amountMinor = 5678, sourceEventKey = "evt-b"),
             sourceType = "MANUAL"
         )
         val rows = database.pendingTransactionDao().getPage(10, 0)
@@ -204,6 +209,160 @@ class CheckoutPaymentMatcherIntegrationTest {
             setOf("accessibility", "manual"),
             rows.map { it.sourceType }.toSet()
         )
+    }
+
+    // ---------- D-25：孤儿待确认跨桶重复观测去重 ----------
+
+    /**
+     * D-25 正例：同一笔支付的结果页被观测两次，事件键跨了 30 秒时间桶 ⇒
+     * `sourceEventKey` 幂等键挡不住 ⇒ 必须靠"同包同额 + 60 秒窗"补口。
+     *
+     * 真机数据（2026-09-29 拼多多 build 0.0.98，¥19.90）：
+     * `occurredAt=1790687322157`（桶 59689577）与 `occurredAt=1790687342160`（桶 59689578），
+     * 间隔 20 秒。旧实现落了两条待确认（`pending-orphan-2` / `pending-orphan-4`）。
+     */
+    @Test
+    fun 孤儿跨桶重复观测_同包同额60秒内不新建第二张卡() = runBlocking {
+        matcher.recordOrphanPaymentSignal(
+            paymentSignal(amountMinor = 1990, sourceEventKey = "evt-bucket-a", occurredAt = now),
+            sourceType = "ACCESSIBILITY",
+            conflictReason = "NO_ACTIVE_SESSION"
+        )
+        // 跨桶：不同 sourceEventKey，但同包同额、间隔 20 秒 ⇒ 同一笔的重复观测
+        matcher.recordOrphanPaymentSignal(
+            paymentSignal(
+                amountMinor = 1990,
+                sourceEventKey = "evt-bucket-b",
+                occurredAt = now + 20_000L
+            ),
+            sourceType = "ACCESSIBILITY",
+            conflictReason = "NO_ACTIVE_SESSION"
+        )
+
+        val rows = database.pendingTransactionDao().getPage(10, 0)
+        assertEquals("同包同额 60 秒内只落一张待确认卡", 1, rows.size)
+        assertEquals(
+            "重复观测不得重复追加同一码",
+            "NO_ACTIVE_SESSION",
+            rows.single().conflictReason
+        )
+    }
+
+    /** D-25：重复观测**不得丢证据** —— 后到的 conflictReason 必须合并进既有卡。 */
+    @Test
+    fun 孤儿跨桶重复观测_冲突原因合并进既有卡() = runBlocking {
+        matcher.recordOrphanPaymentSignal(
+            paymentSignal(amountMinor = 1990, sourceEventKey = "evt-bucket-a", occurredAt = now),
+            sourceType = "ACCESSIBILITY",
+            conflictReason = "NO_ACTIVE_SESSION"
+        )
+        matcher.recordOrphanPaymentSignal(
+            paymentSignal(
+                amountMinor = 1990,
+                sourceEventKey = "evt-bucket-b",
+                occurredAt = now + 20_000L
+            ),
+            sourceType = "ACCESSIBILITY",
+            conflictReason = PAYMENT_RESULT_NO_MATCHING_SESSION
+        )
+        val rows = database.pendingTransactionDao().getPage(10, 0)
+        assertEquals(1, rows.size)
+        assertEquals(
+            "既有码在前、新码追加（保住 startsWith 前缀语义）",
+            "NO_ACTIVE_SESSION,$PAYMENT_RESULT_NO_MATCHING_SESSION",
+            rows.single().conflictReason
+        )
+    }
+
+    /**
+     * D-25 负例：**超过窗口**必须各自建卡。
+     *
+     * 判别性：若窗口写错（误用 `PAYMENT_EVIDENCE_MERGE_WINDOW_MILLIS` 的 2 分钟），
+     * 本用例必红 —— 而那正好会重现 D-6 明确要避免的"同包同金额、2 分钟内两单撞键"。
+     */
+    @Test
+    fun 孤儿去重_超过60秒窗口的同额两笔各自建卡() = runBlocking {
+        matcher.recordOrphanPaymentSignal(
+            paymentSignal(amountMinor = 1990, sourceEventKey = "evt-t0", occurredAt = now),
+            sourceType = "ACCESSIBILITY"
+        )
+        matcher.recordOrphanPaymentSignal(
+            paymentSignal(
+                amountMinor = 1990,
+                sourceEventKey = "evt-t90",
+                occurredAt = now + 90_000L
+            ),
+            sourceType = "ACCESSIBILITY"
+        )
+        assertEquals(2, database.pendingTransactionDao().getPage(10, 0).size)
+    }
+
+    /** D-25 负例：不同金额不合并（D-6「同额两笔都保留」的对偶，必须守住）。 */
+    @Test
+    fun 孤儿去重_不同金额不合并() = runBlocking {
+        matcher.recordOrphanPaymentSignal(
+            paymentSignal(amountMinor = 1990, sourceEventKey = "evt-amt-a", occurredAt = now),
+            sourceType = "ACCESSIBILITY"
+        )
+        matcher.recordOrphanPaymentSignal(
+            paymentSignal(
+                amountMinor = 2990,
+                sourceEventKey = "evt-amt-b",
+                occurredAt = now + 20_000L
+            ),
+            sourceType = "ACCESSIBILITY"
+        )
+        assertEquals(2, database.pendingTransactionDao().getPage(10, 0).size)
+    }
+
+    /** D-25 负例：不同支付包不合并（微信结果页与支付宝结果页各自独立）。 */
+    @Test
+    fun 孤儿去重_不同支付包不合并() = runBlocking {
+        matcher.recordOrphanPaymentSignal(
+            paymentSignal(
+                amountMinor = 1990,
+                sourceEventKey = "evt-pkg-a",
+                paymentPackage = "com.tencent.mm",
+                occurredAt = now
+            ),
+            sourceType = "ACCESSIBILITY"
+        )
+        matcher.recordOrphanPaymentSignal(
+            paymentSignal(
+                amountMinor = 1990,
+                sourceEventKey = "evt-pkg-b",
+                paymentPackage = "com.eg.android.AlipayGphone",
+                occurredAt = now + 20_000L
+            ),
+            sourceType = "ACCESSIBILITY"
+        )
+        assertEquals(2, database.pendingTransactionDao().getPage(10, 0).size)
+    }
+
+    /**
+     * D-25 负例：已被用户忽略的记录**不再吸收**新的冲突码，也不阻新建卡。
+     *
+     * 判别性：若 DAO 查询漏了 `status = 'pending'` 条件，本用例必红。
+     */
+    @Test
+    fun 孤儿去重_已忽略的记录不吸收也不阻新建() = runBlocking {
+        val first = paymentSignal(amountMinor = 1990, sourceEventKey = "evt-ign-a", occurredAt = now)
+        matcher.recordOrphanPaymentSignal(first, sourceType = "ACCESSIBILITY")
+        val dao = database.pendingTransactionDao()
+        val row = dao.getPage(10, 0).single()
+        dao.markIgnoredIfVersion(row.id, row.version)
+        assertEquals(0, dao.getPage(10, 0).size)
+
+        matcher.recordOrphanPaymentSignal(
+            paymentSignal(
+                amountMinor = 1990,
+                sourceEventKey = "evt-ign-b",
+                occurredAt = now + 20_000L
+            ),
+            sourceType = "ACCESSIBILITY",
+            conflictReason = PAYMENT_RESULT_NO_MATCHING_SESSION
+        )
+        assertEquals("已忽略的卡不得吸收新码，且新卡照常建", 1, dao.getPage(10, 0).size)
     }
 
     // ---------- 契约 2:会话引用恢复 ----------

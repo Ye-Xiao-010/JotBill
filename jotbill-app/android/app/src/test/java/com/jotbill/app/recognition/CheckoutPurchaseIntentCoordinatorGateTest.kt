@@ -616,20 +616,127 @@ class CheckoutPurchaseIntentCoordinatorGateTest {
         assertEquals(PAYMENT_RESULT_NO_MATCHING_SESSION, f.orphanSignals.single().conflictReason)
     }
 
-    /** 页面金额无法判定（null）的会话不参与归属 —— 不猜。 */
+    /**
+     * D-25 反转：页面金额不可判定（null）**不再**一律判不命中。
+     *
+     * 真机取证（2026-09-29 拼多多 build 0.0.98）：结算页 `finalAmountMinor` 时有时无，
+     * 未渲染出"合计/实付"标签且同时存在多个商品价时为 null。null 是提取器的**正确
+     * 保守行为**（无标签 + 多金额 ⇒ 判歧义），却让旧口径恒 0 命中 ⇒ 同一笔支付
+     * 落 2 条孤儿待确认。旧口径见 `FIX_TASK_2026-09-29` §二。
+     *
+     * 判别性：若实现退回"null ⇒ 不命中"，本用例必红（gateReason 会变回
+     * PAYMENT_RESULT_NO_MATCHING_SESSION）。
+     */
     @Test
-    fun handoffContextWithoutPageAmountIsNotAttributed() {
+    fun handoffContextWithoutPageAmountIsAttributedWhenItIsTheOnlyCandidate() {
         val f = Fixture()
         f.handoff(sessionId = "session-1", amountMinor = null, at = 1_000_000L)
+        f.gateway.consumeResult = f.ready(fingerprint = FP_A, sessionId = "session-1")
         val result = f.coordinator.trigger(
             PurchaseIntent.PAYMENT_RESULT,
             paymentResult = paymentResultSignal(amountMinor = 12_800L, occurredAt = 1_000_000L)
+        )
+        assertTrue(
+            "唯一候选且页面金额不可判定 = 无矛盾信息，应归属",
+            result is PurchaseIntentCoordinationResult.AiDispatched
+        )
+        assertEquals(
+            listOf(Triple("payment:session-1", PurchaseIntent.PAYMENT_RESULT, null)),
+            f.gateway.consumeCalls
+        )
+        assertTrue(f.orphanSignals.isEmpty())
+    }
+
+    /**
+     * D-25 的**边界**：唯一候选的页面金额可判定但与证据金额不符 ⇒ 仍判 0 命中。
+     *
+     * 为什么不放行：用户在拼多多下单后切到支付宝付另一单，支付宝结果页会落进拼多多
+     * handoff 的 5 分钟窗内。硬归会把账单记到错的订单 —— 自动入错账比多落一张
+     * 待确认严重得多。D-25 只放行"无矛盾信息"（金额不可判定），不放行"矛盾信息"。
+     */
+    @Test
+    fun handoffContextWithDecisiveButMismatchedPageAmountIsStillNotAttributed() {
+        val f = Fixture()
+        f.handoff(sessionId = "session-1", amountMinor = 12_800L, at = 1_000_000L)
+        val result = f.coordinator.trigger(
+            PurchaseIntent.PAYMENT_RESULT,
+            paymentResult = paymentResultSignal(amountMinor = 5_500L, occurredAt = 1_000_000L)
         )
         assertEquals(
             PurchaseIntentGateRejection.PAYMENT_RESULT_NO_MATCHING_SESSION,
             (result as PurchaseIntentCoordinationResult.Rejected).gateReason
         )
         assertTrue(f.gateway.consumeCalls.isEmpty())
+        assertEquals(1, f.orphanSignals.size)
+    }
+
+    /**
+     * D-25 的**边界**：唯一候选在时间窗**外** ⇒ 0 命中（null 也不放行）。
+     *
+     * 判别性：若实现把"唯一候选即归属"写成无条件短路，本用例必红。
+     */
+    @Test
+    fun handoffContextOutsideTimeWindowIsNotAttributedEvenWithNullPageAmount() {
+        val f = Fixture()
+        f.handoff(sessionId = "session-1", amountMinor = null, at = 1_000_000L)
+        val result = f.coordinator.trigger(
+            PurchaseIntent.PAYMENT_RESULT,
+            paymentResult = paymentResultSignal(amountMinor = 12_800L, occurredAt = 20_000_000L)
+        )
+        assertEquals(
+            PurchaseIntentGateRejection.PAYMENT_RESULT_NO_MATCHING_SESSION,
+            (result as PurchaseIntentCoordinationResult.Rejected).gateReason
+        )
+        assertTrue(f.gateway.consumeCalls.isEmpty())
+        assertEquals(1, f.orphanSignals.size)
+    }
+
+    /**
+     * D-25 的**边界**：多候选时金额恢复为硬性消歧条件 —— 无金额可比的候选（null）
+     * 不参与，且仍只有 1 个金额命中时才归属。
+     *
+     * 判别性：若"null 放行"泄漏到多候选分支，`paymentResultWithTwoAmountMatchesIsAmbiguous`
+     * 的判别性会被削弱；本用例钉死 session-2（金额 null）不得被误选。
+     */
+    @Test
+    fun multipleCandidatesStillResolveByAmountAndIgnoreNullPageAmounts() {
+        val f = Fixture()
+        f.handoff(fingerprint = FP_A, sessionId = "session-1", amountMinor = 12_800L, at = 1_000_000L)
+        f.handoff(fingerprint = FP_B, sessionId = "session-2", amountMinor = null, at = 1_020_000L)
+        f.gateway.consumeResult = f.ready(fingerprint = FP_A, sessionId = "session-1")
+        val result = f.coordinator.trigger(
+            PurchaseIntent.PAYMENT_RESULT,
+            paymentResult = paymentResultSignal(amountMinor = 12_800L, occurredAt = 1_100_000L)
+        )
+        assertTrue(result is PurchaseIntentCoordinationResult.AiDispatched)
+        assertEquals(
+            listOf(Triple("payment:session-1", PurchaseIntent.PAYMENT_RESULT, null)),
+            f.gateway.consumeCalls
+        )
+        assertTrue(f.orphanSignals.isEmpty())
+    }
+
+    /**
+     * D-25 的**边界**：多候选且**无任何金额可判定** ⇒ 0 命中（不猜）。
+     *
+     * 两个候选页面金额都是 null 时没有可比信息；虽然只有 2 个候选，但"唯一候选放行"
+     * 的前提不成立 ⇒ 不得任取其一。
+     */
+    @Test
+    fun multipleCandidatesWithAllNullPageAmountsFallBackToNoCandidate() {
+        val f = Fixture()
+        f.handoff(fingerprint = FP_A, sessionId = "session-1", amountMinor = null, at = 1_000_000L)
+        f.handoff(fingerprint = FP_B, sessionId = "session-2", amountMinor = null, at = 1_020_000L)
+        val result = f.coordinator.trigger(
+            PurchaseIntent.PAYMENT_RESULT,
+            paymentResult = paymentResultSignal(amountMinor = 12_800L, occurredAt = 1_100_000L)
+        )
+        assertEquals(
+            PurchaseIntentGateRejection.PAYMENT_RESULT_NO_MATCHING_SESSION,
+            (result as PurchaseIntentCoordinationResult.Rejected).gateReason
+        )
+        assertTrue(f.gateway.consumeCalls.isEmpty())
+        assertEquals(1, f.orphanSignals.size)
     }
 
     /**

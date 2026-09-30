@@ -58,6 +58,40 @@ interface PendingTransactionDao {
     suspend fun findPendingBySessionId(sessionId: String): PendingTransactionEntity?
 
     /**
+     * D-25：查"同支付包 + 同金额 + 落在时间窗内"的待确认记录（孤儿去重用）。
+     *
+     * 背景：支付结果页的事件键含 30 秒时间桶（`PaymentResultParser`，D-6 为防
+     * "同包同金额、2 分钟内两单撞键"而定的窄桶），跨桶即产生第二个幂等键。
+     * `CheckoutPaymentMatcher.mergeSessionEvidence` 的 2 分钟收敛只作用于**证据行**，
+     * 收敛不到由 `recordOrphanPaymentSignal` 独立新建的**孤儿待确认卡**
+     * ⇒ 真机上同一笔 ¥19.90 落了两条待确认（`FIX_TASK_2026-09-29` §三）。
+     *
+     * 本查询是那条兜底缺失的补口：按"包名 + 金额 + 时间窗"认出重复观测，
+     * 合并 `conflictReason` 而不新建第二张卡。
+     *
+     * ⚠️ 只匹配 `status = 'pending'`：已被用户忽略的记录不该再吸收新的冲突码
+     * （保留原审计语义）。`platform` 为 null 的行天然不匹配（SQL 三值逻辑），
+     * 即"平台未知"不做合并 —— 保守侧。
+     */
+    @Query(
+        """
+        SELECT * FROM pending_transactions
+        WHERE status = 'pending'
+          AND platform = :platform
+          AND amount_minor = :amountMinor
+          AND occurred_at BETWEEN :windowStart AND :windowEnd
+        ORDER BY created_at DESC
+        LIMIT 1
+        """
+    )
+    suspend fun findRecentPendingByPlatformAndAmount(
+        platform: String,
+        amountMinor: Long,
+        windowStart: Long,
+        windowEnd: Long
+    ): PendingTransactionEntity?
+
+    /**
      * 只更新冲突原因列（批 V-4）：用于同一笔支付被两条路径各落一次孤儿时的
      * **诊断信息保全**——幂等键保证不产生第二条待确认，但后到路径的
      * `conflictReason`（如 `PAYMENT_PROCESS_SNAPSHOT_MISSING`，量化"搬运漏检率"
