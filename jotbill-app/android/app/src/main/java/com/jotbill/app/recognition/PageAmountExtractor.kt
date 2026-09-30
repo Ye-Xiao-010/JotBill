@@ -171,4 +171,30 @@ internal class PageAmountAccumulator {
         val distinct = amounts.distinct()
         return distinct.singleOrNull()
     }
+
+    // ------------------------------------------------------------ 诊断只读快照
+    //
+    // 2026-09-29 取证用。真机回归发现 `finalAmountMinor` 恒为 null ⇒ 归属判定恒 0 命中
+    // ⇒ 同一笔支付在待确认中心产生多条记录（2 笔支付 → 5 条待确认）。
+    //
+    // `resolveFinalAmountMinor` 只返回收口结果，**看不到它是被哪一步判成 null 的**，
+    // 而"带标签池有值 / 无标签兜底有多个候选 / 两者都空"对应完全不同的成因与修法。
+    // 故在此开两个只读出口，把中间态落进诊断日志。
+    //
+    // ⚠️ 本组方法**不参与任何判定**，只供日志/单测观察。判定口径仍只有
+    // [resolveFinalAmountMinor] 一处；任何修法不得以本组方法为准。
+
+    /**
+     * 诊断快照：带标签金额集合。
+     *
+     * [labeledAmounts] 本身就是 [LinkedHashSet]，**已天然去重**（同值多标签只留一个）
+     * ⇒ 返回列表天然满足"去重后的带标签金额集合"语义。
+     */
+    fun labeledAmountsForDiagnostics(): List<Long> = labeledAmounts.toList()
+
+    /**
+     * 诊断快照：无标签兜底候选（[amounts] 去重后）—— 即 [resolveFinalAmountMinor]
+     * 在"无任何带标签候选"时实际会比对的那一组值。
+     */
+    fun unlabeledAmountsForDiagnostics(): List<Long> = amounts.distinct()
 }

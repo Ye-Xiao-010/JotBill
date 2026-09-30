@@ -1,8 +1,8 @@
 package com.jotbill.app.recognition
 
 import android.os.Build
-import android.util.Log
 import android.view.accessibility.AccessibilityNodeInfo
+import com.jotbill.app.utils.JotBillLog
 import java.security.MessageDigest
 import java.util.Locale
 
@@ -25,11 +25,38 @@ internal object AccessibilityPageSummaryCollectorBudget {
 }
 
 /**
+ * 最终金额信号命中的分支。
+ *
+ * 存在意义是**可取证**：[AccessibilityPageSummaryCollector.hasFinalAmountSignal]
+ * 只吐一个布尔，出问题时无法知道是哪条兜底放行的，而
+ * [PageAmountAccumulator.resolveFinalAmountMinor] 是否能提取出数值
+ * 恰恰与走哪条分支强相关（详见 [PageAmountDiagnostics] 文件头）。
+ *
+ * ⚠️ 2026-09-29 新增，**判据本身未变** —— `hasFinalAmountSignal` 已改为委托
+ * [AccessibilityPageSummaryCollector.finalAmountSignalEvidence]，三条分支与顺序
+ * 逐字照搬原实现，行为等价。**声明为顶层**以便 [PageAmountDiagnostics] 引用。
+ */
+internal enum class FinalAmountSignalEvidence {
+    /** 词表标签直接命中（`实付` / `订单金额` …）。 */
+    LABEL_TERM,
+
+    /** 「结算动作词 + 页面存在货币金额」—— 拼多多无标签结算页靠这条。 */
+    ACTION_WITH_CURRENCY,
+
+    /** 「合计/总计 + 订单/收货/优惠后」。 */
+    SUBTOTAL_WITH_ORDER,
+
+    /** 三条分支均不成立。 */
+    NONE
+}
+
+/**
  * 从无障碍节点树生成结算页观察摘要。
  *
  * 该收集器只生成内存中的布尔门禁和哈希，不保留原始文本，也不执行截图、点击或网络操作。
  */
 internal object AccessibilityPageSummaryCollector {
+    private const val TAG = "PageSummaryCollector"
     private const val MAX_NODE_COUNT = 320
     private const val MAX_DEPTH = 24
     private const val MAX_TOKEN_LENGTH = 240
@@ -297,11 +324,12 @@ internal object AccessibilityPageSummaryCollector {
         // " number "，¥128.00 → currency number .00 ⇒ 正则不匹配 ⇒ 整链失效）。
         // 改用同一次遍历从【原始】文本得到的"页面是否存在货币金额"。
         val hasCurrencyAmount = accumulator.amountAccumulator.hasCurrencyAmount
-        val hasFinalAmountSignal = hasFinalAmountSignal(lowerText, hasCurrencyAmount)
+        val amountSignalEvidence = finalAmountSignalEvidence(lowerText, hasCurrencyAmount)
+        val hasFinalAmountSignal = amountSignalEvidence != FinalAmountSignalEvidence.NONE
         val hasCheckoutActionSignal = containsAny(lowerText, checkoutActionTerms)
         if (accumulator.textDropped) {
-            Log.w(
-                "PageSummaryCollector",
+            JotBillLog.w(
+                TAG,
                 "页面文本因容量上限被截断: pkg=$shoppingPackage, " +
                     "nodes=${accumulator.visitedNodes}, tokens=${accumulator.signalTokens.size}, " +
                     "amountSignal=$hasFinalAmountSignal, actionSignal=$hasCheckoutActionSignal"
@@ -316,6 +344,23 @@ internal object AccessibilityPageSummaryCollector {
             hasCheckoutActionSignal = hasCheckoutActionSignal,
             isSensitivePage = isSensitivePage,
             hasCheckoutClassSemantic = checkoutClassSemantic
+        )
+        // 订单总额（分）；null = 无法判定（无金额/多金额歧义）⇒ 调用方保守沿用旧会话。
+        // 提取与诊断共用同一次收口结果，**不得**在别处再调一次以免读数漂移。
+        val finalAmountMinor = accumulator.amountAccumulator.resolveFinalAmountMinor()
+        // 金额取证（2026-09-29）：finalAmountMinor 恒为 null ⇒ 归属判定恒 0 命中
+        // ⇒ 同一笔支付产生多条待确认。中间态（带标签池 / 无标签兜底 / 信号分支）
+        // 是判定成因的唯一依据，故落盘。**纯诊断，不参与任何判定**（见 PageAmountDiagnostics）。
+        logAmountDiagnostics(
+            shoppingPackage = shoppingPackage,
+            pageRole = pageRole,
+            windowClass = windowClass,
+            accumulator = accumulator,
+            lowerText = lowerText,
+            hasCurrencyAmount = hasCurrencyAmount,
+            hasCheckoutActionSignal = hasCheckoutActionSignal,
+            finalAmountMinor = finalAmountMinor,
+            evidence = amountSignalEvidence
         )
         // 指纹文本：只含稳定 token。轮播位置（观察窗口内出现 ≥2 个不同文本）
         // 的 token 已在采集时剔除（见 collectNode 的 volatileTracker 分支），
@@ -344,9 +389,92 @@ internal object AccessibilityPageSummaryCollector {
             observedAt = observedAt,
             hasCheckoutClassSemantic = checkoutClassSemantic,
             // 订单总额（分）；null = 无法判定（无金额/多金额歧义）⇒ 调用方保守沿用旧会话。
-            finalAmountMinor = accumulator.amountAccumulator.resolveFinalAmountMinor()
+            finalAmountMinor = finalAmountMinor
         )
     }
+
+    /**
+     * 金额取证日志（2026-09-29 诊断设施，**只读不改行为**）。
+     *
+     * [collect] 由**逐内容变更事件**驱动（`CheckoutAccessibilityService:853`），
+     * 一次结算页停留可能产生数十次采集，直接打日志会淹没 diag 文件，故两道收敛：
+     * ① 只对「结算页 / 有最终金额信号」的页面打 —— 归属判定问题只出在这两类页；
+     * ② 同一页面状态下**只打一行**（元组未变则跳过），金额或标签一变即补打新行。
+     *
+     * ⚠️ [lastAmountDiagKey] 是本文件**唯一的可变状态**，仅用于诊断去重；
+     * 它不参与任何判定，即使失准也只影响日志条数。
+     */
+    private fun logAmountDiagnostics(
+        shoppingPackage: String,
+        pageRole: CheckoutPageRole,
+        windowClass: String?,
+        accumulator: NodeSummaryAccumulator,
+        lowerText: String,
+        hasCurrencyAmount: Boolean,
+        hasCheckoutActionSignal: Boolean,
+        finalAmountMinor: Long?,
+        evidence: FinalAmountSignalEvidence
+    ) {
+        if (pageRole != CheckoutPageRole.CHECKOUT && evidence == FinalAmountSignalEvidence.NONE) {
+            return
+        }
+        val labeledTerms = FINAL_AMOUNT_TERMS.filter { lowerText.contains(it) }
+        val labeledAmounts = accumulator.amountAccumulator.labeledAmountsForDiagnostics()
+        val unlabeledAmounts = accumulator.amountAccumulator.unlabeledAmountsForDiagnostics()
+        val dedupKey = PageAmountDiagnostics.dedupKey(
+            shoppingPackage = shoppingPackage,
+            windowClass = windowClass,
+            pageRole = pageRole,
+            textDropped = accumulator.textDropped,
+            labeledTerms = labeledTerms,
+            labeledAmounts = labeledAmounts,
+            unlabeledAmounts = unlabeledAmounts,
+            finalAmountMinor = finalAmountMinor,
+            evidence = evidence
+        )
+        if (!markAmountDiagIfChanged(dedupKey)) {
+            return
+        }
+        JotBillLog.w(
+            TAG,
+            PageAmountDiagnostics.format(
+                shoppingPackage = shoppingPackage,
+                pageRole = pageRole,
+                windowClass = windowClass,
+                visitedNodes = accumulator.visitedNodes,
+                tokenCount = accumulator.signalTokens.size,
+                textDropped = accumulator.textDropped,
+                labeledTerms = labeledTerms,
+                labeledAmounts = labeledAmounts,
+                unlabeledAmounts = unlabeledAmounts,
+                finalAmountMinor = finalAmountMinor,
+                evidence = evidence,
+                termHit = evidence == FinalAmountSignalEvidence.LABEL_TERM,
+                // 复用 collect 已算好的值，不重算 —— 保证日志与角色判定读到的是同一份
+                actionHit = hasCheckoutActionSignal,
+                currencyHit = hasCurrencyAmount,
+                subtotalHit = evidence == FinalAmountSignalEvidence.SUBTOTAL_WITH_ORDER
+            )
+        )
+    }
+
+    /**
+     * 诊断去重键；`@Synchronized` 保证并发采集下同一状态也只打一行。
+     *
+     * [lastAmountDiagKey] 是本文件**唯一的可变状态**，仅供诊断去重，
+     * 不参与任何判定；即使失准，影响也只限于日志条数。
+     */
+    @Synchronized
+    private fun markAmountDiagIfChanged(key: String): Boolean {
+        if (lastAmountDiagKey == key) {
+            return false
+        }
+        lastAmountDiagKey = key
+        return true
+    }
+
+    @Volatile
+    private var lastAmountDiagKey: String? = null
 
     private fun collectNode(
         node: AccessibilityNodeInfo,
@@ -483,7 +611,10 @@ internal object AccessibilityPageSummaryCollector {
     }
 
     /**
-     * 最终金额信号。
+     * 最终金额信号 —— [hasFinalAmountSignal] 的判定出处，返回命中的分支。
+     *
+     * 三条分支与顺序为原实现原样搬运；判定逻辑**只此一处**，
+     * 诊断日志不得另抄一份（抄了就会在分支变更后说谎）。
      *
      * @param text 已归一化（含脱敏）的信号文本。
      * @param hasCurrencyAmount 页面是否出现过货币金额。**必须来自原始文本提取**
@@ -491,9 +622,12 @@ internal object AccessibilityPageSummaryCollector {
      *   [text] 里找数字，`¥128.00` 这类百元订单会系统性漏判（P2-8：PDD 无标签
      *   结算页 ≥¥100 订单整链失效）。
      */
-    internal fun hasFinalAmountSignal(text: String, hasCurrencyAmount: Boolean): Boolean {
+    internal fun finalAmountSignalEvidence(
+        text: String,
+        hasCurrencyAmount: Boolean
+    ): FinalAmountSignalEvidence {
         if (containsAny(text, FINAL_AMOUNT_TERMS)) {
-            return true
+            return FinalAmountSignalEvidence.LABEL_TERM
         }
         // 拼多多确认订单页可能只出现“提交订单 + ¥55.70”，没有“实付/合计”等标签；
         // 这种情况下把“提交/支付动作 + 货币金额”作为最终金额信号。
@@ -501,11 +635,24 @@ internal object AccessibilityPageSummaryCollector {
         // 提取在“多金额歧义”时返回 null，若用它会让“动作词 + 两个小额金额”的
         // 页面由 true 变 false —— 那才是新引入的漏判。
         if (containsAny(text, checkoutActionTerms) && hasCurrencyAmount) {
-            return true
+            return FinalAmountSignalEvidence.ACTION_WITH_CURRENCY
         }
-        return (text.contains("合计") || text.contains("总计")) &&
+        if ((text.contains("合计") || text.contains("总计")) &&
             (text.contains("订单") || text.contains("收货") || text.contains("优惠后"))
+        ) {
+            return FinalAmountSignalEvidence.SUBTOTAL_WITH_ORDER
+        }
+        return FinalAmountSignalEvidence.NONE
     }
+
+    /**
+     * 最终金额信号。
+     *
+     * @param text 已归一化（含脱敏）的信号文本。
+     * @param hasCurrencyAmount 见 [finalAmountSignalEvidence]。
+     */
+    internal fun hasFinalAmountSignal(text: String, hasCurrencyAmount: Boolean): Boolean =
+        finalAmountSignalEvidence(text, hasCurrencyAmount) != FinalAmountSignalEvidence.NONE
 
     /**
      * 判定页面角色。
