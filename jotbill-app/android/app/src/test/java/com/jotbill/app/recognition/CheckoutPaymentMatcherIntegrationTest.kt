@@ -240,11 +240,56 @@ class CheckoutPaymentMatcherIntegrationTest {
         )
 
         val rows = database.pendingTransactionDao().getPage(10, 0)
-        assertEquals("同包同额 60 秒内只落一张待确认卡", 1, rows.size)
+        assertEquals("同包同额 90 秒内只落一张待确认卡", 1, rows.size)
         assertEquals(
             "重复观测不得重复追加同一码",
             "NO_ACTIVE_SESSION",
             rows.single().conflictReason
+        )
+    }
+
+    /**
+     * **真机回归用例**（2026-09-30 10:05~10:06，小米 25128PNA1C / 拼多多 build 0.0.98）。
+     *
+     * 同一笔 ¥2.68 的微信结果页被观测两次，`textLength` 均为 20（同一页面），
+     * `occurredAt` 分别为 1790733945898 / 1790734006291，相差 **60393 ms**。
+     * 当时 `ORPHAN_DEDUP_WINDOW_MILLIS = 60_000` ⇒ **超了 393 毫秒，两条都建了卡**
+     * （`pending-orphan-044f32b` / `pending-orphan-bf77dd6`）。
+     *
+     * 本例用真机原值钉死该场景，防止窗口被改回 60 秒。
+     * 判别性：窗口 ≤ 60393 ms 时本例必红。
+     */
+    @Test
+    fun 孤儿去重_真机实测60393毫秒的同一结果页重复观测只建一张卡() = runBlocking {
+        val firstOccurredAt = 1_790_733_945_898L
+        val secondOccurredAt = 1_790_734_006_291L
+        assertEquals(
+            "真机两次观测的间隔应与日志一致（60393 ms）",
+            60_393L,
+            secondOccurredAt - firstOccurredAt
+        )
+        matcher.recordOrphanPaymentSignal(
+            paymentSignal(
+                amountMinor = 268,
+                sourceEventKey = "evt-real-a",
+                occurredAt = firstOccurredAt
+            ),
+            sourceType = "ACCESSIBILITY",
+            conflictReason = "NO_ACTIVE_SESSION"
+        )
+        matcher.recordOrphanPaymentSignal(
+            paymentSignal(
+                amountMinor = 268,
+                sourceEventKey = "evt-real-b",
+                occurredAt = secondOccurredAt
+            ),
+            sourceType = "ACCESSIBILITY",
+            conflictReason = "NO_ACTIVE_SESSION"
+        )
+        assertEquals(
+            "真机实测的 60393 ms 重复必须被去重挡下（窗口 ≤ 该值时本例必红）",
+            1,
+            database.pendingTransactionDao().getPage(10, 0).size
         )
     }
 
@@ -277,11 +322,16 @@ class CheckoutPaymentMatcherIntegrationTest {
     /**
      * D-25 负例：**超过窗口**必须各自建卡。
      *
+     * ⚠️ 2026-09-30 修订：本例原用 `now + 90_000L`（当时的"超过 60 秒"）。
+     * 窗口调至 90 秒后该值**正好卡在边界上**（`BETWEEN` 两端闭区间 ⇒ 仍会去重），
+     * 用它当负例会假绿。改用 `now + 150_000L`：落在窗口外，且**仍在 D-6 的 2 分钟内**
+     * —— 顺带证明本窗口确实窄于 D-6，没有把"同额两单撞键"的风险引回来。
+     *
      * 判别性：若窗口写错（误用 `PAYMENT_EVIDENCE_MERGE_WINDOW_MILLIS` 的 2 分钟），
      * 本用例必红 —— 而那正好会重现 D-6 明确要避免的"同包同金额、2 分钟内两单撞键"。
      */
     @Test
-    fun 孤儿去重_超过60秒窗口的同额两笔各自建卡() = runBlocking {
+    fun 孤儿去重_超过90秒窗口的同额两笔各自建卡() = runBlocking {
         matcher.recordOrphanPaymentSignal(
             paymentSignal(amountMinor = 1990, sourceEventKey = "evt-t0", occurredAt = now),
             sourceType = "ACCESSIBILITY"
@@ -289,8 +339,8 @@ class CheckoutPaymentMatcherIntegrationTest {
         matcher.recordOrphanPaymentSignal(
             paymentSignal(
                 amountMinor = 1990,
-                sourceEventKey = "evt-t90",
-                occurredAt = now + 90_000L
+                sourceEventKey = "evt-t150",
+                occurredAt = now + 150_000L
             ),
             sourceType = "ACCESSIBILITY"
         )

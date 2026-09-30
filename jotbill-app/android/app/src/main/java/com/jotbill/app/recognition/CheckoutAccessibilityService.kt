@@ -74,6 +74,15 @@ class CheckoutAccessibilityService : AccessibilityService() {
          */
         private const val SENSITIVE_PAGE_SCREENSHOT_BLOCK_MILLIS = 60_000L
 
+        /**
+         * 支付结果页事件键记忆窗（去重第一道防线），**2026-09-30 由 60 秒调至 90 秒**。
+         *
+         * 依据见 [recentPaymentResultEventKeys] 的 KDoc（真机实测同一结果页被观测两次、
+         * `occurredAt` 相差 60393 ms，比原 60 秒窗多 393 毫秒而漏过去）。
+         * ⚠️ 须与 `CheckoutPaymentMatcher.ORPHAN_DEDUP_WINDOW_MILLIS` 保持同值。
+         */
+        private const val PAYMENT_RESULT_EVENT_MEMORY_MILLIS = 90_000L
+
         /** 支付结果页截图兜底的系统回调看门狗：MIUI 等可能静默丢弃回调，超时强制复位。 */
         private const val PAYMENT_SCREENSHOT_FALLBACK_WATCHDOG_MILLIS = 8_000L
 
@@ -328,6 +337,27 @@ class CheckoutAccessibilityService : AccessibilityService() {
      */
     private val assertedSessionIds = mutableSetOf<String>()
 
+    /**
+     * 支付结果页事件键记忆窗（去重第一道防线）。
+     *
+     * ⚠️ **2026-09-30 由 60 秒调至 90 秒**（真机实证）。原 60 秒与
+     * `PaymentResultParser` 的 30 秒时间桶、[D-25] 的孤儿去重窗**阈值重叠**：
+     * 三个 30~60 秒的判据挤在窄带里，只要用户在微信结果页停留超过 60 秒，
+     * 三道防线在同一刻集体失效。
+     *
+     * 真机数据（小米 25128PNA1C，拼多多 build 0.0.98，2026-09-30 10:05~10:06）：
+     * 同一笔 ¥2.68 的结果页被观测两次，`textLength` 均为 20（同一页面），
+     * `occurredAt` 相差 **60393 ms** —— 比原 60 秒窗多 393 毫秒，
+     * 事件层记忆过期 + 跨桶 + 越过 D-25 窗 ⇒ 落了两条待确认。
+     *
+     * 90 秒的依据：覆盖实测的 60.393 秒；**仍远小于 D-6 关心的 2 分钟**
+     * （"同包同金额、2 分钟内两单不得撞键"），不把那个风险重新引进来。
+     *
+     * ⚠️ **这不是根治**：纯时间判据必然随用户停留时长失效。停留超 90 秒仍会重复。
+     * 根治方向见 `FIX_TASK_2026-09-29` §三.② 的待办（把判据从时间锚到结算上下文）。
+     * 本常量须与 `CheckoutPaymentMatcher.ORPHAN_DEDUP_WINDOW_MILLIS` **保持同值** ——
+     * 两道防线阈值不一致时，先失效的那道形同虚设。
+     */
     private val recentPaymentResultEventKeys = mutableMapOf<String, Long>()
     private val screenshotCallbackExecutor = Executor { runnable -> mainHandler.post(runnable) }
     @Volatile
@@ -1918,7 +1948,9 @@ class CheckoutAccessibilityService : AccessibilityService() {
             .joinToString("") { "%02x".format(it) }
 
     private fun markPaymentResultEvent(sourceEventKey: String, now: Long): Boolean {
-        recentPaymentResultEventKeys.entries.removeAll { now - it.value > 60_000L }
+        recentPaymentResultEventKeys.entries.removeAll {
+            now - it.value > PAYMENT_RESULT_EVENT_MEMORY_MILLIS
+        }
         val previous = recentPaymentResultEventKeys[sourceEventKey]
         if (previous != null) {
             return false

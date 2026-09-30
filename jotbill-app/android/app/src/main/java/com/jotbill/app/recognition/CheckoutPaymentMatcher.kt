@@ -1,4 +1,4 @@
-package com.jotbill.app.recognition
+﻿package com.jotbill.app.recognition
 
 import androidx.room.withTransaction
 import com.jotbill.app.ai.AiVisionResult
@@ -90,23 +90,32 @@ internal fun classifyPaymentAmount(
 private const val PAYMENT_EVIDENCE_MERGE_WINDOW_MILLIS = 2 * 60 * 1000L
 
 /**
- * 孤儿待确认去重窗口（D-25，2026-09-29）。
+ * 孤儿待确认去重窗口（D-25，2026-09-29 定案 / 2026-09-30 修订）。
  *
- * ⚠️ **为什么必须窄于 [PAYMENT_EVIDENCE_MERGE_WINDOW_MILLIS]**：
- * [PAYMENT_EVIDENCE_MERGE_WINDOW_MILLIS] 的 KDoc 假设"跨桶重复读靠它收敛为一条证据"——
- * 该假设**只对证据行成立**。孤儿待确认由 [recordOrphanPaymentSignal] 独立新建，
- * 幂等键取自**新解析证据**的 `sourceEventKey`（跨桶即不同），与证据行的合并结果无关。
- * 2026-09-29 真机实测：同一笔 ¥19.90 的结果页在 21:08:42 / 21:09:02 被观测两次
- * （间隔 20 秒，跨 30 秒桶），证据正确合并为同一条 `payment-2493`，
- * 却仍落了两条孤儿待确认（`pending-orphan-2` / `pending-orphan-4`）。
+ * ⚠️ **为什么必须存在**：`sourceEventKey` 幂等键挡不住重复观测 —— 结果页事件键含
+ * 30 秒时间桶（`PaymentResultParser`，D-6 为防"同额两单撞键"而定的窄桶），
+ * 跨桶即换键。`PAYMENT_EVIDENCE_MERGE_WINDOW_MILLIS` 的 2 分钟收敛只作用于**证据行**，
+ * 收敛不到本函数独立新建的**孤儿卡**。
  *
- * 取 60 秒的依据：
- * - 覆盖实测的 20 秒跨桶重复观测；
- * - 与 `CheckoutAccessibilityService.markPaymentResultEvent` 的进程内记忆窗同口径；
- * - **远小于 D-6 关心的 2 分钟**——D-6 要求"同包同金额、2 分钟内两单"不得撞键，
- *   本窗口不得把那个风险重新引进来。
+ * ⚠️ **2026-09-30 由 60 秒调至 90 秒**（真机实证，定案值当天的实测就漏了）：
+ * 真机（小米 25128PNA1C / 拼多多 build 0.0.98）同一笔 ¥2.68 的结果页在
+ * 10:05:45 与 10:06:46 被各观测一次，`textLength` 均为 20（同一页面），
+ * `occurredAt=1790733945898` 与 `1790734006291` 相差 **60393 ms** ——
+ * 比原 60 秒窗多 **393 毫秒**，两条都建了卡。
+ * 且 `CheckoutAccessibilityService.PAYMENT_RESULT_EVENT_MEMORY_MILLIS`（第一道防线）
+ * 同为 60 秒，**三道判据的阈值全部挤在 30~60 秒窄带内**，于是在同一刻集体失效。
+ *
+ * 90 秒的依据：覆盖实测的 60.393 秒；**仍远小于 D-6 关心的 2 分钟**
+ * （"同包同金额、2 分钟内两单不得撞键"），不把那个风险重新引进来。
+ * ⚠️ 须与 `PAYMENT_RESULT_EVENT_MEMORY_MILLIS` **保持同值** —— 阈值不一致时，
+ * 先失效的那道防线形同虚设。
+ *
+ * ⚠️ **这不是根治**：本判据是纯时间维度，必然随用户停留时长失效
+ * （用户在结果页停留超 90 秒仍会重复）。根治方向是把"同一笔"锚到**结算上下文**
+ * 而非时间，但孤儿路径拿不到 `sessionId`（0 命中时实参即 `null`/`emptyList`，
+ * 且 `orphanSink` 是非 suspend 的 fire-and-forget）。已记为待办。
  */
-private const val ORPHAN_DEDUP_WINDOW_MILLIS = 60_000L
+private const val ORPHAN_DEDUP_WINDOW_MILLIS = 90_000L
 
 private const val PAYMENT_CONFIRMED_STATUS = "PAYMENT_CONFIRMED"
 private const val AI_PENDING_STATUS = "AI_PENDING"
