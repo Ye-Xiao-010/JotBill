@@ -11,12 +11,13 @@ import {
   ActivityIndicator,
   RefreshControl,
 } from 'react-native';
-import { MessageCircle, Plus, Trash2, ChevronRight } from 'lucide-react-native';
+import { MessageCircle, Plus, Trash2, ChevronRight, AlertTriangle } from 'lucide-react-native';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { useAlert } from '../../providers';
 import { ThemeColors } from '../../theme/colors';
 import { borderRadius, borderWidth, spacing } from '../../theme/spacing';
 import { useStyles } from '../../hooks';
+import { useChatSessions } from '../../hooks/useChatSessions';
 import { aiService } from '../../services/ai';
 import type { ChatSession } from '../../types/ai';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -25,34 +26,31 @@ export default function AIChatSessionsScreen() {
   const styles = useStyles(createStyles);
   const navigation = useNavigation();
   const { alert, confirm } = useAlert();
-  const [sessions, setSessions] = useState<ChatSession[]>([]);
-  const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
-  const loadSessions = async (showLoading = true) => {
-    if (showLoading) setLoading(true);
-    try {
-      const response = await aiService.getChatSessions({ limit: 50 });
-      if (response.success && response.data) {
-        setSessions(response.data);
-      }
-    } catch (error) {
-      console.error('加载会话列表失败:', error);
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
-    }
-  };
+  const {
+    sessions,
+    setSessions,
+    isLoading,
+    isLoadingMore,
+    error,
+    loadMore,
+    reload,
+  } = useChatSessions();
 
+  // 每次重新聚焦都重拉首页：对话可能在别的页面（AIChat）新增/置顶/删除，
+  // 本地 state 不会自动同步。reload 失败时不阻塞进入列表（保留旧数据）。
   useFocusEffect(
     useCallback(() => {
-      loadSessions();
-    }, []),
+      reload();
+    }, [reload]),
   );
 
   const handleRefresh = () => {
     setRefreshing(true);
-    loadSessions(false);
+    reload();
+    // reload 内部驱动 loading 态，这里只负责收起下拉指示器
+    setTimeout(() => setRefreshing(false), 600);
   };
 
   const handleNewChat = () => {
@@ -71,8 +69,12 @@ export default function AIChatSessionsScreen() {
         try {
           await aiService.deleteChatSession(sessionId);
           setSessions(prev => prev.filter(s => s.id !== sessionId));
-        } catch (error) {
-          alert('错误', '删除失败，请重试');
+        } catch (deleteError) {
+          // ⚠️ 此前固定回"删除失败，请重试"，把原生给出的真实原因（会话不存在、
+          // 数据库忙、外键约束…）全丢了，用户只能反复重试同一个必然失败的操作。
+          const message =
+            deleteError instanceof Error ? deleteError.message : '删除失败，请重试';
+          alert('删除失败', message);
         }
       },
       undefined,
@@ -134,7 +136,29 @@ export default function AIChatSessionsScreen() {
     </View>
   );
 
-  if (loading) {
+  /**
+   * ⚠️ 加载失败**绝不能**复用"还没有对话记录"。
+   * 两者在界面上只差一句话，但对用户是相反的结论：
+   * 一个是"你还没聊过"，一个是"你的聊天记录读不出来了"。
+   * 尤其本项目的数据管理文案明确说过"清除本地数据会清掉 AI 对话历史"，
+   * 于是"被清了"和"读失败"会渲染成同一句话，无法区分。
+   */
+  const renderLoadError = () => {
+    const message = error instanceof Error ? error.message : String(error ?? '未知错误');
+    return (
+      <View style={styles.emptyContainer}>
+        <AlertTriangle size={48} color={styles._colors.error} />
+        <Text style={[styles.emptyText, styles.errorTitle]}>对话记录加载失败</Text>
+        <Text style={styles.emptyHint}>{message}</Text>
+        <Text style={styles.errorHint}>这不代表记录已被删除。</Text>
+        <TouchableOpacity style={styles.retryButton} onPress={reload} activeOpacity={0.7}>
+          <Text style={styles.retryButtonText}>重试</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  };
+
+  if (isLoading) {
     return (
       <SafeAreaView style={[styles.container, styles.centerContent]} edges={['top', 'bottom']}>
         <ActivityIndicator size="large" color={styles._colors.primary} />
@@ -163,7 +187,16 @@ export default function AIChatSessionsScreen() {
         renderItem={renderSession}
         keyExtractor={item => item.id.toString()}
         contentContainerStyle={sessions.length === 0 ? styles.emptyList : styles.listContent}
-        ListEmptyComponent={renderEmpty}
+        ListEmptyComponent={error ? renderLoadError : renderEmpty}
+        onEndReached={loadMore}
+        onEndReachedThreshold={0.4}
+        ListFooterComponent={
+          isLoadingMore ? (
+            <View style={styles.footerLoading}>
+              <ActivityIndicator color={styles._colors.primary} />
+            </View>
+          ) : null
+        }
         refreshControl={
           <RefreshControl
             refreshing={refreshing}
@@ -222,6 +255,32 @@ const createStyles = (colors: ThemeColors) => ({
     },
     emptyList: {
       flex: 1,
+    },
+    footerLoading: {
+      paddingVertical: spacing.lg,
+    },
+    errorTitle: {
+      color: colors.error,
+    },
+    errorHint: {
+      marginTop: spacing.xs,
+      fontSize: 13,
+      fontWeight: '700',
+      color: colors.error,
+    },
+    retryButton: {
+      marginTop: spacing.lg,
+      backgroundColor: colors.primary,
+      borderRadius: borderRadius.button,
+      borderWidth: borderWidth.thin,
+      borderColor: colors.stroke,
+      paddingHorizontal: spacing.xl,
+      paddingVertical: spacing.sm,
+    },
+    retryButtonText: {
+      fontSize: 14,
+      fontWeight: '800',
+      color: '#FFFFFF',
     },
     sessionCard: {
       flexDirection: 'row',

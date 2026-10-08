@@ -7,6 +7,7 @@ export { useAlert } from './useAlert';
 export { useAppStateManager } from './useAppState';
 export { useDashboard } from './useDashboard';
 export { useCategories } from './useCategories';
+export { useChatSessions } from './useChatSessions';
 export { useAppUpdate } from './useAppUpdate';
 export { useStyles, useThemedStyles } from './useStyles';
 export { useHotUpdate } from './useHotUpdate';

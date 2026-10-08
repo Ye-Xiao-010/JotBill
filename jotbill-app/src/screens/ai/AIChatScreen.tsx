@@ -2,7 +2,7 @@
  * AI 助手聊天屏幕
  * 支持拍照/上传图片、语音、文本输入识别账单
  */
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
@@ -21,6 +21,8 @@ import {
   GestureResponderEvent,
   PanResponderGestureState,
   Image,
+  NativeScrollEvent,
+  NativeSyntheticEvent,
 } from 'react-native';
 import { Camera, Mic, Send, Square, X, Check, Edit2, Trash2, Keyboard, Menu, SquarePen, ChevronLeft, Pin, ChevronDown, Plus } from 'lucide-react-native';
 import { launchCamera, launchImageLibrary, ImagePickerResponse } from 'react-native-image-picker';
@@ -28,6 +30,7 @@ import ImageViewing from 'react-native-image-viewing';
 import { ThemeColors } from '../../theme/colors';
 import { borderRadius, borderWidth, spacing, shadow } from '../../theme/spacing';
 import { useStyles } from '../../hooks';
+import { useChatSessions } from '../../hooks/useChatSessions';
 import { useRoute, useNavigation } from '@react-navigation/native';
 import { useAlert } from '../../providers';
 import { aiService } from '../../services/ai';
@@ -932,8 +935,20 @@ export default function AIChatScreen() {
 
   // 侧边栏状态
   const [sidebarVisible, setSidebarVisible] = useState(false);
-  const [sessions, setSessions] = useState<ChatSession[]>([]);
-  const [sessionsLoading, setSessionsLoading] = useState(false);
+  // 会话列表改用共享 hook：分页（原生本就支持 page/limit，此前写死 50 导致
+  // 第 51 条之后永久不可达）+ 显式错误态（此前 catch 只 console.error，
+  // 侧边栏渲染成"暂无会话"，与"真的没有会话"无法区分）。
+  // 置顶/重命名/删除的乐观更新仍通过 setSessions 命令式修改，行为不变。
+  const {
+    sessions,
+    setSessions,
+    isLoading: sessionsLoading,
+    isLoadingMore: sessionsLoadingMore,
+    error: sessionsError,
+    hasMore: sessionsHasMore,
+    loadMore: loadMoreSessions,
+    reload: reloadSessions,
+  } = useChatSessions({ autoLoad: false });
   const [renameModalVisible, setRenameModalVisible] = useState(false);
   const [renamingSession, setRenamingSession] = useState<ChatSession | null>(null);
   const [renameText, setRenameText] = useState('');
@@ -1116,18 +1131,20 @@ export default function AIChatScreen() {
 
   // 加载会话列表
   const loadSessions = async () => {
-    setSessionsLoading(true);
-    try {
-      const response = await aiService.getChatSessions({ limit: 50 });
-      if (response.success && response.data) {
-        setSessions(response.data);
-      }
-    } catch (error) {
-      console.error('加载会话列表失败:', error);
-    } finally {
-      setSessionsLoading(false);
-    }
+    await reloadSessions();
   };
+
+  // 侧边栏滚到底时追加下一页。
+  const loadMoreSessionsRef = useRef(loadMoreSessions);
+  loadMoreSessionsRef.current = loadMoreSessions;
+  const sessionsHasMoreRef = useRef(sessionsHasMore);
+  sessionsHasMoreRef.current = sessionsHasMore;
+  const handleSidebarScroll = useCallback((e: NativeSyntheticEvent<NativeScrollEvent>) => {
+    const { layoutMeasurement, contentOffset, contentSize } = e.nativeEvent;
+    const distanceToBottom =
+      layoutMeasurement.height + contentOffset.y - contentSize.height;
+    if (distanceToBottom < 120) loadMoreSessionsRef.current();
+  }, []);
 
   // 按日期分组会话（置顶优先）
   const groupSessionsByDate = (list: ChatSession[]): SessionGroup[] => {
@@ -2410,6 +2427,24 @@ export default function AIChatScreen() {
               <View style={sidebarStyles.loadingContainer}>
                 <ActivityIndicator size="small" color={styles._colors.primary} />
               </View>
+            ) : sessionsError ? (
+              /* ⚠️ 失败态必须与"暂无对话记录"区分。此前 catch 只 console.error，
+                 sessions 停在 [] ⇒ 侧边栏显示"暂无对话记录"，用户会以为历史被清空了
+                 （数据管理里"清除本地数据"确实会清 AI 对话历史，两者无法分辨）。 */
+              <View style={sidebarStyles.emptyContainer}>
+                <Text style={[sidebarStyles.emptyText, { color: styles._colors.error }]}>
+                  会话列表加载失败
+                </Text>
+                <TouchableOpacity
+                  onPress={loadSessions}
+                  activeOpacity={0.7}
+                  style={sidebarStyles.retryTextWrap}
+                >
+                  <Text style={[sidebarStyles.retryText, { color: styles._colors.primary }]}>
+                    点此重试
+                  </Text>
+                </TouchableOpacity>
+              </View>
             ) : sessions.length === 0 ? (
               <View style={sidebarStyles.emptyContainer}>
                 <Text style={[sidebarStyles.emptyText, { color: styles._colors.textTertiary }]}>
@@ -2417,7 +2452,14 @@ export default function AIChatScreen() {
                 </Text>
               </View>
             ) : (
-              <ScrollView style={sidebarStyles.sessionList} showsVerticalScrollIndicator={false}>
+              <ScrollView
+                style={sidebarStyles.sessionList}
+                showsVerticalScrollIndicator={false}
+                // ⚠️ 侧边栏此前只取首屏 50 条且无翻页入口，第 51 条之后
+                // 永久不可达。滚到底自动追加下一页（阈值 120px）。
+                onScroll={handleSidebarScroll}
+                scrollEventThrottle={200}
+              >
                 {groupSessionsByDate(sessions).map(group => (
                   <View key={group.title}>
                     <Text style={[sidebarStyles.groupTitle, { color: styles._colors.textTertiary }]}>
@@ -2451,6 +2493,11 @@ export default function AIChatScreen() {
                     ))}
                   </View>
                 ))}
+                {sessionsLoadingMore ? (
+                  <View style={sidebarStyles.loadingContainer}>
+                    <ActivityIndicator size="small" color={styles._colors.primary} />
+                  </View>
+                ) : null}
               </ScrollView>
             )}
           </Animated.View>
@@ -2980,6 +3027,14 @@ const sidebarStyles = StyleSheet.create({
   emptyText: {
     fontSize: 14,
     fontWeight: '700',
+    textAlign: 'center',
+  },
+  retryTextWrap: {
+    marginTop: spacing.sm,
+  },
+  retryText: {
+    fontSize: 13,
+    fontWeight: '800',
   },
   sessionList: {
     flex: 1,
