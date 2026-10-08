@@ -51,6 +51,25 @@ const PENDING_QUERY_KEY = QUERY_KEYS.recognition.pending;
 const STATUS_QUERY_KEY = QUERY_KEYS.recognition.status;
 const EVIDENCE_QUERY_KEY = QUERY_KEYS.recognition.evidence;
 
+/**
+ * "重试识别"按钮是否可用（单一出处，UI 渲染与点击回调共用）。
+ *
+ * 判据：只有"结算页 AI 识别失败"的占位候选才可能重试 —— 其 `conflictReason`
+ * 固定为 `AI_RECOGNITION_FAILED` 且金额为 0（见 `CheckoutPaymentMatcher`
+ * 的 AI 失败占位分支）。其余候选（孤儿待确认、正常证据待确认）要么没有候选，
+ * 要么重试也没有可用的结算页上下文。
+ *
+ * 精简模式停用结算页截图识别链路后，`retryAiRecognition` 的 `USER_RETRY` 通道
+ * 拿不到手动补截上下文，必然失败 ⇒ 按钮隐藏而非置灰。
+ */
+function isRetryRecognitionAvailable(pending: PendingTransaction): boolean {
+  return (
+    pending.conflictReason === 'AI_RECOGNITION_FAILED' &&
+    pending.amountMinor === 0 &&
+    Boolean(pending.candidateId)
+  );
+}
+
 /** 待确认中心屏幕组件，对应阶段三任务9前端桥接。 */
 export default function ReviewScreen() {
   const navigation = useNavigation();
@@ -176,6 +195,16 @@ export default function ReviewScreen() {
     (pending: PendingTransaction) => {
       if (!pending.candidateId) {
         alert('无法重试', '该待确认交易没有关联的候选，不能重试识别。');
+        return;
+      }
+      // 精简模式：结算页截图识别链路停用后，重试通道必然失败（见 PendingCard 的
+      // canRetryRecognition 注释）。按钮已隐藏，这里是纵深防御 —— 避免将来有别处
+      // 复用本回调时又暴露出一个点不动的入口。
+      if (!isRetryRecognitionAvailable(pending)) {
+        alert(
+          '无法重试',
+          '结算页截图识别已停用，无法重新识别。请直接修改金额或分类后确认入账。',
+        );
         return;
       }
       if (retrySubmittedVersions[pending.candidateId] === pending.version) {
@@ -446,6 +475,25 @@ function PendingCard({
   const isAiFailedPlaceholder =
     pending.conflictReason === 'AI_RECOGNITION_FAILED' && pending.amountMinor === 0;
 
+  /**
+   * "重试识别"是否可用。
+   *
+   * 该按钮走 `retryAiRecognition` → 无障碍 `USER_RETRY` 通道，而那条通道要求
+   * 先在**购物 App 的结算页**建立手动补截上下文（`userRetryCaptureContext`）。
+   * 精简模式已停用结算页截图识别链路，上下文不再建立 ⇒ 按钮点了必然失败
+   * （`NO_CHECKOUT_CONTEXT` / `SERVICE_NOT_CONNECTED`），是一个功能性死按钮。
+   *
+   * 判据只用既有 `conflictReason` 字段，不新增桥接方法：
+   * 能重试的只可能是"结算页 AI 识别失败"的占位候选，其 conflictReason 前缀固定为
+   * `AI_RECOGNITION_FAILED`（见 `CheckoutPaymentMatcher` 的 AI 失败占位分支）；
+   * 孤儿待确认（`NO_ACTIVE_SESSION` / `PAYMENT_RESULT_NO_MATCHING_SESSION` 等）
+   * 压根没有候选，按钮本就不渲染。
+   *
+   * 隐藏而非置灰：置灰仍要解释"为什么不能点"，对用户是噪音；精简版下这个按钮
+   * 不存在比"存在但点不动"更干净。
+   */
+  const canRetryRecognition = isRetryRecognitionAvailable(pending);
+
   return (
     <View style={styles.pendingCard}>
       <View style={styles.pendingHeader}>
@@ -549,7 +597,7 @@ function PendingCard({
                 : '确认入账'}
           </Text>
         </TouchableOpacity>
-        {pending.candidateId ? (
+        {pending.candidateId && canRetryRecognition ? (
           <TouchableOpacity
             style={[
               styles.retryButton,
