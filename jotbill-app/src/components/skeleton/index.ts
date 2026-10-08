@@ -4,3 +4,4 @@
 export * from './Skeleton';
 export * from './DashboardSkeleton';
 export * from './ReportsSkeleton';
+export * from './ReportSkeletons';

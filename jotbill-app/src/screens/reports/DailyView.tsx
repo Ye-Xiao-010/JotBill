@@ -15,6 +15,7 @@ import {
 } from '../../hooks/useIncomeExpenseData';
 import { CalendarGrid, PeriodNavigator } from '../../components/reports';
 import QueryErrorBanner from '../../components/ui/QueryErrorBanner';
+import { CalendarSkeleton } from '../../components/skeleton/ReportSkeletons';
 import BillItem from '../../components/business/BillItem';
 import type { BillData as BillItemData } from '../../components/business/BillItem';
 
@@ -106,6 +107,15 @@ export default function DailyView({
   // 计算选中日的汇总
   const selectedDayData = selectedDay ? dailyMap.get(selectedDay) : null;
 
+  // ⚠️ 加载中不渲染日历：dailyMap 是空 Map，CalendarGrid 会画出一张
+  // "整月无记录"的日历 —— 用户以为这个月没记账。
+  //
+  // 但**只换内容区、保留 PeriodNavigator**：`isLoading` 在切换月份时同样为 true
+  // （queryKey 变了、没有缓存数据），若整屏早返回，用户点"下个月"后
+  // 连"2026年10月"这个标题和翻页按钮都消失了 —— 加载完才回来，
+  // 比加载中看到空白日历更让人困惑。
+  const showGridSkeleton = isLoading;
+
   return (
     <ScrollView
       style={styles.container}
@@ -132,16 +142,20 @@ export default function DailyView({
         />
       ) : null}
 
-      <CalendarGrid
-        year={year}
-        month={month}
-        dailyData={dailyMap}
-        selectedDay={selectedDay}
-        onDayPress={handleDayPress}
-      />
+      {showGridSkeleton ? (
+        <CalendarSkeleton showNav={false} fill={false} />
+      ) : (
+        <CalendarGrid
+          year={year}
+          month={month}
+          dailyData={dailyMap}
+          selectedDay={selectedDay}
+          onDayPress={handleDayPress}
+        />
+      )}
 
       {/* 选中日的明细 */}
-      {selectedDay && (
+      {!showGridSkeleton && selectedDay && (
         <View style={styles.detailSection}>
           <View style={styles.detailHeader}>
             <Text style={styles.detailTitle}>

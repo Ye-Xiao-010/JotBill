@@ -11,6 +11,7 @@ import { useAssetsData } from '../../hooks/useAssetsData';
 import { AssetTrendChart } from '../../components/reports';
 import AssetCompositionChart from '../../components/reports/AssetCompositionChart';
 import QueryErrorBanner from '../../components/ui/QueryErrorBanner';
+import { AssetsTabSkeleton } from '../../components/skeleton/ReportSkeletons';
 
 export default function AssetsTab() {
   const styles = useStyles(createStyles);
@@ -37,6 +38,12 @@ export default function AssetsTab() {
     }
     return `¥${val.toFixed(2)}`;
   };
+
+  // ⚠️ 首屏加载期间**不能**渲染真实布局。兜底值是 0，直接渲染就是
+  // "净资产（账户余额）¥0.00 / 总资产 ¥0.00 / 总负债 ¥0.00"——
+  // 用户打开统计页的第一眼是"我的钱没了"，随后数字才跳成真实值。
+  // 这与"确实净资产为 0"在界面上完全一样，且没有任何办法自证。
+  if (isLoading) return <AssetsTabSkeleton />;
 
   return (
     <ScrollView

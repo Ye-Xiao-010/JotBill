@@ -10,6 +10,7 @@ import { useStyles } from '../../hooks';
 import { useYearlyGridData } from '../../hooks/useIncomeExpenseData';
 import { YearGrid, MonthlySummaryList } from '../../components/reports';
 import QueryErrorBanner from '../../components/ui/QueryErrorBanner';
+import { GridSkeleton } from '../../components/skeleton/ReportSkeletons';
 
 interface YearlyViewProps {
   onJumpToMonthly?: (year: number, month?: number) => void;
@@ -57,6 +58,14 @@ export default function YearlyView({ onJumpToMonthly }: YearlyViewProps) {
     return result;
   }, [selectedYear, getMonthlyDataForYear]);
 
+  // ⚠️ 加载中不渲染网格：yearlyData 永远返回补齐的 5 个零值年份，
+  // 所以"还在读"时看到的是**整齐的全零五年柱状图** —— 比任何加载态都更像
+  // 真实数据，最容易被读成"这五年我一分没花"。
+  //
+  // 同 MonthlyView：只换内容区，保留标题（YearlyView 没有 PeriodNavigator，
+  // 标题在下方单独渲染，所以这里保留即可）。
+  const showGridSkeleton = isLoading;
+
   return (
     <ScrollView
       style={styles.container}
@@ -81,14 +90,18 @@ export default function YearlyView({ onJumpToMonthly }: YearlyViewProps) {
         />
       ) : null}
 
-      <YearGrid
-        years={yearlyData}
-        selectedYear={selectedYear}
-        onYearPress={handleYearPress}
-      />
+      {showGridSkeleton ? (
+        <GridSkeleton columns={5} rows={1} fill={false} />
+      ) : (
+        <YearGrid
+          years={yearlyData}
+          selectedYear={selectedYear}
+          onYearPress={handleYearPress}
+        />
+      )}
 
       {/* 选中年的12月汇总 */}
-      {selectedYear && (
+      {!showGridSkeleton && selectedYear && (
         <View style={styles.detailSection}>
           <Text style={styles.detailTitle}>
             {selectedYear}年 每月收支

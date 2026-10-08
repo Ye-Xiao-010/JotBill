@@ -10,6 +10,7 @@ import { useStyles } from '../../hooks';
 import { useMonthlyGridData, useDailyGridData } from '../../hooks/useIncomeExpenseData';
 import { MonthGrid, PeriodNavigator, DailySummaryList } from '../../components/reports';
 import QueryErrorBanner from '../../components/ui/QueryErrorBanner';
+import { GridSkeleton } from '../../components/skeleton/ReportSkeletons';
 
 interface MonthlyViewProps {
   initialYear?: number;
@@ -88,6 +89,13 @@ export default function MonthlyView({
     return result.sort((a, b) => a.date.localeCompare(b.date));
   }, [dailyMap, selectedMonth]);
 
+  // ⚠️ 加载中不渲染网格：monthlyData 为空数组，MonthGrid 会画出 12 个全 0 的
+  // 月份 —— 读起来是"这一年一分钱没花"。
+  //
+  // 与 DailyView 同理，`isLoading` 在切换年份时也为 true，所以**只换内容区**，
+  // 保留 PeriodNavigator（否则点"下一年"后连标题和翻页按钮都消失）。
+  const showGridSkeleton = isLoading;
+
   return (
     <ScrollView
       style={styles.container}
@@ -114,15 +122,19 @@ export default function MonthlyView({
         />
       ) : null}
 
-      <MonthGrid
-        year={year}
-        monthlyData={monthlyData}
-        selectedMonth={selectedMonth}
-        onMonthPress={handleMonthPress}
-      />
+      {showGridSkeleton ? (
+        <GridSkeleton columns={3} rows={4} fill={false} />
+      ) : (
+        <MonthGrid
+          year={year}
+          monthlyData={monthlyData}
+          selectedMonth={selectedMonth}
+          onMonthPress={handleMonthPress}
+        />
+      )}
 
       {/* 选中月的每日汇总 */}
-      {selectedMonth && (
+      {!showGridSkeleton && selectedMonth && (
         <View style={styles.detailSection}>
           <Text style={styles.detailTitle}>
             {year}年{selectedMonth}月 每日收支
