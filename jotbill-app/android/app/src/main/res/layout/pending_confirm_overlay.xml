@@ -69,7 +69,9 @@
                 android:padding="12dp"
                 android:gravity="center" />
 
-            <!-- 商户行:证据/AI 识别结果,可核对 -->
+            <!-- 商户行:证据/AI 识别结果,可核对。精简版下结算页 AI 已停用,
+                 商户只靠支付结果页文本解析,可能为空;为空时整行隐藏(见
+                 PendingConfirmOverlayManager.displayOverlay),不显示"未知" -->
             <TextView
                 android:id="@+id/tv_merchant"
                 android:layout_width="match_parent"
@@ -124,7 +126,8 @@
                     android:orientation="horizontal" />
             </HorizontalScrollView>
 
-            <!-- 备注输入 -->
+            <!-- 备注输入:精简版下这是用户唯一能补"买了什么"的地方(结算页 AI 已停用,
+                     商品描述不再由识别链路填充),因此 hint 直接说清用途 -->
             <EditText
                 android:id="@+id/et_remark"
                 android:layout_width="match_parent"
@@ -133,7 +136,7 @@
                 android:minHeight="44dp"
                 android:background="@drawable/btn_outline_gray"
                 android:gravity="top|start"
-                android:hint="添加备注（可选）"
+                android:hint="买了什么？（可选）"
                 android:importantForAutofill="no"
                 android:inputType="textMultiLine|textCapSentences"
                 android:maxLines="3"

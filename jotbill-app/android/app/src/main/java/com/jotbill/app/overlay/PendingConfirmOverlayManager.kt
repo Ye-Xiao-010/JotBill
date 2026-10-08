@@ -308,7 +308,24 @@ internal object PendingConfirmOverlayManager {
                 }
             }
             val merchantText = view.findViewById<TextView>(R.id.tv_merchant)
-            merchantText.text = "商户：${pendingRow.merchant?.take(24) ?: "未知"}"
+            // 精简版：结算页截图 AI 已停用，商户只剩"支付结果页文本解析"一个来源，
+            // 解析不出就是解析不出。此前固定显示"商户：未知"，读起来像"读到了但没看懂"，
+            // 实际是"压根没有" —— 而这一行用户又不能改（弹窗只让改金额/分类/账户），
+            // 是一处死路。解析不出时整行隐藏，把纵向空间留给可编辑字段。
+            val merchant = pendingRow.merchant?.trim()?.takeIf { it.isNotEmpty() }
+            if (merchant == null) {
+                merchantText.visibility = View.GONE
+            } else {
+                merchantText.visibility = View.VISIBLE
+                merchantText.text = "商户：${merchant.take(24)}"
+            }
+            // 商品描述不再由识别链路填充（阶段二），但 FeeExtractor / 导入等生产者
+            // 仍可能写入；此时预填进备注框，避免同一份信息在弹窗里凭空消失。
+            // 留空则由 hint 引导用户自己补一句。
+            view.findViewById<EditText>(R.id.et_remark).apply {
+                setText(pendingRow.productDescription?.trim().orEmpty())
+                setSelection(text?.length ?: 0)
+            }
             val amountInput = view.findViewById<EditText>(R.id.et_amount)
             amountInput.setText(formatYuan(pendingRow.amountMinor))
             currentAmountInput = amountInput
