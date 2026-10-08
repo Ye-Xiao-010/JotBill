@@ -24,12 +24,21 @@ internal object RecognitionCapabilities {
     private const val KEY_CHECKOUT_CAPTURE_ENABLED = "checkout_capture_enabled"
 
     /**
-     * 默认开启。
+     * 首次安装（偏好里还没有该键）时的默认取值。
      *
-     * 与 [PendingConfirmOverlayManager.isEnabled] 取同一个默认值方向（均为 true），
-     * 避免出现"弹窗默认开、识别链路默认关"这种用户看不懂的半开状态。
+     * 取自 [com.jotbill.app.BuildConfig.LEAN_DEFAULT]，由构建产物决定而非写死：
+     * - `leanDefault=true`（默认）：**精简版包** —— 装上就是精简形态，
+     *   不监测结算页、不截图、不调视觉模型；用户可在设置页随时打开。
+     * - `leanDefault=false`：`.\gradlew assembleDebug -PleanDefault=false` 产出
+     *   与完整版行为一致的包，用于 A/B 对照（那正是 `usable-0.0.98-full-auto`
+     *   的形态）。
+     *
+     * 写死 true 会让"精简版"名不副实 —— 用户必须先装、再进设置页关一次才能用上，
+     * 而多数人根本找不到那个开关，等于默认仍在跑截图链路。
+     *
+     * 一旦用户显式改过（偏好里有值），以偏好为准，本常量不再参与。
      */
-    private const val DEFAULT_CHECKOUT_CAPTURE_ENABLED = true
+    private val DEFAULT_CHECKOUT_CAPTURE_ENABLED: Boolean = !com.jotbill.app.BuildConfig.LEAN_DEFAULT
 
     /**
      * 结算页截图识别链路开关。false = 不做稳定帧监测/截图/AI 派发。
