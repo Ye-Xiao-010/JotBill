@@ -3,3 +3,4 @@
  */
 export { ThemeProvider, useTheme } from './ThemeProvider';
 export { AlertProvider, useAlert } from './AlertProvider';
+export { ToastProvider } from './ToastProvider';

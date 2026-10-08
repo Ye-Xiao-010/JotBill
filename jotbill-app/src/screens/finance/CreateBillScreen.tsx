@@ -535,18 +535,14 @@ const CreateBillScreen: React.FC<CreateBillScreenProps> = ({ navigation, route }
           <Text style={styles.cancelButtonText}>取消</Text>
         </TouchableOpacity>
         <TouchableOpacity style={styles.saveButton} onPress={handleSave} disabled={loading} activeOpacity={0.8}>
-          <Text style={styles.saveButtonText}>{isEditing ? '更新账单' : '下一步'}</Text>
+          {/* 文案此前写"下一步"，但 handleSave 没有任何后续步骤：直接提交并 goBack。
+            与行为不符的按钮会让人以为还有一屏内容。 */}
+          <Text style={styles.saveButtonText}>{isEditing ? '更新账单' : '保存'}</Text>
         </TouchableOpacity>
       </View>
 
-      <Toast
-        visible={toastState.visible}
-        message={toastState.message}
-        type={toastState.type}
-        duration={toastState.duration}
-        position={toastState.position}
-        onHide={hideToast}
-      />
+      {/* Toast 已提升为全局单例（ToastProvider），此处不再重复渲染 ——
+          否则本页面与全局 Toast 会同时显示同一条提示。 */}
 
       <AddCategoryModal
         visible={showAddCategoryModal}

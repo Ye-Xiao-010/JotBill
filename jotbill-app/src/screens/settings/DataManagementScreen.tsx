@@ -55,6 +55,19 @@ export default function DataManagementScreen() {
 
   const busy = exporting || creatingBackup || restoring || clearing;
 
+  /**
+   * 本机现状与"覆盖后增减"。
+   *
+   * `preview.existingRecordSummary` 由原生返回（BackupManager:222），但此前 UI
+   * 完全没用它 —— 用户只看到"备份里有 N 笔"，看不到"我本机有 M 笔会被删"。
+   * 覆盖恢复是 DELETE FROM bills 全表删后重插，这两个数字必须并排出现。
+   *
+   * 容错：老版本备份或桥接缺该字段时按 undefined 处理，不让预览崩掉。
+   */
+  const existing = preview?.existingRecordSummary;
+  const diffBills =
+    existing && preview ? preview.recordSummary.billCount - existing.billCount : 0;
+
   usePreventRemove(restoring || restoringRef.current, () => {
     // 恢复事务期间不派发离开动作，恢复结束后由 React Navigation 自动解除拦截。
   });
@@ -101,7 +114,10 @@ export default function DataManagementScreen() {
       setStatus({
         kind: 'success',
         title: '备份已保存',
-        message: `文件已保存。包含 ${countText(result.recordSummary.totalCount)} 条可恢复非敏感记录；API Key 等凭据未写入备份。`,
+        message:
+          `文件已保存。包含 ${countText(result.recordSummary.totalCount)} 条可恢复非敏感记录；` +
+          `API Key 等凭据未写入备份。\n\n注意：备份不包含待确认交易、AI 对话历史与导入批次` +
+          `（清除数据后将无法再撤销导入）。`,
       });
     } catch (error) {
       if (isErrorWithCode(error, 'BACKUP_CANCELLED')) return;
@@ -153,10 +169,19 @@ export default function DataManagementScreen() {
       invalidateCache.all();
       queryClient.clear();
       setPreview(null);
+      // ⚠️ result.errors 是原生精心构造的降级事实清单（BackupManager:252-267）：
+      // "备份未包含 AI 成本记录""3 个不安全地址字段已省略""5 个仍被引用的
+      // Provider 配置已保留"…… 这些是用户**必须知道**的部分状态，
+      // 此前一次都没被读取，只以绿色"覆盖恢复完成"呈现 —— 等于把
+      // "有些数据没恢复"说成了"全部恢复成功"。
+      const warnings = result.errors ?? [];
       setStatus({
-        kind: 'success',
-        title: '覆盖恢复完成',
-        message: `已恢复 ${countText(result.imported)} 条非敏感记录，跳过 ${countText(result.skipped)} 条未包含记录，替换 ${countText(result.replaced)} 条重复记录；API Key 等凭据未恢复。`,
+        kind: warnings.length > 0 ? 'info' : 'success',
+        title: warnings.length > 0 ? `覆盖恢复完成（含 ${warnings.length} 条提示）` : '覆盖恢复完成',
+        message:
+          `已恢复 ${countText(result.imported)} 条非敏感记录，跳过 ${countText(result.skipped)} 条未包含记录，` +
+          `替换 ${countText(result.replaced)} 条重复记录；API Key 等凭据未恢复。` +
+          (warnings.length > 0 ? '\n\n以下内容未被完整恢复：\n· ' + warnings.join('\n· ') : ''),
       });
     } catch (error) {
       setStatus({ kind: 'error', title: '恢复失败', message: getErrorMessage(error) });
@@ -193,7 +218,22 @@ export default function DataManagementScreen() {
 
   const clearData = () => {
     if (busy || restoringRef.current) return;
-    Alert.alert('清除本地数据', '这会删除本机账单、账户、分类、预算和目标，且不能撤销。请先导出 CSV。', [
+    // ⚠️ 原生执行的是 database.clearAllTables() —— 清空**全部 18 张表**，
+    // 而原确认文案只承诺"账单、账户、分类、预算和目标"5 类。
+    // 被顺带清掉的包括：AI 对话历史（chat_sessions/messages）、
+    // 待确认交易（pending_transactions）、**导入批次（import_batches）** ——
+    // 后者没了就再也无法撤销那次导入。
+    // 且不可逆：BackupManager 只备份 11 张表，"先备份再清除"救不回这几类。
+    // 文案必须与实际范围一致，否则用户会以为"只是清账本"。
+    Alert.alert(
+      '清除本地数据',
+      '这会清空本机全部数据，且无法撤销：\n\n' +
+        '· 账单、账户、分类、预算、财务目标、规则、余额校准\n' +
+        '· AI 对话历史\n' +
+        '· 待确认交易（尚未入账的支付记录）\n' +
+        '· 导入批次（清除后无法再撤销导入）\n\n' +
+        '请先导出 CSV 或创建本地备份。注意备份本身不包含待确认交易与 AI 对话历史。',
+      [
       { text: '取消', style: 'cancel' },
       {
         text: '继续清除',
@@ -211,7 +251,10 @@ export default function DataManagementScreen() {
             await nativeBackup.clearData();
             invalidateCache.all();
             queryClient.clear();
-            Alert.alert('已清除', '本地数据已删除。');
+            Alert.alert(
+              '已清除',
+              '本地全部数据已删除，包括 AI 对话历史、待确认交易与导入批次。',
+            );
           } catch (error) {
             setStatus({ kind: 'error', title: '清除失败', message: getErrorMessage(error) });
           } finally {
@@ -303,13 +346,57 @@ export default function DataManagementScreen() {
                 <X size={20} color={styles._colors.textPrimary} />
               </TouchableOpacity>
             </View>
+            {/* ⚠️ 覆盖恢复是 DELETE FROM bills 全表删后重插（BackupManager:988-1002）。
+                原生在 preview 里已经返回 existingRecordSummary（本机现状），但 UI 只渲染
+                备份文件的数字 —— 用户在点确认时**看不到自己会丢多少**。
+                一个装了半年账本的用户点错一次，5000 笔本地数据就没了，
+                而 UI 事前事后都没让他看见这个数字。必须把两组数字并排展示。 */}
+            <View style={styles.sectionLabel}>
+              <Text style={styles.panelTitle}>备份文件内（将被恢复）</Text>
+            </View>
             <View style={styles.metricsGrid}>
               <View style={styles.metric}><Text style={styles.metricValue}>{countText(preview.recordSummary.billCount)}</Text><Text style={styles.metricLabel}>账单</Text></View>
               <View style={styles.metric}><Text style={styles.metricValue}>{countText(preview.recordSummary.accountCount)}</Text><Text style={styles.metricLabel}>账户</Text></View>
               <View style={styles.metric}><Text style={styles.metricValue}>{countText(preview.recordSummary.categoryCount)}</Text><Text style={styles.metricLabel}>分类</Text></View>
               <View style={styles.metric}><Text style={styles.metricValue}>{countText(preview.duplicateCount)}</Text><Text style={styles.metricLabel}>重复替换</Text></View>
             </View>
+            {existing ? (
+              <>
+                <View style={styles.sectionLabel}>
+                  <Text style={styles.panelTitle}>本机现有（将被替换）</Text>
+                </View>
+                <View style={styles.metricsGrid}>
+                  <View style={[styles.metric, styles.metricWarning]}>
+                    <Text style={styles.metricValue}>{countText(existing.billCount)}</Text>
+                    <Text style={styles.metricLabel}>本机账单</Text>
+                  </View>
+                  <View style={styles.metric}>
+                    <Text style={styles.metricValue}>{countText(existing.accountCount)}</Text>
+                    <Text style={styles.metricLabel}>本机账户</Text>
+                  </View>
+                  <View style={styles.metric}>
+                    <Text style={styles.metricValue}>{countText(existing.categoryCount)}</Text>
+                    <Text style={styles.metricLabel}>本机分类</Text>
+                  </View>
+                  <View style={[styles.metric, styles.metricWarning]}>
+                    <Text style={styles.metricValue}>{countText(diffBills)}</Text>
+                    <Text style={styles.metricLabel}>账单增减</Text>
+                  </View>
+                </View>
+                <Text style={styles.warningText}>
+                  {diffBills === 0
+                    ? '账单数量不变，但本机已有账单会被备份中的记录替换（按 orderId 匹配）。'
+                    : diffBills > 0
+                      ? `覆盖后账单将减少 ${countText(diffBills)} 条（备份里没有的记录会被删除，且无法撤销）。`
+                      : `覆盖后账单将增加 ${countText(-diffBills)} 条。`}
+                </Text>
+              </>
+            ) : null}
             <Text style={styles.panelMeta}>格式 {preview.format} v{preview.formatVersion} · 校验摘要 {preview.checksum.slice(0, 12)}…</Text>
+            <Text style={styles.panelMeta}>
+              备份不包含：待确认交易、AI 对话历史、导入批次（清除后无法再撤销导入）、结算会话与证据。
+              因此"先备份再清除"并不能救回这几类数据。
+            </Text>
             <Text style={styles.panelMeta}>AI Provider 非敏感字段和成本记录会恢复；API Key、密钥和凭据不会写入备份。当前策略：覆盖，重复记录替换。</Text>
             <TouchableOpacity style={styles.restoreButton} onPress={confirmOverwriteRestore} disabled={restoring}>
               {restoring ? <ActivityIndicator color={styles._colors.surface} /> : <Archive size={19} color={styles._colors.surface} />}
@@ -385,6 +472,9 @@ const createStyles = (colors: ThemeColors) => ({
     panelText: { marginTop: spacing.sm, fontSize: 12, lineHeight: 17, color: colors.textSecondary },
     panelMeta: { marginTop: spacing.sm, fontSize: 12, lineHeight: 17, color: colors.textTertiary },
     metricsGrid: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.md },
+    sectionLabel: { marginTop: spacing.lg, marginBottom: spacing.xs },
+    metricWarning: { borderColor: colors.error, borderWidth: borderWidth.medium },
+    warningText: { marginTop: spacing.md, fontSize: 13, lineHeight: 19, fontWeight: '700', color: colors.error },
     metric: { flex: 1, minWidth: 0, padding: spacing.sm, backgroundColor: colors.background, borderWidth: borderWidth.thin, borderColor: colors.strokeLight, borderRadius: borderRadius.small },
     metricValue: { fontSize: 17, fontWeight: '800', color: colors.textPrimary },
     metricLabel: { marginTop: 2, fontSize: 11, color: colors.textSecondary },

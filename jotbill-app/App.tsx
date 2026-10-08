@@ -12,7 +12,7 @@ import {
 import { addBudgetAlertListener } from './src/native/budgetReminder';
 import { markBundleLoaded } from './src/services/hotUpdate';
 import { useAppStateManager } from './src/hooks';
-import { ThemeProvider, useTheme, AlertProvider } from './src/providers';
+import { ThemeProvider, useTheme, AlertProvider, ToastProvider } from './src/providers';
 import AppNavigator from './src/navigation/AppNavigator';
 
 const { PaymentNotificationModule } = NativeModules;
@@ -108,7 +108,12 @@ export default function App() {
       <SafeAreaProvider>
         <ThemeProvider>
           <AlertProvider>
-            <AppContent />
+            {/* ToastProvider 必须包在 AppContent 之外：它持有全局唯一的 Toast 状态
+                并渲染那唯一的一个 <Toast />。此前没有 Provider，多个页面的
+                showError 写进了各自独立的、未被渲染的 state，用户看不到任何提示。 */}
+            <ToastProvider>
+              <AppContent />
+            </ToastProvider>
           </AlertProvider>
         </ThemeProvider>
       </SafeAreaProvider>
