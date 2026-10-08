@@ -1040,12 +1040,17 @@ class CheckoutAccessibilityService : AccessibilityService() {
                         handoffStableCheckout = null
                         handoffForegroundPackage = null
                     }
-                    val userRetryCaptureAvailable = if (reason == CheckoutInvalidationReason.NON_CHECKOUT_PAGE) {
+                    val userRetryCaptureAvailable = if (
+                        RecognitionCapabilities.checkoutCaptureEnabled &&
+                            reason == CheckoutInvalidationReason.NON_CHECKOUT_PAGE
+                    ) {
                         // 手动重试上下文就绪，或用户断言通道可用（服务存活且 AI 已配置），
                         // 都让按钮进入 READY：识别失败/普通购物页不再表现为"按钮不可用"，
                         // 此时的点击由断言通道接管并直接产出待确认。
                         setUserRetryCaptureContext(observation) || isUserAssertedCaptureAvailable()
                     } else {
+                        // 精简模式同样落到这里：不得留下手动补截上下文，否则
+                        // snapshotCaptureCoordinator 仍持有一个可截图的 USER_RETRY 上下文。
                         clearUserRetryCaptureContext()
                         false
                     }
@@ -1055,11 +1060,16 @@ class CheckoutAccessibilityService : AccessibilityService() {
                         pageFingerprint = observation.pageFingerprint
                     )
                     if (reason == CheckoutInvalidationReason.NON_CHECKOUT_PAGE) {
-                        checkoutCaptureOverlayManager?.onSupportedShoppingNonCheckout(
-                            shoppingPackage = observation.shoppingPackage,
-                            pageFingerprint = observation.pageFingerprint,
-                            userRetryCaptureAvailable = userRetryCaptureAvailable
-                        )
+                        // 精简模式：不向悬浮按钮投递状态。按钮的可见性实际由
+                        // Invalidated 事件驱动（见 dispatchEvent），这里跳过只是
+                        // 少一次冗余投递 —— 真正的隐藏在 dispatchEvent 的门禁里。
+                        if (RecognitionCapabilities.checkoutCaptureEnabled) {
+                            checkoutCaptureOverlayManager?.onSupportedShoppingNonCheckout(
+                                shoppingPackage = observation.shoppingPackage,
+                                pageFingerprint = observation.pageFingerprint,
+                                userRetryCaptureAvailable = userRetryCaptureAvailable
+                            )
+                        }
                     } else if (reason == CheckoutInvalidationReason.SENSITIVE_PAGE) {
                         dispatchOverlayInvalidation(
                             reason = reason,
@@ -2727,9 +2737,10 @@ class CheckoutAccessibilityService : AccessibilityService() {
             ?.takeIf { pageDetector.supportsShoppingPackage(it) }
     }
 
-    /** 用户断言通道是否可用：服务存活且 AI 视觉客户端已配置。 */
+    /** 用户断言通道是否可用：链路开关打开、服务存活且 AI 视觉客户端已配置。 */
     private fun isUserAssertedCaptureAvailable(): Boolean =
-        serviceConnected && synchronized(aiLifecycleLock) { aiVisionClient != null }
+        RecognitionCapabilities.checkoutCaptureEnabled &&
+            serviceConnected && synchronized(aiLifecycleLock) { aiVisionClient != null }
 
     /**
      * 用户断言截图通道：绕过结算页识别与会话门禁，把"用户点了截图"直接变成
@@ -3306,7 +3317,22 @@ class CheckoutAccessibilityService : AccessibilityService() {
                 JotBillLog.w(TAG, "分发结算页观察事件失败", error)
             }
         }
-        checkoutCaptureOverlayManager?.onObservationEvent(event)
+        // 精简模式：悬浮截图按钮整体不出现。
+        //
+        // 这里必须是门禁点，**不能只靠"不调用 onSupportedShoppingNonCheckout"**：
+        // 按钮的可见性主要由 Invalidated 事件驱动，而
+        // `CheckoutCaptureOverlayManager.handleInvalidated` 对 NON_CHECKOUT_PAGE 是
+        // **硬编码 READY + visible=canShowOnCurrentPage()**，完全不看可用性判据。
+        // 漏掉这一行 ⇒ 开关关闭后按钮照样显示"可截图"，点下去却被
+        // requestManualCaptureFromOverlay 静默拒绝 —— 正是该文件 KDoc 里
+        // "按钮显示截图但点击必然被拒绝，用户看到的是无响应"那个已修过的失败模式。
+        //
+        // observationListener / purchaseIntentCoordinator 仍照常收事件：
+        // 前者是截图协调器的清理通道，后者消费 Invalidated 做状态复位，
+        // 两者都无副作用，切断反而会让残留状态无法回收。
+        if (RecognitionCapabilities.checkoutCaptureEnabled) {
+            checkoutCaptureOverlayManager?.onObservationEvent(event)
+        }
         try {
             // §8.3 sessionId 传递链路第③环：会话标识是截图协调器处理本帧时的决策
             // （新建 / 漂移沿用 / 支付返回恢复），因此只能在它之后解析并补进事件，
