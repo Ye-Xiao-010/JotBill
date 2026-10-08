@@ -50,6 +50,7 @@ object JotBillLog {
     const val FILE_NAME = "jotbill-diag.log"
 
     /** 单文件上限，超过后重命名为 `.1` 重新开始 —— 只为不让文件无限增长，不丢弃任何一轮。 */
+    /** 单文件上限，按**落盘字节数**计（见 drainLoop 内的 UTF-8 字节计数）。 */
     private const val MAX_BYTES = 10L * 1024 * 1024
 
     private val queue = LinkedBlockingQueue<String>()
@@ -137,18 +138,50 @@ object JotBillLog {
         while (true) {
             val line = queue.take()
             synchronized(this) {
-                val w = writer ?: return
+                if (writer == null) return
                 try {
+                    // ⚠️ 轮转必须在写之前，且**不得**把 writer 缓存进局部变量后再轮转。
+                    // 旧实现 `val w = writer ?: return` 先取实例、`rotate()` 内部 close 并
+                    // 换新实例、随后仍写那个已关闭的旧实例 ⇒ 抛 Stream Closed；
+                    // 而 written 已被 rotate() 置 0 且因异常不再累加 ⇒
+                    // 永远不再满足轮转条件 ⇒ **本进程诊断日志永久失效**。
+                    // 真机已见 `jotbill-diag.log.1` 达 11.5MB（worklog/2026-09-30），
+                    // 轮转确实发生过，之后的 .log 就是空的 —— 而验收的唯一证据出口
+                    // 就是这个文件，等于整轮验收拿不到任何证据。
                     if (written > MAX_BYTES) rotate()
+                    val w = writer ?: return
                     w.write(line)
                     w.write("\n")
                     // 每行即刷：诊断日志的价值就在于崩溃/断连前的最后几行不能丢。
                     w.flush()
-                    written += line.length + 1
+                    // 按 UTF-8 字节数计，而非 String.length（UTF-16 码元）。
+                    // 中文日志实际按 3 字节/字落盘，用 length 会让文件达到标称的
+                    // 2~3 倍（实测 .log.1 已 11.5MB，而上限标称 10MB）。
+                    written += line.toByteArray(Charsets.UTF_8).size + 1
                 } catch (e: Exception) {
                     Log.w(TAG, "诊断日志写入失败：${e.message}")
+                    // 写入失败后尝试重开一次：句柄可能已因轮转/外部删文件而失效。
+                    // 不重开的话，一次失败就永久静音（见上方注释的历史故障）。
+                    reopenWriterQuietly()
                 }
             }
+        }
+    }
+
+    /**
+     * 重新打开日志文件句柄（失败仅记 logcat，绝不抛出）。
+     *
+     * 覆盖两种真实故障：① 轮转后旧句柄已关闭；② 用户在进程运行中删除了日志文件
+     * （回归脚本指导"先删旧文件再跑"，若在进程启动后删，句柄指向已删除的 inode，
+     * 写入静默消失）。
+     */
+    private fun reopenWriterQuietly() {
+        try {
+            writer?.let { runCatching { it.close() } }
+            writer = FileWriter(requireNotNull(logFile), /* append = */ true)
+            written = 0L
+        } catch (e: Exception) {
+            Log.w(TAG, "诊断日志句柄重建失败：${e.message}")
         }
     }
 
@@ -163,6 +196,9 @@ object JotBillLog {
             written = 0
         } catch (e: Exception) {
             Log.w(TAG, "诊断日志轮转失败：${e.message}")
+            // 轮转中途失败时 writer 可能已被 close，此处必须重建，
+            // 否则本进程再无任何可写的句柄。
+            reopenWriterQuietly()
         }
     }
 
