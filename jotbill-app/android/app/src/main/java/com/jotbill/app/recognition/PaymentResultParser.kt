@@ -101,7 +101,21 @@ internal object PaymentResultParser {
     private val SENSITIVE_NUMBER_PATTERN = Regex(
         """(?<![\p{L}\p{N}])\d{3,}(?:[.,]\d+)?(?![\p{L}\p{N}])"""
     )
-    private val MAX_AMOUNT_MINOR = BigDecimal.valueOf(Long.MAX_VALUE)
+    /**
+     * 金额上界：与全应用安全整数分单位口径**同源**（[MAX_SAFE_MINOR_UNIT]）。
+     *
+     * 原为 `BigDecimal.valueOf(Long.MAX_VALUE)`，是全应用最宽松的上界，与
+     * `PendingConfirmReadiness.isValidAmount` / `LedgerRepository.validateSafeAmount`
+     * 的口径错配 —— 后两者都以 `MAX_SAFE_MINOR_UNIT` 为准，会出现
+     * "解析层放行、就绪层与账本层拒绝"的错配。
+     *
+     * **精简版下这条尤其要紧**：完整版还有截图 AI 二次校验金额，解析器误取一个
+     * 异常大数会被 AI 复核挡下；停用截图识别后只剩这一条文本路径，
+     * 结果页文本里任何 `¥1234567890123` 都会被当成真实金额落库。
+     * 统一为 `MAX_SAFE_MINOR_UNIT` 后行为**更保守**（多拒而不是少拒），
+     * 与项目"落袋优先于激进"的既有取向一致。
+     */
+    private val MAX_AMOUNT_MINOR = BigDecimal.valueOf(MAX_SAFE_MINOR_UNIT)
 
     /** 订单号匹配正则 */
     private val ORDER_ID_PATTERNS = listOf(

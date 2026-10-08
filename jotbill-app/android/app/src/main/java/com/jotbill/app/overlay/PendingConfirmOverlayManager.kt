@@ -95,13 +95,27 @@ internal object PendingConfirmOverlayManager {
     @Volatile
     private var lastForegroundPackage: String? = null
 
-    /** 等待非敏感帧的弹窗候选；null 表示无挂起候选。仅主线程读写。 */
+    /**
+     * 等待非敏感帧的弹窗候选；null 表示无挂起候选。
+     *
+     * **仅主线程读写**。曾经被 [onPendingChange] 的 IO 协程间接写入，导致
+     * 主线程守卫看不见 IO 线程的状态变更 → 双弹窗 + 悬浮窗永久泄漏；
+     * 现已改为决策后 `mainHandler.post` 回主线程执行。
+     */
     private var waitingCandidate: PromptCandidate? = null
+
+    /** @see waitingCandidate */
     private var candidateExpiryRunnable: Runnable? = null
 
     private lateinit var prefs: SharedPreferences
 
-    /** 策略运行状态：去重键 → 最近弹窗时间；滑动窗口内的弹窗时间戳。 */
+    /**
+ * 策略运行状态：去重键 → 最近弹窗时间；滑动窗口内的弹窗时间戳。
+     *
+     * **仅主线程读写** —— HashMap 非线程安全，并发写可损坏内部结构导致去重永久失效
+     * （弹窗无限轰炸）。[onPendingChange] 的决策 IO 协程只读副本（`.toMap()`），
+     * 写入一律 `mainHandler.post` 回主线程。
+     */
     private val recentDedupKeys = HashMap<String, Long>()
     private val recentPromptTimes = mutableListOf<Long>()
 
@@ -235,18 +249,34 @@ internal object PendingConfirmOverlayManager {
                 }
 
                 is PendingPromptPolicy.Decision.Prompt -> {
-                    recordPrompted(decision.dedupKey, System.currentTimeMillis())
+                    // ⚠️ 必须回主线程：recordPrompted / maybeShowCandidate 读写的是
+                    // 一组"仅主线程"字段（overlayView、waitingCandidate、
+                    // candidateExpiryRunnable、recentDedupKeys、recentPromptTimes），
+                    // 而本协程跑在 Dispatchers.IO 上。直接在 IO 线程调用会造成：
+                    // ① 两条并发 pending 各自通过 :218 与 :260 的双重守卫
+                    //    （守卫之间的状态变更在 IO 线程，主线程看不见），
+                    //    两次 displayOverlay → 两次 windowManager.addView，
+                    //    而 dismissInternal 只移除 overlayView 指向的最后一个视图
+                    //    ⇒ 第一个系统窗口永久残留、无法关闭；
+                    // ② waitingCandidate 非 volatile ⇒ 主线程读不到 IO 线程的写，
+                    //    候选丢失（弹窗不出现）或留下永不触发的僵尸超时 runnable。
+                    // recordPrompted 同样必须与守卫在同一线程，否则去重表
+                    // 会在 IO 线程被并发修改（HashMap 非线程安全，可损坏内部结构）。
                     val candidate = PromptCandidate(
                         pendingId = info.pendingId,
                         dedupKey = decision.dedupKey,
                         createdAt = System.currentTimeMillis()
                     )
-                    maybeShowCandidate(candidate)
+                    mainHandler.post {
+                        recordPrompted(decision.dedupKey, candidate.createdAt)
+                        maybeShowCandidate(candidate)
+                    }
                 }
             }
         }
     }
 
+    /** 记录已弹窗的去重键与时间戳。**仅主线程调用**（见 [onPendingChange] 内的 post）。 */
     private fun recordPrompted(dedupKey: String, now: Long) {
         recentDedupKeys[dedupKey] = now
         recentPromptTimes += now
