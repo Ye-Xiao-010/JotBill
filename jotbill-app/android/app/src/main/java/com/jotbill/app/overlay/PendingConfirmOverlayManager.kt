@@ -33,6 +33,7 @@ import com.jotbill.app.pending.PendingConfirmReadiness
 import com.jotbill.app.pending.PendingConfirmService
 import com.jotbill.app.pending.PendingPromptPolicy
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -62,6 +63,10 @@ internal object PendingConfirmOverlayManager {
 
     /** 观察状态的新鲜度：超龄的"非敏感"判定不可信，宁可弹不出来也不冒险。 */
     private const val OBSERVATION_FRESH_MILLIS = 30_000L
+
+    /** 预读待确认的重试次数与间隔：覆盖落库事务提交前的可见性延迟（见 [readPendingRow]）。 */
+    private const val PENDING_ROW_READ_ATTEMPTS = 3
+    private const val PENDING_ROW_READ_RETRY_DELAY_MILLIS = 40L
 
     /** 分类网格每行数量与最大可见行数（超出纵向滚动）。 */
     private const val CATEGORIES_PER_ROW = 3
@@ -159,6 +164,53 @@ internal object PendingConfirmOverlayManager {
         mainHandler.post { onPendingChange(info) }
     }
 
+    /**
+     * 读待确认行；读不到时做有界重试，规避"落库事务尚未提交"的可见性竞态。
+     *
+     * **竞态是真的**：`CheckoutPaymentMatcher.recordOrphanPaymentSignal` /
+     * `upsertPendingForSession` 都在 `database.withTransaction { ... }` **内部**同步
+     * 调用 `PendingChangeHub.emit`。emit → 主线程 post → 本协程在 Dispatchers.IO 上
+     * 另开一条数据库连接读同一行 —— 而此时事务可能尚未提交。SQLite 的读写隔离下，
+     * 另一条连接看不到未提交数据 ⇒ `getById` 返回 null。
+     *
+     * 此前两处预读都是 `?: return@launch`，一次读空就**静默放弃本次弹窗**。
+     * 数据没丢（事务会提交、待确认中心可见、系统通知兜底照常），但弹窗不出现 ——
+     * 而弹窗是精简版唯一的自动记账入口，漏一次就是验收 L1 的一次 miss。
+     * 主线程越忙（支付瞬间正是最忙的时候）post 越快，反而越容易命中这个窗口。
+     *
+     * 只对"读为空"重试；读抛异常是真实故障，立即上抛由上层按失败处理，不重试掩盖。
+     * 上限 3 次 × 40ms：足以覆盖事务提交耗时，又不会让一个真的不存在的 pendingId
+     * 把 IO 线程拖住。
+     */
+    private suspend fun readPendingRow(
+        db: JotBillDatabase,
+        pendingId: String
+    ): PendingTransactionEntity? {
+        repeat(PENDING_ROW_READ_ATTEMPTS) { attempt ->
+            val row = try {
+                db.pendingTransactionDao().getById(pendingId)
+            } catch (error: RuntimeException) {
+                Log.w(TAG, "弹窗预读待确认失败", error)
+                return null
+            }
+            if (row != null) {
+                if (attempt > 0) {
+                    Log.i(TAG, "弹窗预读在第${attempt + 1}次命中(事务提交可见性延迟): id=${pendingId.take(16)}")
+                }
+                return row
+            }
+            if (attempt < PENDING_ROW_READ_ATTEMPTS - 1) {
+                delay(PENDING_ROW_READ_RETRY_DELAY_MILLIS)
+            }
+        }
+        Log.w(
+            TAG,
+            "弹窗预读待确认为空(事务可能未提交或行已被处理): id=${pendingId.take(16)}, " +
+                "attempts=$PENDING_ROW_READ_ATTEMPTS"
+        )
+        return null
+    }
+
     /** 仅主线程调用。 */
     private fun onPendingChange(info: PendingChangeInfo) {
         val context = appContext ?: return
@@ -168,12 +220,7 @@ internal object PendingConfirmOverlayManager {
             return
         }
         scope.launch {
-            val pendingRow = try {
-                db.pendingTransactionDao().getById(info.pendingId)
-            } catch (error: RuntimeException) {
-                Log.w(TAG, "弹窗预读待确认失败", error)
-                null
-            } ?: return@launch
+            val pendingRow = readPendingRow(db, info.pendingId) ?: return@launch
             val decision = PendingPromptPolicy.evaluate(
                 info = info,
                 merchant = pendingRow.merchant,
@@ -271,11 +318,7 @@ internal object PendingConfirmOverlayManager {
         val context = appContext ?: return
         val db = database ?: return
         scope.launch {
-            val pendingRow = try {
-                db.pendingTransactionDao().getById(candidate.pendingId)
-            } catch (error: RuntimeException) {
-                null
-            } ?: return@launch
+            val pendingRow = readPendingRow(db, candidate.pendingId) ?: return@launch
             // 行内容复核：事件到达后可能已被其他入口确认/忽略
             if (pendingRow.status != PendingTransactionEntity.STATUS_PENDING) {
                 return@launch
