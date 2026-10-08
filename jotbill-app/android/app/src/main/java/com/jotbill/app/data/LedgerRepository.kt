@@ -69,9 +69,10 @@ class LedgerRepository(private val database: JotBillDatabase) {
      * @param bill 待写入的账单实体
      * @param operator 审计操作者标记：手动路径为 "system"，阶段四 T5 自动入账为 "auto_commit"
      */
-    suspend fun createBillWithBalanceUpdate(bill: BillEntity, operator: String = "system") {
-        createBillWithDedup(bill, operator)
-    }
+    suspend fun createBillWithBalanceUpdate(
+        bill: BillEntity,
+        operator: String = "system"
+    ): CreateBillOutcome = createBillWithDedup(bill, operator)
 
     /**
      * 阶段五 T6：带去重的账单创建。
@@ -98,6 +99,13 @@ class LedgerRepository(private val database: JotBillDatabase) {
         }
         val now = System.currentTimeMillis()
         return database.withTransaction {
+            // adjustment 是**校准**账单：`BalanceCalculator.delta` 对它返回 0，
+            // 即写入后余额分毫不动。若允许它经本路径落库，调用方却会拿到
+            // Committed 并按"已入账"上报（转账/退款自动入账链路即如此），
+            // 用户看到"保存成功"却找不到任何余额变化。
+            // update / delete 路径已有 requireMutableBill，本路径此前是缺口 ——
+            // 漏了它就等于"能创建、不能改、不能删"的幽灵账单。口径统一在此。
+            requireMutableBill(bill)
             // ---- 去重第 1 级：(sourceType, orderId) 精确查重（退款豁免）----
             val duplicate = DuplicateGuard(database).checkLevel1(
                 sourceType = bill.sourceType,
@@ -374,6 +382,11 @@ class LedgerRepository(private val database: JotBillDatabase) {
                 }
             }
             validateConfirmationBill(effectiveBill)
+            // 与 createBillWithDedup 同口径：adjustment 不允许经确认路径落库。
+            // 否则余额不动（delta=0）+ 待确认被物理删除 = 用户点"确认入账"
+            // 却凭空丢了一笔记录，且该 adjustment 账单被 requireMutableBill
+            // 锁死、无法编辑或删除补救。
+            requireMutableBill(effectiveBill)
             val relations = loadPendingRelations(currentPending)
             if (relations.session?.let { it.status in TERMINAL_SESSION_STATUSES } == true) {
                 throw LedgerValidationException("Checkout session is already terminal")

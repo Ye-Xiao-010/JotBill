@@ -1,6 +1,7 @@
 package com.jotbill.app.recognition
 
 import androidx.room.withTransaction
+import com.jotbill.app.data.CreateBillOutcome
 import com.jotbill.app.data.JotBillDatabase
 import com.jotbill.app.pending.PendingChangeHub
 import com.jotbill.app.pending.PendingChangeInfo
@@ -193,9 +194,15 @@ internal class RefundLinker(
                 updatedAt = now,
                 version = 1
             )
-            // 写 Bill + refund 口径联动余额（收入侧，金额加回账户）+ 审计日志
-            ledger.createBillWithBalanceUpdate(bill, operator = REFUND_AUTO_COMMIT_OPERATOR)
-            return@withTransaction RefundOutcome.AutoCommitted(bill.id, original.id)
+            // 写 Bill + refund 口径联动余额（收入侧，金额加回账户）+ 审计日志。
+            // 按 outcome 分支：命中去重时未 insert、未动余额，返回的必须是
+            // 既有账单的 id，而非那个从未落库的 UUID。
+            val outcome = ledger.createBillWithDedup(bill, operator = REFUND_AUTO_COMMIT_OPERATOR)
+            val settledBillId = when (outcome) {
+                is CreateBillOutcome.Committed -> outcome.bill.id
+                is CreateBillOutcome.MergedInto -> outcome.bill.id
+            }
+            return@withTransaction RefundOutcome.AutoCommitted(settledBillId, original.id)
         }
 
         val pending = PendingTransactionEntity(

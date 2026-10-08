@@ -1,6 +1,7 @@
 package com.jotbill.app.recognition
 
 import androidx.room.withTransaction
+import com.jotbill.app.data.CreateBillOutcome
 import com.jotbill.app.data.JotBillDatabase
 import com.jotbill.app.pending.PendingChangeHub
 import com.jotbill.app.pending.PendingChangeInfo
@@ -173,9 +174,17 @@ internal class TransferClassifier(
                 updatedAt = now,
                 version = 1
             )
-            // 写 Bill + 双账户余额联动（转账源减目标加；还款源减、负债目标减欠款）+ 审计日志
-            ledger.createBillWithBalanceUpdate(bill, operator = TRANSFER_AUTO_COMMIT_OPERATOR)
-            return@withTransaction TransferOutcome.AutoCommitted(bill.id, billType)
+            // 写 Bill + 双账户余额联动（转账源减目标加；还款源减、负债目标减欠款）+ 审计日志。
+            // 必须按 outcome 分支：命中去重第 1 级时 createBillWithDedup **不 insert**、
+            // 不动余额，只把新证据字段合并进既有账单。此前这里忽略返回值并一律上报
+            // AutoCommitted(bill.id)，而 bill.id 是一个从未落库的 UUID ——
+            // 上层会据此认为"已入账"并把该 ID 当作退款/转账的关联目标。
+            val outcome = ledger.createBillWithDedup(bill, operator = TRANSFER_AUTO_COMMIT_OPERATOR)
+            val settledBillId = when (outcome) {
+                is CreateBillOutcome.Committed -> outcome.bill.id
+                is CreateBillOutcome.MergedInto -> outcome.bill.id
+            }
+            return@withTransaction TransferOutcome.AutoCommitted(settledBillId, billType)
         }
 
         // ---- 待确认：类型按语义预填，他人转账按支出语义由用户改类型 ----

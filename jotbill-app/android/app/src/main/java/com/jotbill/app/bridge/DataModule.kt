@@ -6,6 +6,7 @@ import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
+import com.jotbill.app.data.CreateBillOutcome
 import com.jotbill.app.data.JotBillDatabase
 import com.jotbill.app.data.JotBillDatabaseProvider
 import com.jotbill.app.data.LedgerRepository
@@ -209,10 +210,19 @@ class DataModule(
         val now = System.currentTimeMillis()
         input.optionalMinor("amountMinor")
         val bill = BridgeDtoMapper.parseBillInput(input, now, UUID.randomUUID().toString())
-        repository.createBillWithBalanceUpdate(bill)
-        events.emit("onBillCreated", BridgeDtoMapper.bill(bill))
+        // 必须按 outcome 分支：命中去重第 1 级时并未 insert 新账单，也未动余额，
+        // 实际是把新证据字段合并进了既有账单。此时若仍把 `bill`（一个从未落库的
+        // UUID）返回给 JS 并广播 onBillCreated，前端跳详情页会得到 NOT_FOUND，
+        // 而余额分毫未动、UI 却显示"保存成功"。addBill 的 id 是随机 UUID、
+        // 无幂等键，用户重试就会真的产生重复账单。
+        val outcome = repository.createBillWithDedup(bill)
+        val settledBill = when (outcome) {
+            is CreateBillOutcome.Committed -> outcome.bill
+            is CreateBillOutcome.MergedInto -> outcome.bill
+        }
+        events.emit("onBillCreated", BridgeDtoMapper.bill(settledBill))
         maybeNotifyBudgetAlerts()
-        BridgeDtoMapper.bill(bill).toString()
+        BridgeDtoMapper.bill(settledBill).toString()
     }
 
     @ReactMethod
