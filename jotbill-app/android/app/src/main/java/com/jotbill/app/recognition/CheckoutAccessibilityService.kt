@@ -137,6 +137,19 @@ class CheckoutAccessibilityService : AccessibilityService() {
         /** 供悬浮按钮或 RN bridge 请求当前稳定结算页的手动截图。 */
         @JvmStatic
         fun requestManualCapture(callback: SnapshotCaptureCallback) {
+            // 精简模式：截图识别链路整体停用时手动补截同样无意义（协调器本就没有
+            // 稳定结算页槽位，返回的会是 NO_ACTIVE_CHECKOUT，对用户不可解释）。
+            // 在入口显式拒绝，日志锚点比"无上下文"更接近真实原因。
+            if (!RecognitionCapabilities.checkoutCaptureEnabled) {
+                callback.onResult(
+                    SnapshotCaptureResult(
+                        status = SnapshotCaptureStatus.UNAVAILABLE,
+                        sourceReason = SnapshotSourceReason.MANUAL_CAPTURE,
+                        reasonCode = SnapshotCaptureUnavailableReason.SERVICE_NOT_CONNECTED.wireValue
+                    )
+                )
+                return
+            }
             val service = activeService
             if (service == null) {
                 callback.onResult(
@@ -390,6 +403,16 @@ class CheckoutAccessibilityService : AccessibilityService() {
     @Volatile
     private var lastCoordinatorRecoveryAt = 0L
 
+    /**
+     * 已应用到本服务状态的开关取值；null 表示本次服务生命周期内尚未应用过。
+     * 用途是**运行中翻转**：用户在设置页关掉识别链路时，已经建立的稳定结算页、
+     * 交接上下文与手动补截上下文必须立刻失效，否则"关掉之后仍能截图"会一直成立到
+     * 下一次服务重连。用可空初始化强制首个事件就建立基线，避免默认 true 的取值
+     * 让"启动即关闭"的用户错过一次清理。
+     */
+    @Volatile
+    private var appliedCheckoutCaptureEnabled: Boolean? = null
+
     /** "截图兜底已禁止"日志按原因的最近打印时间。 */
     private val lastScreenshotFallbackBlockLogAt = mutableMapOf<String, Long>()
 
@@ -500,7 +523,49 @@ class CheckoutAccessibilityService : AccessibilityService() {
         initializeAiClient()
         setObservationListener(snapshotCaptureCoordinator)
         serviceConnected = true
+        // 精简模式开关在连接时对齐持久值：系统可以在 RN 进程未启动的情况下拉起本服务，
+        // 此时 MainApplication 已跑过，但设置页的改动仍需在此兜底一次（服务重连场景）。
+        RecognitionCapabilities.load(applicationContext)
+        applyCheckoutCaptureCapability()
         JotBillLog.i(TAG, "结算页无障碍观察服务已连接")
+    }
+
+    /**
+     * 把开关取值应用到本服务的运行状态；取值变化时清理结算页侧的全部可截图上下文。
+     *
+     * 关闭时必须清理的四项，缺一都会让"关掉之后仍能截图/关联"继续成立：
+     * 1. `stabilityCoordinator` —— 它的在途稳定窗口会在随后触发 `Stable` 事件，
+     *    而 `Stable` 是自动截图与 buffer 落图的唯一触发源；
+     * 2. `currentStableCheckout` / `handoffStableCheckout` / `handoffForegroundPackage` ——
+     *    交接上下文会让支付结果页拿到旧会话引用，从而消费 `payment:<sessionId>` 槽位；
+     * 3. `userRetryCaptureContext` —— 手动补截与用户断言通道的入口；
+     * 4. 悬浮截图按钮 —— 它存在的唯一目的就是发起截图，停用后继续显示会让用户
+     *    点到一个必然失败的按钮。
+     *
+     * **不清理** `sensitivePageLatch`：它是密码页零截图的不变式依据，与开关无关，
+     * 停用识别链路只会让截图更少，不构成放宽风险。
+     *
+     * 仅主线程（无障碍事件回调）访问，无需同步。
+     */
+    private fun applyCheckoutCaptureCapability() {
+        val enabled = RecognitionCapabilities.checkoutCaptureEnabled
+        val previous = appliedCheckoutCaptureEnabled
+        if (previous == enabled) {
+            return
+        }
+        appliedCheckoutCaptureEnabled = enabled
+        JotBillLog.i(TAG, "结算页截图识别链路: ${if (enabled) "启用" else "停用"}（上次=${previous ?: "无基线"}）")
+        if (enabled) {
+            return
+        }
+        currentStableCheckout = null
+        handoffStableCheckout = null
+        handoffForegroundPackage = null
+        clearUserRetryCaptureContext()
+        stabilityCoordinator.invalidate(CheckoutInvalidationReason.SERVICE_INTERRUPTED)
+        // 复用"服务中断"状态：它是既有语义里唯一表达"按钮收起且不再可截图"的迁移，
+        // 另造一套状态会污染 CheckoutOverlayStatus 契约与 RN 侧状态映射。
+        checkoutCaptureOverlayManager?.onServiceInterrupted()
     }
 
     /**
@@ -716,6 +781,11 @@ class CheckoutAccessibilityService : AccessibilityService() {
         // 使截图能力最迟在下一个无障碍事件到来时恢复。
         recoverSnapshotCoordinatorIfClosed()
 
+        // 精简模式开关在运行中翻转：结算页侧的可截图上下文必须立即失效。
+        // 放在 recoverSnapshotCoordinatorIfClosed 之后 —— 熔断重建会换掉整组协调器，
+        // 清理必须针对重建后的那一组。
+        applyCheckoutCaptureCapability()
+
         // 部分购物页会发出 packageName 为空的内容变化事件（WebView/系统窗口）。
         // 空包名不代表已经离开购物应用；同时兼容视频通话悬浮窗等第三方窗口事件
         // 与购物应用窗口事件交错到达的真机场景，按活动窗口/事件包名推断归属。
@@ -914,26 +984,41 @@ class CheckoutAccessibilityService : AccessibilityService() {
             when (val detection = pageDetector.detect(observation)) {
                 is CheckoutPageDetection.Accepted -> {
                     logCheckoutGateSampled(observation, rejection = null)
-                    // 结算页也必须具备手动截图上下文。
-                    //
-                    // 真机数据：结算态（activeCheckout）从建立到转入交接挂起仅存活
-                    // 469ms（京东 a23f589b）~5.5s（京东 e3b01a29），拼多多同样只有
-                    // 2067ms。挂起后 activeCheckout 被置空，用户在结算页上的每一次
-                    // 点击都返回 NO_ACTIVE_CHECKOUT——本轮日志中连续失败 14 次。
-                    // 此前这里调用 clearUserRetryCaptureContext()，等于在唯一真正
-                    // 需要手动补截的页面上主动移除了兜底能力。
-                    // 改为建立上下文：用户随时可手动补截，不再受那不足一秒的窗口限制。
-                    // 该上下文只承载脱敏元数据，且 CHECKOUT 角色本就在
-                    // canBufferUserRetrySnapshot() 允许集合内；敏感页已在更前面拦截。
-                    setUserRetryCaptureContext(observation)
-                    // 门禁通过即通知悬浮层进入"处理中"：候选期（稳定窗口确认前，
-                    // 指纹漂移时可达数十秒）此前零反馈，按钮停留在 HIDDEN 会让用户
-                    // 以为识别未工作（截图链路实际照常运行）。后续 Stable 事件、
-                    // Invalidated 或截图结果会自然覆盖该状态。
-                    checkoutCaptureOverlayManager?.onCheckoutCandidate(observation)
-                    // 新指纹只是“候选观察”，要等稳定窗口确认后才能替换当前结算页；
-                    // 提前清空会在 PDD 内部支付中间页切微信时丢掉手头正在提交的会话。
-                    stabilityCoordinator.observe(detection.observation)
+                    if (RecognitionCapabilities.checkoutCaptureEnabled) {
+                        // 结算页也必须具备手动截图上下文。
+                        //
+                        // 真机数据：结算态（activeCheckout）从建立到转入交接挂起仅存活
+                        // 469ms（京东 a23f589b）~5.5s（京东 e3b01a29），拼多多同样只有
+                        // 2067ms。挂起后 activeCheckout 被置空，用户在结算页上的每一次
+                        // 点击都返回 NO_ACTIVE_CHECKOUT——本轮日志中连续失败 14 次。
+                        // 此前这里调用 clearUserRetryCaptureContext()，等于在唯一真正
+                        // 需要手动补截的页面上主动移除了兜底能力。
+                        // 改为建立上下文：用户随时可手动补截，不再受那不足一秒的窗口限制。
+                        // 该上下文只承载脱敏元数据，且 CHECKOUT 角色本就在
+                        // canBufferUserRetrySnapshot() 允许集合内；敏感页已在更前面拦截。
+                        setUserRetryCaptureContext(observation)
+                        // 门禁通过即通知悬浮层进入"处理中"：候选期（稳定窗口确认前，
+                        // 指纹漂移时可达数十秒）此前零反馈，按钮停留在 HIDDEN 会让用户
+                        // 以为识别未工作（截图链路实际照常运行）。后续 Stable 事件、
+                        // Invalidated 或截图结果会自然覆盖该状态。
+                        checkoutCaptureOverlayManager?.onCheckoutCandidate(observation)
+                        // 新指纹只是“候选观察”，要等稳定窗口确认后才能替换当前结算页；
+                        // 提前清空会在 PDD 内部支付中间页切微信时丢掉手头正在提交的会话。
+                        stabilityCoordinator.observe(detection.observation)
+                    } else {
+                        // 精简模式：结算页只保留"读文本 + 敏感判定"，不进入稳定帧监测。
+                        // 上面三行必须整组跳过——任一行单独漏掉都会留下截图或 AI 入口：
+                        //   setUserRetryCaptureContext → 截图协调器的手动补截上下文
+                        //   onCheckoutCandidate         → 悬浮按钮进入"处理中"（诱导点击截图）
+                        //   stabilityCoordinator.observe → Stable 事件 → 自动截图 + buffer 落图
+                        // 刻意留在门外的部分（不受开关影响）：
+                        //   AccessibilityPageSummaryCollector.collect / sensitivePageLatch
+                        //     / PendingConfirmOverlayManager.onObservationState
+                        //   它们只读节点文本、不截图，且是付款确认弹窗的敏感帧门禁依据；
+                        //   跟着开关一起关掉会让弹窗永远等不到"最近一帧确认非敏感"，
+                        //   退化到只剩系统通知兜底。
+                        clearUserRetryCaptureContext()
+                    }
                 }
 
                 is CheckoutPageDetection.Rejected -> {
@@ -1710,6 +1795,17 @@ class CheckoutAccessibilityService : AccessibilityService() {
         handoffContext: PaymentResultHandoffContext?,
         sensitivePageSeen: Boolean
     ) {
+        // 精简模式开关：这条兜底虽是"证据链路"的位置，做的却是 takeScreenshot +
+        // 外部视觉模型，与结算页自动截图同属一类动作，必须一起停掉，否则
+        // "关闭后日志中不再有截图"这条验收判据不成立。
+        // 结果页**文本**解析主路径（PaymentResultParser）不经过本方法，不受影响。
+        if (!RecognitionCapabilities.checkoutCaptureEnabled) {
+            logScreenshotFallbackBlockedSampled(
+                reason = "结算页截图识别链路已停用",
+                paymentPackage = paymentPackage
+            )
+            return
+        }
         // P0 隐私红线：敏感支付页面一律禁止截图 AI 兜底，且不受节流状态影响。
         if (sensitivePageSeen) {
             logScreenshotFallbackBlockedSampled("本轮观察到敏感页面", paymentPackage)
@@ -2516,6 +2612,13 @@ class CheckoutAccessibilityService : AccessibilityService() {
      * NO_ACTIVE_CHECKOUT/NOT_CHECKOUT_PAGE 的场景，现在都能直接产出待确认。
      */
     private fun requestManualCaptureFromOverlay() {
+        // 精简模式：悬浮按钮的两条分支（原会话绑定手动补截 / 用户断言）都以
+        // takeScreenshot + buffer 落图 + AI 派发收尾，属于同一条截图识别链路，
+        // 在这个唯一路由点一刀切掉，避免下游两处各写一遍开关判断。
+        if (!RecognitionCapabilities.checkoutCaptureEnabled) {
+            JotBillLog.i(TAG, "手动截图已停用: 结算页截图识别链路关闭")
+            return
+        }
         val foregroundPackage = currentForegroundShoppingPackage()
         val hasLiveAutoCandidate = foregroundPackage != null && try {
             checkoutSnapshotBuffer?.findReference(checkoutSnapshotSlotId(foregroundPackage)) != null

@@ -9,6 +9,7 @@ import com.facebook.react.bridge.ReactMethod
 import com.facebook.react.bridge.WritableMap
 import com.facebook.react.modules.core.DeviceEventManagerModule
 import com.jotbill.app.recognition.CheckoutAccessibilityService
+import com.jotbill.app.recognition.RecognitionCapabilities
 import com.jotbill.app.recognition.SnapshotCaptureResult
 
 /** 为 RN 提供悬浮按钮权限、显示配置、截图触发和无图片状态事件。 */
@@ -114,6 +115,32 @@ class OverlayModule(
             promise.resolve(PendingConfirmOverlayManager.isEnabled(reactContext))
         } catch (error: RuntimeException) {
             promise.reject(ERROR_CODE, "读取付款确认弹窗开关失败", error)
+        }
+    }
+
+    /**
+     * 结算页截图识别链路开关（精简版）。
+     *
+     * 与 [setPendingConfirmPopupEnabled] 刻意分开：后者只控制"弹窗出不出现"，
+     * 前者控制"要不要截结算页的图送 AI"。两者都是 SharedPreferences 落盘，
+     * 但语义正交——关掉识别链路不影响弹窗，关掉弹窗也不影响识别。
+     */
+    @ReactMethod
+    fun setCheckoutCaptureEnabled(enabled: Boolean, promise: Promise) {
+        try {
+            RecognitionCapabilities.setCheckoutCaptureEnabled(reactContext, enabled)
+            promise.resolve(null)
+        } catch (error: RuntimeException) {
+            promise.reject(ERROR_CODE, "更新结算页截图识别链路开关失败", error)
+        }
+    }
+
+    @ReactMethod
+    fun getCheckoutCaptureEnabled(promise: Promise) {
+        try {
+            promise.resolve(RecognitionCapabilities.isCheckoutCaptureEnabled(reactContext))
+        } catch (error: RuntimeException) {
+            promise.reject(ERROR_CODE, "读取结算页截图识别链路开关失败", error)
         }
     }
 

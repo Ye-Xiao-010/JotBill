@@ -56,6 +56,8 @@ interface RawOverlayModule {
   requestManualCapture(): Promise<SnapshotCaptureResult>;
   setPendingConfirmPopupEnabled(enabled: boolean): Promise<void>;
   getPendingConfirmPopupEnabled(): Promise<boolean>;
+  setCheckoutCaptureEnabled(enabled: boolean): Promise<void>;
+  getCheckoutCaptureEnabled(): Promise<boolean>;
   addListener(eventName: string): void;
   removeListeners(count: number): void;
 }
@@ -106,6 +108,20 @@ export const nativeOverlay = {
 
   async getPendingConfirmPopupEnabled(): Promise<boolean> {
     return getRawOverlayModule().getPendingConfirmPopupEnabled();
+  },
+
+  /**
+   * 结算页截图识别链路开关（精简版）。false = 不做稳定帧监测/截图/AI 派发，
+   * 只保留支付结果页文本证据 → 待确认弹窗这条链路。
+   *
+   * 与 setPendingConfirmPopupEnabled 正交：关掉它不会关掉弹窗。
+   */
+  async setCheckoutCaptureEnabled(enabled: boolean): Promise<void> {
+    await getRawOverlayModule().setCheckoutCaptureEnabled(enabled);
+  },
+
+  async getCheckoutCaptureEnabled(): Promise<boolean> {
+    return getRawOverlayModule().getCheckoutCaptureEnabled();
   },
 };
 

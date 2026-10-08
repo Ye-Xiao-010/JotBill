@@ -28,6 +28,7 @@ import { useAlert } from '../providers';
 import { aiService } from '../services/ai';
 import { nativePendingReminder } from '../native/pendingReminder';
 import { nativeBudgetReminder } from '../native/budgetReminder';
+import { nativeOverlay } from '../native/overlay';
 import type {
   AIModelConfig,
   AIProvider,
@@ -618,6 +619,11 @@ export default function GeneralSettingsScreen({ navigation: _navigation }: Gener
   // 预算超支提醒开关(仅控制系统通知;进度计算与 UI 变色不受影响,默认开启)
   const [budgetReminderEnabled, setBudgetReminderEnabled] = useState(true);
 
+  // 结算页截图识别链路开关(精简版;默认开启以保持与完整版一致的行为)
+  const [checkoutCaptureEnabled, setCheckoutCaptureEnabled] = useState(true);
+  // 写盘失败时需要把开关拨回真实值,否则页面显示与实际行为会长期不一致
+  const [checkoutCaptureBusy, setCheckoutCaptureBusy] = useState(false);
+
   // 加载配置
   useEffect(() => {
     loadConfig();
@@ -659,7 +665,28 @@ export default function GeneralSettingsScreen({ navigation: _navigation }: Gener
       .isReminderEnabled()
       .then(setBudgetReminderEnabled)
       .catch(() => undefined);
+    nativeOverlay
+      .getCheckoutCaptureEnabled()
+      .then(setCheckoutCaptureEnabled)
+      .catch(() => undefined);
   }, []);
+
+  const handleToggleCheckoutCapture = async (enabled: boolean) => {
+    setCheckoutCaptureEnabled(enabled);
+    setCheckoutCaptureBusy(true);
+    try {
+      await nativeOverlay.setCheckoutCaptureEnabled(enabled);
+    } catch (error) {
+      console.error('切换结算页截图识别链路失败:', error);
+      // 拨回真实值:原生侧未落盘,页面若留在乐观值会让用户以为已生效
+      nativeOverlay
+        .getCheckoutCaptureEnabled()
+        .then(setCheckoutCaptureEnabled)
+        .catch(() => undefined);
+    } finally {
+      setCheckoutCaptureBusy(false);
+    }
+  };
 
   const handleTogglePendingReminder = async (enabled: boolean) => {
     setPendingReminderEnabled(enabled);
@@ -887,6 +914,26 @@ export default function GeneralSettingsScreen({ navigation: _navigation }: Gener
       <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
         <PaymentNotificationSettings style={styles.card} />
         <ManualCaptureOverlaySettings style={styles.card} />
+
+        {/* 结算页截图识别链路(精简版开关) */}
+        <View style={styles.card}>
+          <Text style={styles.cardTitle}>🛒 结算页识别</Text>
+          <View style={styles.appItem}>
+            <View style={styles.appInfo}>
+              <Text style={styles.appName}>结算页截图 AI 识别</Text>
+              <Text style={styles.appPackage}>
+                关闭后不再监测结算页、不截图、不调用视觉模型；支付结果页弹窗记账不受影响
+              </Text>
+            </View>
+            <Switch
+              value={checkoutCaptureEnabled}
+              onValueChange={handleToggleCheckoutCapture}
+              disabled={checkoutCaptureBusy}
+              trackColor={{ false: styles._colors.divider, true: styles._colors.primary }}
+              thumbColor="#FFFFFF"
+            />
+          </View>
+        </View>
 
         {/* 待确认提醒 */}
         <View style={styles.card}>
