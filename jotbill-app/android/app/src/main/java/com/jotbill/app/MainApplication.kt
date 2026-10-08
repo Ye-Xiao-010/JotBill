@@ -56,7 +56,13 @@ class MainApplication : Application(), ReactApplication {
           android.util.Log.i("HotUpdate", "当前 crash_count=$crashCount")
 
           if (crashCount < 2) {
-              prefs.edit().putInt("crash_count", crashCount + 1).apply()
+              // ⚠️ 必须 commit()，不能用 apply()。
+              // 这个计数的**全部意义**就是"进程崩溃/被杀后仍能读到累加值"——
+              // apply() 是异步落盘，进程被硬杀或 ANR 时根本没写进磁盘，
+              // 下次启动读到的 crash_count 偏低甚至恒为 0 ⇒ 永远触发不了
+              // `crashCount < 2` 的删除回退 ⇒ 崩溃循环没有自愈。
+              // 这里每进程只写一次、同步写，开销可接受。
+              prefs.edit().putInt("crash_count", crashCount + 1).commit()
               android.util.Log.i("HotUpdate", "使用热更新 bundle (crash_count: ${crashCount + 1})")
               hotBundlePathCache = hotBundlePath.absolutePath
           } else {

@@ -88,11 +88,16 @@ internal object BudgetReminderNotifier {
         database.budgetDao().getActive().forEach { budget ->
             val (start, end) = budgetPeriodRange(budget.period, now)
             val spent = database.billDao().sumExpenses(budget.categoryId, start, end)
-            val progressPct = if (budget.amountMinor == 0L) {
-                if (spent > 0L) 100 else 0
+            // ⚠️ 阈值判定必须用**原始比例**，不能用取整后的百分比。
+            // 此前 `roundToInt()` 让 99.5% 进位成 100 → 预算 ¥100、已花 ¥99.50
+            // 会推送"预算已超支"，而实际一分钱都没超。金额类阈值取整比较是
+            // 典型的边界错误。progressPct 仅用于展示文案，不参与任何判定。
+            val progressRatio = if (budget.amountMinor == 0L) {
+                if (spent > 0L) 1.0 else 0.0
             } else {
-                (spent.toDouble() / budget.amountMinor.toDouble() * 100.0).roundToInt()
+                spent.toDouble() / budget.amountMinor.toDouble()
             }
+            val progressPct = (progressRatio * 100.0).roundToInt()
             // 一次性档位:alertAt(默认 80)与 100 各提醒一次;同周期内已提醒的档位不再提醒。
             // 另存触发该提醒时的 alertAt:用户同周期内调低阈值后,新阈值档位允许再提醒一次
             // (此前只存最高已提醒档位,调低后永远不会再提醒)。
@@ -101,10 +106,11 @@ internal object BudgetReminderNotifier {
             val alertAtKey = ALERTED_AT_PREFIX + budget.id + "_" + periodKey
             val already = prefs.getInt(dedupKey, 0)
             val storedAlertAt = prefs.getInt(alertAtKey, Int.MIN_VALUE)
+            val alertAtRatio = budget.alertAt / 100.0
             var level = 0
             when {
-                progressPct >= 100 && already < 100 -> level = 100
-                progressPct >= budget.alertAt &&
+                progressRatio >= 1.0 && already < 100 -> level = 100
+                progressRatio >= alertAtRatio &&
                     (already < budget.alertAt || storedAlertAt != budget.alertAt) ->
                     level = budget.alertAt
             }

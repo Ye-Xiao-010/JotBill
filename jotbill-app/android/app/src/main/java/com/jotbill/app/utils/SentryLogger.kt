@@ -340,7 +340,9 @@ object SentryLogger {
                     }
                 }
             } else {
-                Sentry.captureMessage(message, SentryLevel.ERROR)
+                // ⚠️ 此前这里是 `captureMessage(message, ERROR)` —— 同名方法 w 分支
+                // 走 redact 而 ERROR 分支不脱敏，属于同一出口的两条路径口径不一致。
+                Sentry.captureMessage(redact(message), SentryLevel.ERROR)
             }
         } catch (e: Exception) {
             Log.e(TAG, "发送错误到 Sentry 失败", e)
@@ -357,18 +359,20 @@ object SentryLogger {
      * @param data 附加数据（可选）
      */
     fun captureException(throwable: Throwable, message: String? = null, data: Map<String, Any>? = null) {
-        Log.e(TAG, message ?: "捕获异常", throwable)
+        Log.e(TAG, redact(message ?: "捕获异常"), throwable)
 
         if (!isEnabled) return
 
         try {
             Sentry.captureException(throwable) { scope ->
+                // ⚠️ message 与 data 此前均未走 redact（同文件 ERROR 分支的
+                // setExtra 却脱敏了），是脱敏的第三条绕过路径。
                 if (message != null) {
-                    scope.setExtra("exception_message", message)
+                    scope.setExtra("exception_message", redact(message))
                 }
                 if (data != null) {
                     data.forEach { (k, v) ->
-                        scope.setExtra("exception_$k", v.toString())
+                        scope.setExtra(redact("exception_$k"), redact(v.toString()))
                     }
                 }
             }
@@ -385,15 +389,16 @@ object SentryLogger {
      * @param data 附加数据（可选）
      */
     fun captureMessage(message: String, level: SentryLevel = SentryLevel.INFO, data: Map<String, Any>? = null) {
-        Log.i(TAG, "发送消息到 Sentry: $message")
+        Log.i(TAG, "发送消息到 Sentry: ${redact(message)}")
 
         if (!isEnabled) return
 
         try {
-            Sentry.captureMessage(message, level) { scope ->
+            // ⚠️ message 与 data 此前全部未脱敏（脱敏的第四条绕过路径）。
+            Sentry.captureMessage(redact(message), level) { scope ->
                 if (data != null) {
                     data.forEach { (k, v) ->
-                        scope.setExtra("message_$k", v.toString())
+                        scope.setExtra(redact("message_$k"), redact(v.toString()))
                     }
                 }
             }

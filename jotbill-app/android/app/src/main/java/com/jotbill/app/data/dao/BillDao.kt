@@ -206,6 +206,14 @@ interface BillDao {
         offset: Int
     ): List<BillEntity>
 
+    /**
+     * 按筛选条件计数（供分页 total 使用）。
+     *
+     * ⚠️ 三条 LIKE 必须与 [query] **逐字一致**（含 `ESCAPE '~'`）：`DataModule.getBills`
+     * 把同一个已由 `escapeLikeKeyword` 转义过的 keyword 同时喂给两者。若此处漏 ESCAPE，
+     * 搜索 `100%` 时 `~` 是普通字符而 `%` 仍是通配符 → total 虚高；
+     * 搜索含 `_` 时 `_` 变单字符通配符 → total 失真，`hasMore` 随之出错、翻页出空白页。
+     */
     @Query(
         """
         SELECT COUNT(*) FROM bills
@@ -219,9 +227,9 @@ interface BillDao {
           AND (:endDate IS NULL OR occurred_at <= :endDate)
           AND (
               :keyword IS NULL
-              OR description LIKE '%' || :keyword || '%'
-              OR merchant LIKE '%' || :keyword || '%'
-              OR product_description LIKE '%' || :keyword || '%'
+              OR description LIKE '%' || :keyword || '%' ESCAPE '~'
+              OR merchant LIKE '%' || :keyword || '%' ESCAPE '~'
+              OR product_description LIKE '%' || :keyword || '%' ESCAPE '~'
           )
         """
     )

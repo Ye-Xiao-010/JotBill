@@ -627,14 +627,32 @@ class BackupModule(
         }
     }
 
+    /**
+     * 打开备份输入流。
+     *
+     * ⚠️ 此前非 `content:`/`file:` 前缀时直接 `File(filePath).inputStream()`，
+     * 与类注释"通过 Android SAF"矛盾：`filePath` 来自 JS，恢复入口可读任意
+     * 进程可读文件并把内容送进 parse。虽然桥接层本就有同等能力、不构成提权，
+     * 但这是一个"该收口未收口"的口子：把任意路径当成备份文件读进来，
+     * 解析失败时的报错还会把文件内容线索带出去。
+     *
+     * 收口为只接受 SAF 的 `content:` URI 与显式 `file:` URI，其余一律拒绝。
+     * 正常调用方（JS 侧 SAF 选择器返回的就是 content: URI）不受影响。
+     */
     private fun openInput(filePath: String): InputStream? {
-        return if (filePath.startsWith("content:", ignoreCase = true) ||
-            filePath.startsWith("file:", ignoreCase = true)
-        ) {
-            reactContext.contentResolver.openInputStream(Uri.parse(filePath))
-        } else {
-            File(filePath).inputStream()
+        val trimmed = filePath.trim()
+        if (trimmed.startsWith("content:", ignoreCase = true)) {
+            return reactContext.contentResolver.openInputStream(Uri.parse(trimmed))
         }
+        if (trimmed.startsWith("file:", ignoreCase = true)) {
+            return runCatching { Uri.parse(trimmed).path?.let(::File)?.inputStream() }
+                .getOrNull()
+        }
+        com.jotbill.app.utils.JotBillLog.w(
+            "BackupModule",
+            "拒绝非 SAF 的备份路径(仅接受 content:/file: URI): ${trimmed.take(64)}"
+        )
+        return null
     }
 
     private fun readLimited(input: InputStream): ByteArray {

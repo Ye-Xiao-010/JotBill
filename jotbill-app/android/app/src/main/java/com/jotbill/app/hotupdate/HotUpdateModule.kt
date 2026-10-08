@@ -187,11 +187,16 @@ class HotUpdateModule(reactContext: ReactApplicationContext) :
     }
 
     /**
-     * 标记 bundle 已成功加载，重置崩溃计数
+     * 标记 bundle 已成功加载，重置崩溃计数。
+     *
+     * ⚠️ 用 commit() 而非 apply()：这里复位的是"崩溃计数"，它与
+     * MainApplication 读取的是同一份偏好。用 apply() 时若进程在落盘前被杀，
+     * 计数不会被清零，下次启动会误判为"又崩了一次"，进而错误地触发回退 ——
+     * 一个成功运行的 bundle 被当成坏的删掉。同步写确保读到的状态一致。
      */
     @ReactMethod
     fun markBundleApplied() {
-        getPrefs().edit().putInt(KEY_CRASH_COUNT, 0).apply()
+        getPrefs().edit().putInt(KEY_CRASH_COUNT, 0).commit()
     }
 
     /**
