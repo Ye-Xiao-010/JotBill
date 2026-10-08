@@ -58,6 +58,22 @@ internal class ImportEngine(
      */
     private val lifecycleMutex = Mutex()
 
+    /**
+     * 导入生命周期的**唯一互斥闸**：撤销与中断恢复也必须走它。
+     *
+     * 此前只有 inspect / execute 持锁，而 [ImportUndo] 完全在锁外。后果是
+     * `undoLatestCompleted` 进入事务后第一步 `recoverInterruptedBatchesInTransaction()`
+     * 会把**正在执行**的 RUNNING 批次当成崩溃孤儿处理：删掉已写入的账单、
+     * 反向恢复余额、置 FAILED；而 execute 的分块事务继续写后续 chunk，最终
+     * `finish()` 带 `WHERE status='RUNNING'` 匹配 0 行且**返回值被丢弃**，
+     * execute 照样返回 import_succeeded。调用方看到成功，数据残缺、余额错乱。
+     *
+     * 走同一把锁后，"撤销"与"导入"不可能交错。
+     */
+    suspend fun <T> withLifecycleLock(block: suspend () -> T): T = lifecycleMutex.withLock {
+        block()
+    }
+
     /** 用户取消当前导入；进程/模块异常路径由 BackupModule.invalidate 调用。 */
     fun requestCancel() {
         activeRun?.cancelled = true
@@ -623,14 +639,29 @@ internal class ImportEngine(
                 unmatched = source == null
             )
         }
-        val source = matchAccount(sourceTexts, accounts)
-        val targetTexts = listOfNotNull(
-            row.merchant?.trim()?.takeIf { it.isNotEmpty() },
-            row.paymentMethod?.trim()?.takeIf { it.isNotEmpty() }
+        // transfer / repayment 需要**两个不同**账户。
+        //
+        // ⚠️ 此前这里把同一组文本仅换顺序传给两次匹配（source=[paymentMethod, merchant]、
+        // target=[merchant, paymentMethod]），而 matchAccount 对入参顺序完全不敏感
+        // （exact 用 distinctBy 后判 size==1，contained 用 any）⇒ source 与 target
+        // 必然解析出同一个账户，随即被 `takeIf { it.id != source?.id }` 抹成 null。
+        // 后果：targetAccountId 恒为 null → applyImportedBalance 直接 return →
+        // 导入的转账/还款**从不改动任何账户余额**，且 accountUnmatchedCount 被虚高。
+        //
+        // 正确语义：付款方来自 paymentMethod（账单里的付款渠道/账户），
+        // 对方账户来自 merchant（交易对手）。因此两侧各自主字段优先，
+        // 主字段匹配不到时才回退到"两个字段一起试"，以兼容只填了一列的账单。
+        val paymentMethod = row.paymentMethod?.trim()?.takeIf { it.isNotEmpty() }
+        val merchantName = row.merchant?.trim()?.takeIf { it.isNotEmpty() }
+        val source = matchAccount(
+            texts = listOfNotNull(paymentMethod, merchantName),
+            accounts = accounts,
+            preferred = paymentMethod
         )
         val target = matchAccount(
-            texts = targetTexts,
+            texts = listOfNotNull(merchantName, paymentMethod),
             accounts = accounts,
+            preferred = merchantName,
             allowedKinds = if (row.type == "repayment") setOf("liability") else null
         )?.takeIf { it.id != source?.id }
         val bothMatched = source != null && target != null
@@ -641,14 +672,33 @@ internal class ImportEngine(
         )
     }
 
+    /**
+     * 按文本匹配账户。
+     *
+     * @param preferred 该侧的**主字段**文本（转账源=付款渠道、目标=交易对手）。
+     *   主字段能单独唯一命中时直接采用；否则回退到用 [texts] 全组匹配。
+     *   这是修复"源与目标用同一组文本换顺序 ⇒ 必然解析出同一账户 ⇒ 目标恒为 null"
+     *   的关键：两侧必须能各自锚定到不同的主字段。
+     */
     private fun matchAccount(
         texts: List<String>,
         accounts: List<AccountEntity>,
-        allowedKinds: Set<String>? = null
+        allowedKinds: Set<String>? = null,
+        preferred: String? = null
     ): AccountEntity? {
         val candidates = accounts.filter { allowedKinds == null || it.kind in allowedKinds }
         val normalizedTexts = texts.map { it.trim() }.filter { it.isNotEmpty() }
         if (normalizedTexts.isEmpty()) return null
+        // 主字段单独唯一命中 ⇒ 直接采用，不再看其它文本（否则两侧会撞同一个账户）
+        preferred?.trim()?.takeIf { it.isNotEmpty() }?.let { primary ->
+            val primaryExact = candidates.firstOrNull { it.name == primary }
+            if (primaryExact != null) return primaryExact
+            val primaryContained = candidates.filter { account ->
+                val name = account.name
+                name.contains(primary) || primary.contains(name)
+            }
+            if (primaryContained.size == 1) return primaryContained.single()
+        }
         val exact = normalizedTexts
             .mapNotNull { text -> candidates.firstOrNull { it.name == text } }
             .distinctBy { it.id }

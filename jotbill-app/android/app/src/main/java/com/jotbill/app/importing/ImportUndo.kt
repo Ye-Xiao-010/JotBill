@@ -37,7 +37,19 @@ internal class ImportUndo(
         val protectedRecords: List<ProtectedRecord>
     )
 
-    suspend fun undoLatestCompleted(batchId: String): UndoResult {
+    /**
+     * 撤销最近一批导入。
+     *
+     * 整个流程经 [ImportEngine.withLifecycleLock] 串行化：撤销会先调用
+     * `recoverInterruptedBatchesInTransaction()`，若此时有导入正在执行，
+     * 那个 RUNNING 批次会被当成崩溃孤儿清理（删账单 + 反向余额 + 置 FAILED），
+     * 而 execute 的分块事务仍会继续写入后续 chunk 并最终返回"导入成功"。
+     * 锁保证"撤销"与"导入"不可能交错。
+     */
+    suspend fun undoLatestCompleted(batchId: String): UndoResult =
+        engine.withLifecycleLock { undoLatestCompletedLocked(batchId) }
+
+    private suspend fun undoLatestCompletedLocked(batchId: String): UndoResult {
         val batch = database.importBatchDao().getById(batchId)
             ?: throw UndoException("NOT_FOUND", "找不到导入批次 $batchId")
         if (batch.status != ImportBatchEntity.STATUS_COMPLETED) {
@@ -139,10 +151,17 @@ internal class ImportUndo(
         )
     }
 
-    /** 中断恢复：RUNNING 且无对应进行中任务（进程重启后）按失败清理。 */
+    /**
+     * 中断恢复：RUNNING 且无对应进行中任务（进程重启后）按失败清理。
+     *
+     * 同样经 [ImportEngine.withLifecycleLock] 串行化 —— 它会把 RUNNING 批次当
+     * 失败清理，而正在执行的导入也会留下 RUNNING 批次，二者交错会摧毁在途数据。
+     */
     suspend fun recoverInterruptedBatches() {
-        database.withTransaction {
-            recoverInterruptedBatchesInTransaction()
+        engine.withLifecycleLock {
+            database.withTransaction {
+                recoverInterruptedBatchesInTransaction()
+            }
         }
     }
 
