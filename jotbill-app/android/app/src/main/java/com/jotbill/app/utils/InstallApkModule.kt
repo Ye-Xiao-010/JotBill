@@ -5,6 +5,7 @@ import android.content.pm.PackageInfo
 import android.content.pm.PackageManager
 import android.content.pm.Signature
 import android.net.Uri
+import android.os.Build
 import androidx.core.content.FileProvider
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
@@ -17,6 +18,12 @@ import java.security.MessageDigest
 import java.security.MessageDigest.getInstance
 
 class InstallApkModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaModule(reactContext) {
+
+    companion object {
+        /** 签名读不到时的哨兵值。绝不可用任何"看起来像指纹"的常量，否则两侧同时
+         * 读不到签名时会互相相等 ⇒ "是否同一签名"的检查恒通过。 */
+        private const val UNREADABLE_SIGNATURE = "__unreadable_signature__"
+    }
 
     override fun getName(): String = "InstallApk"
 
@@ -76,9 +83,13 @@ class InstallApkModule(reactContext: ReactApplicationContext) : ReactContextBase
                 )
             }.getOrNull()
             val signatureConsistent = if (current == null) {
-                true
+                // ⚠️ 读不到当前包信息时**必须判为不一致**（fail-closed）。
+                // 此前这里是 `true` —— 任何 APK 都会被判"签名一致"，而 JS 侧
+                // useAppUpdate.ts:151-153 正是拿这个字段当安装闸门。
+                false
             } else {
                 archive.packageName == context.packageName &&
+                    signatureHash(archive) != UNREADABLE_SIGNATURE &&
                     signatureHash(archive) == signatureHash(current)
             }
             val result = JSONObject().apply {
@@ -95,8 +106,30 @@ class InstallApkModule(reactContext: ReactApplicationContext) : ReactContextBase
         }
     }
 
+    /**
+     * 取签名指纹摘要；**读不到签名时返回哨兵值而非某个真实指纹**。
+     *
+     * 此前返回常量 `"unsigned"` 有两个致命问题：
+     * ① `GET_SIGNATURES` 自 API 28 已弃用，归档包在部分系统版本上 signatures 为 null；
+     * ② 两侧都退化成 `"unsigned"` 时 `"unsigned" == "unsigned"` **恒成立**，
+     * 于是"是否同一签名"这项检查对任何一对都通过。
+     * 哨兵值使"读不到"无法与"指纹相同"混淆，配合上方的 fail-closed 判据，
+     * 读不到签名一律判为不一致。
+     */
     private fun signatureHash(packageInfo: PackageInfo): String {
-        val signatures = packageInfo.signatures ?: return "unsigned"
+        val signatures = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            packageInfo.signingInfo?.let { info ->
+                if (info.hasMultipleSigners()) {
+                    info.apkContentsSigners
+                } else {
+                    info.signingCertificateHistory
+                }
+            }
+        } else {
+            @Suppress("DEPRECATION")
+            packageInfo.signatures
+        }
+        if (signatures.isNullOrEmpty()) return UNREADABLE_SIGNATURE
         return signatures.map { signature -> sha256Bytes(signature.toByteArray()) }
             .sorted()
             .joinToString(",")

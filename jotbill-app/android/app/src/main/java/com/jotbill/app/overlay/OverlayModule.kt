@@ -166,9 +166,27 @@ class OverlayModule(
 
     override fun onHostPause() = Unit
 
+    /**
+     * 宿主 Activity 销毁**不是** CatalystInstance 销毁。
+     *
+     * RN 0.81 路径：onHostDestroy → ReactInstanceManager 只把生命周期状态前移并
+     * 发事件，不销毁 CatalystInstance；Activity 因内存紧张被回收后重建时，
+     * NativeModule 实例被复用、`init` 不再执行。
+     *
+     * 因此清监听必须挂在 [invalidate]（= onCatalystInstanceDestroy）上：
+     * 挂在 onHostDestroy 会让 CheckoutCaptureOverlayStateHub.listener 变 null
+     * 且永不重建，`onCheckoutCaptureOverlayStateChanged` 在本进程内永久失效，
+     * ManualCaptureOverlaySettings.tsx:242 的订阅静默失效。
+     */
     override fun onHostDestroy() {
+        // 只解除 RN 生命周期订阅；状态监听保留到 invalidate。
+        reactContext.removeLifecycleEventListener(this)
+    }
+
+    override fun invalidate() {
         CheckoutCaptureOverlayStateHub.clearListener(stateListener)
         reactContext.removeLifecycleEventListener(this)
+        super.invalidate()
     }
 
     private fun emitState(state: CheckoutOverlayState) {
