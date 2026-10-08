@@ -10,6 +10,7 @@ import com.jotbill.app.data.entity.AuditEntryEntity
 import com.jotbill.app.data.entity.PendingTransactionEntity
 import com.jotbill.app.notification.PaymentEvidenceInput
 import com.jotbill.app.rules.RuleEngine
+import com.jotbill.app.utils.JotBillLog
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 import org.json.JSONArray
@@ -66,6 +67,17 @@ internal class FeeExtractor(
         input: PaymentEvidenceInput,
         mainPart: PaymentEvidenceInput?
     ): FeeOutcome = database.withTransaction {
+        // D-3：通知派生链路在 v1 整体停用。本分类器直写 PendingTransaction 并
+        // emit 到 PendingChangeHub，完全绕过 Matcher 的
+        // isNotificationSourceDisabledInV1 闸 ⇒ 必须在入口自查，
+        // 否则"v1 只做支付结果页"的收敛形同虚设。
+        if (isNotificationPipelineDisabledInV1()) {
+            JotBillLog.i(
+                "FeeExtractor",
+                "手续费来源在 v1 已停用(D-3)，未落待确认: amount=${input.amountMinor}"
+            )
+            return@withTransaction FeeOutcome.Duplicate
+        }
         val now = nowMillis()
         if (input.occurredAt <= 0L || input.amountMinor < 0L ||
             input.amountMinor > MAX_SAFE_MINOR_UNIT

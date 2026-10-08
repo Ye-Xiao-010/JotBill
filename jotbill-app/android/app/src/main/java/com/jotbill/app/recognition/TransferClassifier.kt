@@ -3,6 +3,7 @@ package com.jotbill.app.recognition
 import androidx.room.withTransaction
 import com.jotbill.app.data.CreateBillOutcome
 import com.jotbill.app.data.JotBillDatabase
+import com.jotbill.app.utils.JotBillLog
 import com.jotbill.app.pending.PendingChangeHub
 import com.jotbill.app.pending.PendingChangeInfo
 import com.jotbill.app.data.LedgerRepository
@@ -74,6 +75,20 @@ internal class TransferClassifier(
      * 全程在单个 Room 事务内，任一写入失败整体回滚。
      */
     suspend fun processTransfer(input: PaymentEvidenceInput): TransferOutcome = database.withTransaction {
+        // D-3：通知派生链路在 v1 整体停用。
+        //
+        // 本分类器是三条绕过链路里后果最重的一条：它会直写 Bill、自动入账、
+        // 联动双账户余额；且收款人命中时把 pending 定型为 `type="expense"`，
+        // 而 PendingPromptPolicy 只按 `type == "expense"` 放行 ⇒ 一条纯通知来源的
+        // "转账给他人"会命中付款确认弹窗，用户点"确认入账"即写成**支出**。
+        // 精简版下弹窗是唯一的自动记账入口，这条路径必须彻底关掉。
+        if (isNotificationPipelineDisabledInV1()) {
+            JotBillLog.i(
+                "TransferClassifier",
+                "转账来源在 v1 已停用(D-3)，未落账: amount=${input.amountMinor}"
+            )
+            return@withTransaction TransferOutcome.Duplicate
+        }
         val now = nowMillis()
         if (input.amountMinor !in 1L..MAX_SAFE_MINOR_UNIT || input.occurredAt <= 0L) {
             return@withTransaction TransferOutcome.Duplicate

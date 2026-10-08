@@ -116,16 +116,36 @@ data class PaymentNotificationFallbackSignal(
  * D-3 / G3.1：v1 信号源收敛为「支付结果页」单一来源，支付通知整体推迟到版本更新。
  *
  * 依据：`CONFLICT_REVIEW_SESSION` G3.1「v1 只做支付结果页，通知整体推迟到版本更新；
- * 通知代码全部保留，仅摘除证据作用」，处置方式为**粒度 2**（出口开关）——
- * 在 `recordPaymentEvidence` / `recordOrphanPaymentSignal` 内按已归一化的
- * sourceType 短路，采集与解析代码全部保留，新版本打开此闸即恢复。
+ * 通知代码全部保留，仅摘除证据作用」，处置方式为**出口开关**——
+ * 按已归一化的 sourceType 短路，采集与解析代码全部保留，新版本打开此闸即恢复。
  *
  * ⚠️ 必须比对**归一化后**的值：调用方传的是 `"NOTIFICATION"` 等大写形式。
  * ⚠️ 只约束**通知来源**；`accessibility`（结果页主路径 / 截图兜底）与
  * `manual`（用户断言通道）不受影响。
+ *
+ * ⚠️ **本闸必须覆盖全部 notification 出口，不能只挂在 Matcher 上**。
+ * 此前只有 `recordPaymentEvidence` / `recordOrphanPaymentSignal` 两处调用它，
+ * 而 `FeeExtractor` / `RefundLinker` / `TransferClassifier` 三条通知链路
+ * 各自直写 Bill/PendingTransaction 并直接 emit 到 `PendingChangeHub`，
+ * 完全绕过 Matcher ⇒ 门禁形同虚设：它们照样自动入账、改账户余额、进待确认、
+ * 发系统通知。尤以 TransferClassifier 为甚：收款人命中时把 pending 定型为
+ * `type="expense"`，而 `PendingPromptPolicy` 只按 `type == "expense"` 放行
+ * ⇒ 一条纯通知来源的"转账给他人"会命中付款确认弹窗，用户点确认即写成**支出**。
+ *
+ * 因此另设 [isNotificationPipelineDisabledInV1] 供三个分类器在入口自查，
+ * 语义与本闸一致但用于"整条链路早退"，避免各自重复实现判定。
  */
 internal fun isNotificationSourceDisabledInV1(normalizedSourceType: String): Boolean =
     normalizedSourceType == "notification"
+
+/**
+ * 通知派生链路（手续费 / 退款关联 / 转账分类）的 v1 总闸。
+ *
+ * 与 [isNotificationSourceDisabledInV1] 同源同值，单独命名只为表达"整条链路早退"
+ * 的用途，使三个分类器的入口判读意图明确、且不会与 Matcher 的证据级判据混淆。
+ */
+internal fun isNotificationPipelineDisabledInV1(): Boolean =
+    isNotificationSourceDisabledInV1("notification")
 
 /** 将支付证据来源收敛为 Native.d.ts 允许的三个小写值。 */
 internal fun normalizePaymentEvidenceSourceType(value: String?): String? =

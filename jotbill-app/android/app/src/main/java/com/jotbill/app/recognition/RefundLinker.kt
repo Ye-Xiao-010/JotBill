@@ -3,6 +3,7 @@ package com.jotbill.app.recognition
 import androidx.room.withTransaction
 import com.jotbill.app.data.CreateBillOutcome
 import com.jotbill.app.data.JotBillDatabase
+import com.jotbill.app.utils.JotBillLog
 import com.jotbill.app.pending.PendingChangeHub
 import com.jotbill.app.pending.PendingChangeInfo
 import com.jotbill.app.data.LedgerRepository
@@ -80,6 +81,15 @@ internal class RefundLinker(
      * 全程在单个 Room 事务内，任一写入失败整体回滚。
      */
     suspend fun processRefund(input: PaymentEvidenceInput): RefundOutcome = database.withTransaction {
+        // D-3：通知派生链路在 v1 整体停用。本分类器会直接写 Bill、自动入账并
+        // 联动余额，完全绕过 Matcher 的 isNotificationSourceDisabledInV1 闸。
+        if (isNotificationPipelineDisabledInV1()) {
+            JotBillLog.i(
+                "RefundLinker",
+                "退款关联来源在 v1 已停用(D-3)，未落账: amount=${input.amountMinor}"
+            )
+            return@withTransaction RefundOutcome.Duplicate
+        }
         val now = nowMillis()
         if (input.amountMinor !in 1L..MAX_SAFE_MINOR_UNIT || input.occurredAt <= 0L) {
             return@withTransaction RefundOutcome.Duplicate
