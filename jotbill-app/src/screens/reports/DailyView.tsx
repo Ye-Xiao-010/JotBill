@@ -3,10 +3,10 @@
  * 月日历网格 + 点击某天展示账单明细
  */
 import React, { useState, useEffect } from 'react';
-import { View, Text, ScrollView, RefreshControl, StyleSheet, ActivityIndicator } from 'react-native';
+import { View, Text, ScrollView, RefreshControl, StyleSheet, ActivityIndicator, TouchableOpacity } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { ThemeColors } from '../../theme/colors';
-import { spacing } from '../../theme/spacing';
+import { spacing, borderRadius, borderWidth } from '../../theme/spacing';
 import { useStyles } from '../../hooks';
 import {
   useDailyGridData,
@@ -14,6 +14,7 @@ import {
   type ReportBill,
 } from '../../hooks/useIncomeExpenseData';
 import { CalendarGrid, PeriodNavigator } from '../../components/reports';
+import QueryErrorBanner from '../../components/ui/QueryErrorBanner';
 import BillItem from '../../components/business/BillItem';
 import type { BillData as BillItemData } from '../../components/business/BillItem';
 
@@ -43,8 +44,23 @@ export default function DailyView({
     if (initialSelectedDay !== undefined) setSelectedDay(initialSelectedDay);
   }, [initialYear, initialMonth, initialSelectedDay]);
 
-  const { dailyMap, isLoading, refetch } = useDailyGridData(year, month);
-  const { bills, isLoading: billsLoading } = useDailyBills(selectedDay);
+  const {
+    dailyMap,
+    isLoading,
+    isFetching,
+    isError,
+    error,
+    refetch,
+  } = useDailyGridData(year, month);
+  const {
+    bills,
+    total: billsTotal,
+    hasMore: billsHasMore,
+    isLoading: billsLoading,
+    isError: billsError,
+    error: billsErrorDetail,
+    refetch: refetchBills,
+  } = useDailyBills(selectedDay);
 
   const handlePrev = () => {
     if (month === 0) {
@@ -93,7 +109,9 @@ export default function DailyView({
   return (
     <ScrollView
       style={styles.container}
-      refreshControl={<RefreshControl refreshing={isLoading} onRefresh={refetch} />}
+      refreshControl={
+        <RefreshControl refreshing={isFetching && !isLoading} onRefresh={refetch} />
+      }
       showsVerticalScrollIndicator={false}
     >
       <PeriodNavigator
@@ -102,6 +120,17 @@ export default function DailyView({
         onNext={handleNext}
         disableNext={isNextDisabled}
       />
+
+      {/* 日历数据失败时，dailyMap 为空 ⇒ CalendarGrid 画出一张"整月无记录"的
+          日历，而实际上可能整月都有记录。必须显式说明。 */}
+      {isError ? (
+        <QueryErrorBanner
+          error={error}
+          title="日历数据加载失败"
+          hint="下方日历显示为空白，不代表这个月没有记录。"
+          onRetry={refetch}
+        />
+      ) : null}
 
       <CalendarGrid
         year={year}
@@ -130,19 +159,49 @@ export default function DailyView({
             )}
           </View>
 
-          {billsLoading ? (
+          {billsError ? (
+            <QueryErrorBanner
+              error={billsErrorDetail}
+              title="明细加载失败"
+              hint="当天可能有记录但读不出来。"
+              onRetry={refetchBills}
+              style={styles.inlineError}
+            />
+          ) : billsLoading ? (
             <ActivityIndicator
               style={styles.loading}
               color={styles._colors.primary}
             />
           ) : bills.length > 0 ? (
-            bills.map((bill) => (
-              <BillItem
-                key={bill.id}
-                bill={mapBill(bill)}
-                onPress={handleBillPress}
-              />
-            ))
+            <>
+              {bills.map((bill) => (
+                <BillItem
+                  key={bill.id}
+                  bill={mapBill(bill)}
+                  onPress={handleBillPress}
+                />
+              ))}
+              {/* ⚠️ limit=100 的静默截断必须说出来。
+                  上方汇总取自 dailyTrends（全量），下方明细只到 100 笔 ——
+                  超过时会出现"汇总 ¥5,000、明细只列 ¥300"的自相矛盾画面，
+                  而用户完全无从判断缺了多少。 */}
+              {billsHasMore ? (
+                <View style={styles.truncatedNotice}>
+                  <Text style={styles.truncatedText}>
+                    仅显示最近 {bills.length} 笔，当天共 {billsTotal} 笔。
+                    上方汇算是全量金额，明细列表未全部展示。
+                  </Text>
+                  <TouchableOpacity
+                    style={styles.truncatedButton}
+                    onPress={() => {
+                      void refetchBills();
+                    }}
+                  >
+                    <Text style={styles.truncatedButtonText}>重试加载</Text>
+                  </TouchableOpacity>
+                </View>
+              ) : null}
+            </>
           ) : (
             <Text style={styles.emptyText}>当天暂无记录</Text>
           )}
@@ -198,6 +257,37 @@ const createStyles = (colors: ThemeColors) => ({
       color: colors.textTertiary,
       textAlign: 'center',
       padding: spacing.xxxl,
+    },
+    inlineError: {
+      margin: 0,
+    },
+    truncatedNotice: {
+      marginTop: spacing.md,
+      padding: spacing.md,
+      borderRadius: borderRadius.small,
+      borderWidth: borderWidth.thin,
+      borderColor: colors.warning,
+      backgroundColor: colors.surface,
+    },
+    truncatedText: {
+      fontSize: 12,
+      lineHeight: 18,
+      color: colors.textSecondary,
+    },
+    truncatedButton: {
+      alignSelf: 'flex-start',
+      marginTop: spacing.sm,
+      paddingHorizontal: spacing.md,
+      paddingVertical: spacing.xs,
+      borderRadius: borderRadius.small,
+      borderWidth: borderWidth.thin,
+      borderColor: colors.stroke,
+      backgroundColor: colors.primary,
+    },
+    truncatedButtonText: {
+      fontSize: 12,
+      fontWeight: '800',
+      color: '#FFFFFF',
     },
   }),
   _colors: colors,

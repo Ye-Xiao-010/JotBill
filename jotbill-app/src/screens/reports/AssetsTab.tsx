@@ -10,6 +10,7 @@ import { useStyles } from '../../hooks';
 import { useAssetsData } from '../../hooks/useAssetsData';
 import { AssetTrendChart } from '../../components/reports';
 import AssetCompositionChart from '../../components/reports/AssetCompositionChart';
+import QueryErrorBanner from '../../components/ui/QueryErrorBanner';
 
 export default function AssetsTab() {
   const styles = useStyles(createStyles);
@@ -24,6 +25,9 @@ export default function AssetsTab() {
     incomeCategoryStats,
     expenseCategoryStats,
     isLoading,
+    isFetching,
+    isError,
+    error,
     refetch,
   } = useAssetsData();
 
@@ -38,10 +42,25 @@ export default function AssetsTab() {
     <ScrollView
       style={styles.container}
       refreshControl={
-        <RefreshControl refreshing={isLoading} onRefresh={refetch} />
+        <RefreshControl
+          refreshing={isFetching && !isLoading}
+          onRefresh={refetch}
+        />
       }
       showsVerticalScrollIndicator={false}
     >
+      {/* ⚠️ 失败时必须先说"读不出来"，再谈金额。
+          兜底值是 0，若直接渲染就是"净资产（账户余额）¥0.00"——
+          和"账户真的没钱"在界面上毫无区别，且没有任何办法自证。 */}
+      {isError ? (
+        <QueryErrorBanner
+          error={error}
+          title="资产数据加载失败"
+          hint="下面的金额是占位 0，不代表你的真实余额。"
+          onRetry={refetch}
+        />
+      ) : null}
+
       {/* 总资产卡片 */}
       <View style={styles.balanceCard}>
         <Text style={styles.balanceLabel}>净资产（账户余额）</Text>

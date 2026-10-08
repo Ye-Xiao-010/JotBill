@@ -70,9 +70,14 @@ export const LineChart: React.FC<LineChartProps> = ({
   const gridStep = valueRange / (gridLines - 1);
   const grids = Array.from({ length: gridLines }, (_, i) => minValue + gridStep * i);
 
-  // 计算点的位置
+  // 计算点的位置。
+  // ⚠️ 分母必须是 max(len-1, 1)：单数据点时 chartWidth / 0 = Infinity，
+  // 而 Infinity * 0 = NaN ⇒ d 路径、Circle 的 cx、X 轴标签全是 NaN，
+  // 图表渲染为空白。StatisticsScreen 默认区间是单月，getMonthlyTrends 按月分组
+  // 必然只返回 1 行 —— 即"默认进入就画不出图"。
+  const xDenominator = Math.max(data.length - 1, 1);
   const points = data.map((d, index) => {
-    const x = padding.left + (chartWidth / (data.length - 1)) * index;
+    const x = padding.left + (chartWidth / xDenominator) * index;
     const y = padding.top + chartHeight - ((d.value - minValue) / valueRange) * chartHeight;
     return { x, y, value: d.value, label: d.label };
   });

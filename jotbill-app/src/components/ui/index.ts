@@ -25,6 +25,8 @@ export { default as SearchBar } from './SearchBar';
 export type { SearchBarProps } from './SearchBar';
 export { default as EmptyState } from './EmptyState';
 export type { EmptyStateProps } from './EmptyState';
+export { default as QueryErrorBanner } from './QueryErrorBanner';
+export type { QueryErrorBannerProps } from './QueryErrorBanner';
 
 // Neo-Brutalism 组件
 export { default as BrutalPressable } from './BrutalPressable';

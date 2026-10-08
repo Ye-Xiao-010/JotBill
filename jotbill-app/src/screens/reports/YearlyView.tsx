@@ -9,6 +9,7 @@ import { spacing } from '../../theme/spacing';
 import { useStyles } from '../../hooks';
 import { useYearlyGridData } from '../../hooks/useIncomeExpenseData';
 import { YearGrid, MonthlySummaryList } from '../../components/reports';
+import QueryErrorBanner from '../../components/ui/QueryErrorBanner';
 
 interface YearlyViewProps {
   onJumpToMonthly?: (year: number, month?: number) => void;
@@ -18,7 +19,15 @@ export default function YearlyView({ onJumpToMonthly }: YearlyViewProps) {
   const styles = useStyles(createStyles);
   const [selectedYear, setSelectedYear] = useState<number | null>(null);
 
-  const { yearlyData, getMonthlyDataForYear, isLoading, refetch } = useYearlyGridData();
+  const {
+    yearlyData,
+    getMonthlyDataForYear,
+    isLoading,
+    isFetching,
+    isError,
+    error,
+    refetch,
+  } = useYearlyGridData();
 
   const handleYearPress = (year: number) => {
     setSelectedYear(selectedYear === year ? null : year);
@@ -51,12 +60,26 @@ export default function YearlyView({ onJumpToMonthly }: YearlyViewProps) {
   return (
     <ScrollView
       style={styles.container}
-      refreshControl={<RefreshControl refreshing={isLoading} onRefresh={refetch} />}
+      refreshControl={
+        <RefreshControl refreshing={isFetching && !isLoading} onRefresh={refetch} />
+      }
       showsVerticalScrollIndicator={false}
     >
       <View style={styles.header}>
         <Text style={styles.headerTitle}>近5年收支</Text>
       </View>
+
+      {/* useYearlyGridData 失败时 yearlyData 仍是补齐的 5 个零值年份 ——
+          这是最像"真实数据"的失败态：五年柱状图整齐地全为零，
+          用户会得出"这五年我一分没花"的结论。必须先说读失败。 */}
+      {isError ? (
+        <QueryErrorBanner
+          error={error}
+          title="年度数据加载失败"
+          hint="下方五年网格显示为 0，不代表这五年没有收支。"
+          onRetry={refetch}
+        />
+      ) : null}
 
       <YearGrid
         years={yearlyData}

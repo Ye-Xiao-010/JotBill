@@ -20,7 +20,7 @@ export default function AssetTrendChart({ data, dateRange }: AssetTrendChartProp
   if (data.length === 0) {
     return (
       <View style={styles.emptyContainer}>
-        <Text style={styles.emptyText}>暂无资产变动数据</Text>
+        <Text style={styles.emptyText}>该区间暂无账单数据</Text>
       </View>
     );
   }
@@ -40,7 +40,11 @@ export default function AssetTrendChart({ data, dateRange }: AssetTrendChartProp
   return (
     <View style={styles.container}>
       <View style={styles.header}>
-        <Text style={styles.title}>资产变动趋势</Text>
+        {/* ⚠️ 口径已在 useAssetsData 修正：这条曲线是**账单收支净额累计**，
+            不是账户余额历史（后者含期初余额与余额校准，无法由账单反推）。
+            标题必须同步 —— 继续叫"资产变动趋势"会让用户以为它与上方
+            "净资产（账户余额）"是同一个量，而两者恰好不是。 */}
+        <Text style={styles.title}>收支净额累计</Text>
         {dateRange && <Text style={styles.dateRange}>{dateRange}</Text>}
       </View>
       <View style={styles.chartWrap}>

@@ -83,6 +83,11 @@ export function useDailyGridData(year: number, month: number, enabled = true) {
     dailyMap,
     statistics: query.data,
     isLoading: query.isLoading,
+    isFetching: query.isFetching,
+    // 失败时 dailyMap 是空 Map —— CalendarGrid 会画出一张"整月无记录"的
+    // 日历，DailyView 的空态文案则是"当天暂无记录"。故障伪装成了事实。
+    isError: query.isError,
+    error: query.error,
     refetch: query.refetch,
   };
 }
@@ -94,7 +99,7 @@ export function useDailyBills(date: string | null) {
   const query = useQuery({
     queryKey: QUERY_KEYS.dailyBills(date || ''),
     queryFn: async () => {
-      if (!date) return [];
+      if (!date) return { bills: [] as ReportBill[], total: 0, hasMore: false };
       const [response, categories] = await Promise.all([
         nativeData.getBills({
           startDate: date,
@@ -106,10 +111,16 @@ export function useDailyBills(date: string | null) {
         nativeData.getCategories(),
       ]);
       const categoryMap = new Map(categories.map((category) => [category.id, category]));
-      return response.items.flatMap((bill) => {
+      const bills = response.items.flatMap((bill) => {
         const reportBill = toReportBill(bill, categoryMap);
         return reportBill ? [reportBill] : [];
       });
+      // ⚠️ 原生返回分页信息（total/hasMore），但此前只取 items。
+      // limit=100 意味着单日 100 笔以上的账单被静默截断，UI 一个字都不说 ——
+      // 而上方的当日汇总显示的是**全量** income/expense，于是出现
+      // "汇总 ¥5,000，明细只列了 ¥300" 的自相矛盾画面。
+      // 现在把 total / hasMore 传出去，由调用方决定提示或分页。
+      return { bills, total: response.total, hasMore: response.hasMore };
     },
     enabled: !!date,
     staleTime: CACHE_TIME.BILL_DETAIL,
@@ -117,8 +128,15 @@ export function useDailyBills(date: string | null) {
   });
 
   return {
-    bills: query.data ?? [],
+    bills: query.data?.bills ?? [],
+    /** 当日账单总笔数（native 计数，未被 limit 截断）。 */
+    total: query.data?.total ?? 0,
+    /** 是否有更多记录未被本页返回。 */
+    hasMore: query.data?.hasMore ?? false,
     isLoading: query.isLoading,
+    isError: query.isError,
+    error: query.error,
+    refetch: query.refetch,
   };
 }
 
@@ -153,6 +171,9 @@ export function useMonthlyGridData(year: number) {
     monthlyData,
     statistics: query.data,
     isLoading: query.isLoading,
+    isFetching: query.isFetching,
+    isError: query.isError,
+    error: query.error,
     refetch: query.refetch,
   };
 }
@@ -215,6 +236,11 @@ export function useYearlyGridData() {
     yearlyData,
     getMonthlyDataForYear,
     isLoading: query.isLoading,
+    isFetching: query.isFetching,
+    // yearlyData 永远返回 5 个年份（补零），所以失败时它长得**完全正常**：
+    // 五年柱状图全为零。用户会以为"今年没花钱"，而不是"读不出来"。
+    isError: query.isError,
+    error: query.error,
     refetch: query.refetch,
   };
 }

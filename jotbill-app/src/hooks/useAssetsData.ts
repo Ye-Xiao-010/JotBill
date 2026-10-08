@@ -52,25 +52,35 @@ export function useAssetsData() {
   const totalIncome = totalQuery.data?.totalIncome ?? 0;
   const totalExpense = totalQuery.data?.totalExpense ?? 0;
 
-  // 计算资产趋势折线图数据（逐月累计）
+  /**
+ * 资产趋势折线图数据。
+   *
+   * ⚠️ 此前是"用当前净资产反推历史各月资产"：
+   *     value = netWorth - totalNetInRange + cumulative
+   * 这隐含一个等式 `netWorth == 窗口期初净资产 + Σ(收入-支出)`，而实际上
+   * `netWorth` 来自 `AccountDao.getNetWorth()` —— 它是**账户余额**口径，
+   * 包含 `initial_balance_minor`（开户初始余额）与 `balance_calibrations`
+   * （余额校准），**这些从不对应任何账单**。
+   *
+   * 后果：期初 5 万、近 12 个月净流入 3 千的用户，曲线第一个点是 -47000 而不是 0，
+   * 整条线被平移了 5 万。而同一个页面上方 `AssetsTab` 明写"净资产（账户余额）"
+   * = 5.3 万 —— 同页两个数字互相矛盾，且下方那张是错的。
+   *
+   * 修：改为**诚实的收支净额累计**（不再锚定 netWorth）。这是账单数据唯一
+   * 能支撑的口径 —— 要画真实的"资产余额历史"需要原生提供按时间切片的
+   * 余额查询（对 audit_entries 的余额变更回放），那属于新增功能。
+   */
   const assetTrendData = useMemo(() => {
-    if (!trendQuery.data?.monthlyTrends || trendQuery.data.monthlyTrends.length === 0) {
-      return [];
-    }
-
-    const trends = trendQuery.data.monthlyTrends;
-    const totalNetInRange = trends.reduce((sum, t) => sum + (t.income - t.expense), 0);
-
-    // 从后往前反推每月末的累计资产
+    const trends = trendQuery.data?.monthlyTrends ?? [];
     let cumulative = 0;
     return trends.map((t) => {
       cumulative += t.income - t.expense;
       return {
         month: t.month,
-        value: Math.round((netWorth - totalNetInRange + cumulative) * 100) / 100,
+        value: Math.round(cumulative * 100) / 100,
       };
     });
-  }, [trendQuery.data, netWorth]);
+  }, [trendQuery.data]);
 
   // 收入/支出分类构成（用于饼图）
   const incomeCategoryStats = trendQuery.data?.incomeCategoryStats ?? [];
@@ -80,6 +90,16 @@ export function useAssetsData() {
   const trendDateRange = `${trendStart.getFullYear()}.${trendStart.getMonth() + 1} - ${
     now.getFullYear()
   }.${now.getMonth() + 1}`;
+
+  /**
+   * 聚合错误。三个 query 任意一个失败都要冒泡：
+   * 此前本 hook 只返回 isLoading，AssetsTab 于是把 `?? 0` 的兜底值
+   * 直接渲染成"净资产（账户余额）¥0.00" —— 用户看到的是"我的钱没了"
+   * 而不是"读不出来"。netWorth 失败和账户真的净资产为 0 在界面上完全一样。
+   */
+  const error = netWorthQuery.error ?? totalQuery.error ?? trendQuery.error ?? null;
+  const isError =
+    netWorthQuery.isError || totalQuery.isError || trendQuery.isError;
 
   return {
     netWorth,
@@ -92,6 +112,10 @@ export function useAssetsData() {
     incomeCategoryStats,
     expenseCategoryStats,
     isLoading: totalQuery.isLoading || netWorthQuery.isLoading || trendQuery.isLoading,
+    isFetching:
+      totalQuery.isFetching || netWorthQuery.isFetching || trendQuery.isFetching,
+    isError,
+    error,
     refetch: async () => {
       await Promise.all([
         totalQuery.refetch(),

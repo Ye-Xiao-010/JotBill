@@ -9,6 +9,7 @@ import { spacing } from '../../theme/spacing';
 import { useStyles } from '../../hooks';
 import { useMonthlyGridData, useDailyGridData } from '../../hooks/useIncomeExpenseData';
 import { MonthGrid, PeriodNavigator, DailySummaryList } from '../../components/reports';
+import QueryErrorBanner from '../../components/ui/QueryErrorBanner';
 
 interface MonthlyViewProps {
   initialYear?: number;
@@ -33,10 +34,22 @@ export default function MonthlyView({
     if (initialSelectedMonth !== undefined) setSelectedMonth(initialSelectedMonth);
   }, [initialYear, initialSelectedMonth]);
 
-  const { monthlyData, isLoading, refetch } = useMonthlyGridData(year);
+  const {
+    monthlyData,
+    isLoading,
+    isFetching,
+    isError,
+    error,
+    refetch,
+  } = useMonthlyGridData(year);
 
   // 当选中月份时，获取该月每日数据（未选月份不发请求）
-  const { dailyMap } = useDailyGridData(
+  const {
+    dailyMap,
+    isError: dailyError,
+    error: dailyErrorDetail,
+    refetch: refetchDaily,
+  } = useDailyGridData(
     year,
     selectedMonth ? selectedMonth - 1 : 0,
     selectedMonth !== null,
@@ -78,7 +91,9 @@ export default function MonthlyView({
   return (
     <ScrollView
       style={styles.container}
-      refreshControl={<RefreshControl refreshing={isLoading} onRefresh={refetch} />}
+      refreshControl={
+        <RefreshControl refreshing={isFetching && !isLoading} onRefresh={refetch} />
+      }
       showsVerticalScrollIndicator={false}
     >
       <PeriodNavigator
@@ -87,6 +102,17 @@ export default function MonthlyView({
         onNext={handleNext}
         disableNext={isNextDisabled}
       />
+
+      {/* 失败时 monthlyData 为空 ⇒ 12 个月格子全是 0，
+          看上去就是"这一年什么都没花"。必须显式说明是读失败。 */}
+      {isError ? (
+        <QueryErrorBanner
+          error={error}
+          title="月度数据加载失败"
+          hint="下方网格显示为 0，不代表这一年没有收支。"
+          onRetry={refetch}
+        />
+      ) : null}
 
       <MonthGrid
         year={year}
@@ -101,10 +127,20 @@ export default function MonthlyView({
           <Text style={styles.detailTitle}>
             {year}年{selectedMonth}月 每日收支
           </Text>
-          <DailySummaryList
-            data={dailySummaryData}
-            onDayPress={handleDayPress}
-          />
+          {dailyError ? (
+            <QueryErrorBanner
+              error={dailyErrorDetail}
+              title="每日汇总加载失败"
+              hint="这个月可能仍有记录，但明细读不出来。"
+              onRetry={refetchDaily}
+              style={styles.inlineError}
+            />
+          ) : (
+            <DailySummaryList
+              data={dailySummaryData}
+              onDayPress={handleDayPress}
+            />
+          )}
         </View>
       )}
 
@@ -127,6 +163,9 @@ const createStyles = (colors: ThemeColors) => ({
       color: colors.textPrimary,
       paddingHorizontal: spacing.lg,
       marginBottom: spacing.md,
+    },
+    inlineError: {
+      margin: spacing.lg,
     },
   }),
   _colors: colors,

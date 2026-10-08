@@ -35,6 +35,15 @@ export interface ReportStatistics {
 export function toReportStatistics(
   statistics: NativeBillStatistics,
 ): ReportStatistics {
+  // 原生 `percentage` 不取整（DataModule:1072-1073 直接返回 Double），
+  // 前端原样透传 ⇒ 三等分场景显示 `33.33333333333333%`，塞进
+  // legendValue（minWidth 35）后行宽溢出。同项目 AssetCompositionChart.tsx
+  // 正确写了 .toFixed(0)，说明这是遗漏而非设计。
+  // 在这个**单一出口**统一保留一位小数：消费方无需各自处理，也不会
+  // 出现"有的页面取整、有的不取整"的漂移。
+  const roundPercentage = (value: number): number =>
+    Number.isFinite(value) ? Math.round(value * 10) / 10 : 0;
+
   const toCategoryStats = (
     items: NativeBillStatistics['expenseCategoryStats'],
   ): ReportCategoryStatistic[] => items.map((item) => ({
@@ -42,7 +51,7 @@ export function toReportStatistics(
     categoryName: item.categoryName,
     categoryIcon: item.categoryIcon,
     amount: item.amountMinor / 100,
-    percentage: item.percentage,
+    percentage: roundPercentage(item.percentage),
     count: item.count,
   }));
 
