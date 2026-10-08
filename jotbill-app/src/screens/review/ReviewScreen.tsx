@@ -50,6 +50,8 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 const PENDING_QUERY_KEY = QUERY_KEYS.recognition.pending;
 const STATUS_QUERY_KEY = QUERY_KEYS.recognition.status;
 const EVIDENCE_QUERY_KEY = QUERY_KEYS.recognition.evidence;
+/** 与 `PendingEditPanel` 共用同一份缓存，避免每张卡片各发一次桥接调用。 */
+const ACCOUNTS_QUERY_KEY = ['accounts', 'list'] as const;
 
 /**
  * "重试识别"按钮是否可用（单一出处，UI 渲染与点击回调共用）。
@@ -105,10 +107,10 @@ export default function ReviewScreen() {
     onSuccess: () => {
       invalidateAll();
     },
-    onError: (error, { pending }) => {
-      const message =
-        error instanceof Error ? error.message : '确认入账失败，请稍后重试';
-      alert('确认失败', `${pending.pendingId}：${message}`);
+    onError: (error) => {
+      // 不再回显裸 pendingId：那是内部 UUID，对用户零信息量，
+      // 反而把真正的原因挤到后面。改为可照做的中文指引。
+      alert('确认失败', describeConfirmError(error));
       // 版本冲突等情况下列表中的 version 已过期:重新拉取,避免用户在旧版本上反复提交
       invalidateAll();
     },
@@ -120,10 +122,8 @@ export default function ReviewScreen() {
     onSuccess: () => {
       invalidateAll();
     },
-    onError: (error, { pending }) => {
-      const message =
-        error instanceof Error ? error.message : '忽略失败，请稍后重试';
-      alert('忽略失败', `${pending.pendingId}：${message}`);
+    onError: (error) => {
+      alert('忽略失败', describeConfirmError(error));
     },
   });
 
@@ -443,6 +443,25 @@ function PendingCard({
 }: PendingCardProps) {
   const [editing, setEditing] = useState(false);
   const styles = useStyles(createStyles);
+
+  /**
+   * 账户名解析：把 `pending.accountId` 翻成人看得懂的名字。
+   *
+   * 与 `PendingEditPanel` 用同一个 query key（`['accounts','list']`），
+   * 50 张卡片共享一份缓存 —— 不会因为卡片多而发出 N 次桥接调用。
+   * `PendingEditPanel` 内部已经存在同名 key，这里只是复用它的缓存。
+   */
+  const accountsQuery = useQuery({
+    queryKey: ACCOUNTS_QUERY_KEY,
+    queryFn: () => nativeData.getAccounts(),
+  });
+  const accountName = useMemo(() => {
+    if (!pending.accountId) return null;
+    const accounts = (accountsQuery.data ?? []) as Account[];
+    const hit = accounts.find((account: Account) => account.id === pending.accountId);
+    // 查不到 = 账户被删或停用；与"从未指定"是两种情况，UI 要分开说
+    return hit ? `${hit.icon ?? '💳'} ${hit.name}` : null;
+  }, [accountsQuery.data, pending.accountId]);
   // 阶段四 T7：按会话查询支付证据摘要；无会话的纯手动记录不查询
   const evidenceQuery = useQuery({
     queryKey: [...EVIDENCE_QUERY_KEY, pending.sessionId ?? 'none'],
@@ -520,6 +539,25 @@ function PendingCard({
 
       <View style={styles.pendingMeta}>
         <MetaRow label="来源" value={sourceLabel} colors={colors} />
+        {/* ⚠️ 必须显示会记到哪个账户。
+            确认入账会立刻扣/加该账户余额，而此前卡片**只字不提账户**，
+            用户点"确认入账"时并不知道钱从哪出、余额会变多少。
+            `pending.accountId` 为空时更要点明：这条现在直接确认会失败
+            （LedgerRepository.validateBillAccounts 硬性要求 accountId），
+            必须先点「编辑」选账户 —— 让用户在点之前就知道，而不是点完吃一个
+            "Transaction requires an account"。 */}
+        {accountName ? (
+          <MetaRow label="账户" value={accountName} colors={colors} />
+        ) : pending.accountId ? (
+          <MetaRow label="账户" value="已停用或已删除" colors={colors} highlight />
+        ) : (
+          <MetaRow
+            label="账户"
+            value="未指定 · 需点「编辑」选择后才能入账"
+            colors={colors}
+            highlight
+          />
+        )}
         {pending.platform ? (
           <MetaRow label="平台" value={pending.platform} colors={colors} />
         ) : null}
@@ -673,7 +711,7 @@ function PendingEditPanel({ pending, submitting, onCancel, onSubmit }: PendingEd
   const [refundKeyword, setRefundKeyword] = useState('');
 
   const accountsQuery = useQuery({
-    queryKey: ['accounts', 'list'],
+    queryKey: ACCOUNTS_QUERY_KEY,
     queryFn: () => nativeData.getAccounts(),
   });
   const activeAccounts: Account[] = useMemo(
@@ -1145,6 +1183,50 @@ function formatTime(value: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
   return date.toLocaleString('zh-CN', { hour12: false });
+}
+
+/**
+ * 把原生的校验错误翻成用户能照做的中文。
+ *
+ * ⚠️ 此前 `alert('确认失败', \`${pending.pendingId}：${message}\`)` 直接把
+ * 原生英文异常和**裸 pendingId（UUID）**甩给用户，实际长这样：
+ *
+ *     确认失败
+ *     3f8a1c92-7d4e-4b6a-9e21-0c5f8a2b7d13：Transaction requires an account
+ *
+ * 用户既看不懂英文，也完全不知道那个 UUID 是什么，更不知道下一步该做什么。
+ * 而这条路径是**主功能**（弹窗点"稍后"后的兜底入口）。
+ *
+ * 覆盖的都是 `PendingConfirmService` / `LedgerRepository` / `BridgeDtoMapper`
+ * 里真实会抛出的串。匹配不到就原样返回（不吞信息），但至少去掉 UUID 前缀。
+ */
+function describeConfirmError(error: unknown): string {
+  const raw = error instanceof Error ? error.message : String(error ?? '');
+  const rules: Array<[RegExp, string]> = [
+    [
+      /Transaction requires an account/i,
+      '这条待确认没有账户，无法入账。点卡片上的「编辑」选一个账户，或先到「通用配置 → 账户管理」启用账户。',
+    ],
+    [/Account .* does not exist/i, '这条待确认记录的账户已不存在，请点「编辑」重新选择账户。'],
+    [/Account .* is inactive/i, '这条待确认记录的账户已停用，请点「编辑」改选一个启用中的账户。'],
+    [
+      /Duplicate bill has changed during merge/i,
+      '这条账单刚刚被其他入口处理过，请下拉刷新查看最新列表。',
+    ],
+    [
+      /amountMinor must be a positive safe integer minor unit/i,
+      '金额无效，请点「编辑」重新填写一个大于 0 的金额。',
+    ],
+    [/Bill version/i, '这条待确认已被更新，请下拉刷新后重试。'],
+    [/INVALID_TYPE|invalid bill type/i, '账单类型无效，请点「编辑」重新选择。'],
+    [/INVALID_SOURCE_TYPE/i, '来源类型无效，请下拉刷新后重试。'],
+  ];
+  for (const [pattern, message] of rules) {
+    if (pattern.test(raw)) return message;
+  }
+  // 兜底：非空就透传（可能含具体 ID 信息），空则给通用文案
+  const cleaned = raw.trim();
+  return cleaned ? cleaned : '操作失败，请稍后重试';
 }
 
 const createStyles = (colors: ThemeColors) => ({
