@@ -16,7 +16,6 @@ import GeneralSettingsScreen from '../screens/GeneralSettingsScreen';
 import {
   CreateBillScreen,
   AllBillsScreen,
-  StatisticsScreen,
   CategoryManageScreen,
   BillDetailScreen,
 } from '../screens/finance';
@@ -340,14 +339,6 @@ export default function AppNavigator() {
           options={{
             headerShown: true,
             title: '全部账单',
-          }}
-        />
-        <Stack.Screen
-          name="Statistics"
-          component={StatisticsScreen}
-          options={{
-            headerShown: true,
-            title: '统计分析',
           }}
         />
         <Stack.Screen

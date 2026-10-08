@@ -29,7 +29,6 @@ declare global {
       AllBills: {
         initialFilter?: 'all' | 'income' | 'expense';
       } | undefined;
-      Statistics: undefined;
       Categories: undefined;
 
       // 统计报表
