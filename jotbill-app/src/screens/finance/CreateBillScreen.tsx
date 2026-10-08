@@ -197,10 +197,25 @@ const CreateBillScreen: React.FC<CreateBillScreenProps> = ({ navigation, route }
     type === 'repayment' ? account.kind === 'liability' : true,
   );
 
-  /** 表单校验：金额必填；非转账类必选分类；转账/还款必选双账户且源≠目标、还款目标为负债。 */
+  /** 表单校验：金额合法且有上限；账户必填；非转账类必选分类；转账/还款必选双账户且源≠目标、还款目标为负债。 */
   const validateForm = () => {
-    if (!amount || parseFloat(amount) <= 0) {
+    const trimmedAmount = amount.trim();
+    // ⚠️ 原来写的是 `!amount || parseFloat(amount) <= 0`：parseFloat('abc') 返回
+    // NaN，而 `NaN <= 0` 为 false ⇒ 校验通过 ⇒ amountMinor = NaN ⇒ 原生
+    // assertMinorUnit 抛英文 "amountMinor must be a safe integer minor unit"，
+    // 用户填的是"12块"却收到一句天书。改用 Number.isFinite 兜住 NaN。
+    // 另外补小数位与上限校验：此前无上限，一笔亿元账单会直接落库并把余额扣成大额负数。
+    const parsedAmount = Number(trimmedAmount);
+    if (!trimmedAmount || !Number.isFinite(parsedAmount) || parsedAmount <= 0) {
       showError('请输入有效的金额');
+      return false;
+    }
+    if (!/^\d+(\.\d{1,2})?$/.test(trimmedAmount)) {
+      showError('金额最多两位小数');
+      return false;
+    }
+    if (parsedAmount > 99_999_999.99) {
+      showError('金额过大（上限 9999 万）');
       return false;
     }
     if (isTransferLike) {
@@ -222,6 +237,15 @@ const CreateBillScreen: React.FC<CreateBillScreenProps> = ({ navigation, route }
         return false;
       }
       return true;
+    }
+    // ⚠️ 账户是原生层的硬性入账前提：LedgerRepository.validateBillAccounts
+    // 无条件要求 accountId（缺失即抛 "Transaction requires an account"）。
+    // 此前只有转账分支校验账户，非转账分支"不选就不传"，于是每一笔普通支出
+    // 都要先失败一次才能看到错误 —— 而错误提示来自 Toast，恰好在本页可见，
+    // 用户看到的是一句英文。这里补上前端校验，把问题拦在提交之前。
+    if (!selectedAccountId) {
+      showError('请选择账户');
+      return false;
     }
     if (!selectedCategory) {
       showError('请选择分类');
@@ -313,13 +337,30 @@ const CreateBillScreen: React.FC<CreateBillScreenProps> = ({ navigation, route }
                 value={amount}
                 onChangeText={setAmount}
                 placeholder="0.00"
-                keyboardType="numeric"
+                keyboardType="decimal-pad"
                 placeholderTextColor={styles._colors.textTertiary}
               />
             </View>
           </View>
 
-          {selectableAccounts.length > 0 && (
+          {selectableAccounts.length === 0 ? (
+            // ⚠️ 此前此处直接不渲染账户区块：账户加载失败（被 .catch 静默吞成 []）
+            // 或用户把账户全部停用时，用户会看到一个没有任何账户选项的表单，
+            // 点了保存才收到一句英文 "Transaction requires an account" ——
+            // 既不知道发生了什么，也不知道该去哪建账户。显式空态 + 去添加入口。
+            <View style={styles.formGroup}>
+              <Text style={styles.formLabel}>{isTransferLike ? '💳 源账户' : '账户'}</Text>
+              <View style={styles.accountGrid}>
+                <TouchableOpacity
+                  style={[styles.accountOption, styles.accountOptionSelected]}
+                  onPress={() => navigation.navigate('Accounts')}
+                >
+                  <Text style={styles.accountOptionName}>尚未创建账户</Text>
+                  <Text style={styles.accountOptionType}>点这里去「账户管理」添加</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          ) : (
             <View style={styles.formGroup}>
               <Text style={styles.formLabel}>{isTransferLike ? '💳 源账户' : '账户'}</Text>
               <View style={styles.accountGrid}>

@@ -33,11 +33,12 @@ import { useAlert } from '../../providers';
 import { aiService } from '../../services/ai';
 import { audioRecorderService } from '../../services/audio/audioRecorderService';
 import type { RecordingProgress } from '../../services/audio/audioRecorderService';
-import { nativeData, type Category } from '../../native';
+import { nativeData, type Account, type Category } from '../../native';
 import { Skeleton, SkeletonCircle } from '../../components/skeleton/Skeleton';
 import type { ParsedBill, AIModelConfig, ChatSession } from '../../types/ai';
 import { ProviderIcon } from '../../components/icons';
 import storage from '../../utils/storage';
+import { invalidateCache } from '../../lib/queryClient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const SIDEBAR_WIDTH = Dimensions.get('window').width * 0.78;
@@ -54,7 +55,27 @@ interface BillItem extends ParsedBill {
   id: string;
   categoryIcon?: string;
   categoryId?: string;
+  /**
+   * 记账账户。
+   *
+   * `LedgerRepository.validateBillAccounts` 无条件要求 accountId
+   * （缺失即抛 LedgerValidationException），而本路径此前**根本没传** ——
+   * 导致 AI 对话提出的每一笔账单保存时都被原生拒绝，入口三 100% 不可用。
+   * 用户可选；未选时由 [handleSaveAllBills] 回落到默认账户（与其他入口同口径）。
+   */
+  accountId?: string;
 }
+
+/**
+ * 兜底分类的稳定 ID（来自 DefaultDataInitializer 的种子数据）。
+ *
+ * 不依赖本地分类名称 —— 用户可能把"其他"改名，甚至删掉。因此保存前还要
+ * 再查一次本地是否存在，存在才用。
+ */
+const FALLBACK_CATEGORY_IDS: Record<'income' | 'expense', string> = {
+  expense: 'default-category-expense-other',
+  income: 'default-category-income-other',
+};
 
 // 流式步骤类型
 interface StreamStep {
@@ -879,6 +900,8 @@ export default function AIChatScreen() {
   const [inputText, setInputText] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [categories, setCategories] = useState<Category[]>([]);
+  /** 可选记账账户：AI 账单必须落到某个账户上（原生层硬性要求）。 */
+  const [accounts, setAccounts] = useState<Account[]>([]);
   const [editingBill, setEditingBill] = useState<BillItem | null>(null);
   const [showEditModal, setShowEditModal] = useState(false);
   const [pendingBills, setPendingBills] = useState<BillItem[]>([]);
@@ -1296,9 +1319,10 @@ export default function AIChatScreen() {
     }
   }, [sessionId]);
 
-  // 加载分类和默认AI配置
+  // 加载分类、账户和默认AI配置
   useEffect(() => {
     loadCategories();
+    loadAccounts();
     loadDefaultAIConfigWithCache();
     if (routeSessionId) {
       // 从会话列表导航过来，加载指定会话
@@ -1382,6 +1406,41 @@ export default function AIChatScreen() {
     } catch (error) {
       console.error('加载分类失败:', error);
     }
+  };
+
+  /**
+   * 加载可记账账户。
+   *
+   * 加载失败必须**告知用户**：账户是原生层的硬性入账前提，拿不到账户就等于
+   * 这一轮所有账单都保存不了。静默失败会让用户面对"点了保存但什么都没发生"。
+   */
+  const loadAccounts = async () => {
+    try {
+      const all = await nativeData.getAccounts();
+      setAccounts(all.filter((a) => a.isActive !== false));
+    } catch (error) {
+      console.error('加载账户失败:', error);
+      alert('无法记账', '未能加载账户列表，AI 记账需要先选择一个账户。请稍后重试。');
+    }
+  };
+
+  /**
+   * 取本次保存要用的账户：用户在卡片上显式选的优先，否则用 sortOrder 最小的
+   * 活跃账户兜底（与 DefaultDataInitializer 的默认账户顺序一致）。
+   *
+   * 取不到时返回 null —— 调用方必须据此中止并提示，**不能**继续调用 addBill：
+   * 原生 validateBillAccounts 会抛 "Transaction requires an account"，
+   * 那样每笔都失败且用户只看到"失败 N 条"，无从判断原因。
+   */
+  const resolveAccountId = (bill: BillItem): string | null => {
+    if (bill.accountId) {
+      const selected = accounts.find((a) => a.id === bill.accountId);
+      if (selected) {
+        return selected.id;
+      }
+    }
+    const fallback = [...accounts].sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0))[0];
+    return fallback?.id ?? null;
   };
 
   // SWR 模式：先读缓存立即显示，再请求接口静默更新
@@ -1719,9 +1778,35 @@ export default function AIChatScreen() {
     return iconMap[categoryName] || '📦';
   };
 
-  const getCategoryId = (categoryName: string, type: 'income' | 'expense'): string | undefined => {
-    const category = categories.find(c => c.name === categoryName && c.type === type);
-    return category?.id;
+  /**
+   * 把 LLM 给的分类名映射到本地分类 ID。
+   *
+   * 此前是**精确字符串相等**，模型输出"餐饮美食"/"外卖"/"打车"这类近义名
+   * 一律匹配失败 ⇒ 账单带 `categoryId = null` 落库 —— 这是静默的脏数据，
+   * 用户在账单列表里看到一条"无分类"记录却没有任何提示。
+   *
+   * 三级兜底（对齐 PendingConfirmOverlayManager.resolveDefaultCategoryId 的思路）：
+   * 精确匹配 → 包含关系唯一命中 → "其他"分类（稳定 ID，不依赖本地名称）。
+   * 都不中时返回 undefined，由调用方在保存前提示用户手动选分类。
+   */
+  const getCategoryId = (
+    categoryName: string,
+    type: 'income' | 'expense',
+  ): string | undefined => {
+    const candidates = categories.filter((c) => c.type === type);
+    const exact = candidates.find((c) => c.name === categoryName);
+    if (exact) {
+      return exact.id;
+    }
+    const trimmed = categoryName.trim();
+    if (trimmed) {
+      const fuzzy = candidates.filter((c) => c.name.includes(trimmed) || trimmed.includes(c.name));
+      // 只有唯一命中才算数：多个候选时说明歧义，宁可交给用户也不要猜错。
+      if (fuzzy.length === 1) {
+        return fuzzy[0].id;
+      }
+    }
+    return categories.find((c) => c.id === FALLBACK_CATEGORY_IDS[type])?.id;
   };
 
   const handleEditBill = (bill: BillItem) => {
@@ -1776,32 +1861,76 @@ export default function AIChatScreen() {
       return;
     }
 
+    // 原生 validateBillAccounts 无条件要求 accountId。拿不到账户就整批中止，
+    // 并明确告知 —— 否则每笔都会以 "Transaction requires an account" 失败，
+    // 用户只看到"失败 N 条"，无从判断是自己没选账户还是系统问题。
+    const fallbackAccountId = resolveAccountId(pendingBills[0]);
+    if (!fallbackAccountId) {
+      alert(
+        '无法记账',
+        '没有可用的账户。请先到「通用设置 → 账户管理」启用至少一个账户，再回到这里记账。',
+      );
+      return;
+    }
+
     setSavingBills(true);
     let successCount = 0;
     let failCount = 0;
+    const failedBillIds: string[] = [];
+    const savedBillIds: string[] = [];
+    const failureReasons: string[] = [];
 
     for (const bill of pendingBills) {
       try {
+        const accountId = resolveAccountId(bill) ?? fallbackAccountId;
+        // 保存时**重新解析**分类：提案那一刻算出的 categoryId 来自当时 render
+        // 闭包里的 categories，而 categories 是 mount 时异步加载的；若加载失败
+        // 或慢于提案到达，那批 bill 的 categoryId 会全是 undefined。重新解析
+        // 才能保证"分类在保存瞬间是有效的"。
+        const categoryId =
+          bill.categoryId ?? getCategoryId(bill.categoryName ?? '', bill.type);
         await nativeData.addBill({
           amountMinor: Math.round(bill.amount * 100),
           type: bill.type,
           description: bill.description,
           occurredAt: new Date(`${bill.date}T12:00:00`).toISOString(),
-          categoryId: bill.categoryId,
+          categoryId,
+          accountId,
           sourceType: 'ai_chat',
         });
         successCount++;
+        savedBillIds.push(bill.id);
       } catch (error) {
         failCount++;
+        failedBillIds.push(bill.id);
+        // 失败原因必须呈现给用户：此前只 console.error，用户看到的是
+        // "成功 0 条，失败 1 条"，无法判断是金额越界、账户失效还是分类非法。
+        const reason = error instanceof Error ? error.message : String(error);
+        failureReasons.push(`${bill.description || '未命名'}: ${reason}`);
         console.error('保存账单失败:', error);
       }
     }
 
     setSavingBills(false);
 
+    // 已成功的必须从待保存列表移除：此前只有"全部成功"才 setPendingBills([])，
+    // 部分失败时列表原样保留，用户再点一次"全部保存"会把已成功的那几条
+    // **再插一遍**。而本路径不带 orderId，DuplicateGuard.checkLevel1 第一行
+    // 就是 `if (orderId.isNullOrBlank()) return null` ⇒ 去重必然不命中，
+    // 重试 = 重复账单。
+    if (savedBillIds.length > 0) {
+      setPendingBills((prev) => prev.filter((b) => !savedBillIds.includes(b.id)));
+    }
+
+    // 保存成功后必须刷新 RN 缓存：原生确实广播了 onBillCreated，但全仓
+    // 没有任何监听器订阅它（grep 零命中），而 queryClient 的
+    // refetchOnWindowFocus 为 false —— 用户切到账单页看到的仍是旧缓存。
+    if (successCount > 0) {
+      invalidateCache.bills();
+    }
+
     if (failCount === 0) {
       alert('保存成功', `已成功保存 ${successCount} 条账单`);
-      setPendingBills([]);
       // 添加成功消息
       addMessage({
         type: 'text',
@@ -1809,7 +1938,12 @@ export default function AIChatScreen() {
         isUser: false,
       });
     } else {
-      alert('保存完成', `成功 ${successCount} 条，失败 ${failCount} 条`);
+      const detail = failureReasons.length > 0 ? `\n\n${failureReasons.join('\n')}` : '';
+      alert(
+        '保存完成',
+        `成功 ${successCount} 条，失败 ${failCount} 条。` +
+          `失败项已保留在列表中，可修改后重试。${detail}`,
+      );
     }
   };
 

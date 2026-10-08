@@ -352,7 +352,25 @@ class AiChatModule(
                                             .put(
                                                 "properties",
                                                 JSONObject()
-                                                    .put("amount", JSONObject().put("type", "number"))
+                                                    .put(
+                                                        "amount",
+                                                        JSONObject()
+                                                            .put("type", "number")
+                                                            // ⚠️ 单位必须写死在 schema 里。
+                                                            // 同一个 system prompt 在查询场景会把账单金额以
+                                                            // **分** 注入（见下方 buildBillSummary），若 amount
+                                                            // 无单位声明，模型在同一上下文里看到两种无标注数字就会
+                                                            // 混淆：用户说"午餐 35 元"可能返回 3500（当作分），
+                                                            // RN 侧 *100 后写入 3500 元 —— 100 倍金额错误且
+                                                            // 用户毫无察觉。description + minimum + maximum 三者
+                                                            // 一起给，模型既知道单位也知道量级上限。
+                                                            .put(
+                                                                "description",
+                                                                "金额，单位：元（不是分）。必须大于 0，最多 7 位整数位"
+                                                            )
+                                                            .put("minimum", 0.01)
+                                                            .put("maximum", 9999999)
+                                                    )
                                                     .put(
                                                         "type",
                                                         JSONObject()
@@ -361,7 +379,12 @@ class AiChatModule(
                                                     )
                                                     .put("description", JSONObject().put("type", "string"))
                                                     .put("categoryName", JSONObject().put("type", "string"))
-                                                    .put("date", JSONObject().put("type", "string"))
+                                                    .put(
+                                                        "date",
+                                                        JSONObject()
+                                                            .put("type", "string")
+                                                            .put("description", "交易日期，格式 YYYY-MM-DD")
+                                                    )
                                             )
                                             .put(
                                                 "required",
@@ -461,6 +484,24 @@ class AiChatModule(
                 "需要记账时必须调用 create_bills 工具生成待确认账单。" +
                 "收到图片时提取金额、平台、商户、商品说明和日期，并调用 create_bills；不确定的字段明确说明。"
         )
+        // 把本地真实分类清单注入 prompt。
+        //
+        // 此前 prompt 从不告诉模型有哪些分类，create_bills 的 categoryName 也没有
+        // enum 约束 ⇒ 模型在凭空猜名字。而 RN 侧映射是**精确字符串相等**
+        // （getCategoryId: categories.find(c => c.name === categoryName)），
+        // 模型输出"餐饮美食"/"外卖"/"打车"这类近义名一律匹配失败 ⇒
+        // 账单带 categoryId=null 落库，是**静默的脏数据**，用户看不到任何提示。
+        // 把可选值直接告诉模型，是成本最低、收益最大的一条修复。
+        runCatching {
+            val names = database.categoryDao().getAll()
+                .filter { it.type == "income" || it.type == "expense" }
+                .sortedWith(compareBy({ it.type }, { it.sortOrder }))
+                .joinToString("、") { "${it.name}(${it.type})" }
+            if (names.isNotBlank()) {
+                prompt.append("\n可用的账单分类（categoryName 必须原样使用其中一项）：")
+                    .append(names)
+            }
+        }
         if (QUERY_KEYWORDS.any(latestContent::contains)) {
             val recentBills = database.billDao().query(
                 type = null,
@@ -490,8 +531,15 @@ class AiChatModule(
                         .append(' ')
                         .append(bill.type)
                         .append(' ')
-                        .append(bill.amountMinor)
-                        .append("分")
+                        // ⚠️ 单位必须是「元」，与 create_bills 工具的 amount 参数、
+                        // 以及 queryBillsResult 的输出保持同一口径。
+                        // 此前这里注入的是**分**（amountMinor 原样），而同一次调用的
+                        // 账单摘要是分、create_bills.amount 是无单位数字 —— 模型在
+                        // 同一上下文里看到两种无标注数字就会混淆：用户说"午餐 35 元"
+                        // 可能返回 amount=3500（当作分），RN 侧 *100 后写入 3500 元，
+                        // **100 倍金额错误且用户毫无察觉**。三处口径统一为元。
+                        .append(String.format(java.util.Locale.ROOT, "%.2f", bill.amountMinor / 100.0))
+                        .append("元")
                     bill.merchant?.let { prompt.append(" 商户:").append(it.take(80)) }
                     bill.description?.let { prompt.append(" 说明:").append(it.take(120)) }
                 }
