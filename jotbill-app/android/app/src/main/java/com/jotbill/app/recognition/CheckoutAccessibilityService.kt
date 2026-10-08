@@ -508,24 +508,40 @@ class CheckoutAccessibilityService : AccessibilityService() {
         AccessibilityPageSummaryCollector.resetVolatileTracker()
         checkoutCaptureOverlayManager?.setManualCaptureRequestHandler(null)
         checkoutCaptureOverlayManager?.close()
-        val sharedBuffer = CheckoutSnapshotBuffer()
-        checkoutSnapshotBuffer = sharedBuffer
-        snapshotCaptureCoordinator = CheckoutSnapshotCaptureCoordinator(this, sharedBuffer)
-        purchaseIntentCoordinator = CheckoutPurchaseIntentCoordinator(sharedBuffer)
-        checkoutCaptureOverlayManager = CheckoutCaptureOverlayManager(this).also { manager ->
-            manager.setManualCaptureRequestHandler { requestManualCaptureFromOverlay() }
+        // 精简模式：整条截图识别链路既不创建也不接线。
+        //
+        // 为什么是"不创建"而不只是"闸住入口"：
+        // ① CheckoutSnapshotCaptureCoordinator 构造即
+        //    `HandlerThread("CheckoutScreenshot").apply { start() }` —— 一条常驻
+        //    OS 线程，只在 onDestroy 才 quitSafely。开关关闭时它永远等不到消息。
+        // ② CheckoutAiVisionClient 构造即建 OkHttpClient（连接池 + 线程池），
+        //    而 recognize/recognizePaymentResult 在精简版永不被调。
+        // ③ 更关键的是**接线**：`setObservationListener(snapshotCaptureCoordinator)`
+        //    注册后，每个 Invalidated 事件（购物页每秒数十条）仍会跑完
+        //    handleInvalidated 的 ~140 行（算 handoffSource / isPaymentInterstitial /
+        //    replaceRetainedHandoff + 日志 + buffer.clear），而缓冲区里永远什么都没有；
+        //    每次 clearUserRetryCaptureContext() 还要 mainHandler.post{} 走一遍
+        //    140 行交接守卫（纯 null 赋值却付了完整 Handler 往返）。
+        //    省掉的是**每事件**开销，不只是启动那一次建对象。
+        //
+        // 五个字段本来就可空、95 处调用点全用安全调用 `?.`，因此"保持 null"
+        // 等价于"不存在"，不需要为它新增分支。
+        //
+        // ⚠️ purchaseIntentCoordinator 为 null 时，dispatchPaymentResultIntent 恒返
+        // NOT_DISPATCHED → promotePendingWhenAiUnavailable(matcher, sessionId) 接管落卡。
+        // 精简版主路径（无会话 → recordOrphanPaymentSignal 本就落卡）不受影响；
+        // "命中遗留会话"路径则由 promoteEvidenceOnlySessionToPending 补上 ——
+        // 即协调器的孤儿出口在这里被服务层的兜底取代，pending 仍会落地。
+        RecognitionCapabilities.load(applicationContext)
+        if (RecognitionCapabilities.checkoutCaptureEnabled) {
+            createCaptureChain()
+        } else {
+            JotBillLog.i(TAG, "结算页截图识别链路已停用: 跳过协调器/悬浮层创建与事件接线")
         }
         activeService = this
-        configureSnapshotCaptureResultListener()
-        configurePurchaseIntentResultConsumer()
-        configurePaymentSignalOrphanSink()
         initializePaymentMatcher()
         initializeAiClient()
-        setObservationListener(snapshotCaptureCoordinator)
         serviceConnected = true
-        // 精简模式开关在连接时对齐持久值：系统可以在 RN 进程未启动的情况下拉起本服务，
-        // 此时 MainApplication 已跑过，但设置页的改动仍需在此兜底一次（服务重连场景）。
-        RecognitionCapabilities.load(applicationContext)
         applyCheckoutCaptureCapability()
         JotBillLog.i(TAG, "结算页无障碍观察服务已连接")
     }
@@ -556,6 +572,12 @@ class CheckoutAccessibilityService : AccessibilityService() {
         appliedCheckoutCaptureEnabled = enabled
         JotBillLog.i(TAG, "结算页截图识别链路: ${if (enabled) "启用" else "停用"}（上次=${previous ?: "无基线"}）")
         if (enabled) {
+            // 运行中从关闭翻到开启：整条链在关闭时**根本没有被创建**（见 onServiceConnected），
+            // 这里按需补建并接线，否则用户改完设置后要等服务重连才生效。
+            if (snapshotCaptureCoordinator == null) {
+                createCaptureChain()
+            }
+            initializeAiClient()
             return
         }
         currentStableCheckout = null
@@ -566,6 +588,52 @@ class CheckoutAccessibilityService : AccessibilityService() {
         // 复用"服务中断"状态：它是既有语义里唯一表达"按钮收起且不再可截图"的迁移，
         // 另造一套状态会污染 CheckoutOverlayStatus 契约与 RN 侧状态映射。
         checkoutCaptureOverlayManager?.onServiceInterrupted()
+        // 拆链而不是只清状态：协调器内部的截图线程与事件接线必须真正停掉，
+        // 否则每事件仍要跑一遍 handleInvalidated 的空转逻辑。
+        disposeCaptureChain()
+    }
+
+    /**
+     * 创建并接线整条结算截图链（buffer → 截图协调器 → 意图协调器 → 悬浮层）。
+     *
+     * 幂等：已存在时不重复创建（重复创建会泄漏前一个 HandlerThread）。
+     */
+    private fun createCaptureChain() {
+        if (snapshotCaptureCoordinator != null) {
+            return
+        }
+        val sharedBuffer = CheckoutSnapshotBuffer()
+        checkoutSnapshotBuffer = sharedBuffer
+        snapshotCaptureCoordinator = CheckoutSnapshotCaptureCoordinator(this, sharedBuffer)
+        purchaseIntentCoordinator = CheckoutPurchaseIntentCoordinator(sharedBuffer)
+        checkoutCaptureOverlayManager = CheckoutCaptureOverlayManager(this).also { manager ->
+            manager.setManualCaptureRequestHandler { requestManualCaptureFromOverlay() }
+        }
+        configureSnapshotCaptureResultListener()
+        configurePurchaseIntentResultConsumer()
+        configurePaymentSignalOrphanSink()
+        setObservationListener(snapshotCaptureCoordinator)
+    }
+
+    /**
+     * 关闭并断开整条结算截图链。
+     *
+     * 必须 close 而非置空：截图协调器持有 `HandlerThread("CheckoutScreenshot")`，
+     * 只置空引用会让那条线程一直空转到进程结束（quitSafely 只在 close 里调用）。
+     * 关闭顺序与 [onServiceConnected] 的建立顺序相反，先摘监听再关组件。
+     */
+    private fun disposeCaptureChain() {
+        setObservationListener(null)
+        purchaseIntentCoordinator?.setReadyDispatcher(null)
+        purchaseIntentCoordinator?.setResultConsumer(null)
+        purchaseIntentCoordinator?.close()
+        snapshotCaptureCoordinator?.close()
+        checkoutCaptureOverlayManager?.setManualCaptureRequestHandler(null)
+        checkoutCaptureOverlayManager?.close()
+        purchaseIntentCoordinator = null
+        snapshotCaptureCoordinator = null
+        checkoutSnapshotBuffer = null
+        checkoutCaptureOverlayManager = null
     }
 
     /**
@@ -1185,6 +1253,14 @@ class CheckoutAccessibilityService : AccessibilityService() {
 
     /** 服务连接时创建与当前服务绑定的 AI 客户端，失败时保留无 AI 的安全路径。 */
     private fun initializeAiClient() {
+        // 精简模式：结算页 AI 派发整条不可达（无协调器 ⇒ 无 Ready ⇒ 无 dispatch）。
+        // 提前返回即省掉 CheckoutAiVisionClient 构造 —— 它会建一个 OkHttpClient
+        // （Dispatcher 线程池 + ConnectionPool + CleanupThread），
+        // 在精简版下这个连接池永远不会有任何请求。开关打开时行为完全不变。
+        if (!RecognitionCapabilities.checkoutCaptureEnabled) {
+            JotBillLog.i(TAG, "结算页 AI 客户端跳过初始化: 截图识别链路已停用")
+            return
+        }
         val client = try {
             CheckoutAiVisionClient(
                 database = JotBillDatabaseProvider.get(applicationContext),
@@ -3067,6 +3143,13 @@ class CheckoutAccessibilityService : AccessibilityService() {
      */
     private fun recoverSnapshotCoordinatorIfClosed(): Boolean {
         if (!serviceConnected) {
+            return false
+        }
+        // 精简模式：整条链根本没被创建，snapshotCaptureCoordinator 恒为 null。
+        // 若不在此拦一道，:3148 的 `coordinator == null` 会一路走到重建分支，
+        // 每 10 秒凭空造出一条已关闭的"全新"协调器 —— 既白起 HandlerThread，
+        // 又把 disposeCaptureChain 的清理成果全部推翻。
+        if (!RecognitionCapabilities.checkoutCaptureEnabled) {
             return false
         }
         val coordinator = snapshotCaptureCoordinator

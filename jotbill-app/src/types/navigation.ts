@@ -9,10 +9,6 @@ import type { Bill } from '../native';
 declare global {
   namespace ReactNavigation {
     interface RootParamList {
-      // 法律与隐私说明
-      UserAgreement: undefined;
-      PrivacyPolicy: undefined;
-
       // 主要导航
       Main: undefined;
       Settings: undefined;

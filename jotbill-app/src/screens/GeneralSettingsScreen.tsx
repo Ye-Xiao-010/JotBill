@@ -913,7 +913,6 @@ export default function GeneralSettingsScreen({ navigation: _navigation }: Gener
     <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
       <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
         <PaymentNotificationSettings style={styles.card} />
-        <ManualCaptureOverlaySettings style={styles.card} />
 
         {/* 结算页截图识别链路(精简版开关) */}
         <View style={styles.card}>
@@ -934,6 +933,16 @@ export default function GeneralSettingsScreen({ navigation: _navigation }: Gener
             />
           </View>
         </View>
+
+        {/* 悬浮截图按钮设置：仅在结算页截图识别启用时渲染。
+            停用时这张卡片的三个控件（启用开关/显示方式/悬浮窗权限）都能改、能写盘，
+            但悬浮按钮永远拿不到 currentCheckout ⇒ canShowOnCurrentPage() 恒 false
+            ⇒ 按钮物理上永不出现；同时它读的 state 还是 SharedPreferences 里的持久化
+            旧值，会显示与现实不符的"已授权/可截图"。是纯假 UI，直接不渲染。
+            原生侧的 @ReactMethod 全部保留（约束：不改 Native.d.ts）。 */}
+        {checkoutCaptureEnabled ? (
+          <ManualCaptureOverlaySettings style={styles.card} />
+        ) : null}
 
         {/* 待确认提醒 */}
         <View style={styles.card}>
