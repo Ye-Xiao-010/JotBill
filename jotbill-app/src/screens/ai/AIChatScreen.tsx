@@ -99,6 +99,19 @@ const TOOL_DISPLAY_NAMES: Record<string, string> = {
   get_statistics: '统计分析',
 };
 
+/**
+ * 多模态图片的两个硬上限，与原生 `AiChatModule` 的 companion object 保持一致：
+ * - `MAX_IMAGES = 4`（AiChatModule.kt:1137，`readImages` 超限直接抛异常）
+ * - `MAX_IMAGE_BASE64_LENGTH = 12 * 1024 * 1024`（:1140，含 `data:` 前缀）
+ *
+ * 前端镜像这两个值，是为了让"必然失败的请求"在按下发送**之前**就被拦下，
+ * 而不是让用户选完图、点发送、被拒绝、附件已被清空（详见 pickImage 注释）。
+ */
+const MAX_IMAGES = 4;
+const MAX_IMAGE_BASE64_LENGTH = 12 * 1024 * 1024;
+/** 原生 `MAX_CONTENT_LENGTH`（AiChatModule.kt:1135），同样只在下发时才拒绝。 */
+const MAX_CONTENT_LENGTH = 8000;
+
 // 消息类型
 interface Message {
   id: string;
@@ -1510,6 +1523,20 @@ export default function AIChatScreen() {
     const images = [...pendingImages];
     if ((!text && images.length === 0) || isLoading) return;
 
+    // 发送前最后一道闸：pickImage 已按上限拦过，但 pendingImages 也可被
+    // 恢复逻辑塞回（见 onError）。这里再确认一次，避免必然失败的请求。
+    if (images.length > MAX_IMAGES) {
+      alert('图片数量已达上限', `每次最多发送 ${MAX_IMAGES} 张图片。`);
+      return;
+    }
+
+    // 同理：原生对文本也只在下发时才拒绝（AiChatModule.kt:61-63），
+    // 此前用户要写满 8000 字、按下发送、被拒、输入框已被清空。
+    if (text.length > MAX_CONTENT_LENGTH) {
+      alert('消息过长', `消息内容不能超过 ${MAX_CONTENT_LENGTH} 个字符，当前 ${text.length} 个。`);
+      return;
+    }
+
     if (!overrideText) {
       setInputText('');
     }
@@ -1716,6 +1743,13 @@ export default function AIChatScreen() {
             streamSteps: undefined,
             streamingText: undefined,
           });
+          // ⚠️ 失败时把附件还回输入区。
+          // 发送前 setPendingImages([]) 已经清空过，用户若不重新选就得丢掉
+          // 本轮的全部图片（一张单据可能需要重新翻相册去找）。
+          // 仅在用户当前没有重新选图时归还，避免与用户的新操作打架。
+          if (images.length > 0) {
+            setPendingImages(prev => (prev.length === 0 ? images : prev));
+          }
           setIsLoading(false);
           streamRef.current = null;
         },
@@ -1769,6 +1803,25 @@ export default function AIChatScreen() {
         return;
       }
       const base64Data = `data:image/jpeg;base64,${asset.base64}`;
+
+      // ⚠️ 原生 readImages（AiChatModule.kt:1069-1086）只接受
+      //    `data:image/...;base64,` 开头的字符串，且硬性拒绝超限条目。
+      //    前端此前**一个前置校验都没有**：用户连点 5 次"+"凑满 5 张，
+      //    点发送必被原生拒绝"每次最多发送 4 张图片"，
+      //    而附件在 handleSend 里已被 setPendingImages([]) 清空 ——
+      //    5 张图要一张张重新选（相册里那张单据还得重新找到）。
+      //    两个上限都镜像到前端，让失败在按下发送之前就发生。
+      if (pendingImages.length >= MAX_IMAGES) {
+        alert('图片数量已达上限', `每次最多发送 ${MAX_IMAGES} 张图片。`);
+        return;
+      }
+      if (base64Data.length > MAX_IMAGE_BASE64_LENGTH) {
+        alert(
+          '图片过大',
+          `第 ${pendingImages.length + 1} 张图片编码后过大，请换一张更小的图片。`,
+        );
+        return;
+      }
       setPendingImages(prev => [...prev, base64Data]);
     };
 
@@ -2259,6 +2312,10 @@ export default function AIChatScreen() {
       {/* 待发送图片预览栏 */}
       {pendingImages.length > 0 && (
         <View style={styles.pendingImagesContainer}>
+          {/* 让上限可见：不给计数的话，用户只能靠撞到第 5 张被原生拒绝才知道有上限 */}
+          <Text style={styles.pendingImagesCounter}>
+            {pendingImages.length}/{MAX_IMAGES}
+          </Text>
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.pendingImagesScroll}>
             {pendingImages.map((uri, index) => (
               <View key={index} style={styles.pendingImageWrapper}>
@@ -2773,6 +2830,14 @@ const createStyles = (colors: ThemeColors) => ({
       flexDirection: 'row',
       alignItems: 'center',
       gap: spacing.sm,
+    },
+    pendingImagesCounter: {
+      alignSelf: 'flex-end',
+      fontSize: 11,
+      fontWeight: '800',
+      fontFamily: 'Courier',
+      color: colors.textTertiary,
+      marginBottom: 2,
     },
     pendingImageWrapper: {
       position: 'relative',
