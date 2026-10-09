@@ -9,7 +9,6 @@ import android.os.Handler
 import android.os.Looper
 import android.text.Editable
 import android.text.TextWatcher
-import android.util.Log
 import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.View
@@ -32,6 +31,7 @@ import com.jotbill.app.pending.PendingChangeInfo
 import com.jotbill.app.pending.PendingConfirmReadiness
 import com.jotbill.app.pending.PendingConfirmService
 import com.jotbill.app.pending.PendingPromptPolicy
+import com.jotbill.app.utils.JotBillLog
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.CoroutineScope
@@ -140,11 +140,11 @@ internal object PendingConfirmOverlayManager {
         database = try {
             JotBillDatabaseProvider.get(app)
         } catch (error: RuntimeException) {
-            Log.w(TAG, "弹窗数据库初始化失败,弹窗停用(通知兜底)", error)
+            JotBillLog.w(TAG, "弹窗数据库初始化失败,弹窗停用(通知兜底)", error)
             null
         }
         PendingChangeHub.addListener(::onPendingChangeFromHub)
-        Log.i(TAG, "付款确认弹窗已初始化: enabled=${isEnabled(app)}")
+        JotBillLog.i(TAG, "付款确认弹窗已初始化: enabled=${isEnabled(app)}")
     }
 
     fun isEnabled(context: Context): Boolean =
@@ -204,12 +204,12 @@ internal object PendingConfirmOverlayManager {
             val row = try {
                 db.pendingTransactionDao().getById(pendingId)
             } catch (error: RuntimeException) {
-                Log.w(TAG, "弹窗预读待确认失败", error)
+                JotBillLog.w(TAG, "弹窗预读待确认失败", error)
                 return null
             }
             if (row != null) {
                 if (attempt > 0) {
-                    Log.i(TAG, "弹窗预读在第${attempt + 1}次命中(事务提交可见性延迟): id=${pendingId.take(16)}")
+                    JotBillLog.i(TAG, "弹窗预读在第${attempt + 1}次命中(事务提交可见性延迟): id=${pendingId.take(16)}")
                 }
                 return row
             }
@@ -217,7 +217,7 @@ internal object PendingConfirmOverlayManager {
                 delay(PENDING_ROW_READ_RETRY_DELAY_MILLIS)
             }
         }
-        Log.w(
+        JotBillLog.w(
             TAG,
             "弹窗预读待确认为空(事务可能未提交或行已被处理): id=${pendingId.take(16)}, " +
                 "attempts=$PENDING_ROW_READ_ATTEMPTS"
@@ -245,7 +245,7 @@ internal object PendingConfirmOverlayManager {
             )
             when (decision) {
                 is PendingPromptPolicy.Decision.Skip -> {
-                    Log.i(TAG, "弹窗跳过: ${decision.reason.wireValue}, id=${info.pendingId.take(16)}")
+                    JotBillLog.i(TAG, "弹窗跳过: ${decision.reason.wireValue}, id=${info.pendingId.take(16)}")
                 }
 
                 is PendingPromptPolicy.Decision.Prompt -> {
@@ -294,7 +294,7 @@ internal object PendingConfirmOverlayManager {
             showCandidate(candidate)
             return
         }
-        Log.i(
+        JotBillLog.i(
             TAG,
             "弹窗候选挂起等待非敏感帧: id=${candidate.pendingId.take(16)}, " +
                 "sensitive=$lastObservationSensitive, foreground=$lastForegroundPackage"
@@ -304,7 +304,7 @@ internal object PendingConfirmOverlayManager {
         candidateExpiryRunnable = Runnable {
             if (waitingCandidate === candidate) {
                 waitingCandidate = null
-                Log.i(TAG, "弹窗候选超时放弃(敏感页未结束), 通知兜底: id=${candidate.pendingId.take(16)}")
+                JotBillLog.i(TAG, "弹窗候选超时放弃(敏感页未结束), 通知兜底: id=${candidate.pendingId.take(16)}")
             }
         }
         mainHandler.postDelayed(candidateExpiryRunnable!!, PendingPromptPolicy.CANDIDATE_TTL_MILLIS)
@@ -360,7 +360,7 @@ internal object PendingConfirmOverlayManager {
     private fun displayOverlay(pendingRow: PendingTransactionEntity) {
         val context = appContext ?: return
         if (!hasOverlayPermission(context)) {
-            Log.i(TAG, "无悬浮窗权限,弹窗放弃(通知兜底)")
+            JotBillLog.i(TAG, "无悬浮窗权限,弹窗放弃(通知兜底)")
             return
         }
         try {
@@ -444,13 +444,13 @@ internal object PendingConfirmOverlayManager {
             scheduleAutoDismiss()
             loadCategories(view, pendingRow)
             loadAccounts(view, pendingRow.accountId)
-            Log.i(
+            JotBillLog.i(
                 TAG,
                 "付款确认弹窗已显示: id=${pendingRow.id.take(16)}, amount=${pendingRow.amountMinor}, " +
                     "source=${pendingRow.sourceType}"
             )
         } catch (error: RuntimeException) {
-            Log.w(TAG, "弹窗显示失败(通知兜底)", error)
+            JotBillLog.w(TAG, "弹窗显示失败(通知兜底)", error)
             overlayView?.let { view ->
                 try {
                     windowManager?.removeView(view)
@@ -490,7 +490,7 @@ internal object PendingConfirmOverlayManager {
             } catch (error: CancellationException) {
                 throw error
             } catch (error: RuntimeException) {
-                Log.w(TAG, "弹窗确认异常", error)
+                JotBillLog.w(TAG, "弹窗确认异常", error)
                 null
             }
             mainHandler.post {
@@ -531,7 +531,7 @@ internal object PendingConfirmOverlayManager {
             )
             emitter.emit("onBillCreated", BridgeDtoMapper.bill(bill))
         } catch (error: RuntimeException) {
-            Log.w(TAG, "弹窗确认后 JS 事件推送失败(RN 可能未就绪)", error)
+            JotBillLog.w(TAG, "弹窗确认后 JS 事件推送失败(RN 可能未就绪)", error)
         }
     }
 
@@ -546,7 +546,7 @@ internal object PendingConfirmOverlayManager {
             val categories = try {
                 db.categoryDao().getByType("expense")
             } catch (error: RuntimeException) {
-                Log.w(TAG, "弹窗加载分类失败", error)
+                JotBillLog.w(TAG, "弹窗加载分类失败", error)
                 emptyList()
             }
             val defaultCategoryId = resolveDefaultCategoryId(db, pendingRow)
@@ -633,7 +633,7 @@ internal object PendingConfirmOverlayManager {
             val accounts = try {
                 db.accountDao().getAll().filter { it.isActive }
             } catch (error: RuntimeException) {
-                Log.w(TAG, "弹窗加载账户失败", error)
+                JotBillLog.w(TAG, "弹窗加载账户失败", error)
                 emptyList()
             }
             mainHandler.post {
@@ -807,7 +807,7 @@ internal object PendingConfirmOverlayManager {
                 windowManager?.removeView(view)
             }
         } catch (error: RuntimeException) {
-            Log.w(TAG, "弹窗关闭异常", error)
+            JotBillLog.w(TAG, "弹窗关闭异常", error)
         } finally {
             overlayView = null
             selectedCategory = null
@@ -820,7 +820,7 @@ internal object PendingConfirmOverlayManager {
             waitingCandidate = null
             candidateExpiryRunnable?.let(mainHandler::removeCallbacks)
             candidateExpiryRunnable = null
-            Log.i(TAG, "付款确认弹窗已关闭: reason=$reason")
+            JotBillLog.i(TAG, "付款确认弹窗已关闭: reason=$reason")
         }
     }
 

@@ -4,7 +4,6 @@ import android.app.Notification
 import android.content.ComponentName
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
-import android.util.Log
 import com.jotbill.app.data.JotBillDatabaseProvider
 import com.jotbill.app.recognition.CheckoutAccessibilityService
 import com.jotbill.app.recognition.CheckoutPaymentMatcher
@@ -14,6 +13,7 @@ import com.jotbill.app.recognition.RefundLinker
 import com.jotbill.app.recognition.TransferClassifier
 import com.jotbill.app.recognition.PurchaseIntentCoordinationResult
 import com.jotbill.app.recognition.PurchaseIntentResultCallback
+import com.jotbill.app.utils.JotBillLog
 import com.jotbill.app.utils.SentryLogger
 import kotlinx.coroutines.CancellableContinuation
 import kotlinx.coroutines.CoroutineScope
@@ -51,7 +51,7 @@ class PaymentNotificationService : NotificationListenerService() {
         super.onCreate()
         SentryLogger.i(TAG, "支付通知服务启动（阶段四重写）")
         SentryLogger.addBreadcrumb("PaymentNotificationService 启动", category = "service_lifecycle")
-        Log.i(TAG, "支付通知服务已创建（阶段四：解析→证据→决策）")
+        JotBillLog.i(TAG, "支付通知服务已创建（阶段四：解析→证据→决策）")
     }
 
     /**
@@ -61,7 +61,7 @@ class PaymentNotificationService : NotificationListenerService() {
         super.onDestroy()
         scope.cancel()
         SentryLogger.i(TAG, "支付通知服务销毁")
-        Log.i(TAG, "支付通知服务已销毁")
+        JotBillLog.i(TAG, "支付通知服务已销毁")
     }
 
     /**
@@ -69,7 +69,7 @@ class PaymentNotificationService : NotificationListenerService() {
      */
     override fun onListenerConnected() {
         super.onListenerConnected()
-        Log.i(TAG, "通知监听服务已连接")
+        JotBillLog.i(TAG, "通知监听服务已连接")
         SentryLogger.addBreadcrumb("通知监听服务已连接", category = "service_lifecycle")
     }
 
@@ -82,12 +82,12 @@ class PaymentNotificationService : NotificationListenerService() {
      */
     override fun onListenerDisconnected() {
         super.onListenerDisconnected()
-        Log.w(TAG, "通知监听服务已断开，请求重绑")
+        JotBillLog.w(TAG, "通知监听服务已断开，请求重绑")
         SentryLogger.addBreadcrumb("通知监听服务已断开，请求重绑", category = "service_lifecycle")
         runCatching {
             requestRebind(ComponentName(this, PaymentNotificationService::class.java))
         }.onFailure { error ->
-            Log.w(TAG, "通知监听服务重绑请求失败", error)
+            JotBillLog.w(TAG, "通知监听服务重绑请求失败", error)
             SentryLogger.addBreadcrumb("通知监听服务重绑请求失败: ${error.message}", category = "service_lifecycle")
         }
     }
@@ -102,7 +102,7 @@ class PaymentNotificationService : NotificationListenerService() {
         try {
             processNotification(sbn)
         } catch (error: Exception) {
-            Log.e(TAG, "处理通知时发生错误", error)
+            JotBillLog.e(TAG, "处理通知时发生错误", error)
             SentryLogger.e(TAG, "处理通知时发生错误", error)
         }
     }
@@ -150,7 +150,7 @@ class PaymentNotificationService : NotificationListenerService() {
             notificationId = sbn.id
         )
         if (refundInput != null) {
-            Log.i(TAG, "解析到退款证据: 包名=${refundInput.sourcePackage}")
+            JotBillLog.i(TAG, "解析到退款证据: 包名=${refundInput.sourcePackage}")
             scope.launch {
                 handleRefundEvidence(refundInput)
             }
@@ -173,7 +173,7 @@ class PaymentNotificationService : NotificationListenerService() {
             notificationId = sbn.id
         )
         if (feeParse != null) {
-            Log.i(
+            JotBillLog.i(
                 TAG,
                 "解析到手续费证据: 包名=${feeParse.feePart.sourcePackage}, " +
                     "含主交易=${feeParse.mainPart != null}"
@@ -199,7 +199,7 @@ class PaymentNotificationService : NotificationListenerService() {
             notificationId = sbn.id
         )
         if (transferInput != null) {
-            Log.i(TAG, "解析到转账/还款证据: 包名=${transferInput.sourcePackage}")
+            JotBillLog.i(TAG, "解析到转账/还款证据: 包名=${transferInput.sourcePackage}")
             scope.launch {
                 handleTransferEvidence(transferInput)
             }
@@ -235,7 +235,7 @@ class PaymentNotificationService : NotificationListenerService() {
             return
         }
 
-        Log.i(TAG, "解析到支付证据: 包名=${evidenceInput.sourcePackage}")
+        JotBillLog.i(TAG, "解析到支付证据: 包名=${evidenceInput.sourcePackage}")
 
         // 异步落库证据并触发匹配
         scope.launch {
@@ -280,15 +280,15 @@ class PaymentNotificationService : NotificationListenerService() {
                 val evidenceAlreadyStored = database.paymentEvidenceDao()
                     .getBySourceEventKey(input.sourceEventKey) != null
                 if (evidenceAlreadyStored) {
-                    Log.i(TAG, "支付证据已由无障碍链路落库，跳过纯通知兜底")
+                    JotBillLog.i(TAG, "支付证据已由无障碍链路落库，跳过纯通知兜底")
                     return
                 }
                 CheckoutPaymentMatcher(database).recordOrphanPaymentSignal(
                     signal, sourceType = "NOTIFICATION"
                 )
-                Log.i(TAG, "支付通知回退不可用($result)，已转纯通知待确认")
+                JotBillLog.i(TAG, "支付通知回退不可用($result)，已转纯通知待确认")
             } catch (error: RuntimeException) {
-                Log.w(TAG, "纯通知待确认写入失败", error)
+                JotBillLog.w(TAG, "纯通知待确认写入失败", error)
             }
         }
 
@@ -302,7 +302,7 @@ class PaymentNotificationService : NotificationListenerService() {
             data = resultInfo,
             category = "payment_evidence"
         )
-        Log.i(TAG, "支付证据处理完成: $resultInfo")
+        JotBillLog.i(TAG, "支付证据处理完成: $resultInfo")
     }
 
     /**
@@ -328,9 +328,9 @@ class PaymentNotificationService : NotificationListenerService() {
                 data = outcomeInfo,
                 category = "refund_evidence"
             )
-            Log.i(TAG, "退款证据处理完成: $outcomeInfo")
+            JotBillLog.i(TAG, "退款证据处理完成: $outcomeInfo")
         } catch (error: RuntimeException) {
-            Log.w(TAG, "退款证据处理失败", error)
+            JotBillLog.w(TAG, "退款证据处理失败", error)
             SentryLogger.addBreadcrumb(
                 "退款证据处理失败",
                 data = mapOf("package" to input.sourcePackage),
@@ -365,9 +365,9 @@ class PaymentNotificationService : NotificationListenerService() {
                 data = outcomeInfo,
                 category = "transfer_evidence"
             )
-            Log.i(TAG, "转账/还款证据处理完成: $outcomeInfo")
+            JotBillLog.i(TAG, "转账/还款证据处理完成: $outcomeInfo")
         } catch (error: RuntimeException) {
-            Log.w(TAG, "转账/还款证据处理失败", error)
+            JotBillLog.w(TAG, "转账/还款证据处理失败", error)
             SentryLogger.addBreadcrumb(
                 "转账/还款证据处理失败",
                 data = mapOf("package" to input.sourcePackage),
@@ -400,9 +400,9 @@ class PaymentNotificationService : NotificationListenerService() {
                 data = outcomeInfo,
                 category = "fee_evidence"
             )
-            Log.i(TAG, "手续费证据处理完成: $outcomeInfo")
+            JotBillLog.i(TAG, "手续费证据处理完成: $outcomeInfo")
         } catch (error: RuntimeException) {
-            Log.w(TAG, "手续费证据处理失败", error)
+            JotBillLog.w(TAG, "手续费证据处理失败", error)
             SentryLogger.addBreadcrumb(
                 "手续费证据处理失败",
                 data = mapOf("package" to parse.feePart.sourcePackage),
@@ -416,7 +416,7 @@ class PaymentNotificationService : NotificationListenerService() {
             try {
                 handleTransferEvidence(mainPart)
             } catch (error: RuntimeException) {
-                Log.w(TAG, "手续费伴随主交易处理失败", error)
+                JotBillLog.w(TAG, "手续费伴随主交易处理失败", error)
             }
         }
     }
@@ -446,7 +446,7 @@ class PaymentNotificationService : NotificationListenerService() {
                 }
             }
         } catch (_: RuntimeException) {
-            Log.w(TAG, "支付通知回退入口不可用")
+            JotBillLog.w(TAG, "支付通知回退入口不可用")
             null
         }
     }
