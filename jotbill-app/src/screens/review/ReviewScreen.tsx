@@ -53,34 +53,13 @@ const EVIDENCE_QUERY_KEY = QUERY_KEYS.recognition.evidence;
 /** 与 `PendingEditPanel` 共用同一份缓存，避免每张卡片各发一次桥接调用。 */
 const ACCOUNTS_QUERY_KEY = ['accounts', 'list'] as const;
 
-/**
- * "重试识别"按钮是否可用（单一出处，UI 渲染与点击回调共用）。
- *
- * 判据：只有"结算页 AI 识别失败"的占位候选才可能重试 —— 其 `conflictReason`
- * 固定为 `AI_RECOGNITION_FAILED` 且金额为 0（见 `CheckoutPaymentMatcher`
- * 的 AI 失败占位分支）。其余候选（孤儿待确认、正常证据待确认）要么没有候选，
- * 要么重试也没有可用的结算页上下文。
- *
- * 精简模式停用结算页截图识别链路后，`retryAiRecognition` 的 `USER_RETRY` 通道
- * 拿不到手动补截上下文，必然失败 ⇒ 按钮隐藏而非置灰。
- */
-function isRetryRecognitionAvailable(pending: PendingTransaction): boolean {
-  return (
-    pending.conflictReason === 'AI_RECOGNITION_FAILED' &&
-    pending.amountMinor === 0 &&
-    Boolean(pending.candidateId)
-  );
-}
-
 /** 待确认中心屏幕组件，对应阶段三任务9前端桥接。 */
 export default function ReviewScreen() {
   const navigation = useNavigation();
   const queryClient = useQueryClient();
   const styles = useStyles(createStyles);
   const { alert } = useAlert();
-  const [retrySubmittedVersions, setRetrySubmittedVersions] = useState<
-    Record<string, number>
-  >({});
+
 
   const pendingQuery = useQuery({
     queryKey: PENDING_QUERY_KEY,
@@ -127,26 +106,6 @@ export default function ReviewScreen() {
     },
   });
 
-  const retryMutation = useMutation({
-    mutationFn: ({ candidateId }: { candidateId: string }) =>
-      nativeRecognition.retryAiRecognition(candidateId),
-    onSuccess: () => {
-      invalidateAll();
-      setRetrySubmittedVersions({});
-      alert('重试已触发', 'AI 识别已重新触发，结果会更新到待确认列表。');
-    },
-    onError: (error, { candidateId }) => {
-      setRetrySubmittedVersions((current) => {
-        if (!(candidateId in current)) return current;
-        const next = { ...current };
-        delete next[candidateId];
-        return next;
-      });
-      const message =
-        error instanceof Error ? error.message : '重试识别失败，请稍后重试';
-      alert('重试失败', message);
-    },
-  });
 
   const refresh = useCallback(async () => {
     await Promise.all([
@@ -191,33 +150,6 @@ export default function ReviewScreen() {
     [ignoreMutation],
   );
 
-  const handleRetry = useCallback(
-    (pending: PendingTransaction) => {
-      if (!pending.candidateId) {
-        alert('无法重试', '该待确认交易没有关联的候选，不能重试识别。');
-        return;
-      }
-      // 精简模式：结算页截图识别链路停用后，重试通道必然失败（见 PendingCard 的
-      // canRetryRecognition 注释）。按钮已隐藏，这里是纵深防御 —— 避免将来有别处
-      // 复用本回调时又暴露出一个点不动的入口。
-      if (!isRetryRecognitionAvailable(pending)) {
-        alert(
-          '无法重试',
-          '结算页截图识别已停用，无法重新识别。请直接修改金额或分类后确认入账。',
-        );
-        return;
-      }
-      if (retrySubmittedVersions[pending.candidateId] === pending.version) {
-        return;
-      }
-      setRetrySubmittedVersions((current) => ({
-        ...current,
-        [pending.candidateId as string]: pending.version,
-      }));
-      retryMutation.mutate({ candidateId: pending.candidateId });
-    },
-    [alert, retryMutation, retrySubmittedVersions],
-  );
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
@@ -269,7 +201,6 @@ export default function ReviewScreen() {
                 onConfirm={handleConfirm}
                 onConfirmWithInput={handleConfirmWithInput}
                 onIgnore={handleIgnore}
-                onRetry={handleRetry}
                 isConfirming={
                   confirmMutation.isPending &&
                   confirmMutation.variables?.pending.pendingId === pending.pendingId
@@ -277,16 +208,6 @@ export default function ReviewScreen() {
                 isIgnoring={
                   ignoreMutation.isPending &&
                   ignoreMutation.variables?.pending.pendingId === pending.pendingId
-                }
-                isRetrying={
-                  retryMutation.isPending &&
-                  retryMutation.variables?.candidateId === pending.candidateId
-                }
-                retryBlocked={
-                  Boolean(
-                    pending.candidateId &&
-                      retrySubmittedVersions[pending.candidateId] === pending.version,
-                  )
                 }
                 colors={styles._colors}
               />
@@ -421,11 +342,8 @@ interface PendingCardProps {
     input: PendingConfirmationInput,
   ) => void;
   onIgnore: (pending: PendingTransaction) => void;
-  onRetry: (pending: PendingTransaction) => void;
   isConfirming: boolean;
   isIgnoring: boolean;
-  isRetrying: boolean;
-  retryBlocked: boolean;
   colors: ThemeColors;
 }
 
@@ -434,11 +352,8 @@ function PendingCard({
   onConfirm,
   onConfirmWithInput,
   onIgnore,
-  onRetry,
   isConfirming,
   isIgnoring,
-  isRetrying,
-  retryBlocked,
   colors,
 }: PendingCardProps) {
   const [editing, setEditing] = useState(false);
@@ -494,24 +409,6 @@ function PendingCard({
   const isAiFailedPlaceholder =
     pending.conflictReason === 'AI_RECOGNITION_FAILED' && pending.amountMinor === 0;
 
-  /**
-   * "重试识别"是否可用。
-   *
-   * 该按钮走 `retryAiRecognition` → 无障碍 `USER_RETRY` 通道，而那条通道要求
-   * 先在**购物 App 的结算页**建立手动补截上下文（`userRetryCaptureContext`）。
-   * 精简模式已停用结算页截图识别链路，上下文不再建立 ⇒ 按钮点了必然失败
-   * （`NO_CHECKOUT_CONTEXT` / `SERVICE_NOT_CONNECTED`），是一个功能性死按钮。
-   *
-   * 判据只用既有 `conflictReason` 字段，不新增桥接方法：
-   * 能重试的只可能是"结算页 AI 识别失败"的占位候选，其 conflictReason 前缀固定为
-   * `AI_RECOGNITION_FAILED`（见 `CheckoutPaymentMatcher` 的 AI 失败占位分支）；
-   * 孤儿待确认（`NO_ACTIVE_SESSION` / `PAYMENT_RESULT_NO_MATCHING_SESSION` 等）
-   * 压根没有候选，按钮本就不渲染。
-   *
-   * 隐藏而非置灰：置灰仍要解释"为什么不能点"，对用户是噪音；精简版下这个按钮
-   * 不存在比"存在但点不动"更干净。
-   */
-  const canRetryRecognition = isRetryRecognitionAvailable(pending);
 
   return (
     <View style={styles.pendingCard}>
@@ -635,22 +532,6 @@ function PendingCard({
                 : '确认入账'}
           </Text>
         </TouchableOpacity>
-        {pending.candidateId && canRetryRecognition ? (
-          <TouchableOpacity
-            style={[
-              styles.retryButton,
-              (isRetrying || retryBlocked) && styles.actionButtonDisabled,
-            ]}
-            onPress={() => onRetry(pending)}
-            disabled={isRetrying || isConfirming || isIgnoring || retryBlocked}
-            activeOpacity={0.85}
-          >
-            <RefreshCw size={16} color={colors.textPrimary} />
-            <Text style={styles.retryButtonText}>
-              {isRetrying ? '重试中…' : retryBlocked ? '重试已提交' : '重试识别'}
-            </Text>
-          </TouchableOpacity>
-        ) : null}
         <TouchableOpacity
           style={[
             styles.ignoreButton,

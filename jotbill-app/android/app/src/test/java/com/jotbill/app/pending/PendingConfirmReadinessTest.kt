@@ -1,6 +1,8 @@
 package com.jotbill.app.pending
 
-import com.jotbill.app.recognition.MAX_SAFE_MINOR_UNIT
+// 金额上界原本在 recognition/CheckoutContract.kt，随识别链路移除后
+// 统一以 data/LedgerRepository.kt:17 那份为唯一出处。
+import com.jotbill.app.data.MAX_SAFE_MINOR_UNIT
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test

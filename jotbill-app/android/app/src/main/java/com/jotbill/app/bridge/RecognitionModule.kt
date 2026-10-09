@@ -1,46 +1,43 @@
 package com.jotbill.app.bridge
 
-import android.content.Context
-import android.content.Intent
-import android.provider.Settings
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
 import com.jotbill.app.data.JotBillDatabase
 import com.jotbill.app.data.JotBillDatabaseProvider
-import com.jotbill.app.recognition.CheckoutAccessibilityService
-import com.jotbill.app.recognition.PurchaseIntentCoordinationResult
-import com.jotbill.app.recognition.PurchaseIntentResultCallback
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONArray
 import org.json.JSONObject
-import kotlin.coroutines.resume
 
 /**
- * 识别链路桥接层。
+ * 识别数据只读桥接层。
  *
- * 仅暴露会话、候选、证据和重试入口的只读查询与有限操作，所有图片或敏感字段都不离开原生层。
- * 重试入口复用无障碍服务的 USER_RETRY 通路，桥接层不直接接触截图或 AI 客户端。
+ * ⚠️ 本模块原为"识别链路桥接"，9 个方法里有 3 个直接驱动无障碍服务
+ * （retryAiRecognition / isAccessibilityEnabled / openAccessibilitySettings）。
+ * 精简版移除整条自动识别链路后，这 3 个方法及其支撑代码
+ * （TERMINAL_SESSION_STATUSES / mapRejectionCode / isAccessibilityServiceEnabled）
+ * 已全部删除。
+ *
+ * **保留本模块的理由**：剩下 6 个方法全是**纯 Room 只读查询**
+ * （checkout_sessions / transaction_candidates / payment_evidence /
+ * pending_transactions），读的是 Room schema 里的表，**不依赖 recognition 包**。
+ * 待确认中心（ReviewScreen）的状态卡与"支付证据"区块依赖它们，
+ * 而这些数据在识别链路删除后**依然存在**（Room schema 18 张表按约束不可动）。
+ * 删掉本模块等于连带删掉对已有数据的只读展示能力。
+ *
+ * 所有图片与敏感字段仍不离开原生层。
  */
 class RecognitionModule(
     private val reactContext: ReactApplicationContext
 ) : ReactContextBaseJavaModule(reactContext) {
     companion object {
         private const val MODULE_NAME = "Recognition"
-        private const val RETRY_TIMEOUT_MILLIS = 30_000L
-        private val TERMINAL_SESSION_STATUSES = setOf(
-            "COMPLETED",
-            "CANCELLED",
-            "EXPIRED"
-        )
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -101,70 +98,6 @@ class RecognitionModule(
         }.toString()
     }
 
-    /**
-     * 触发候选对应的 AI 识别重试。
-     *
-     * 通过候选找到关联会话的购物包，再交给无障碍服务的 USER_RETRY 通路。
-     * 服务未连接、会话已过期或页面已失效时，回调会返回 Rejected，桥接层转换为对应错误码。
-     */
-    @ReactMethod
-    fun retryAiRecognition(candidateId: String, promise: Promise) = launch(promise) {
-        val id = requireId(candidateId, "candidate")
-        val candidate = database.transactionCandidateDao().getById(id)
-            ?: throw BridgeException("NOT_FOUND", "Transaction candidate $id was not found")
-        val session = database.checkoutSessionDao().getById(candidate.sessionId)
-            ?: throw BridgeException("NOT_FOUND", "Session ${candidate.sessionId} was not found")
-        if (session.status in TERMINAL_SESSION_STATUSES) {
-            throw BridgeException("SESSION_EXPIRED", "Session ${session.id} has reached terminal state")
-        }
-        if (session.expiresAt <= System.currentTimeMillis()) {
-            throw BridgeException("SESSION_EXPIRED", "Session ${session.id} has expired")
-        }
-        val shoppingPackage = session.shoppingPackage?.trim()?.takeIf { it.isNotEmpty() }
-            ?: throw BridgeException(
-                "SESSION_EXPIRED",
-                "Session ${session.id} has no shopping package to retry"
-            )
-
-        val result = withTimeoutOrNull(RETRY_TIMEOUT_MILLIS) {
-            suspendCancellableCoroutine<PurchaseIntentCoordinationResult> { cont ->
-                val callback = PurchaseIntentResultCallback { value ->
-                    if (cont.isActive) {
-                        cont.resume(value)
-                    }
-                }
-                // 重试截图使用新的内存会话，再由识别服务把结果回写到原失败会话。
-                CheckoutAccessibilityService.requestUserRetryForSession(
-                    sessionId = session.id,
-                    expectedShoppingPackage = shoppingPackage,
-                    callback = callback
-                )
-                cont.invokeOnCancellation {
-                    // 协程取消时不主动中断无障碍服务流程，回调可能仍会触发但结果已被丢弃。
-                }
-            }
-        } ?: throw BridgeException(
-            "AI_TIMEOUT",
-            "Retry for candidate $candidateId timed out after $RETRY_TIMEOUT_MILLIS ms"
-        )
-
-        when (result) {
-            is PurchaseIntentCoordinationResult.AiDispatched,
-            is PurchaseIntentCoordinationResult.Accepted -> null
-
-            is PurchaseIntentCoordinationResult.ReleasedWithoutConsumer ->
-                throw BridgeException(
-                    "SERVICE_UNAVAILABLE",
-                    "Retry dispatcher unavailable: ${result.reasonCode}"
-                )
-
-            is PurchaseIntentCoordinationResult.Rejected -> {
-                val code = mapRejectionCode(result.reasonCode)
-                throw BridgeException(code, "Retry rejected: ${result.reasonCode}")
-            }
-        }
-    }
-
     /** 报告识别链路当前状态：活跃会话数、待确认数、AI 是否在识别中。 */
     @ReactMethod
     fun getRecognitionStatus(promise: Promise) = launch(promise) {
@@ -178,32 +111,6 @@ class RecognitionModule(
             put("aiRequesting", aiRequestingCount > 0)
         }.toString()
     }
-
-    /** 打开系统无障碍设置页，引导用户开启结算页观察服务。 */
-    @ReactMethod
-    fun openAccessibilitySettings(promise: Promise) {
-        try {
-            val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
-            reactContext.applicationContext.startActivity(intent)
-            promise.resolve(null)
-        } catch (error: Exception) {
-            promise.reject(
-                "PERMISSION_DENIED",
-                "无法打开无障碍设置，请手动前往系统设置",
-                error
-            )
-        }
-    }
-
-    /** 查询结算页无障碍服务当前是否已开启，避免前端反复读取 RuntimeHealth。 */
-    @ReactMethod
-    fun isAccessibilityEnabled(promise: Promise) = launch(promise) {
-        val enabled = isAccessibilityServiceEnabled(reactContext)
-        JSONObject().apply { put("enabled", enabled) }.toString()
-    }
-
     /** React Native 新版事件发射器要求模块提供这两个订阅计数方法。 */
     @ReactMethod
     fun addListener(eventName: String) = Unit
@@ -241,37 +148,6 @@ class RecognitionModule(
         }
     }
 
-    /** 把无障碍服务的拒绝原因映射为 RN 契约可识别的错误码。 */
-    private fun mapRejectionCode(reasonCode: String): String = when (reasonCode) {
-        "SERVICE_NOT_CONNECTED", "COORDINATOR_CLOSED" -> "SERVICE_UNAVAILABLE"
-        // PAYMENT_HANDOFF_ALREADY_ATTEMPTED 已随改造 B-2 删除（交接改为搬运后无单次门禁）。
-        "NO_CHECKOUT_CONTEXT", "NOT_CHECKOUT_PAGE", "SENSITIVE_PAGE",
-        "BUFFER_UNAVAILABLE" -> "SESSION_EXPIRED"
-        // 改造 B-3/E-2：支付结果无法自动归属（0 命中/歧义/信号缺失）⇒ 会话不可用。
-        "INVALID_PAYMENT_RESULT",
-        "PAYMENT_RESULT_NO_MATCHING_SESSION",
-        "PAYMENT_RESULT_AMBIGUOUS_SESSION" -> "SESSION_EXPIRED"
-        "REQUEST_BUDGET_EXHAUSTED" -> "AI_BUDGET_EXCEEDED"
-        "INVALID_PAYMENT_NOTIFICATION", "PAYMENT_NOTIFICATION_ALREADY_ATTEMPTED" ->
-            "DUPLICATE_TRANSACTION"
-        else -> "UNKNOWN"
-    }
-
-    /** 读取系统已启用的无障碍服务列表，确认本应用的服务是否已被用户开启。 */
-    private fun isAccessibilityServiceEnabled(context: Context): Boolean {
-        // 优先看服务是否实际存活：部分 ROM 系统设置读取与真实状态不一致会误报未开启。
-        if (CheckoutAccessibilityService.isServiceRunning()) {
-            return true
-        }
-        val enabledServices = Settings.Secure.getString(
-            context.contentResolver,
-            Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
-        ) ?: return false
-        val serviceName = context.packageName +
-            "/" +
-            CheckoutAccessibilityService::class.java.name
-        return enabledServices.split(':').any { it.equals(serviceName, ignoreCase = true) }
-    }
 
     private fun launch(promise: Promise, action: suspend () -> Any?) {
         scope.launch {

@@ -118,7 +118,6 @@ export default function SettingsScreen({ navigation }: SettingsScreenProps) {
       title: '🧩 本地能力',
       items: [
         { id: 'review', label: '待确认中心', icon: 'review', onPress: () => navigation?.navigate('Review') },
-        { id: 'accessibility', label: '无障碍权限', icon: 'accessibility', onPress: () => navigation?.navigate('AccessibilityPermission') },
         { id: 'notification', label: '通知权限', icon: 'notification', onPress: () => navigation?.navigate('NotificationPermission') },
         { id: 'ai-providers', label: 'AI 服务商', icon: 'ai', onPress: () => navigation?.navigate('AiProviders') },
         { id: 'runtime-status', label: '运行状态', icon: 'runtime', onPress: () => navigation?.navigate('RuntimeStatus') },

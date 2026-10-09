@@ -95,10 +95,7 @@ interface RawRecognitionModule {
   getCheckoutSession(sessionId: string): Promise<string>;
   getTransactionCandidate(candidateId: string): Promise<string>;
   getPaymentEvidence(sessionId: string): Promise<string>;
-  retryAiRecognition(candidateId: string): Promise<null>;
   getRecognitionStatus(): Promise<string>;
-  openAccessibilitySettings(): Promise<null>;
-  isAccessibilityEnabled(): Promise<string>;
   addListener(eventName: string): void;
   removeListeners(count: number): void;
 }
@@ -159,7 +156,17 @@ function normalizeEvidenceSourceType(value: unknown): EvidenceSourceType {
   return normalized;
 }
 
-/** 识别链路桥接封装；不暴露图片或原文，仅提供查询和重试入口。 */
+/**
+ * 识别数据只读封装；不暴露图片或原文。
+ *
+ * ⚠️ `retryAiRecognition` / `openAccessibilitySettings` /
+ * `isAccessibilityEnabled` 三个入口已随无障碍服务一并移除 ——
+ * 它们都依赖 `CheckoutAccessibilityService`，而精简版不再包含任何自动识别链路。
+ *
+ * 保留这里的原因是**纯 Room 只读查询**：会话、候选、支付证据、识别状态
+ * 读的都是 schema 里的表，数据在识别链路删除后依然存在。
+ * 待确认中心的状态卡与证据区块依赖它们。
+ */
 export const nativeRecognition = {
   async getCheckoutSessions(
     filter: CheckoutSessionFilter = {},
@@ -198,23 +205,9 @@ export const nativeRecognition = {
     );
   },
 
-  async retryAiRecognition(candidateId: string): Promise<void> {
-    await getRawRecognitionModule().retryAiRecognition(candidateId);
-  },
-
   async getRecognitionStatus(): Promise<RecognitionStatus> {
     const raw = await getRawRecognitionModule().getRecognitionStatus();
     return parseJson<RecognitionStatus>(raw, 'getRecognitionStatus');
-  },
-
-  async openAccessibilitySettings(): Promise<void> {
-    await getRawRecognitionModule().openAccessibilitySettings();
-  },
-
-  async isAccessibilityEnabled(): Promise<boolean> {
-    const raw = await getRawRecognitionModule().isAccessibilityEnabled();
-    const parsed = parseJson<{ enabled: boolean }>(raw, 'isAccessibilityEnabled');
-    return parsed.enabled === true;
   },
 };
 

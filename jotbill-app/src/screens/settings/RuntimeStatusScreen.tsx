@@ -4,7 +4,7 @@ import { useNavigation } from '@react-navigation/native';
 import { Linking } from 'react-native';
 import { useQuery } from '@tanstack/react-query';
 import { Activity, AlertTriangle, Battery, CheckCircle2, ChevronLeft, Database, FileText, Layers3, WalletCards } from 'lucide-react-native';
-import { nativeRecognition, nativeRuntime } from '../../native';
+import { nativeRuntime } from '../../native';
 import { borderRadius, borderWidth, spacing } from '../../theme/spacing';
 import { ThemeColors } from '../../theme/colors';
 import { useStyles } from '../../hooks';
@@ -115,12 +115,6 @@ export default function RuntimeStatusScreen() {
           <View style={styles.detailRow}>
             <Text style={styles.detailLabel}>通知监听设置</Text>
             <TouchableOpacity onPress={() => { void nativeRuntime.openNotificationListenerSettings(); }}>
-              <Text style={styles.linkText}>打开</Text>
-            </TouchableOpacity>
-          </View>
-          <View style={styles.detailRow}>
-            <Text style={styles.detailLabel}>无障碍服务设置</Text>
-            <TouchableOpacity onPress={() => { void nativeRecognition.openAccessibilitySettings(); }}>
               <Text style={styles.linkText}>打开</Text>
             </TouchableOpacity>
           </View>

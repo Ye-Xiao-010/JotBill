@@ -10,7 +10,7 @@ import com.facebook.react.ReactNativeHost
 import com.facebook.react.ReactPackage
 import com.facebook.react.defaults.DefaultReactHost.getDefaultReactHost
 import com.facebook.react.defaults.DefaultReactNativeHost
-import com.jotbill.app.notification.PaymentNotificationPackage
+
 import com.jotbill.app.overlay.PendingConfirmOverlayManager
 import com.jotbill.app.utils.InstallApkPackage
 import com.jotbill.app.utils.SentryLogger
@@ -20,8 +20,8 @@ import com.jotbill.app.bridge.DataPackage
 import com.jotbill.app.ai.AiPackage
 import com.jotbill.app.runtime.RuntimePackage
 import com.jotbill.app.backup.BackupPackage
-import com.jotbill.app.overlay.OverlayPackage
-import com.jotbill.app.bridge.RecognitionPackage
+
+import com.jotbill.app.bridge.RecognitionPackage // RecognitionPackage 已删除，本行随步骤 4 一并清掉
 import com.jotbill.app.pending.PendingReminderNotifier
 import com.jotbill.app.budget.BudgetReminderNotifier
 import com.facebook.react.ReactInstanceManager
@@ -92,15 +92,16 @@ class MainApplication : Application(), ReactApplication {
       object : DefaultReactNativeHost(this) {
         override fun getPackages(): List<ReactPackage> =
             PackageList(this).packages.apply {
-              add(PaymentNotificationPackage())
+              // PaymentNotificationPackage / OverlayPackage / RecognitionPackage
+              // 均已移除：精简版不含任何自动识别与自动记账链路。
               add(InstallApkPackage())
               add(HotUpdatePackage())
               add(DataPackage())
               add(AiPackage())
               add(RuntimePackage())
               add(BackupPackage())
-              add(OverlayPackage())
-              add(RecognitionPackage())
+              // 注意 PendingConfirmOverlayManager.init(this) 仍在下方 —— 弹窗保留，
+              // 手工/AI/导入也会产生待确认。只是不再有自动识别链路作为生产者。
             }
 
         override fun getJSMainModuleName(): String = "index"
@@ -150,10 +151,9 @@ class MainApplication : Application(), ReactApplication {
     // 待确认提醒先于 RN 初始化:通知监听/无障碍路径在 RN 未启动时也要能发系统通知
     PendingReminderNotifier.init(this)
     // 付款确认弹窗:订阅待确认创建事件,悬浮权限+非敏感帧门禁通过时就地弹窗
+    // ⚠️ 弹窗本身保留（手工/AI/导入也会产生待确认），只是不再有自动识别链路
+    // 作为生产者。删掉它会让"非自动"来源的待确认也失去弹窗确认入口。
     PendingConfirmOverlayManager.init(this)
-    // 识别能力开关:无障碍服务可能在 RN 进程未启动时被系统拉起,先于任何识别门禁
-    // 把持久值读进内存镜像,避免两处读到不同的开关状态
-    com.jotbill.app.recognition.RecognitionCapabilities.load(this)
     // 预算超支提醒:账单增删改后由 DataModule 触发检查,应用未启动也能发系统通知
     BudgetReminderNotifier.init(this)
     HotUpdateModule.recoverInterruptedSwap(this)
