@@ -30,6 +30,7 @@ import RuntimeStatusScreen from '../screens/settings/RuntimeStatusScreen';
 import DataManagementScreen from '../screens/settings/DataManagementScreen';
 import ImportScreen from '../screens/settings/ImportScreen';
 import RulesScreen from '../screens/settings/RulesScreen';
+import AccessibilityPermissionScreen from '../screens/settings/AccessibilityPermissionScreen';
 import NotificationPermissionScreen from '../screens/settings/NotificationPermissionScreen';
 import ReviewScreen from '../screens/review/ReviewScreen';
 
@@ -399,6 +400,11 @@ export default function AppNavigator() {
         <Stack.Screen
           name="Review"
           component={ReviewScreen}
+          options={{ headerShown: false }}
+        />
+        <Stack.Screen
+          name="AccessibilityPermission"
+          component={AccessibilityPermissionScreen}
           options={{ headerShown: false }}
         />
         <Stack.Screen

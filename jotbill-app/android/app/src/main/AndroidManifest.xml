@@ -54,16 +54,55 @@
         </intent-filter>
       </activity>
       
-      <!--
-          以下四个组件已随精简版移除（无障碍观察服务 / 支付通知监听服务 /
-          Headless JS 服务 / 开机启动接收器）：精简版不含任何自动识别与
-          自动记账链路。待确认弹窗（PendingConfirmOverlayManager）保留，
-          手工、AI、导入仍会产生待确认，只是不再有自动生产者。
+      <!-- 支付通知监听服务 -->
+      <service
+          android:name=".notification.PaymentNotificationService"
+          android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE"
+          android:exported="false">
+          <intent-filter>
+              <action android:name="android.service.notification.NotificationListenerService" />
+          </intent-filter>
+          <!--
+              阶段七真机修复：微信/支付宝支付凭证多为静默通知；只声明 alerting
+              会收不到这些通知，导致支付成功页节点不可读时没有任何兜底证据。
+              同时声明 alerting|silent，由代码白名单继续过滤非支付通知。
+          -->
+          <meta-data
+              android:name="android.service.notification.default_filter_types"
+              android:value="alerting|silent" />
+      </service>
 
-          Room schema 的 checkout_sessions / transaction_candidates /
-          payment_evidence 三张表按约束保留且不动 —— 已落库的数据仍可在
-          待确认中心的只读视图里查看。
-      -->
+      <!-- 结算页只读观察服务，不执行点击或输入；截图仅交给内存缓冲协调器 -->
+      <service
+          android:name=".recognition.CheckoutAccessibilityService"
+          android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
+          android:exported="true">
+          <intent-filter android:priority="1000">
+              <action android:name="android.accessibilityservice.AccessibilityService" />
+          </intent-filter>
+          <meta-data
+              android:name="android.accessibilityservice"
+              android:resource="@xml/checkout_accessibility_service" />
+      </service>
+      
+      <!-- Headless JS 服务（用于后台处理支付通知） -->
+      <service
+          android:name=".notification.PaymentNotificationHeadlessService"
+          android:exported="false"
+          android:foregroundServiceType="specialUse">
+          <property
+              android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+              android:value="payment_notification_processing" />
+      </service>
+      
+      <!-- 开机启动接收器（可选） -->
+      <receiver
+          android:name=".notification.BootCompletedReceiver"
+          android:exported="false">
+          <intent-filter>
+              <action android:name="android.intent.action.BOOT_COMPLETED" />
+          </intent-filter>
+      </receiver>
 
       <!-- FileProvider 用于安装 APK -->
       <provider

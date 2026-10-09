@@ -11,8 +11,7 @@ import com.jotbill.app.data.entity.PaymentEvidenceEntity
 import com.jotbill.app.data.entity.PendingTransactionEntity
 import com.jotbill.app.data.entity.RuleEntity
 import com.jotbill.app.data.entity.TransactionCandidateEntity
-// normalizePaymentEvidenceSourceType 已随识别链路移除迁到同包的
-// PaymentEvidenceSourceType.kt（同包无需 import）
+import com.jotbill.app.recognition.normalizePaymentEvidenceSourceType
 import org.json.JSONArray
 import org.json.JSONException
 import org.json.JSONObject

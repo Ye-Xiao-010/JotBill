@@ -3,6 +3,8 @@
  */
 
 export { default as BillItem, type BillData } from './BillItem';
+export { PaymentNotificationSettings } from './PaymentNotificationSettings';
+export { default as ManualCaptureOverlaySettings } from './ManualCaptureOverlaySettings';
 
 // 新增组件
 export { default as TransactionItem } from './TransactionItem';

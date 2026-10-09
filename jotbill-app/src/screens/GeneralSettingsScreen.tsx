@@ -18,11 +18,17 @@ import {
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { ThemeColors } from '../theme/colors';
 import { spacing, borderRadius, borderWidth, shadow } from '../theme';
+import {
+  ManualCaptureOverlaySettings,
+  PaymentNotificationSettings,
+} from '../components/business';
+import { paymentNotificationService } from '../services/paymentNotification';
 import { useStyles } from '../hooks';
 import { useAlert } from '../providers';
 import { aiService } from '../services/ai';
 import { nativePendingReminder } from '../native/pendingReminder';
 import { nativeBudgetReminder } from '../native/budgetReminder';
+import { nativeOverlay } from '../native/overlay';
 import type {
   AIModelConfig,
   AIProvider,
@@ -47,15 +53,9 @@ interface MonitoredApp {
   enabled: boolean;
 }
 
-/**
- * 通用配置持久化载体。
- *
- * `monitoredApps` / `filterKeywords` 只服务于"监听哪几个 App 的支付通知、
- * 用哪些关键词过滤"，也就是已随精简版删除的**支付通知自动记账**。
- */
 interface AppConfig {
-  monitoredApps?: MonitoredApp[];
-  filterKeywords?: string[];
+  monitoredApps: MonitoredApp[];
+  filterKeywords: string[];
 }
 
 // AI 模型配置编辑弹窗
@@ -604,6 +604,15 @@ export default function GeneralSettingsScreen({ navigation: _navigation }: Gener
   const [testingConfigId, setTestingConfigId] = useState<string | null>(null);
 
   // 其他状态
+  const [newAppName, setNewAppName] = useState('');
+  const [newPackageName, setNewPackageName] = useState('');
+  const [newKeyword, setNewKeyword] = useState('');
+  const [showAppPicker, setShowAppPicker] = useState(false);
+  const [installedApps, setInstalledApps] = useState<Array<{ packageName: string; appName: string }>>(
+    []
+  );
+  const [loadingApps, setLoadingApps] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
 
   // 待确认提醒开关(仅控制系统通知;数据落库与 JS 事件不受影响,默认开启)
   const [pendingReminderEnabled, setPendingReminderEnabled] = useState(true);
@@ -656,7 +665,28 @@ export default function GeneralSettingsScreen({ navigation: _navigation }: Gener
       .isReminderEnabled()
       .then(setBudgetReminderEnabled)
       .catch(() => undefined);
+    nativeOverlay
+      .getCheckoutCaptureEnabled()
+      .then(setCheckoutCaptureEnabled)
+      .catch(() => undefined);
   }, []);
+
+  const handleToggleCheckoutCapture = async (enabled: boolean) => {
+    setCheckoutCaptureEnabled(enabled);
+    setCheckoutCaptureBusy(true);
+    try {
+      await nativeOverlay.setCheckoutCaptureEnabled(enabled);
+    } catch (error) {
+      console.error('切换结算页截图识别链路失败:', error);
+      // 拨回真实值:原生侧未落盘,页面若留在乐观值会让用户以为已生效
+      nativeOverlay
+        .getCheckoutCaptureEnabled()
+        .then(setCheckoutCaptureEnabled)
+        .catch(() => undefined);
+    } finally {
+      setCheckoutCaptureBusy(false);
+    }
+  };
 
   const handleTogglePendingReminder = async (enabled: boolean) => {
     setPendingReminderEnabled(enabled);
@@ -682,6 +712,10 @@ export default function GeneralSettingsScreen({ navigation: _navigation }: Gener
   const handleSaveConfig = async () => {
     try {
       await AsyncStorage.setItem('appGeneralConfig', JSON.stringify(config));
+      await paymentNotificationService.saveMonitoringConfig(
+        config.monitoredApps,
+        config.filterKeywords
+      );
       console.log('配置已保存');
     } catch (error) {
       console.error('保存配置失败:', error);
@@ -768,9 +802,148 @@ export default function GeneralSettingsScreen({ navigation: _navigation }: Gener
     }
   };
 
+  // 监听应用相关操作
+  const addMonitoredApp = () => {
+    if (!newAppName.trim() || !newPackageName.trim()) {
+      return;
+    }
+    const newApp: MonitoredApp = {
+      id: Date.now().toString(),
+      packageName: newPackageName.trim(),
+      appName: newAppName.trim(),
+      enabled: true,
+    };
+    const newConfig = { ...config, monitoredApps: [...config.monitoredApps, newApp] };
+    setConfig(newConfig);
+    setNewAppName('');
+    setNewPackageName('');
+    saveConfigToStorage(newConfig);
+  };
+
+  const removeMonitoredApp = (id: string) => {
+    const newConfig = {
+      ...config,
+      monitoredApps: config.monitoredApps.filter((app) => app.id !== id),
+    };
+    setConfig(newConfig);
+    saveConfigToStorage(newConfig);
+  };
+
+  const toggleAppEnabled = (id: string) => {
+    const newConfig = {
+      ...config,
+      monitoredApps: config.monitoredApps.map((app) =>
+        app.id === id ? { ...app, enabled: !app.enabled } : app
+      ),
+    };
+    setConfig(newConfig);
+    saveConfigToStorage(newConfig);
+  };
+
+  const addKeyword = () => {
+    if (!newKeyword.trim()) {
+      return;
+    }
+    if (config.filterKeywords.includes(newKeyword.trim())) {
+      return;
+    }
+    const newConfig = {
+      ...config,
+      filterKeywords: [...config.filterKeywords, newKeyword.trim()],
+    };
+    setConfig(newConfig);
+    setNewKeyword('');
+    saveConfigToStorage(newConfig);
+  };
+
+  const removeKeyword = (keyword: string) => {
+    const newConfig = {
+      ...config,
+      filterKeywords: config.filterKeywords.filter((k) => k !== keyword),
+    };
+    setConfig(newConfig);
+    saveConfigToStorage(newConfig);
+  };
+
+  const saveConfigToStorage = async (configToSave: AppConfig) => {
+    try {
+      await AsyncStorage.setItem('appGeneralConfig', JSON.stringify(configToSave));
+      await paymentNotificationService.saveMonitoringConfig(
+        configToSave.monitoredApps,
+        configToSave.filterKeywords
+      );
+      console.log('配置已自动保存');
+    } catch (error) {
+      console.error('保存配置失败:', error);
+    }
+  };
+
+  const openAppPicker = async () => {
+    setLoadingApps(true);
+    try {
+      const apps = await paymentNotificationService.getInstalledApps();
+      if (apps.length === 0) {
+        alert('提示', '未获取到已安装应用，请确认已授予相关权限后重试');
+        return;
+      }
+      setInstalledApps(apps.sort((a, b) => a.appName.localeCompare(b.appName)));
+      setShowAppPicker(true);
+    } catch (error) {
+      console.error('获取已安装应用失败:', error);
+      alert('提示', '获取已安装应用列表失败，请检查权限设置');
+    } finally {
+      setLoadingApps(false);
+    }
+  };
+
+  const selectApp = (app: { packageName: string; appName: string }) => {
+    setNewAppName(app.appName);
+    setNewPackageName(app.packageName);
+    setShowAppPicker(false);
+    setSearchQuery('');
+  };
+
+  const filteredApps = installedApps.filter(
+    (app) =>
+      app.appName.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      app.packageName.toLowerCase().includes(searchQuery.toLowerCase())
+  );
+
   return (
     <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
       <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
+        <PaymentNotificationSettings style={styles.card} />
+
+        {/* 结算页截图识别链路(精简版开关) */}
+        <View style={styles.card}>
+          <Text style={styles.cardTitle}>🛒 结算页识别</Text>
+          <View style={styles.appItem}>
+            <View style={styles.appInfo}>
+              <Text style={styles.appName}>结算页截图 AI 识别</Text>
+              <Text style={styles.appPackage}>
+                关闭后不再监测结算页、不截图、不调用视觉模型；支付结果页弹窗记账不受影响
+              </Text>
+            </View>
+            <Switch
+              value={checkoutCaptureEnabled}
+              onValueChange={handleToggleCheckoutCapture}
+              disabled={checkoutCaptureBusy}
+              trackColor={{ false: styles._colors.divider, true: styles._colors.primary }}
+              thumbColor="#FFFFFF"
+            />
+          </View>
+        </View>
+
+        {/* 悬浮截图按钮设置：仅在结算页截图识别启用时渲染。
+            停用时这张卡片的三个控件（启用开关/显示方式/悬浮窗权限）都能改、能写盘，
+            但悬浮按钮永远拿不到 currentCheckout ⇒ canShowOnCurrentPage() 恒 false
+            ⇒ 按钮物理上永不出现；同时它读的 state 还是 SharedPreferences 里的持久化
+            旧值，会显示与现实不符的"已授权/可截图"。是纯假 UI，直接不渲染。
+            原生侧的 @ReactMethod 全部保留（约束：不改 Native.d.ts）。 */}
+        {checkoutCaptureEnabled ? (
+          <ManualCaptureOverlaySettings style={styles.card} />
+        ) : null}
+
         {/* 待确认提醒 */}
         <View style={styles.card}>
           <Text style={styles.cardTitle}>🔔 待确认提醒</Text>
@@ -878,11 +1051,113 @@ export default function GeneralSettingsScreen({ navigation: _navigation }: Gener
           </TouchableOpacity>
         </View>
 
+        {/* 监听应用配置 */}
+        <View style={styles.card}>
+          <Text style={styles.cardTitle}>📱 监听应用配置</Text>
+
+          {config.monitoredApps.map((app) => (
+            <View key={app.id} style={styles.appItem}>
+              <View style={styles.appInfo}>
+                <Text style={styles.appName}>{app.appName}</Text>
+                <Text style={styles.appPackage}>{app.packageName}</Text>
+              </View>
+              <View style={styles.appActions}>
+                <Switch
+                  value={app.enabled}
+                  onValueChange={() => toggleAppEnabled(app.id)}
+                  trackColor={{ false: styles._colors.divider, true: styles._colors.primary }}
+                  thumbColor="#FFFFFF"
+                />
+                <TouchableOpacity
+                  onPress={() => removeMonitoredApp(app.id)}
+                  style={styles.deleteButton}
+                >
+                  <Text style={styles.deleteText}>删除</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          ))}
+
+          <View style={styles.addForm}>
+            <Text style={styles.addFormTitle}>添加新的监听应用</Text>
+            <TouchableOpacity
+              onPress={openAppPicker}
+              style={[styles.selectAppButton, loadingApps && styles.selectAppButtonDisabled]}
+              disabled={loadingApps}
+            >
+              {loadingApps ? (
+                <View style={styles.selectAppButtonContent}>
+                  <ActivityIndicator size="small" color={styles._colors.stroke} />
+                  <Text style={styles.selectAppButtonText}>正在获取应用列表...</Text>
+                </View>
+              ) : (
+                <Text style={styles.selectAppButtonText}>从已安装应用选择</Text>
+              )}
+            </TouchableOpacity>
+            <TextInput
+              style={styles.input}
+              value={newAppName}
+              onChangeText={setNewAppName}
+              placeholder="应用名称（如：微信）"
+              placeholderTextColor={styles._colors.textTertiary}
+            />
+            <TextInput
+              style={[styles.input, styles.inputMargin]}
+              value={newPackageName}
+              onChangeText={setNewPackageName}
+              placeholder="应用包名（如：com.tencent.mm）"
+              placeholderTextColor={styles._colors.textTertiary}
+            />
+            <TouchableOpacity onPress={addMonitoredApp} style={styles.addButton}>
+              <Text style={styles.addButtonIcon}>+</Text>
+              <Text style={styles.addButtonText}>添加应用</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+
+        {/* 过滤关键词配置 */}
+        <View style={styles.card}>
+          <Text style={styles.cardTitle}>🔍 过滤关键词配置</Text>
+
+          <View style={styles.keywordList}>
+            {config.filterKeywords.map((keyword) => (
+              <View key={keyword} style={styles.keywordTag}>
+                <Text style={styles.keywordText}>{keyword}</Text>
+                <TouchableOpacity
+                  onPress={() => removeKeyword(keyword)}
+                  style={styles.keywordDelete}
+                >
+                  <Text style={styles.keywordDeleteIcon}>×</Text>
+                </TouchableOpacity>
+              </View>
+            ))}
+          </View>
+
+          <View style={styles.keywordForm}>
+            <TextInput
+              style={[styles.input, styles.keywordInput]}
+              value={newKeyword}
+              onChangeText={setNewKeyword}
+              placeholder="输入关键词"
+              placeholderTextColor={styles._colors.textTertiary}
+              onSubmitEditing={addKeyword}
+            />
+            <TouchableOpacity onPress={addKeyword} style={styles.keywordAddButton}>
+              <Text style={styles.keywordAddIcon}>+</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+
+        <TouchableOpacity onPress={handleSaveConfig} style={styles.saveButton}>
+          <Text style={styles.saveButtonText}>保存配置</Text>
+        </TouchableOpacity>
 
         <View style={styles.descriptionBox}>
           <Text style={styles.descriptionTitle}>📋 配置说明</Text>
           <View style={styles.descriptionList}>
             <Text style={styles.descriptionItem}>• AI 模型配置：管理 AI 智能记账所需的模型</Text>
+            <Text style={styles.descriptionItem}>• 监听应用：配置需要监听通知的应用包名</Text>
+            <Text style={styles.descriptionItem}>• 过滤关键词：用于识别支付通知的关键词</Text>
           </View>
         </View>
       </ScrollView>
@@ -896,6 +1171,62 @@ export default function GeneralSettingsScreen({ navigation: _navigation }: Gener
         isSaving={savingAiConfig}
         colors={styles._colors}
       />
+
+      {/* 应用选择器 Modal */}
+      <Modal
+        visible={showAppPicker}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={() => setShowAppPicker(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>选择应用</Text>
+              <TouchableOpacity
+                onPress={() => setShowAppPicker(false)}
+                style={styles.modalCloseButton}
+              >
+                <Text style={styles.modalCloseIcon}>×</Text>
+              </TouchableOpacity>
+            </View>
+            <View style={styles.searchContainer}>
+              <TextInput
+                style={styles.searchInput}
+                value={searchQuery}
+                onChangeText={setSearchQuery}
+                placeholder="搜索应用名称或包名"
+                placeholderTextColor={styles._colors.textTertiary}
+              />
+            </View>
+            {filteredApps.length === 0 ? (
+              <View style={styles.modalLoading}>
+                <Text style={styles.modalLoadingText}>
+                  {searchQuery ? '未找到匹配的应用' : '未找到已安装的应用'}
+                </Text>
+              </View>
+            ) : (
+              <FlatList
+                data={filteredApps}
+                keyExtractor={(item) => item.packageName}
+                renderItem={({ item }) => (
+                  <TouchableOpacity
+                    style={styles.appPickerItem}
+                    onPress={() => selectApp(item)}
+                    activeOpacity={0.7}
+                  >
+                    <View style={styles.appPickerInfo}>
+                      <Text style={styles.appPickerName}>{item.appName}</Text>
+                      <Text style={styles.appPickerPackage}>{item.packageName}</Text>
+                    </View>
+                  </TouchableOpacity>
+                )}
+                style={styles.appPickerList}
+              />
+            )}
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }

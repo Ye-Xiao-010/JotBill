@@ -1,9 +1,6 @@
 package com.jotbill.app.pending
 
-// 金额上界的单一出处是 data/LedgerRepository.kt:17。
-// 此前 recognition/CheckoutContract.kt 里还有第二份同名常量（值相同），
-// 精简版移除识别链路后这份重复自然消失 —— 金额契约只剩一处。
-import com.jotbill.app.data.MAX_SAFE_MINOR_UNIT
+import com.jotbill.app.recognition.MAX_SAFE_MINOR_UNIT
 
 /**
  * 待确认"确认入账"的就绪判据（纯 Kotlin，无 Android 依赖，可 JVM 单测）。

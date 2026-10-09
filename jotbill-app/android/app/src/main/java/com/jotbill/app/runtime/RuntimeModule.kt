@@ -13,6 +13,8 @@ import com.jotbill.app.data.DatabaseMigrationGuard
 import com.jotbill.app.data.JOT_BILL_DATABASE_VERSION
 import com.jotbill.app.data.JotBillDatabase
 import com.jotbill.app.data.JotBillDatabaseProvider
+import com.jotbill.app.notification.PaymentNotificationService
+import com.jotbill.app.recognition.CheckoutAccessibilityService
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -76,14 +78,8 @@ class RuntimeModule(
                     )
                     put("checkedAt", Instant.now().toString())
                     put("aiProviderConfigured", database.aiProviderConfigDao().getDefault() != null)
-                    // 精简版移除了无障碍服务与通知监听服务，这两项能力已不存在。
-                    // 字段保留并恒为 false，而不是删掉 —— RuntimeHealth 的契约在
-                    // docs/types/Native.d.ts 中声明为必填，删字段会造成契约不一致。
-                    // 恒 false 本身是准确的：本应用确实没有这两个组件。
-                    put("accessibilityEnabled", false)
-                    put("notificationEnabled", false)
-                    // 以下两项**弹窗仍然需要**，不能一并去掉：
-                    // PendingConfirmOverlayManager 要悬浮窗权限，后台存活要电池优化白名单。
+                    put("accessibilityEnabled", isAccessibilityServiceEnabled())
+                    put("notificationEnabled", isNotificationListenerEnabled())
                     put("overlayPermissionGranted", isOverlayPermissionGranted())
                     put("batteryOptimizationIgnored", isIgnoringBatteryOptimizations())
                     put("orphanImportBatches", database.importBatchDao().getRunning().size)
@@ -97,7 +93,35 @@ class RuntimeModule(
         }
     }
 
+    /** 检查结算页无障碍服务是否已在系统设置中启用。 */
+    private fun isAccessibilityServiceEnabled(): Boolean {
+        // 优先看服务是否实际存活：部分 ROM 系统设置读取与真实状态不一致会误报未开启。
+        if (CheckoutAccessibilityService.isServiceRunning()) {
+            return true
+        }
+        val enabledServices = Settings.Secure.getString(
+            reactContext.contentResolver,
+            Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
+        ) ?: return false
+        val serviceName = ComponentName(
+            reactContext.packageName,
+            CheckoutAccessibilityService::class.java.name
+        ).flattenToString()
+        return enabledServices.split(':').any { it.equals(serviceName, ignoreCase = true) }
+    }
 
+    /** 检查支付通知监听服务是否已在系统设置中启用。 */
+    private fun isNotificationListenerEnabled(): Boolean {
+        val enabledListeners = Settings.Secure.getString(
+            reactContext.contentResolver,
+            "enabled_notification_listeners"
+        ) ?: return false
+        val componentName = ComponentName(
+            reactContext.packageName,
+            PaymentNotificationService::class.java.name
+        ).flattenToString()
+        return enabledListeners.split(':').any { it.equals(componentName, ignoreCase = true) }
+    }
 
     /** 检查悬浮窗权限是否已授予。 */
     private fun isOverlayPermissionGranted(): Boolean {
