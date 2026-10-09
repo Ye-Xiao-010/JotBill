@@ -246,6 +246,25 @@ class PaymentNotificationModule(
     }
 
     /**
+     * React Native 新版事件发射器要求模块提供这两个订阅计数方法。
+     *
+     * `App.tsx` 用 `new NativeEventEmitter(PaymentNotificationModule)` 订阅
+     * `onBillCreated`（弹窗/通知落单后刷新账单缓存），缺少这两个方法时 RN
+     * 每次冷启动都会打印：
+     *   `new NativeEventEmitter() was called with a non-null argument
+     *    without the required addListener method.`
+     *
+     * Android 上事件经 RCTDeviceEventEmitter 投递，功能不受影响（AiModule /
+     * DataModule / RecognitionModule / OverlayModule 早已按此约定实现），
+     * 但这是真实的契约缺口，新架构下要求更严，故对齐。
+     */
+    @ReactMethod
+    fun addListener(eventName: String) = Unit
+
+    @ReactMethod
+    fun removeListeners(count: Int) = Unit
+
+    /**
      * 获取已安装应用列表
      *
      * @param promise Promise 对象，返回应用列表
