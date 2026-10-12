@@ -168,40 +168,12 @@ class PaymentNotificationModule(
     }
 
     /**
-     * 获取设备厂商名称
-     * 
-     * @param promise Promise 对象，返回厂商名称字符串
+     * ⚠️ 2026-10-12 删除三个空壳 `@ReactMethod`：JS 侧零调用方。
+     *   · `getDeviceManufacturer` —— 无人问设备厂商；
+     *   · `startListening` / `stopListening` —— 函数体各只有一行日志，
+     *     自述"D-20 后不再注册任何接收器"。它们保留至今只是"接口形状"，
+     *     而没有 JS 调用方时，形状本身不构成兼容性：删掉后 JS 侧本来也没人调。
      */
-    @ReactMethod
-    fun getDeviceManufacturer(promise: Promise) {
-        try {
-            promise.resolve(Build.MANUFACTURER)
-        } catch (e: Exception) {
-            Log.e(TAG, "获取设备厂商失败", e)
-            promise.reject("ERROR", "获取设备厂商失败", e)
-        }
-    }
-
-    /**
-     * 启动监听
-     * 
-     * D-20：账单创建广播接收器已随旧 PaymentOverlayManager（整文件删除）一并移除，
-     * 本方法保留为 JS 接口形状，不再注册任何接收器。
-     */
-    @ReactMethod
-    fun startListening() {
-        Log.i(TAG, "startListening 调用（D-20 后不再注册账单创建广播接收器）")
-    }
-
-    /**
-     * 停止监听
-     *
-     * D-20：账单创建广播接收器已删除，本方法保留为 JS 接口形状，不再注销任何接收器。
-     */
-    @ReactMethod
-    fun stopListening() {
-        Log.i(TAG, "stopListening 调用（D-20 后无接收器可注销）")
-    }
 
     /**
      * 保存监听应用配置

@@ -357,9 +357,6 @@ enum class CheckoutJourneyState(val wireValue: String) {
         EXPIRED -> SessionStatus.EXPIRED
     }
 
-    /** 转换为当前 Native.d.ts 可识别的公开 SessionStatus 存储值。 */
-    fun toCompatibleStorageValue(): String = toPublicSessionStatus().wireValue
-
     companion object {
         fun fromStorageValue(value: String?): CheckoutJourneyState = when (value) {
             "OBSERVING" -> CHECKOUT_DETECTED
@@ -394,40 +391,11 @@ value class CheckoutRequestKey(val value: String) {
     }
 }
 
-/** 结算旅程的最小状态载体，后续由会话管理器映射到 CheckoutSessionEntity。 */
-data class CheckoutJourney(
-    val sessionId: String,
-    val slotId: String,
-    val state: CheckoutJourneyState,
-    val shoppingPackage: String?,
-    val pageRole: CheckoutPageRole,
-    val pageFingerprint: String?,
-    val snapshotId: String?,
-    val checkoutRequestKey: String?,
-    val createdAt: Long,
-    val updatedAt: Long,
-    val expiresAt: Long
-) {
-    init {
-        require(sessionId.isNotBlank()) { "sessionId 不能为空" }
-        require(slotId.isNotBlank()) { "slotId 不能为空" }
-        require(updatedAt >= createdAt) { "updatedAt 不能早于 createdAt" }
-        require(expiresAt >= createdAt) { "expiresAt 不能早于 createdAt" }
-    }
-
-    fun transitionTo(next: CheckoutJourneyState, at: Long): CheckoutJourney {
-        require(at >= updatedAt) { "状态更新时间不能倒退" }
-        require(state.canTransitionTo(next)) {
-            "不允许从 ${state.wireValue} 转换到 ${next.wireValue}"
-        }
-        return copy(state = next, updatedAt = at)
-    }
-
-    fun bindRequestKey(key: CheckoutRequestKey, at: Long): CheckoutJourney {
-        require(at >= updatedAt) { "请求键绑定时间不能倒退" }
-        require(checkoutRequestKey == null || checkoutRequestKey == key.value) {
-            "同一结算旅程不能替换 checkoutRequestKey"
-        }
-        return copy(checkoutRequestKey = key.value, updatedAt = at)
-    }
-}
+/**
+ * ⚠️ 2026-10-12 删除：`CheckoutJourney` 这个 data class **从未被实例化过**。
+ *
+ * 全仓（含 test / JS）检索只命中该定义与两个成员方法的返回类型。会话状态实际由
+ * `CheckoutJourneyState`（枚举，`:260`，仍在使用）+ `CheckoutSessionEntity`
+ * （Room 实体，仍在使用）承载。保留一个从不构造的载体只会让人误以为
+ * 有一条独立于这两者的状态流转路径。
+ */

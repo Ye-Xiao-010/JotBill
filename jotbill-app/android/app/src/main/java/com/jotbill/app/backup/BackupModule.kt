@@ -186,43 +186,13 @@ class BackupModule(
     }
 
     /**
-     * 阶段六 T2：旧导入入口在 T5 执行引擎接入前先转发到文件预处理。
-     * filePath 为空时打开 SAF 文件选择器；处理后返回文件哈希、格式、编码与候选清单，
-     * 不写数据库。T5 会在此之上补齐 inspectImport/executeImport 完整语义。
+     * ⚠️ 2026-10-12 删除 `importData()`（阶段六 T2 的旧入口）：JS 侧零调用方。
+     * `ImportScreen.tsx` 走的是 T5 新引擎 `nativeImport.inspectImport` /
+     * `executeImport`（`src/native/import.ts`）；`src/native/backup.ts` 里那份
+     * `importData` wrapper 同样无人调用，已一并删除。
+     * `PendingKind.IMPORT` / `REQUEST_OPEN_IMPORT` / `processImportPreparation`
+     * 若随之失去调用方，由编译器指出后再处理。
      */
-    @ReactMethod
-    fun importData(filePath: String, promise: Promise) {
-        if (filePath.isBlank()) {
-            val activity = reactContext.currentActivity
-            if (activity == null) {
-                promise.reject("NOT_IMPLEMENTED", "当前没有可用的文件选择器")
-                return
-            }
-            if (isPending()) {
-                promise.reject("IMPORT_IN_PROGRESS", "已有文件操作正在等待完成")
-                return
-            }
-            val operation = PendingFileOperation(
-                kind = PendingKind.IMPORT,
-                promise = promise,
-            )
-            if (!reservePending(operation)) {
-                promise.reject("IMPORT_IN_PROGRESS", "已有文件操作正在等待完成")
-                return
-            }
-            try {
-                activity.startActivityForResult(openImportIntent(), REQUEST_OPEN_IMPORT)
-            } catch (error: Exception) {
-                clearPending(operation)
-                reject(promise, error, "IMPORT_FAILED", "无法打开账单文件选择器")
-            }
-            return
-        }
-
-        scope.launch {
-            processImportPreparation(filePath, password = null, promise)
-        }
-    }
 
     /**
      * 阶段六 T5：导入预览（只读不写库）。

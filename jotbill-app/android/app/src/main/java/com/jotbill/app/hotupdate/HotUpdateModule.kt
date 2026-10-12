@@ -200,26 +200,9 @@ class HotUpdateModule(reactContext: ReactApplicationContext) :
     }
 
     /**
-     * 获取热更新信息
+     * ⚠️ 2026-10-12 删除 `getUpdateInfo()`：JS/TS 侧零引用
+     * （`src/native/` 下无 hotUpdate wrapper，`src/services/hotUpdate/` 也不调它）。
      */
-    @ReactMethod
-    fun getUpdateInfo(promise: Promise) {
-        try {
-            recoverInterruptedSwap(reactApplicationContext)
-            val hotDir = getHotUpdateDir()
-            val bundlePath = File(hotDir, BUNDLE_FILE)
-            val prefs = getPrefs()
-
-            val map = Arguments.createMap()
-            map.putBoolean("hasHotBundle", isVerifiedBundle(hotDir))
-            map.putString("bundlePath", bundlePath.absolutePath)
-            map.putString("hotUpdateDir", hotDir.absolutePath)
-            map.putInt("crashCount", prefs.getInt(KEY_CRASH_COUNT, 0))
-            promise.resolve(map)
-        } catch (e: Exception) {
-            promise.reject("GET_INFO_ERROR", e.message)
-        }
-    }
 
     /** 将已校验的临时目录一次性替换为正式目录，失败时恢复旧目录。 */
     @ReactMethod

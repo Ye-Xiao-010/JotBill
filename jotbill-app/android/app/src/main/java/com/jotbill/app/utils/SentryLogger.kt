@@ -140,41 +140,10 @@ object SentryLogger {
     }
 
     /**
-     * 设置用户信息
-     *
-     * @param userId 用户 ID
-     * @param email 用户邮箱（可选）
-     * @param username 用户名（可选）
+     * ⚠️ 2026-10-12 删除 `setUser()` / `clearUser()`：零调用点。
+     * 精简版没有用户体系（单用户本地记账），Sentry 的用户标识无从产生 ——
+     * 留着只会让人以为已经接入了。
      */
-    fun setUser(userId: String, email: String? = null, username: String? = null) {
-        if (!isEnabled) return
-
-        try {
-            val user = User().apply {
-                id = userId
-                this.email = email
-                this.username = username
-            }
-            Sentry.setUser(user)
-            Log.d(TAG, "✓ 已设置用户信息: userId=$userId")
-        } catch (e: Exception) {
-            Log.e(TAG, "设置用户信息失败", e)
-        }
-    }
-
-    /**
-     * 清除用户信息
-     */
-    fun clearUser() {
-        if (!isEnabled) return
-
-        try {
-            Sentry.setUser(null)
-            Log.d(TAG, "✓ 已清除用户信息")
-        } catch (e: Exception) {
-            Log.e(TAG, "清除用户信息失败", e)
-        }
-    }
 
     /**
      * 添加面包屑（Breadcrumb）
@@ -211,27 +180,10 @@ object SentryLogger {
     }
 
     /**
-     * 设置上下文信息
-     *
-     * 上下文信息会附加到所有后续的事件中
-     *
-     * @param key 上下文键（如 "payment", "user_action"）
-     * @param data 上下文数据
+     * ⚠️ 2026-10-12 删除 `setContext()`：零调用点（KDoc 里的示例不算）。
+     * 需要上下文时用 `setTag(key, value)`，那个有活跃调用方
+     * （`MainApplication.onCreate`）。
      */
-    fun setContext(key: String, data: Map<String, Any>) {
-        if (!isEnabled) return
-
-        try {
-            Sentry.configureScope { scope ->
-                data.forEach { (k, v) ->
-                    scope.setExtra(redact("${key}_${k}"), redact(v.toString()))
-                }
-            }
-            Log.d(TAG, "✓ 已设置上下文: ${redact(key)}")
-        } catch (e: Exception) {
-            Log.e(TAG, "设置上下文失败", e)
-        }
-    }
 
     /**
      * 设置标签
@@ -350,36 +302,10 @@ object SentryLogger {
     }
 
     /**
-     * 捕获异常
-     *
-     * 直接捕获异常并发送到 Sentry
-     *
-     * @param throwable 异常对象
-     * @param message 附加消息（可选）
-     * @param data 附加数据（可选）
+     * ⚠️ 2026-10-12 删除 `captureException()`：零调用点（`Sentry.captureException`
+     * 是 SDK 直调，与本包装函数是两回事）。本文件实际在用的是 `i/w/e/addBreadcrumb/
+     * setTag/captureMessage`，它们都有活跃调用方。
      */
-    fun captureException(throwable: Throwable, message: String? = null, data: Map<String, Any>? = null) {
-        Log.e(TAG, redact(message ?: "捕获异常"), throwable)
-
-        if (!isEnabled) return
-
-        try {
-            Sentry.captureException(throwable) { scope ->
-                // ⚠️ message 与 data 此前均未走 redact（同文件 ERROR 分支的
-                // setExtra 却脱敏了），是脱敏的第三条绕过路径。
-                if (message != null) {
-                    scope.setExtra("exception_message", redact(message))
-                }
-                if (data != null) {
-                    data.forEach { (k, v) ->
-                        scope.setExtra(redact("exception_$k"), redact(v.toString()))
-                    }
-                }
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "捕获异常到 Sentry 失败", e)
-        }
-    }
 
     /**
      * 手动发送消息到 Sentry

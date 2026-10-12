@@ -97,12 +97,15 @@ object JotBillLog {
         Log.i(TAG, "诊断日志落盘已启用：${file.absolutePath}")
     }
 
-    /** 当前日志文件绝对路径；未启用时返回 null。 */
-    fun currentFilePath(): String? = logFile?.absolutePath
+    // ⚠️ 2026-10-12 删除 `currentFilePath()`：零调用点（诊断日志路径由
+// `verify-lean-l1.ps1` 硬编码 `Android/data/com.jotbill.app/files/` 推得，
+// 没有任何运行时代码需要问"文件在哪"）。
 
     // ---- 与 android.util.Log 同签名的转发口 ----
 
-    fun v(tag: String, message: String) { Log.v(tag, message); sink("V", tag, message, null) }
+    // ⚠️ 2026-10-12 删除 `v()`：零调用点。同族的 d/i/w/e 有 200+ 处调用，
+    // 唯独 verbose 一处未用 —— 它从一开始就没被接进任何链路。
+
     fun d(tag: String, message: String) { Log.d(tag, message); sink("D", tag, message, null) }
     fun i(tag: String, message: String) { Log.i(tag, message); sink("I", tag, message, null) }
     fun w(tag: String, message: String) { Log.w(tag, message); sink("W", tag, message, null) }
@@ -118,6 +121,9 @@ object JotBillLog {
     fun mark(note: String) {
         i(TAG, "---------------- $note ----------------")
     }
+
+    /** ⚠️ 2026-10-12 删除 `mark()`：零调用点。分隔标记的实际用法是直接在日志里写
+ * `================` 文案，没有调用方需要这个转发。 */
 
     // ---- 内部 ----
 

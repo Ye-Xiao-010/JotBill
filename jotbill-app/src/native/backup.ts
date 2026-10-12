@@ -8,7 +8,6 @@ import type {
   BackupSummary,
   CreateBackupOptions,
   ExportResult as NativeExportResult,
-  ImportResult,
   RestorePreview,
   RestoreImportResult,
   RestoreStrategy,
@@ -22,7 +21,6 @@ interface RawBackupModule {
   restoreBackup?: (filePath: string) => Promise<string>;
   executeRestore?: (filePath: string, strategy: RestoreStrategy) => Promise<string>;
   exportData?: (format: ExportFormat) => Promise<string>;
-  importData?: (filePath: string) => Promise<string>;
   clearData?: () => Promise<null>;
 }
 
@@ -132,13 +130,6 @@ function requireExportData(module: RawBackupModule): NonNullable<RawBackupModule
     throw missingCapability('exportData');
   }
   return module.exportData.bind(module);
-}
-
-function requireImportData(module: RawBackupModule): NonNullable<RawBackupModule['importData']> {
-  if (typeof module.importData !== 'function') {
-    throw missingCapability('importData');
-  }
-  return module.importData.bind(module);
 }
 
 function requireClearData(module: RawBackupModule): NonNullable<RawBackupModule['clearData']> {
@@ -308,12 +299,10 @@ export const nativeBackup: LegacyBackupModule = {
     );
   },
 
-  async importData(filePath: string): Promise<ImportResult> {
-    return invokeJson<ImportResult>(
-      'importData',
-      () => requireImportData(getRawBackupModule('importData'))(filePath),
-    );
-  },
+  // ⚠️ 2026-10-12 删除 `importData()`：原生 `BackupModule.importData` 与本 wrapper
+// 一并删除（两端都是零调用）。导入走 `src/native/import.ts` 的
+// `nativeImport.inspectImport` / `executeImport`（T5 新引擎），
+// 见 `ImportScreen.tsx`。
 
   async clearData(): Promise<void> {
     await invokeVoid(

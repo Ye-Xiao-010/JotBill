@@ -85,16 +85,6 @@
               android:resource="@xml/checkout_accessibility_service" />
       </service>
       
-      <!-- Headless JS 服务（用于后台处理支付通知） -->
-      <service
-          android:name=".notification.PaymentNotificationHeadlessService"
-          android:exported="false"
-          android:foregroundServiceType="specialUse">
-          <property
-              android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-              android:value="payment_notification_processing" />
-      </service>
-      
       <!-- 开机启动接收器（可选） -->
       <receiver
           android:name=".notification.BootCompletedReceiver"

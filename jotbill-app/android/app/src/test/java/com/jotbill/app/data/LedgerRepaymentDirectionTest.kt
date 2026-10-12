@@ -80,7 +80,7 @@ class LedgerRepaymentDirectionTest {
         // 负数=欠款：欠 1000 元存 -1000
         database.accountDao().insert(liabilityAccount("acc-card", -1_000L))
 
-        ledger.createBillWithBalanceUpdate(
+        ledger.createBillWithDedup(
             bill("repay-1", "repayment", 400L, "acc-cash", "acc-card")
         )
 
@@ -93,7 +93,7 @@ class LedgerRepaymentDirectionTest {
         database.accountDao().insert(assetAccount("acc-cash", 10_000L))
         database.accountDao().insert(liabilityAccount("acc-card", -1_000L))
         val repay = bill("repay-1", "repayment", 400L, "acc-cash", "acc-card")
-        ledger.createBillWithBalanceUpdate(repay)
+        ledger.createBillWithDedup(repay)
 
         ledger.deleteBillWithBalanceUpdate(repay)
 
@@ -106,7 +106,7 @@ class LedgerRepaymentDirectionTest {
         database.accountDao().insert(assetAccount("acc-cash", 10_000L))
         database.accountDao().insert(assetAccount("acc-bank", 500L))
 
-        ledger.createBillWithBalanceUpdate(
+        ledger.createBillWithDedup(
             bill("transfer-1", "transfer", 400L, "acc-cash", "acc-bank")
         )
 

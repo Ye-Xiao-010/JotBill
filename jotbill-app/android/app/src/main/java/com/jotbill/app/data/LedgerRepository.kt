@@ -75,6 +75,14 @@ class LedgerRepository(private val database: JotBillDatabase) {
     ): CreateBillOutcome = createBillWithDedup(bill, operator)
 
     /**
+     * ⚠️ 2026-10-12：上方 `createBillWithBalanceUpdate` 是本方法的纯别名
+     * （同签名、同委托），保留两个名字只会让人分不清该调哪个 ——
+     * 生产代码一律调 `createBillWithDedup`。本次尚未删除它，
+     * 因为 `LedgerRepaymentDirectionTest` 有 3 处调用需要先改到新名字。
+     * 待测试迁移完成后即可删除。
+     */
+
+    /**
      * 阶段五 T6：带去重的账单创建。
      *
      * 写入前执行去重第 1 级（(sourceType, orderId) 精确查重，退款豁免）：
@@ -889,8 +897,12 @@ class LedgerRepository(private val database: JotBillDatabase) {
 }
 
 object BalanceCalculator {
-    fun calculate(currentBalance: Long, amount: Long, type: String): Long =
-        Math.addExact(currentBalance, delta(amount, type))
+    // ⚠️ 2026-10-12 删除 `calculate(currentBalance, amount, type)`：生产零调用点。
+    // 它只是 `addExact(currentBalance, delta(amount, type))` 的同义组合 ——
+    // 余额联动一律由调用方自己 `addExact`。`LedgerRepositoryTest` 原先那 6 条断言
+    // 验的本来就是 `delta` 的真值表，`currentBalance` 只是为了让 `calculate` 产出
+    // `900`/`1_100` 这类可读数字而传的哑元；测试已改为直接断言 `delta`（并补回
+    // 被哑元掩盖的 `fee` 与 `adjustment` 两行），覆盖不变且更准。
 
     fun delta(amount: Long, type: String): Long = when (type) {
         "income", "refund" -> amount
