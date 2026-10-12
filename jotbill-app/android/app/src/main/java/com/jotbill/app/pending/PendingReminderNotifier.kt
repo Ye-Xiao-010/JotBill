@@ -159,6 +159,90 @@ internal object PendingReminderNotifier {
             .build()
     }
 
+    /**
+     * 付款确认弹窗因超时自动关闭后的补充提醒（2026-10-12）。
+     *
+     * **为什么需要它**：创建 pending 时已经发过一次"有一笔交易待确认"
+     * （见 [onPendingChange]），但弹窗会在用户未操作时于 30s 后静默关闭 ——
+     * 用户很可能把"弹窗没了"误读成"已经记好了"。本条把这件事显式说出来。
+     *
+     * 与首条通知**共用同一个通知 id**（`pendingId.hashCode()`）：是**原地更新**
+     * 而非新增一条，避免通知栏出现两条内容相近、只有措辞不同的通知。
+     * 共用 id 也与 [onPendingChange] 的 `removed` 分支的 `cancel(同 id)` 保持自洽 ——
+     * 用户随后在待确认中心处理掉这笔时，更新后的通知同样会被消除。
+     *
+     * 不受 [MIN_NOTIFY_INTERVAL_MILLIS] 节流：连续多笔支付时每笔都会弹窗，
+     * 节流是为"创建时提醒"那种密集场景设计的；自动关闭是低频事件，
+     * 且节流会把"用户没注意到弹窗关了"这个关键信息再吞一次。
+     */
+    fun notifyAutoDismissed(
+        context: Context,
+        pendingId: String,
+        amountMinor: Long,
+        type: String,
+        sourceType: String
+    ) {
+        if (amountMinor <= 0L) {
+            // 0 金额占位本就不发首条通知（见 [onPendingChange]），此处保持一致。
+            JotBillLog.i(TAG, "跳过自动关闭提醒: 0 金额占位条目 id=${pendingId.take(16)}")
+            return
+        }
+        if (!isEnabled(context)) {
+            JotBillLog.i(TAG, "跳过自动关闭提醒: 用户已关闭开关")
+            return
+        }
+        val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+        if (manager == null || !manager.areNotificationsEnabled()) {
+            JotBillLog.w(TAG, "跳过自动关闭提醒: 应用通知权限未授予(API 33+ 需运行时授权)")
+            return
+        }
+        try {
+            manager.notify(
+                pendingId.hashCode(),
+                buildAutoDismissedNotification(context, pendingId, amountMinor, type, sourceType)
+            )
+            JotBillLog.i(
+                TAG,
+                "弹窗超时已转入待确认中心, 提醒已更新: id=${pendingId.take(16)}, amount=$amountMinor"
+            )
+        } catch (error: RuntimeException) {
+            JotBillLog.w(TAG, "弹窗超时提醒发送失败", error)
+        }
+    }
+
+    private fun buildAutoDismissedNotification(
+        context: Context,
+        pendingId: String,
+        amountMinor: Long,
+        type: String,
+        sourceType: String
+    ): Notification {
+        val launchIntent = context.packageManager.getLaunchIntentForPackage(context.packageName)
+        val contentIntent = launchIntent?.let { intent ->
+            PendingIntent.getActivity(
+                context,
+                0,
+                intent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+        }
+        val text = "¥${formatYuan(amountMinor)} · ${typeLabel(type)} · ${sourceLabel(sourceType)} · 未确认，已存入待确认中心"
+        val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            Notification.Builder(context, CHANNEL_ID)
+        } else {
+            @Suppress("DEPRECATION")
+            Notification.Builder(context)
+        }
+        return builder
+            .setSmallIcon(context.applicationInfo.icon)
+            .setContentTitle("这笔还没记上")
+            .setContentText(text)
+            .setStyle(Notification.BigTextStyle().bigText(text))
+            .setContentIntent(contentIntent)
+            .setAutoCancel(true)
+            .build()
+    }
+
     private fun formatYuan(amountMinor: Long): String {
         val yuan = amountMinor / 100
         val fen = amountMinor % 100

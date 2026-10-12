@@ -1,0 +1,30 @@
+﻿=== JotBill 精简版 30s 自动关闭 + 补发通知 真机验证 ===
+设备: 小米 25128PNA1C (nezha) / Android 17 / API 37
+采集: 2026-10-12 16:31:20 ~ 16:33:30   诊断日志基线 = 18 行
+
+10-12 16:29:39.626 I/PendingReminder: 待确认提醒已初始化: channel=pending_reminder
+10-12 16:29:39.868 I/PendingConfirmOverlay: 付款确认弹窗已初始化: enabled=true
+10-12 16:30:23.453 I/CheckoutAccessibilityService: 结算页无障碍观察服务已连接
+10-12 16:32:20.842 I/CheckoutAccessibilityService: 支付结果页截图兜底已禁止: 支付包页面为敏感页面，跳过证据提取与截图兜底 pkg=com.tencent.mm, role=UNKNOWN, class=
+10-12 16:32:25.447 I/CheckoutAccessibilityService: 支付结果页解析到证据: 金额=3906分, 状态=SUCCESS, textLength=21
+10-12 16:32:25.463 I/PendingChangeHub: pending变更事件: id=pending-orphan-4, type=expense, amount=3906, source=accessibility, reason=NO_ACTIVE_SESSION, isNew=true
+10-12 16:32:25.469 I/PendingReminder: 待确认提醒已发送: id=pending-orphan-4, type=expense, amount=3906, source=accessibility
+10-12 16:32:25.650 I/PendingConfirmOverlay: 弹窗门禁判定: id=pending-orphan-4, allowed=true, reason=PASS(age=2ms, foreground=com.tencent.mm)
+10-12 16:32:25.789 I/PendingConfirmOverlay: 付款确认弹窗已显示: id=pending-orphan-4, amount=3906, source=accessibility
+10-12 16:32:26.288 I/PendingConfirmOverlay: 付款确认弹窗已上屏确认: id=pending-orphan-4, attached=true
+10-12 16:32:55.793 I/PendingReminder: 弹窗超时已转入待确认中心, 提醒已更新: id=pending-orphan-4, amount=3906
+10-12 16:32:55.793 I/PendingConfirmOverlay: 付款确认弹窗已关闭: reason=AUTO_DISMISS
+10-12 16:32:55.940 I/CheckoutAccessibilityService: 支付结果页解析到证据: 金额=3906分, 状态=SUCCESS, textLength=21
+10-12 16:32:55.946 I/CheckoutPaymentMatcher: 孤立支付证据判为重复观测(同包同额90秒内)，未新建待确认: pending=pending-orphan-4, incoming=pending-orphan-5, amount=3906, reason=NO_ACTIVE_SESSION
+10-12 16:32:58.966 I/CheckoutAccessibilityService: 支付结果页未生成成功证据: reason=INVALID_AMOUNT
+10-12 16:33:11.347 I/CheckoutAccessibilityService: 支付结果页截图兜底已禁止: 支付包页面为敏感页面，跳过证据提取与截图兜底 pkg=com.eg.android.AlipayGphone, role=UNKNOWN, class=com.alipay.android.msp.ui.views.mspcontaineractivity, 期间已抑制122次
+10-12 16:33:14.395 I/CheckoutAccessibilityService: 支付结果页解析到证据: 金额=9900分, 状态=SUCCESS, textLength=88
+10-12 16:33:14.410 I/PendingChangeHub: pending变更事件: id=pending-orphan-3, type=expense, amount=9900, source=accessibility, reason=NO_ACTIVE_SESSION, isNew=true
+10-12 16:33:14.415 I/PendingReminder: 待确认提醒已发送: id=pending-orphan-3, type=expense, amount=9900, source=accessibility
+10-12 16:33:14.725 I/PendingConfirmOverlay: 弹窗门禁判定: id=pending-orphan-3, allowed=false, reason=NO_OVERLAY_PERMISSION(foreground=com.eg.android.AlipayGphone, age=5ms, device=Xiaomi 25128PNA1C sdk=37)
+10-12 16:33:14.725 I/PendingConfirmOverlay: 弹窗候选挂起等待非敏感帧: id=pending-orphan-3, sensitive=false, foreground=com.eg.android.AlipayGphone, blockedBy=NO_OVERLAY_PERMISSION(foreground=com.eg.android.AlipayGphone, age=5ms, device=Xiaomi 25128PNA1C sdk=37)
+10-12 16:33:16.701 I/PendingConfirmOverlay: 弹窗候选挂起后放行: id=pending-orphan-3, waitedMs=1976, reason=PASS(age=20ms, foreground=com.eg.android.AlipayGphone)
+10-12 16:33:16.768 I/PendingConfirmOverlay: 付款确认弹窗已显示: id=pending-orphan-3, amount=9900, source=accessibility
+10-12 16:33:17.268 I/PendingConfirmOverlay: 付款确认弹窗已上屏确认: id=pending-orphan-3, attached=true
+10-12 16:33:23.773 I/PendingChangeHub: pending变更事件: id=pending-orphan-3, type=expense, amount=9900, source=accessibility, reason=null, isNew=false
+10-12 16:33:25.276 I/PendingConfirmOverlay: 付款确认弹窗已关闭: reason=SUCCESS

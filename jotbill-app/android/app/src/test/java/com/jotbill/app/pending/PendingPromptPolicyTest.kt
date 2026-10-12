@@ -46,11 +46,8 @@ class PendingPromptPolicyTest {
     private fun evaluate(
         info: PendingChangeInfo = info(),
         merchant: String? = "测试商户",
-        enabled: Boolean = true,
-        now: Long = NOW,
-        dedup: Map<String, Long> = emptyMap(),
-        recent: List<Long> = emptyList()
-    ) = PendingPromptPolicy.evaluate(info, merchant, enabled, now, dedup, recent)
+        enabled: Boolean = true
+    ) = PendingPromptPolicy.evaluate(info, merchant, enabled)
 
     @Test
     fun promptsExpenseWithDedupKey() {
@@ -178,54 +175,46 @@ class PendingPromptPolicyTest {
         )
     }
 
+    /**
+     * 【用户裁定 2026-10-12】去重与频控两条规则已废弃 —— 本用例钉死新行为。
+     *
+     * 原先同商户同金额 5 分钟内只弹一次（`DEDUP_WINDOW`）、1 小时最多 10 次
+     * （`HOURLY_LIMIT`），两条都直接违反本版本目标"只要出现支付成功页就弹窗"。
+     * 连续两笔同额是**两笔真实交易**，本就该弹两次。
+     *
+     * 判别性：把任一条判定加回 [PendingPromptPolicy.evaluate]，本用例必红。
+     */
     @Test
-    fun dedupWindowSuppressesSameMerchantAndAmountWithinFiveMinutes() {
-        val first = evaluate()
-        assertTrue(first is PendingPromptPolicy.Decision.Prompt)
-        val key = (first as PendingPromptPolicy.Decision.Prompt).dedupKey
-        // 同商户同金额 5 分钟内 → 去重
-        val suppressed = evaluate(
-            now = NOW + 60_000L,
-            dedup = mapOf(key to NOW)
-        )
-        assertEquals(
-            PendingPromptPolicy.SkipReason.DEDUP_WINDOW,
-            (suppressed as PendingPromptPolicy.Decision.Skip).reason
-        )
-        // 超过 5 分钟 → 再次放行
-        val later = evaluate(
-            now = NOW + PendingPromptPolicy.DEDUP_WINDOW_MILLIS + 1,
-            dedup = mapOf(key to NOW)
-        )
-        assertTrue(later is PendingPromptPolicy.Decision.Prompt)
+    fun promptsRepeatedSameMerchantAndAmountWithinAnyWindow() {
+        // 同商户同金额连续两笔 → 两次都放行（旧实现第二次是 DEDUP_WINDOW）
+        repeat(2) {
+            assertTrue(
+                "第 ${it + 1} 笔同额应放行弹窗",
+                evaluate() is PendingPromptPolicy.Decision.Prompt
+            )
+        }
+        // 同一商户同金额短时间高频 12 笔 → 全部放行（旧实现第 11 笔起是 HOURLY_LIMIT）
+        repeat(12) {
+            assertTrue(
+                "高频第 ${it + 1} 笔应放行弹窗",
+                evaluate() is PendingPromptPolicy.Decision.Prompt
+            )
+        }
+        // 不同商户/不同金额同样放行（确认没有残留的键级判定）
+        assertTrue(evaluate(merchant = "另一家") is PendingPromptPolicy.Decision.Prompt)
+        assertTrue(evaluate(info(amountMinor = 990L)) is PendingPromptPolicy.Decision.Prompt)
     }
 
+    /**
+     * `evaluate` 已是纯函数 —— 相同入参必得相同结果，且不含任何时间依赖。
+     *
+     * 2026-10-12 之前它要读 `recentDedupKeys` / `recentPromptTimes` 两个「仅主线程」
+     * 集合，决策协程并发遍历它们会抛 ConcurrentModificationException 而**杀掉进程**。
+     * 废弃两条规则后这两个集合已删除，本用例锁住"不再有隐藏状态"这一前提。
+     */
     @Test
-    fun differentMerchantOrAmountNotDeduped() {
-        val key = "测试商户|3580"
-        assertEquals(
-            PendingPromptPolicy.SkipReason.DEDUP_WINDOW,
-            (evaluate(dedup = mapOf(key to NOW)) as PendingPromptPolicy.Decision.Skip).reason
-        )
-        assertTrue(
-            evaluate(info(amountMinor = 990L), dedup = mapOf(key to NOW))
-                is PendingPromptPolicy.Decision.Prompt
-        )
-        assertTrue(
-            evaluate(merchant = "另一家", dedup = mapOf(key to NOW))
-                is PendingPromptPolicy.Decision.Prompt
-        )
-    }
-
-    @Test
-    fun hourlyLimitBlocksEleventhPromptWithinWindow() {
-        val tenRecent = (1..10).map { NOW - it * 60_000L }
-        assertEquals(
-            PendingPromptPolicy.SkipReason.HOURLY_LIMIT,
-            (evaluate(recent = tenRecent) as PendingPromptPolicy.Decision.Skip).reason
-        )
-        // 窗口外（2 小时前）的弹窗不计数
-        val oldOnly = (1..10).map { NOW - 2 * 60 * 60 * 1000L }
-        assertTrue(evaluate(recent = oldOnly) is PendingPromptPolicy.Decision.Prompt)
+    fun evaluateIsPureAndRepeatable() {
+        assertEquals(evaluate(), evaluate())
+        assertEquals(evaluate(), evaluate())
     }
 }

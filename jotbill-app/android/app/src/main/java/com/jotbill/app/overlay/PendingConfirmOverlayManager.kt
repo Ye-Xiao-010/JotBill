@@ -31,6 +31,7 @@ import com.jotbill.app.pending.PendingChangeInfo
 import com.jotbill.app.pending.PendingConfirmReadiness
 import com.jotbill.app.pending.PendingConfirmService
 import com.jotbill.app.pending.PendingPromptPolicy
+import com.jotbill.app.pending.PendingReminderNotifier
 import com.jotbill.app.utils.JotBillLog
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
@@ -50,6 +51,11 @@ import org.json.JSONObject
  * （这与截图的 60 秒锁存不同：弹窗不采集屏幕内容，风险是遮挡而非外发）。
  *
  * 无障碍未运行或观察状态过期时一律不弹，系统通知兜底照常工作。
+ *
+ * ⚠️ **2026-10-12 用户裁定**：去重与频控两条规则废弃（见 [PendingPromptPolicy]）；
+ * 弹窗未确认时 30s 自动关闭并补发"这笔还没记上"通知。
+ * ⇒ **每一笔被识别出的支付都会弹窗**，用户注意力窗口 30s，
+ * 超时只是转入待确认中心，不会丢账。
  */
 internal object PendingConfirmOverlayManager {
     private const val TAG = "PendingConfirmOverlay"
@@ -57,8 +63,15 @@ internal object PendingConfirmOverlayManager {
     private const val KEY_ENABLED = "enabled"
     private const val KEY_LAST_CATEGORY_ID = "last_category_id"
 
-    /** 悬浮窗自动消失时间。 */
-    private const val AUTO_DISMISS_DELAY = 60_000L
+    /**
+     * 悬浮窗自动消失时间：用户不操作则主动关闭，该笔转入待确认中心。
+     *
+     * ⚠️ 2026-10-12 由 60s 改为 30s（用户裁定）。语义是"给用户 30s 决定"，
+     * **不是"30s 后丢弃"** —— pending 行始终在库里，关闭只清 UI 状态。
+     * 自动关闭时会发一条系统通知（见 [dismissInternal] 的 AUTO_DISMISS 分支），
+     * 避免用户误以为已入账。
+     */
+    private const val AUTO_DISMISS_DELAY = 30_000L
     private const val SUCCESS_DISPLAY_DELAY = 1_500L
 
     /** 观察状态的新鲜度：超龄的"非敏感"判定不可信，宁可弹不出来也不冒险。 */
@@ -141,39 +154,15 @@ internal object PendingConfirmOverlayManager {
 
     private lateinit var prefs: SharedPreferences
 
-    /**
-     * 策略运行状态：去重键 → 最近弹窗时间；滑动窗口内的弹窗时间戳。
-     *
-     * **仅主线程读写** —— HashMap 非线程安全，并发写可损坏内部结构导致去重永久失效
-     * （弹窗无限轰炸）。写入一律 `mainHandler.post` 回主线程；
-     * **读取必须走 [snapshotPolicyState]**，不得在 IO 协程里直接迭代这两个集合。
-     *
-     * ⚠️ 此前 [onPendingChange] 的决策 IO 协程写的是 `recentDedupKeys.toMap()` /
-     * `recentPromptTimes.toList()`，并被当作"安全副本"注释了十余行。**那个注释是错的**：
-     * `.toMap()` / `.toList()` 是**遍历**，不是原子快照。`ArrayList.toList()` 会读
-     * `modCount` 与迭代器的 `cursor`，并发 `+=` 会让它抛
-     * `ConcurrentModificationException`；`HashMap.toMap()` 在并发 `put` 触发扩容时
-     * 同样会抛，甚至可能读到扩容中的半成品 table。本对象是单例，`onPendingChange`
-     * 每来一条 pending 就 `scope.launch` 一个 IO 协程 —— **两笔支付间隔几十毫秒就足以
-     * 命中**，而这里抛出的异常在 `SupervisorJob` 且无 `CoroutineExceptionHandler`
-     * 的协程里会一路冒泡到默认处理器，**直接杀掉进程**。
-     *
-     * 修法：决策所需的快照在主线程取（见 [snapshotPolicyState]），整条
-     * `evaluate` 调用一起挪回主线程 —— 它是纯内存计算（见 [PendingPromptPolicy]），
-     * 不碰数据库，不存在必须离开主线程的理由。
-     */
-    private val recentDedupKeys = HashMap<String, Long>()
-    private val recentPromptTimes = mutableListOf<Long>()
-
-    /**
-     * 供 [PendingPromptPolicy.evaluate] 使用的去重/频控快照。**仅主线程调用**，
-     * 调用点位于 [onPendingChange] 里 `scope.launch` **之前**。
-     *
-     * 返回的两份集合都是新建的独立副本，与本对象内的集合不再共享结构，
-     * 因此后续持有它们跨越协程边界也不会与主线程的写入产生结构性竞争。
-     */
-    private fun snapshotPolicyState(): Pair<Map<String, Long>, List<Long>> =
-        recentDedupKeys.toMap() to recentPromptTimes.toList()
+    // ⚠️ 2026-10-12：`recentDedupKeys` / `recentPromptTimes` / `snapshotPolicyState()`
+    // 已随去重与频控两条规则的废弃整体删除（用户裁定）。
+    //
+    // 这三个成员曾是一处 ConcurrentModificationException 崩进程的根因：
+    // `onPendingChange` 的决策协程写 `.toMap()` / `.toList()` 并把它当"原子快照"，
+    // 而这两个方法是**遍历**不是快照，并发写会让它们抛 CME；异常在无 handler 的
+    // SupervisorJob 协程里会冒泡到默认处理器**直接杀掉进程**。当时的绕法是
+    // "回主线程取快照"，现在根因本身不存在了 —— [PendingPromptPolicy.evaluate]
+    // 已改为纯函数，不再接收任何历史状态。
 
     /** 当前弹窗的选中状态（仅主线程读写）。 */
     private var selectedCategory: CategoryEntity? = null
@@ -185,6 +174,21 @@ internal object PendingConfirmOverlayManager {
     /** 当前弹窗的金额输入框。金额参与就绪判据（D-21），输入变化时重算按钮状态。 */
     private var currentAmountInput: EditText? = null
     private var displayedPendingId: String? = null
+
+    /**
+     * 当前在屏弹窗对应的待确认行关键字段，仅 [AUTO_DISMISS] 自动关闭时用来补发通知。
+     *
+     * 为什么要单独存而不是回查数据库：[dismissInternal] 在关窗后要把所有状态清空，
+     * 而补发通知需要的是"关窗前那一行的金额/类型/来源"。回查会多一次 IO，
+     * 且在用户已确认入账的行上会查不到（行已删）。
+     */
+    private var displayedAutoDismissInfo: AutoDismissInfo? = null
+
+    private data class AutoDismissInfo(
+        val amountMinor: Long,
+        val type: String,
+        val sourceType: String
+    )
 
     fun init(context: Context) {
         if (appContext != null) {
@@ -325,24 +329,14 @@ internal object PendingConfirmOverlayManager {
         }
         scope.launch {
             val pendingRow = readPendingRow(db, info.pendingId) ?: return@launch
-            // ⚠️ 必须回主线程执行 evaluate：它要读 [recentDedupKeys] / [recentPromptTimes]
-            // 两个"仅主线程"集合。此前在 IO 协程里就地 `.toMap()` / `.toList()`，
-            // 而这两个方法是遍历不是原子快照 —— 并发 `put` / `+=` 会抛
-            // ConcurrentModificationException，在无 handler 的 SupervisorJob 协程里
-            // 直接杀掉进程（详见 [recentDedupKeys] 的注释）。
-            // evaluate 是纯内存计算（不碰数据库），移回主线程无任何代价。
-            //
-            // 同时保证：快照、决策、recordPrompted、maybeShowCandidate 四步在**同一个
-            // 主线程任务内**完成，不会出现"拿旧快照决策、用新表记录"的时间错位。
+            // evaluate 是纯函数（2026-10-12 起不依赖任何历史状态），主线程调用无代价。
+            // 保留 mainHandler.post 是因为 [maybeShowCandidate] 的下游
+            // （waitingCandidate / inFlightCandidate / overlayView）均为主线程状态。
             mainHandler.post {
-                val (dedupSnapshot, promptSnapshot) = snapshotPolicyState()
                 val decision = PendingPromptPolicy.evaluate(
                     info = info,
                     merchant = pendingRow.merchant,
-                    enabled = isEnabled(context),
-                    now = System.currentTimeMillis(),
-                    recentDedupKeys = dedupSnapshot,
-                    recentPromptTimes = promptSnapshot
+                    enabled = isEnabled(context)
                 )
                 when (decision) {
                     is PendingPromptPolicy.Decision.Skip -> {
@@ -358,21 +352,11 @@ internal object PendingConfirmOverlayManager {
                             dedupKey = decision.dedupKey,
                             createdAt = System.currentTimeMillis()
                         )
-                        recordPrompted(decision.dedupKey, candidate.createdAt)
                         maybeShowCandidate(candidate)
                     }
                 }
             }
         }
-    }
-
-    /** 记录已弹窗的去重键与时间戳。**仅主线程调用**（见 [onPendingChange] 内的 post）。 */
-    private fun recordPrompted(dedupKey: String, now: Long) {
-        recentDedupKeys[dedupKey] = now
-        recentPromptTimes += now
-        // 清理过期项，防止长期运行下无限增长
-        recentDedupKeys.entries.removeAll { now - it.value > PendingPromptPolicy.DEDUP_WINDOW_MILLIS * 2 }
-        recentPromptTimes.removeAll { now - it > 2 * 60 * 60 * 1000L }
     }
 
     /** 主线程：尝试立即显示候选；观察状态不可信时挂起等待非敏感帧。 */
@@ -630,6 +614,11 @@ internal object PendingConfirmOverlayManager {
                 }
             })
             displayedPendingId = pendingRow.id
+            displayedAutoDismissInfo = AutoDismissInfo(
+                amountMinor = pendingRow.amountMinor,
+                type = pendingRow.type,
+                sourceType = pendingRow.sourceType
+            )
             selectedCategory = null
             // 账户不造占位实体：待确认携带的账户 ID 由 loadAccounts 在列表中匹配预选，
             // 匹配不到就要求用户手选，避免把不存在的账户写进账单。
@@ -1079,6 +1068,9 @@ internal object PendingConfirmOverlayManager {
         } catch (error: RuntimeException) {
             JotBillLog.w(TAG, "弹窗关闭异常", error)
         } finally {
+            // ⚠️ 必须在下面清空 displayedPendingId / displayedAutoDismissInfo **之前**调用：
+            // 它读的就是这两个字段。放在清空之后会永远拿到 null ⇒ 通知永不发出。
+            notifyAutoDismissIfNeeded(reason)
             overlayView = null
             selectedCategory = null
             selectedAccount = null
@@ -1087,6 +1079,7 @@ internal object PendingConfirmOverlayManager {
             currentConfirmButton = null
             currentAmountInput = null
             displayedPendingId = null
+            displayedAutoDismissInfo = null
             waitingCandidate = null
             candidateExpiryRunnable?.let(mainHandler::removeCallbacks)
             candidateExpiryRunnable = null
@@ -1096,6 +1089,27 @@ internal object PendingConfirmOverlayManager {
             inFlightCandidate = null
             JotBillLog.i(TAG, "付款确认弹窗已关闭: reason=$reason")
         }
+    }
+
+    /**
+     * 仅 [AUTO_DISMISS] 路径补发"这笔还没记上"的系统通知（2026-10-12）。
+     *
+     * **只覆盖自动关闭**：用户主动点关闭（[CLOSE_X] / [LATER]）是"我知道有这回事、
+     * 我选择先放着"，补发通知是噪音；确认成功时那笔已经入账、pending 行已删，
+     * 更不能再发。
+     */
+    private fun notifyAutoDismissIfNeeded(reason: String) {
+        if (reason != "AUTO_DISMISS") return
+        val context = appContext ?: return
+        val pendingId = displayedPendingId ?: return
+        val info = displayedAutoDismissInfo ?: return
+        PendingReminderNotifier.notifyAutoDismissed(
+            context = context,
+            pendingId = pendingId,
+            amountMinor = info.amountMinor,
+            type = info.type,
+            sourceType = info.sourceType
+        )
     }
 
     private fun requireDatabase(): JotBillDatabase =
