@@ -1,0 +1,13 @@
+﻿10-12 10:45:23.347  3680  7066 D ActivityTaskManager: Not add starting window, the reason is: windowIsTranslucent = true  windowIsFloating = false  this = ActivityRecord{181674979 u0 com.eg.
+10-12 10:45:23.349  3680  7066 I ActivityTaskManager: START u0 {xflg=0x4 cmp=com.eg.android.AlipayGphone/com.alipay.android.app.TransProcessPayActivity} with LAUNCH_SINGLE_TASK from uid 1033
+10-12 10:45:23.714  3680  7088 D ActivityTaskManager: Not add starting window, the reason is: windowIsTranslucent = true  windowIsFloating = false  this = ActivityRecord{48379034 u0 com.eg.a
+10-12 10:45:23.715  3680  7088 I ActivityTaskManager: START u0 {act=android.intent.action.MAIN xflg=0x4 cmp=com.eg.android.AlipayGphone/com.alipay.android.msp.ui.views.MspContainerActivity (
+10-12 10:45:25.626  3680  7280 D ActivityTaskManager: Not add starting window, the reason is: windowIsTranslucent = true  windowIsFloating = false  this = ActivityRecord{89350631 u0 com.eg.a
+10-12 10:45:25.628  3680  7280 I ActivityTaskManager: START u0 {flg=0x10000 xflg=0x4 cmp=com.eg.android.AlipayGphone/com.alipay.mobile.verifyidentity.module.fingerprint.FingerprintCheckActiv
+10-12 10:45:44.627  3680  7282 D ActivityTaskManager: Not add starting window, the reason is: windowIsTranslucent = true  windowIsFloating = false  this = ActivityRecord{234292570 u0 com.ten
+10-12 10:45:44.628  3680  7282 I ActivityTaskManager: START u0 {flg=0x18000000 xflg=0x4 cmp=com.tencent.mm/.plugin.base.stub.WXPayEntryActivity (has extras) u=0} with LAUNCH_SINGLE_TOP from 
+10-12 10:45:44.684  3680  7490 D ActivityTaskManager: Not add starting window, the reason is: windowIsTranslucent = true  windowIsFloating = false  this = ActivityRecord{190870755 u0 com.ten
+10-12 10:45:44.685  3680  7490 I ActivityTaskManager: START u0 {flg=0x14000000 xflg=0x4 cmp=com.tencent.mm/.plugin.wallet_index.ui.OrderHandlerUI (has extras)} with LAUNCH_SINGLE_TOP from ui
+10-12 10:45:44.763  3680  7090 D ActivityTaskManager: Not add starting window, the reason is: windowIsTranslucent = true  windowIsFloating = false  this = ActivityRecord{4666322 u0 com.tence
+10-12 10:45:44.764  3680  7090 I ActivityTaskManager: START u0 {flg=0x14000000 xflg=0x4 cmp=com.tencent.mm/.plugin.lite.ui.WxaLiteAppPayTransparentLiteUI (has extras)} with LAUNCH_MULTIPLE f
+10-12 10:45:52.812  3680  7089 I ActivityTaskManager: START u0 {flg=0x10000000 xflg=0x4 cmp=com.xunmeng.pinduoduo/.wxapi.WXPayEntryActivity (has extras)} with LAUNCH_SINGLE_TOP from uid 1034

@@ -72,6 +72,9 @@ internal object PendingConfirmOverlayManager {
     private const val CATEGORIES_PER_ROW = 3
     private const val MAX_VISIBLE_ROWS = 3
 
+    /** addView 之后的上屏自检延迟（见 [scheduleVisibilityCheck]）。 */
+    private const val VISIBILITY_CHECK_DELAY = 500L
+
     @Volatile
     private var appContext: Context? = null
 
@@ -84,6 +87,9 @@ internal object PendingConfirmOverlayManager {
     private var windowManager: WindowManager? = null
     private var overlayView: View? = null
     private var autoDismissRunnable: Runnable? = null
+
+    /** 上屏自检任务；关闭弹窗时取消，避免悬挂引用（见 [scheduleVisibilityCheck]）。 */
+    private var visibilityCheckRunnable: Runnable? = null
 
     /** 最近一次观察帧是否敏感；初始按敏感对待（无知识时不弹，通知兜底）。 */
     @Volatile
@@ -171,6 +177,55 @@ internal object PendingConfirmOverlayManager {
         if (!foregroundPackage.isNullOrBlank()) {
             lastForegroundPackage = foregroundPackage
         }
+        mainHandler.post { maybeShowPendingCandidate() }
+    }
+
+    /**
+     * 前台包名变更喂入；**只**更新 [lastForegroundPackage]，不碰观察帧的新鲜度与敏感判定。
+     *
+     * 由 [com.jotbill.app.recognition.CheckoutAccessibilityService] 在判定"前台已离开
+     * 白名单购物/支付应用"（即本应用、桌面或其它任意应用）时调用。
+     *
+     * ## 为什么不复用 [onObservationState]
+     *
+     * 那个方法会把 [lastObservationAt] 刷成当前时刻，等于把一条**陈旧的**观察帧
+     * 伪装成新鲜的 —— 而 30 秒新鲜度门禁恰恰靠这个时间戳挡掉超龄判定。用户切回
+     * 本应用时若走这条入口，残留的支付页帧会被当成"刚刚观察过"，反而让本不该弹的
+     * 弹窗更容易放行。两个语义的字段必须分开喂。
+     *
+     * ## 动机（2026-10-10）
+     *
+     * [evaluateGate] 里"前台是本应用时不弹"这条守卫此前是**死代码**：
+     * [lastForegroundPackage] 只在 [onObservationState] 里更新，而全仓只有两处调用
+     * （购物包分支 [CheckoutAccessibilityService:1048] 与支付包分支 [:1688]），
+     * 传入的包名分别被 8 个购物包与两个支付包的白名单锁死 —— **本应用包名永远
+     * 喂不进来**，那个分支恒为假。
+     *
+     * 后果有两层：① 用户切回本应用后弹窗照样盖在我们的界面上，与守卫的设计意图
+     * （"应用内待确认中心已覆盖该场景"）正好相反；② 弹窗因此**并不绑定在支付
+     * 成功页上**，它只绑定"最近 30 秒内有过一帧非敏感观察"—— 而 L1 验收要的
+     * 正是"弹窗出现在支付成功页"，当前实现没有任何机制保证这一点。
+     *
+     * 空包名一律忽略：[CheckoutAccessibilityService.resolveEffectiveShoppingPackage]
+     * 在事件包名为空且活动窗口不可读时可能回落到空串，那不是"前台变成了空"。
+     *
+     * 重复喂入同一包名不打日志：本入口由无障碍事件驱动，切换应用期间事件密集。
+     */
+    fun onForegroundChanged(foregroundPackage: String?) {
+        if (foregroundPackage.isNullOrBlank()) {
+            return
+        }
+        val changed = lastForegroundPackage != foregroundPackage
+        lastForegroundPackage = foregroundPackage
+        if (changed) {
+            JotBillLog.i(
+                TAG,
+                "前台变更: foreground=$foregroundPackage, " +
+                    "isSelf=${foregroundPackage == appContext?.packageName}"
+            )
+        }
+        // 前台变了，挂起的候选需要按新前台重评一次（可能从"挡住"变为"可弹"，
+        // 也可能相反）。waitingCandidate 为空时该调用立即返回，开销可忽略。
         mainHandler.post { maybeShowPendingCandidate() }
     }
 
@@ -290,14 +345,23 @@ internal object PendingConfirmOverlayManager {
         if (overlayView != null || waitingCandidate != null) {
             return
         }
-        if (canShowNow()) {
+        val gate = evaluateGate()
+        // 无论放行与否都留痕：放行时这一行是"弹窗本该出现"的基准线，
+        // 与随后的"付款确认弹窗已显示"配对即可判定 addView 环节（2026-10-10）。
+        JotBillLog.i(
+            TAG,
+            "弹窗门禁判定: id=${candidate.pendingId.take(16)}, allowed=${gate.allowed}, " +
+                "reason=${gate.reason}"
+        )
+        if (gate.allowed) {
             showCandidate(candidate)
             return
         }
         JotBillLog.i(
             TAG,
             "弹窗候选挂起等待非敏感帧: id=${candidate.pendingId.take(16)}, " +
-                "sensitive=$lastObservationSensitive, foreground=$lastForegroundPackage"
+                "sensitive=$lastObservationSensitive, foreground=$lastForegroundPackage, " +
+                "blockedBy=${gate.reason}"
         )
         waitingCandidate = candidate
         candidateExpiryRunnable?.let(mainHandler::removeCallbacks)
@@ -317,40 +381,119 @@ internal object PendingConfirmOverlayManager {
             waitingCandidate = null
             return
         }
-        if (canShowNow()) {
+        val gate = evaluateGate()
+        if (gate.allowed) {
             waitingCandidate = null
             candidateExpiryRunnable?.let(mainHandler::removeCallbacks)
             candidateExpiryRunnable = null
+            // 挂起后放行是"等到了非敏感帧"的正向证据，与首次判定区分开记。
+            JotBillLog.i(
+                TAG,
+                "弹窗候选挂起后放行: id=${candidate.pendingId.take(16)}, waitedMs=" +
+                    "${System.currentTimeMillis() - candidate.createdAt}, reason=${gate.reason}"
+            )
             showCandidate(candidate)
         }
     }
 
-    /** 帧级门禁：最近观察帧非敏感且新鲜，且前台不是本应用。 */
-    private fun canShowNow(): Boolean {
-        val context = appContext ?: return false
-        if (System.currentTimeMillis() - lastObservationAt > OBSERVATION_FRESH_MILLIS) {
-            return false
+    /**
+     * 帧级门禁的判定结果。
+     *
+     * @param allowed 是否放行。
+     * @param reason 放行原因，或**被挡住的门禁代号 + 现场值**（诊断日志锚点）。
+     */
+    private data class GateVerdict(val allowed: Boolean, val reason: String)
+
+    /**
+     * 帧级门禁：最近观察帧非敏感且新鲜，且前台不是本应用，且有悬浮窗权限。
+     *
+     * **返回判定理由而不是裸 Boolean**（2026-10-10）：真机日志里出现过一次
+     * `弹窗候选挂起等待非敏感帧: sensitive=false, foreground=com.eg.android.AlipayGphone`
+     * —— 前两道门禁的现场值都显示"应该放行"，但弹窗就是没出。旧实现只打印
+     * `sensitive` 与 `foreground`，把**观察帧新鲜度**和**悬浮窗权限**两道吞掉了，
+     * 导致无法区分"门禁挡住"与"其它原因"，只能靠推测。
+     * 本方法让每个被挡住的情形都带一个可 grep 的代号。
+     */
+    private fun evaluateGate(): GateVerdict {
+        val context = appContext
+            ?: return GateVerdict(false, "APP_CONTEXT_NULL")
+        val observationAge = System.currentTimeMillis() - lastObservationAt
+        if (observationAge > OBSERVATION_FRESH_MILLIS) {
+            return GateVerdict(
+                false,
+                "OBSERVATION_STALE(age=${observationAge}ms > ${OBSERVATION_FRESH_MILLIS}ms)"
+            )
         }
         if (lastObservationSensitive) {
-            return false
+            return GateVerdict(
+                false,
+                "SENSITIVE_FRAME(age=${observationAge}ms, foreground=$lastForegroundPackage)"
+            )
         }
         // 前台是本应用时不弹：应用内待确认中心已覆盖该场景
         if (lastForegroundPackage == context.packageName) {
-            return false
+            return GateVerdict(
+                false,
+                "FOREGROUND_IS_SELF(foreground=$lastForegroundPackage, age=${observationAge}ms)"
+            )
         }
-        return hasOverlayPermission(context)
+        if (!hasOverlayPermission(context)) {
+            return GateVerdict(
+                false,
+                "NO_OVERLAY_PERMISSION(foreground=$lastForegroundPackage, " +
+                    "age=${observationAge}ms, device=${Build.MANUFACTURER} ${Build.MODEL} " +
+                    "sdk=${Build.VERSION.SDK_INT})"
+            )
+        }
+        return GateVerdict(
+            true,
+            "PASS(age=${observationAge}ms, foreground=$lastForegroundPackage)"
+        )
     }
 
     private fun hasOverlayPermission(context: Context): Boolean =
         Build.VERSION.SDK_INT < Build.VERSION_CODES.M || android.provider.Settings.canDrawOverlays(context)
 
+    /**
+     * 读取待确认行并上屏；**每个提前返回都留日志**。
+     *
+     * 此前三处 `return` / `return@launch` 全是静默的：门禁已放行却什么都没弹，
+     * 日志里只剩一行"付款确认弹窗已显示"从未出现，无从区分"读不到行""行已被处理"
+     * 与"数据库不可用"。三者是完全不同的故障，必须能分开 grep。
+     */
     private fun showCandidate(candidate: PromptCandidate) {
-        val context = appContext ?: return
-        val db = database ?: return
+        val context = appContext
+        if (context == null) {
+            JotBillLog.w(
+                TAG,
+                "弹窗放弃: 应用上下文未初始化, id=${candidate.pendingId.take(16)}"
+            )
+            return
+        }
+        val db = database
+        if (db == null) {
+            JotBillLog.w(
+                TAG,
+                "弹窗放弃: 数据库不可用, id=${candidate.pendingId.take(16)}"
+            )
+            return
+        }
         scope.launch {
-            val pendingRow = readPendingRow(db, candidate.pendingId) ?: return@launch
+            val pendingRow = readPendingRow(db, candidate.pendingId)
+            if (pendingRow == null) {
+                JotBillLog.w(
+                    TAG,
+                    "弹窗放弃: 预读待确认为空(事务未提交或行已被处理), id=${candidate.pendingId.take(16)}"
+                )
+                return@launch
+            }
             // 行内容复核：事件到达后可能已被其他入口确认/忽略
             if (pendingRow.status != PendingTransactionEntity.STATUS_PENDING) {
+                JotBillLog.i(
+                    TAG,
+                    "弹窗放弃: 待确认已被其他入口处理, id=${candidate.pendingId.take(16)}, " +
+                        "status=${pendingRow.status}"
+                )
                 return@launch
             }
             mainHandler.post { displayOverlay(pendingRow) }
@@ -442,6 +585,7 @@ internal object PendingConfirmOverlayManager {
             overlayView = view
 
             scheduleAutoDismiss()
+            scheduleVisibilityCheck(view)
             loadCategories(view, pendingRow)
             loadAccounts(view, pendingRow.accountId)
             JotBillLog.i(
@@ -451,6 +595,10 @@ internal object PendingConfirmOverlayManager {
             )
         } catch (error: RuntimeException) {
             JotBillLog.w(TAG, "弹窗显示失败(通知兜底)", error)
+            // 上屏自检可能已排上（scheduleVisibilityCheck 之后的 findViewById 仍可能抛），
+            // 一并撤销，保持"没有弹窗 ⇒ 没有待执行的上屏自检"这条不变式。
+            visibilityCheckRunnable?.let(mainHandler::removeCallbacks)
+            visibilityCheckRunnable = null
             overlayView?.let { view ->
                 try {
                     windowManager?.removeView(view)
@@ -459,6 +607,54 @@ internal object PendingConfirmOverlayManager {
             }
             overlayView = null
         }
+    }
+
+    /**
+     * 上屏自检：`addView` 不抛异常 **≠** 窗口真的贴在屏幕上。
+     *
+     * 部分 ROM 会在 `addView` 返回后静默移除系统悬浮窗（典型触发：悬浮窗权限被
+     * 系统策略回收、后台启动限制、厂商省电策略）。此时日志里 `付款确认弹窗已显示`
+     * 一行一切正常，用户侧却表现为"什么都没弹" —— 两者矛盾且**没有任何日志可判**。
+     * 本项目 2026-10-10 的"弹窗不出现"问题正是卡在这个盲区上：只能靠肉眼比对截图，
+     * 无法从日志区分"门禁挡住"与"弹了但没上屏"。
+     *
+     * 上游 LiteNote 的 `PaymentOverlayManager.showPaymentOverlay()` 里写了这个自检
+     * （`postDelayed(500)` 查 `isAttachedToWindow`，成功打 INFO、失败打 WARN），
+     * 本方法即移植自那里。
+     *
+     * 与上游的差别：多一道**身份校验**。500ms 内弹窗可能已被关闭（CLOSE_X /
+     * 成功反馈 / `setEnabled(false)`），上游写法只看 `overlayView != null`，
+     * 会把"我们自己关掉的"误报成"被系统移除"。这里比对 `overlayView === view`，
+     * 不是当前弹窗则静默跳过。
+     *
+     * 仅主线程调用（由 [displayOverlay] 在主线程调用）。
+     */
+    private fun scheduleVisibilityCheck(view: View) {
+        visibilityCheckRunnable?.let(mainHandler::removeCallbacks)
+        val runnable = Runnable {
+            visibilityCheckRunnable = null
+            if (overlayView !== view) {
+                // 500ms 内已被关闭（dismissInternal 会取消本任务，此处是兜底）。
+                return@Runnable
+            }
+            if (view.isAttachedToWindow) {
+                JotBillLog.i(
+                    TAG,
+                    "付款确认弹窗已上屏确认: id=${displayedPendingId?.take(16)}, attached=true"
+                )
+                return@Runnable
+            }
+            // 失败时把能拿到的现场一并打出来：区分"被摘除"与"布局成 0 尺寸/不可见"。
+            JotBillLog.w(
+                TAG,
+                "付款确认弹窗 addView 成功但未上屏(疑被系统/ROM 移除): " +
+                    "id=${displayedPendingId?.take(16)}, attached=false, shown=${view.isShown}, " +
+                    "visibility=${view.visibility}, size=${view.width}x${view.height}, " +
+                    "windowToken=${view.windowToken != null}"
+            )
+        }
+        visibilityCheckRunnable = runnable
+        mainHandler.postDelayed(runnable, VISIBILITY_CHECK_DELAY)
     }
 
     private fun onConfirmClicked(view: View, pendingRow: PendingTransactionEntity, confirmButton: Button) {
@@ -803,6 +999,8 @@ internal object PendingConfirmOverlayManager {
         try {
             autoDismissRunnable?.let(mainHandler::removeCallbacks)
             autoDismissRunnable = null
+            visibilityCheckRunnable?.let(mainHandler::removeCallbacks)
+            visibilityCheckRunnable = null
             overlayView?.let { view ->
                 windowManager?.removeView(view)
             }

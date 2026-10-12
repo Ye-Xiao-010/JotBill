@@ -1,0 +1,121 @@
+﻿10-12 10:53:31.953 30429 30429 I CheckoutAccessibilityService: 结算页门禁: NOT_CHECKOUT_PAGE, pkg=com.xunmeng.pinduoduo, role=SHOPPING_HOME, amountSignal=false, actionSignal=false, classSemantic=false
+10-12 10:53:34.977 30429 30429 I CheckoutAccessibilityService: 结算页门禁: NOT_CHECKOUT_PAGE, pkg=com.xunmeng.pinduoduo, role=UNKNOWN, amountSignal=false, actionSignal=false, classSemantic=false, sens
+10-12 10:53:36.460 30429 30429 I CheckoutAccessibilityService: 结算页门禁: ACCEPTED, pkg=com.xunmeng.pinduoduo, role=CHECKOUT, amountSignal=true, actionSignal=true, classSemantic=false, sensitive=fals
+10-12 10:53:36.590 30429 30429 I CheckoutAccessibilityService: 敏感页锁存提前解除: 连续 3 帧明确非敏感购物页, pkg=com.xunmeng.pinduoduo, role=CHECKOUT
+10-12 10:53:36.613 30429 30429 I CheckoutAccessibilityService: 敏感页锁存提前解除: 连续 3 帧明确非敏感购物页, pkg=com.xunmeng.pinduoduo, role=CHECKOUT
+10-12 10:53:36.635 30429 30429 I CheckoutAccessibilityService: 敏感页锁存提前解除: 连续 3 帧明确非敏感购物页, pkg=com.xunmeng.pinduoduo, role=CHECKOUT
+10-12 10:53:36.700 30429 30429 I CheckoutAccessibilityService: 敏感页锁存提前解除: 连续 3 帧明确非敏感购物页, pkg=com.xunmeng.pinduoduo, role=CHECKOUT
+10-12 10:53:36.795 30429 30429 I CheckoutAccessibilityService: 敏感页锁存提前解除: 连续 3 帧明确非敏感购物页, pkg=com.xunmeng.pinduoduo, role=CHECKOUT
+10-12 10:53:36.880 30429 30429 I CheckoutAccessibilityService: 敏感页锁存提前解除: 连续 3 帧明确非敏感购物页, pkg=com.xunmeng.pinduoduo, role=CHECKOUT
+10-12 10:53:36.975 30429 30429 I CheckoutAccessibilityService: 敏感页锁存提前解除: 连续 3 帧明确非敏感购物页, pkg=com.xunmeng.pinduoduo, role=CHECKOUT
+10-12 10:53:37.042 30429 30429 I CheckoutAccessibilityService: 敏感页锁存提前解除: 连续 3 帧明确非敏感购物页, pkg=com.xunmeng.pinduoduo, role=CHECKOUT
+10-12 10:53:37.103 30429 30429 I CheckoutAccessibilityService: 敏感页锁存提前解除: 连续 3 帧明确非敏感购物页, pkg=com.xunmeng.pinduoduo, role=CHECKOUT
+10-12 10:53:37.151 30429 30429 I CheckoutAccessibilityService: 敏感页锁存提前解除: 连续 3 帧明确非敏感购物页, pkg=com.xunmeng.pinduoduo, role=CHECKOUT
+10-12 10:53:37.186 30429 30429 I CheckoutAccessibilityService: 敏感页锁存提前解除: 连续 3 帧明确非敏感购物页, pkg=com.xunmeng.pinduoduo, role=CHECKOUT
+10-12 10:53:37.277 30429 30429 I CheckoutAccessibilityService: 敏感页锁存提前解除: 连续 3 帧明确非敏感购物页, pkg=com.xunmeng.pinduoduo, role=CHECKOUT
+10-12 10:53:37.307 30429 30429 I CheckoutAccessibilityService: 敏感页锁存提前解除: 连续 3 帧明确非敏感购物页, pkg=com.xunmeng.pinduoduo, role=CHECKOUT
+10-12 10:53:37.349 30429 30429 I CheckoutAccessibilityService: 敏感页锁存提前解除: 连续 3 帧明确非敏感购物页, pkg=com.xunmeng.pinduoduo, role=CHECKOUT
+10-12 10:53:37.413 30429 30429 I CheckoutAccessibilityService: 敏感页锁存提前解除: 连续 3 帧明确非敏感购物页, pkg=com.xunmeng.pinduoduo, role=CHECKOUT
+10-12 10:53:38.156 30429 30429 I CheckoutAccessibilityService: 敏感页锁存提前解除: 连续 3 帧明确非敏感购物页, pkg=com.xunmeng.pinduoduo, role=CHECKOUT
+10-12 10:53:38.251 30429 30429 I CheckoutAccessibilityService: 敏感页锁存提前解除: 连续 3 帧明确非敏感购物页, pkg=com.xunmeng.pinduoduo, role=CHECKOUT
+10-12 10:53:38.277 30429 30429 I CheckoutAccessibilityService: 结算页门禁: NOT_CHECKOUT_PAGE, pkg=com.xunmeng.pinduoduo, role=UNKNOWN, amountSignal=false, actionSignal=false, classSemantic=false, sens
+10-12 10:53:38.600 30429 30429 I CheckoutAccessibilityService: 支付交接诊断: payment=com.tencent.mm, currentStable=false, handoffStable=false, previousShopping=com.xunmeng.pinduoduo, coordRef=null
+10-12 10:53:38.728 30429 30429 I CheckoutAccessibilityService: 支付窗口列表(4): 3:com.android.systemui:FrameLayout | 3:com.miui.notes:LinearLayout | 3:com.mipay.wallet:View | 1:com.tencent.mm:FrameLayo
+10-12 10:53:38.745 30429 30429 I CheckoutAccessibilityService: 支付交接事件补发: stable=false, fingerprint=null, foreground=com.tencent.mm
+10-12 10:53:38.833 30429 30429 I CheckoutAccessibilityService: 支付窗口列表(4): 3:com.android.systemui:FrameLayout | 3:com.miui.notes:LinearLayout | 3:com.mipay.wallet:View | 1:com.tencent.mm:FrameLayo
+10-12 10:53:39.091 30429 30429 I CheckoutAccessibilityService: 支付窗口列表(4): 3:com.android.systemui:FrameLayout | 3:com.miui.notes:LinearLayout | 3:com.mipay.wallet:View | 1:com.tencent.mm:FrameLayo
+10-12 10:53:40.000 30429 30429 I CheckoutAccessibilityService: 支付交接诊断: payment=com.tencent.mm, currentStable=false, handoffStable=false, previousShopping=null, coordRef=null
+10-12 10:53:40.590 30429 30429 I CheckoutAccessibilityService: 支付窗口列表(4): 3:com.android.systemui:FrameLayout | 3:com.miui.notes:LinearLayout | 3:com.mipay.wallet:View | 1:com.tencent.mm:FrameLayo
+10-12 10:53:41.011 30429 30429 I CheckoutAccessibilityService: 支付交接诊断: payment=com.tencent.mm, currentStable=false, handoffStable=false, previousShopping=null, coordRef=null
+10-12 10:53:41.444 30429 30429 I CheckoutAccessibilityService: 支付窗口列表(4): 3:com.android.systemui:FrameLayout | 3:com.miui.notes:LinearLayout | 3:com.mipay.wallet:View | 1:com.tencent.mm:FrameLayo
+10-12 10:53:42.996 30429 30429 I CheckoutAccessibilityService: 支付交接诊断: payment=com.tencent.mm, currentStable=false, handoffStable=false, previousShopping=null, coordRef=null
+10-12 10:53:43.021 30429 30429 I CheckoutAccessibilityService: 支付窗口列表(4): 3:com.android.systemui:FrameLayout | 3:com.miui.notes:LinearLayout | 3:com.mipay.wallet:View | 1:com.tencent.mm:FrameLayo
+10-12 10:53:43.101 30429 30429 I CheckoutAccessibilityService: 支付结果页解析到证据: 金额=5490分, 状态=SUCCESS, textLength=21
+10-12 10:53:43.117 30429  1043 I CheckoutPaymentMatcher: 孤立支付证据已落待确认: pending=pending-orphan-5, amount=5490, merchant=拼多多, account=default-account-wechat, reason=NO_ACTIVE_SESSION, inserted=true
+10-12 10:53:43.118 30429  1043 I PendingChangeHub: pending变更事件: id=pending-orphan-5, type=expense, amount=5490, source=accessibility, reason=NO_ACTIVE_SESSION, isNew=true
+10-12 10:53:43.121 30429  1043 I PendingReminder: 待确认提醒已发送: id=pending-orphan-5, type=expense, amount=5490, source=accessibility
+10-12 10:53:43.129 30429  1034 I CheckoutAccessibilityService: 支付结果页无关联活跃会话，已转待确认（不回落猜测）
+10-12 10:53:43.130 30429  1034 W CheckoutAccessibilityService: 支付结果页派发跳过: 购买意图协调器不可用
+10-12 10:53:43.130 30429  1034 W CheckoutAccessibilityService: PAYMENT_RESULT_AI_DISPATCH_UNAVAILABLE: 无会话可关联，已由孤儿待确认承载
+10-12 10:53:43.235 30429 30429 I PendingConfirmOverlay: 弹窗门禁判定: id=pending-orphan-5, allowed=true, reason=PASS(age=2ms, foreground=com.tencent.mm)
+10-12 10:53:43.342 30429 30429 I PendingConfirmOverlay: 付款确认弹窗已显示: id=pending-orphan-5, amount=5490, source=accessibility
+10-12 10:53:43.363 30429 30429 I PendingConfirmOverlay: 前台变更: foreground=com.jotbill.app, isSelf=true
+10-12 10:53:43.547 30429 30429 I PendingConfirmOverlay: 前台变更: foreground=com.android.systemui, isSelf=false
+10-12 10:53:43.602 30429 30429 I PendingConfirmOverlay: 前台变更: foreground=com.jotbill.app, isSelf=true
+10-12 10:53:43.646 30429 30429 I PendingConfirmOverlay: 前台变更: foreground=com.android.systemui, isSelf=false
+10-12 10:53:43.842 30429 30429 I PendingConfirmOverlay: 付款确认弹窗已上屏确认: id=pending-orphan-5, attached=true
+10-12 10:53:45.700 30429  1035 I PendingChangeHub: pending变更事件: id=pending-orphan-5, type=expense, amount=5490, source=accessibility, reason=null, isNew=false
+10-12 10:53:45.701 30429  1035 I PendingReminder: 已消除待确认通知: id=pending-orphan-5
+10-12 10:53:45.784 30429 30429 I PendingConfirmOverlay: 前台变更: foreground=com.jotbill.app, isSelf=true
+10-12 10:53:45.819 30429 30429 I PendingConfirmOverlay: 前台变更: foreground=com.android.systemui, isSelf=false
+10-12 10:53:45.886 30429 30429 I PendingConfirmOverlay: 前台变更: foreground=com.jotbill.app, isSelf=true
+10-12 10:53:45.921 30429 30429 I PendingConfirmOverlay: 前台变更: foreground=com.android.systemui, isSelf=false
+10-12 10:53:47.204 30429 30429 I PendingConfirmOverlay: 付款确认弹窗已关闭: reason=SUCCESS
+10-12 10:53:47.344 30429 30429 I CheckoutAccessibilityService: 支付交接诊断: payment=com.tencent.mm, currentStable=false, handoffStable=false, previousShopping=null, coordRef=null
+10-12 10:53:47.355 30429 30429 I CheckoutAccessibilityService: 支付窗口列表(4): 3:com.android.systemui:FrameLayout | 3:com.miui.notes:LinearLayout | 3:com.mipay.wallet:View | 1:com.tencent.mm:FrameLayo
+10-12 10:53:47.368 30429 30429 I CheckoutAccessibilityService: 支付交接事件补发: stable=false, fingerprint=null, foreground=com.tencent.mm
+10-12 10:53:47.805 30429 30429 I CheckoutAccessibilityService: 支付结果页未生成成功证据: reason=INVALID_AMOUNT
+10-12 10:53:47.814 30429 30429 I CheckoutAccessibilityService: 支付结果页未生成成功证据: reason=INVALID_AMOUNT
+10-12 10:53:47.822 30429 30429 D CheckoutAccessibilityService: 支付结果页未命中可确认的结果语义
+10-12 10:53:48.035 30429 30429 I CheckoutAccessibilityService: 结算页门禁: NOT_CHECKOUT_PAGE, pkg=com.xunmeng.pinduoduo, role=UNKNOWN, amountSignal=false, actionSignal=false, classSemantic=false, sens
+10-12 10:53:51.092 30429 30429 I CheckoutAccessibilityService: 结算页门禁: NOT_CHECKOUT_PAGE, pkg=com.xunmeng.pinduoduo, role=UNKNOWN, amountSignal=false, actionSignal=false, classSemantic=false, sens
+10-12 10:53:51.435 30429 30429 I CheckoutAccessibilityService: 结算页门禁: ACCEPTED, pkg=com.xunmeng.pinduoduo, role=CHECKOUT, amountSignal=true, actionSignal=true, classSemantic=false, sensitive=fals
+10-12 10:53:51.484 30429 30429 I CheckoutAccessibilityService: 敏感页锁存提前解除: 连续 3 帧明确非敏感购物页, pkg=com.xunmeng.pinduoduo, role=CHECKOUT
+10-12 10:53:51.512 30429 30429 I CheckoutAccessibilityService: 敏感页锁存提前解除: 连续 3 帧明确非敏感购物页, pkg=com.xunmeng.pinduoduo, role=CHECKOUT
+10-12 10:53:51.595 30429 30429 I CheckoutAccessibilityService: 敏感页锁存提前解除: 连续 3 帧明确非敏感购物页, pkg=com.xunmeng.pinduoduo, role=CHECKOUT
+10-12 10:53:51.619 30429 30429 I CheckoutAccessibilityService: 敏感页锁存提前解除: 连续 3 帧明确非敏感购物页, pkg=com.xunmeng.pinduoduo, role=CHECKOUT
+10-12 10:53:51.653 30429 30429 I CheckoutAccessibilityService: 敏感页锁存提前解除: 连续 3 帧明确非敏感购物页, pkg=com.xunmeng.pinduoduo, role=CHECKOUT
+10-12 10:53:51.678 30429 30429 I CheckoutAccessibilityService: 敏感页锁存提前解除: 连续 3 帧明确非敏感购物页, pkg=com.xunmeng.pinduoduo, role=CHECKOUT
+10-12 10:53:51.734 30429 30429 I CheckoutAccessibilityService: 敏感页锁存提前解除: 连续 3 帧明确非敏感购物页, pkg=com.xunmeng.pinduoduo, role=CHECKOUT
+10-12 10:53:51.822 30429 30429 I CheckoutAccessibilityService: 敏感页锁存提前解除: 连续 3 帧明确非敏感购物页, pkg=com.xunmeng.pinduoduo, role=CHECKOUT
+10-12 10:53:55.009 30429 30429 I CheckoutAccessibilityService: 结算页门禁: ACCEPTED, pkg=com.xunmeng.pinduoduo, role=PRODUCT_DETAIL, amountSignal=true, actionSignal=false, classSemantic=false, sensiti
+10-12 10:53:55.054 30429 30429 I CheckoutAccessibilityService: 结算页门禁: NOT_CHECKOUT_PAGE, pkg=com.xunmeng.pinduoduo, role=UNKNOWN, amountSignal=false, actionSignal=false, classSemantic=false, sens
+10-12 10:53:55.445 30429 30429 I CheckoutAccessibilityService: 支付交接诊断: payment=com.eg.android.AlipayGphone, currentStable=false, handoffStable=false, previousShopping=com.xunmeng.pinduoduo, coord
+10-12 10:53:55.538 30429 30429 I CheckoutAccessibilityService: 支付窗口列表(2): 3:com.android.systemui:FrameLayout | 1:com.eg.android.AlipayGphone:FrameLayout
+10-12 10:53:55.540 30429 30429 I CheckoutAccessibilityService: 支付交接事件补发: stable=false, fingerprint=null, foreground=com.eg.android.AlipayGphone
+10-12 10:53:55.673 30429 30429 I CheckoutAccessibilityService: 支付窗口列表(2): 3:com.android.systemui:FrameLayout | 1:com.eg.android.AlipayGphone:FrameLayout
+10-12 10:53:56.030 30429 30429 I CheckoutAccessibilityService: 支付窗口列表(2): 3:com.android.systemui:FrameLayout | 1:com.eg.android.AlipayGphone:FrameLayout
+10-12 10:53:56.820 30429 30429 I CheckoutAccessibilityService: 支付交接诊断: payment=com.eg.android.AlipayGphone, currentStable=false, handoffStable=false, previousShopping=null, coordRef=null
+10-12 10:53:56.854 30429 30429 I CheckoutAccessibilityService: 支付窗口列表(2): 3:com.android.systemui:FrameLayout | 1:com.eg.android.AlipayGphone:FrameLayout
+10-12 10:53:57.725 30429 30429 I CheckoutAccessibilityService: 支付窗口列表(4): 3:com.android.systemui:FrameLayout | 3:com.miui.notes:LinearLayout | 1:com.eg.android.AlipayGphone:FrameLayout | 1:com.eg
+10-12 10:53:57.805 30429 30429 I CheckoutAccessibilityService: 支付窗口列表(4): 3:com.android.systemui:FrameLayout | 3:com.miui.notes:LinearLayout | 1:com.eg.android.AlipayGphone:FrameLayout | 1:com.eg
+10-12 10:53:58.237 30429 30429 I CheckoutAccessibilityService: 支付交接诊断: payment=com.eg.android.AlipayGphone, currentStable=false, handoffStable=false, previousShopping=null, coordRef=null
+10-12 10:53:58.240 30429 30429 I CheckoutAccessibilityService: 支付窗口列表(3): 3:com.android.systemui:FrameLayout | 3:com.miui.notes:LinearLayout | 1:com.eg.android.AlipayGphone:FrameLayout
+10-12 10:53:58.811 30429 30429 I CheckoutAccessibilityService: 支付窗口列表(2): 3:com.android.systemui:FrameLayout | 1:com.eg.android.AlipayGphone:FrameLayout
+10-12 10:53:59.834 30429 30429 I CheckoutAccessibilityService: 支付交接诊断: payment=com.eg.android.AlipayGphone, currentStable=false, handoffStable=false, previousShopping=null, coordRef=null
+10-12 10:53:59.864 30429 30429 I CheckoutAccessibilityService: 支付结果页解析到证据: 金额=8800分, 状态=SUCCESS, textLength=48
+10-12 10:53:59.874 30429  1044 I CheckoutPaymentMatcher: 孤立支付证据已落待确认: pending=pending-orphan-b, amount=8800, merchant=null, account=default-account-alipay, reason=NO_ACTIVE_SESSION, inserted=true
+10-12 10:53:59.874 30429  1044 I PendingChangeHub: pending变更事件: id=pending-orphan-b, type=expense, amount=8800, source=accessibility, reason=NO_ACTIVE_SESSION, isNew=true
+10-12 10:53:59.884 30429  1044 I PendingReminder: 待确认提醒已发送: id=pending-orphan-b, type=expense, amount=8800, source=accessibility
+10-12 10:53:59.886 30429  1035 I CheckoutAccessibilityService: 支付结果页无关联活跃会话，已转待确认（不回落猜测）
+10-12 10:53:59.887 30429  1035 W CheckoutAccessibilityService: 支付结果页派发跳过: 购买意图协调器不可用
+10-12 10:53:59.887 30429  1035 W CheckoutAccessibilityService: PAYMENT_RESULT_AI_DISPATCH_UNAVAILABLE: 无会话可关联，已由孤儿待确认承载
+10-12 10:53:59.889 30429 30429 I PendingConfirmOverlay: 弹窗门禁判定: id=pending-orphan-b, allowed=false, reason=NO_OVERLAY_PERMISSION(foreground=com.eg.android.AlipayGphone, age=28ms, device=Xiaomi 25
+10-12 10:53:59.889 30429 30429 I PendingConfirmOverlay: 弹窗候选挂起等待非敏感帧: id=pending-orphan-b, sensitive=false, foreground=com.eg.android.AlipayGphone, blockedBy=NO_OVERLAY_PERMISSION(foreground=com.
+10-12 10:54:00.049 30429 30429 I CheckoutAccessibilityService: 支付结果页解析到证据: 金额=8800分, 状态=SUCCESS, textLength=48
+10-12 10:54:00.058 30429  1044 I CheckoutPaymentMatcher: 孤立支付证据判为重复观测(同包同额90秒内)，未新建待确认: pending=pending-orphan-b, incoming=pending-orphan-3, amount=8800, reason=NO_ACTIVE_SESSION
+10-12 10:54:00.059 30429  1035 I CheckoutAccessibilityService: 支付结果页无关联活跃会话，已转待确认（不回落猜测）
+10-12 10:54:00.059 30429  1035 W CheckoutAccessibilityService: 支付结果页派发跳过: 购买意图协调器不可用
+10-12 10:54:00.059 30429  1035 W CheckoutAccessibilityService: PAYMENT_RESULT_AI_DISPATCH_UNAVAILABLE: 无会话可关联，已由孤儿待确认承载
+10-12 10:54:00.563 30429 30429 I CheckoutAccessibilityService: 支付交接事件补发: stable=false, fingerprint=null, foreground=com.eg.android.AlipayGphone
+10-12 10:54:00.597 30429 30429 I CheckoutAccessibilityService: 支付窗口列表(2): 3:com.android.systemui:FrameLayout | 1:com.eg.android.AlipayGphone:FrameLayout
+10-12 10:54:00.837 30429 30429 I CheckoutAccessibilityService: 支付交接诊断: payment=com.eg.android.AlipayGphone, currentStable=false, handoffStable=false, previousShopping=null, coordRef=null
+10-12 10:54:03.148 30429 30429 I CheckoutAccessibilityService: 支付交接诊断: payment=com.eg.android.AlipayGphone, currentStable=false, handoffStable=false, previousShopping=null, coordRef=null
+10-12 10:54:03.158 30429 30429 I CheckoutAccessibilityService: 支付窗口列表(2): 3:com.android.systemui:FrameLayout | 1:com.eg.android.AlipayGphone:FrameLayout
+10-12 10:54:03.578 30429 30429 I CheckoutAccessibilityService: 结算页门禁: NOT_CHECKOUT_PAGE, pkg=com.xunmeng.pinduoduo, role=UNKNOWN, amountSignal=false, actionSignal=false, classSemantic=false, sens
+10-12 10:54:03.632 30429 30429 I PendingConfirmOverlay: 弹窗候选挂起后放行: id=pending-orphan-b, waitedMs=3744, reason=PASS(age=1ms, foreground=com.xunmeng.pinduoduo)
+10-12 10:54:03.665 30429 30429 I PendingConfirmOverlay: 付款确认弹窗已显示: id=pending-orphan-b, amount=8800, source=accessibility
+10-12 10:54:03.711 30429 30429 I PendingConfirmOverlay: 前台变更: foreground=com.android.systemui, isSelf=false
+10-12 10:54:03.772 30429 30429 I PendingConfirmOverlay: 前台变更: foreground=com.jotbill.app, isSelf=true
+10-12 10:54:04.165 30429 30429 I PendingConfirmOverlay: 付款确认弹窗已上屏确认: id=pending-orphan-b, attached=true
+10-12 10:54:04.279 30429 30429 I PendingConfirmOverlay: 前台变更: foreground=com.android.systemui, isSelf=false
+10-12 10:54:05.281 30429  1035 I PendingChangeHub: pending变更事件: id=pending-orphan-b, type=expense, amount=8800, source=accessibility, reason=null, isNew=false
+10-12 10:54:05.282 30429  1035 I PendingReminder: 已消除待确认通知: id=pending-orphan-b
+10-12 10:54:05.365 30429 30429 I PendingConfirmOverlay: 前台变更: foreground=com.jotbill.app, isSelf=true
+10-12 10:54:05.381 30429 30429 I PendingConfirmOverlay: 前台变更: foreground=com.android.systemui, isSelf=false
+10-12 10:54:05.466 30429 30429 I PendingConfirmOverlay: 前台变更: foreground=com.jotbill.app, isSelf=true
+10-12 10:54:05.484 30429 30429 I PendingConfirmOverlay: 前台变更: foreground=com.android.systemui, isSelf=false
+10-12 10:54:06.785 30429 30429 I PendingConfirmOverlay: 付款确认弹窗已关闭: reason=SUCCESS
+10-12 10:54:06.822 30429 30429 I CheckoutAccessibilityService: 结算页门禁: NOT_CHECKOUT_PAGE, pkg=com.xunmeng.pinduoduo, role=UNKNOWN, amountSignal=false, actionSignal=false, classSemantic=false, sens
+10-12 10:54:12.241 30429 30429 I CheckoutAccessibilityService: 结算页门禁: NOT_CHECKOUT_PAGE, pkg=com.xunmeng.pinduoduo, role=SHOPPING_HOME, amountSignal=true, actionSignal=false, classSemantic=false,
+10-12 10:54:15.528 30429 30429 I CheckoutAccessibilityService: 结算页门禁: NOT_CHECKOUT_PAGE, pkg=com.xunmeng.pinduoduo, role=SHOPPING_HOME, amountSignal=true, actionSignal=false, classSemantic=false,

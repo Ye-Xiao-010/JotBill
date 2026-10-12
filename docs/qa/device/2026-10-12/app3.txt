@@ -1,0 +1,342 @@
+﻿10-12 10:52:39.964 30429 30429 I CheckoutAccessibilityService: 无障碍事件采样: pkg=com.android.systemui(eventPkg=com.android.systemui, rootPkg=com.miui.home), type=TYPE_WINDOW_CONTENT_CHANGED, class=and
+10-12 10:52:43.979 30429 30429 I CheckoutAccessibilityService: 无障碍事件采样: pkg=com.android.systemui(eventPkg=com.android.systemui, rootPkg=com.miui.home), type=TYPE_WINDOW_CONTENT_CHANGED, class=and
+10-12 10:52:48.003 30429 30429 I CheckoutAccessibilityService: 无障碍事件采样: pkg=com.android.systemui(eventPkg=com.android.systemui, rootPkg=com.miui.home), type=TYPE_WINDOW_CONTENT_CHANGED, class=and
+10-12 10:52:52.014 30429 30429 I CheckoutAccessibilityService: 无障碍事件采样: pkg=com.android.systemui(eventPkg=com.android.systemui, rootPkg=com.miui.home), type=TYPE_WINDOW_CONTENT_CHANGED, class=and
+10-12 10:52:56.040 30429 30429 I CheckoutAccessibilityService: 无障碍事件采样: pkg=com.android.systemui(eventPkg=com.android.systemui, rootPkg=com.miui.home), type=TYPE_WINDOW_CONTENT_CHANGED, class=and
+10-12 10:53:00.057 30429 30429 I CheckoutAccessibilityService: 无障碍事件采样: pkg=com.android.systemui(eventPkg=com.android.systemui, rootPkg=com.miui.home), type=TYPE_WINDOW_CONTENT_CHANGED, class=and
+10-12 10:53:04.080 30429 30429 I CheckoutAccessibilityService: 无障碍事件采样: pkg=com.android.systemui(eventPkg=com.android.systemui, rootPkg=com.miui.home), type=TYPE_WINDOW_CONTENT_CHANGED, class=and
+10-12 10:53:08.087 30429 30429 I CheckoutAccessibilityService: 无障碍事件采样: pkg=com.android.systemui(eventPkg=com.android.systemui, rootPkg=com.miui.home), type=TYPE_WINDOW_CONTENT_CHANGED, class=and
+10-12 10:53:12.104 30429 30429 I CheckoutAccessibilityService: 无障碍事件采样: pkg=com.android.systemui(eventPkg=com.android.systemui, rootPkg=com.miui.home), type=TYPE_WINDOW_CONTENT_CHANGED, class=and
+10-12 10:53:16.117 30429 30429 I CheckoutAccessibilityService: 无障碍事件采样: pkg=com.android.systemui(eventPkg=com.android.systemui, rootPkg=com.miui.home), type=TYPE_WINDOW_CONTENT_CHANGED, class=and
+10-12 10:53:20.128 30429 30429 I CheckoutAccessibilityService: 无障碍事件采样: pkg=com.android.systemui(eventPkg=com.android.systemui, rootPkg=com.miui.home), type=TYPE_WINDOW_CONTENT_CHANGED, class=and
+10-12 10:53:24.146 30429 30429 I CheckoutAccessibilityService: 无障碍事件采样: pkg=com.android.systemui(eventPkg=com.android.systemui, rootPkg=com.miui.home), type=TYPE_WINDOW_CONTENT_CHANGED, class=and
+10-12 10:53:28.149 30429 30429 I CheckoutAccessibilityService: 无障碍事件采样: pkg=com.android.systemui(eventPkg=com.android.systemui, rootPkg=com.miui.home), type=TYPE_WINDOW_CONTENT_CHANGED, class=and
+10-12 10:53:31.486 30429 30429 I CheckoutAccessibilityService: 无障碍事件采样: pkg=com.xunmeng.pinduoduo(eventPkg=com.xunmeng.pinduoduo, rootPkg=com.xunmeng.pinduoduo), type=TYPE_WINDOW_CONTENT_CHANGED,
+10-12 10:53:31.953 30429 30429 I CheckoutAccessibilityService: 结算页门禁: NOT_CHECKOUT_PAGE, pkg=com.xunmeng.pinduoduo, role=SHOPPING_HOME, amountSignal=false, actionSignal=false, classSemantic=false
+10-12 10:53:32.540 30429 30429 I CheckoutAccessibilityService: 无障碍事件采样: pkg=com.xunmeng.pinduoduo(eventPkg=com.android.systemui, rootPkg=com.xunmeng.pinduoduo), type=TYPE_WINDOW_CONTENT_CHANGED, 
+10-12 10:53:33.607 30429 30429 I CheckoutAccessibilityService: 无障碍事件采样: pkg=com.xunmeng.pinduoduo(eventPkg=com.xunmeng.pinduoduo, rootPkg=com.xunmeng.pinduoduo), type=TYPE_VIEW_SCROLLED, class=an
+10-12 10:53:34.662 30429 30429 I CheckoutAccessibilityService: 无障碍事件采样: pkg=com.xunmeng.pinduoduo(eventPkg=com.xunmeng.pinduoduo, rootPkg=com.xunmeng.pinduoduo), type=TYPE_WINDOW_CONTENT_CHANGED,
+10-12 10:53:34.977 30429 30429 I CheckoutAccessibilityService: 结算页门禁: NOT_CHECKOUT_PAGE, pkg=com.xunmeng.pinduoduo, role=UNKNOWN, amountSignal=false, actionSignal=false, classSemantic=false, sens
+10-12 10:53:35.782 30429 30429 I CheckoutAccessibilityService: 无障碍事件采样: pkg=com.xunmeng.pinduoduo(eventPkg=com.xunmeng.pinduoduo, rootPkg=com.xunmeng.pinduoduo), type=TYPE_WINDOW_CONTENT_CHANGED,
+10-12 10:53:36.460 30429 30429 I CheckoutAccessibilityService: 结算页门禁: ACCEPTED, pkg=com.xunmeng.pinduoduo, role=CHECKOUT, amountSignal=true, actionSignal=true, classSemantic=false, sensitive=fals
+10-12 10:53:36.590 30429 30429 I CheckoutAccessibilityService: 敏感页锁存提前解除: 连续 3 帧明确非敏感购物页, pkg=com.xunmeng.pinduoduo, role=CHECKOUT
+10-12 10:53:36.613 30429 30429 I CheckoutAccessibilityService: 敏感页锁存提前解除: 连续 3 帧明确非敏感购物页, pkg=com.xunmeng.pinduoduo, role=CHECKOUT
+10-12 10:53:36.635 30429 30429 I CheckoutAccessibilityService: 敏感页锁存提前解除: 连续 3 帧明确非敏感购物页, pkg=com.xunmeng.pinduoduo, role=CHECKOUT
+10-12 10:53:36.700 30429 30429 I CheckoutAccessibilityService: 敏感页锁存提前解除: 连续 3 帧明确非敏感购物页, pkg=com.xunmeng.pinduoduo, role=CHECKOUT
+10-12 10:53:36.795 30429 30429 I CheckoutAccessibilityService: 敏感页锁存提前解除: 连续 3 帧明确非敏感购物页, pkg=com.xunmeng.pinduoduo, role=CHECKOUT
+10-12 10:53:36.796 30429 30429 I CheckoutAccessibilityService: 无障碍事件采样: pkg=com.xunmeng.pinduoduo(eventPkg=com.xunmeng.pinduoduo, rootPkg=com.xunmeng.pinduoduo), type=TYPE_WINDOW_CONTENT_CHANGED,
+10-12 10:53:36.880 30429 30429 I CheckoutAccessibilityService: 敏感页锁存提前解除: 连续 3 帧明确非敏感购物页, pkg=com.xunmeng.pinduoduo, role=CHECKOUT
+10-12 10:53:36.975 30429 30429 I CheckoutAccessibilityService: 敏感页锁存提前解除: 连续 3 帧明确非敏感购物页, pkg=com.xunmeng.pinduoduo, role=CHECKOUT
+10-12 10:53:37.042 30429 30429 I CheckoutAccessibilityService: 敏感页锁存提前解除: 连续 3 帧明确非敏感购物页, pkg=com.xunmeng.pinduoduo, role=CHECKOUT
+10-12 10:53:37.103 30429 30429 I CheckoutAccessibilityService: 敏感页锁存提前解除: 连续 3 帧明确非敏感购物页, pkg=com.xunmeng.pinduoduo, role=CHECKOUT
+10-12 10:53:37.151 30429 30429 I CheckoutAccessibilityService: 敏感页锁存提前解除: 连续 3 帧明确非敏感购物页, pkg=com.xunmeng.pinduoduo, role=CHECKOUT
+10-12 10:53:37.186 30429 30429 I CheckoutAccessibilityService: 敏感页锁存提前解除: 连续 3 帧明确非敏感购物页, pkg=com.xunmeng.pinduoduo, role=CHECKOUT
+10-12 10:53:37.277 30429 30429 I CheckoutAccessibilityService: 敏感页锁存提前解除: 连续 3 帧明确非敏感购物页, pkg=com.xunmeng.pinduoduo, role=CHECKOUT
+10-12 10:53:37.307 30429 30429 I CheckoutAccessibilityService: 敏感页锁存提前解除: 连续 3 帧明确非敏感购物页, pkg=com.xunmeng.pinduoduo, role=CHECKOUT
+10-12 10:53:37.349 30429 30429 I CheckoutAccessibilityService: 敏感页锁存提前解除: 连续 3 帧明确非敏感购物页, pkg=com.xunmeng.pinduoduo, role=CHECKOUT
+10-12 10:53:37.413 30429 30429 I CheckoutAccessibilityService: 敏感页锁存提前解除: 连续 3 帧明确非敏感购物页, pkg=com.xunmeng.pinduoduo, role=CHECKOUT
+10-12 10:53:38.156 30429 30429 I CheckoutAccessibilityService: 敏感页锁存提前解除: 连续 3 帧明确非敏感购物页, pkg=com.xunmeng.pinduoduo, role=CHECKOUT
+10-12 10:53:38.196 30429 30429 I CheckoutAccessibilityService: 无障碍事件采样: pkg=com.xunmeng.pinduoduo(eventPkg=com.xunmeng.pinduoduo, rootPkg=com.xunmeng.pinduoduo), type=TYPE_VIEW_CLICKED, class=and
+10-12 10:53:38.251 30429 30429 I CheckoutAccessibilityService: 敏感页锁存提前解除: 连续 3 帧明确非敏感购物页, pkg=com.xunmeng.pinduoduo, role=CHECKOUT
+10-12 10:53:38.277 30429 30429 I CheckoutAccessibilityService: 结算页门禁: NOT_CHECKOUT_PAGE, pkg=com.xunmeng.pinduoduo, role=UNKNOWN, amountSignal=false, actionSignal=false, classSemantic=false, sens
+10-12 10:53:38.600 30429 30429 I CheckoutAccessibilityService: 支付交接诊断: payment=com.tencent.mm, currentStable=false, handoffStable=false, previousShopping=com.xunmeng.pinduoduo, coordRef=null
+10-12 10:53:38.728 30429 30429 I CheckoutAccessibilityService: 支付窗口列表(4): 3:com.android.systemui:FrameLayout | 3:com.miui.notes:LinearLayout | 3:com.mipay.wallet:View | 1:com.tencent.mm:FrameLayo
+10-12 10:53:38.741 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.tencent.mm, role=UNKNOWN, class=android.widget.framelayout, sensitive=false, windows=all, rootPkg=com.tencent.
+10-12 10:53:38.745 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.tencent.mm, role=UNKNOWN, class=android.widget.framelayout, sensitive=false, windows=all, rootPkg=com.tencent.
+10-12 10:53:38.745 30429 30429 I CheckoutAccessibilityService: 支付结果页截图兜底已禁止: 结算页截图识别链路已停用 pkg=com.tencent.mm
+10-12 10:53:38.745 30429 30429 I CheckoutAccessibilityService: 支付交接事件补发: stable=false, fingerprint=null, foreground=com.tencent.mm
+10-12 10:53:38.758 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.tencent.mm, role=UNKNOWN, class=android.widget.framelayout, sensitive=false, windows=active, rootPkg=com.tence
+10-12 10:53:38.785 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.tencent.mm, role=UNKNOWN, class=android.widget.framelayout, sensitive=false, windows=active, rootPkg=com.tence
+10-12 10:53:38.787 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.tencent.mm, role=UNKNOWN, class=android.widget.framelayout, sensitive=false, windows=active, rootPkg=com.tence
+10-12 10:53:38.798 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.tencent.mm, role=UNKNOWN, class=android.widget.framelayout, sensitive=false, windows=active, rootPkg=com.tence
+10-12 10:53:38.800 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.tencent.mm, role=UNKNOWN, class=android.widget.framelayout, sensitive=false, windows=active, rootPkg=com.tence
+10-12 10:53:38.810 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.tencent.mm, role=UNKNOWN, class=, sensitive=false, windows=active, rootPkg=com.tencent.mm, rootClass=FrameLayo
+10-12 10:53:38.811 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.tencent.mm, role=UNKNOWN, class=, sensitive=false, windows=active, rootPkg=com.tencent.mm, rootClass=View, chi
+10-12 10:53:38.833 30429 30429 I CheckoutAccessibilityService: 支付窗口列表(4): 3:com.android.systemui:FrameLayout | 3:com.miui.notes:LinearLayout | 3:com.mipay.wallet:View | 1:com.tencent.mm:FrameLayo
+10-12 10:53:38.835 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.tencent.mm, role=UNKNOWN, class=com.tencent.mm.plugin.lite.ui.wxaliteapppaytransparentliteui, sensitive=false,
+10-12 10:53:38.836 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.tencent.mm, role=UNKNOWN, class=com.tencent.mm.plugin.lite.ui.wxaliteapppaytransparentliteui, sensitive=false,
+10-12 10:53:38.841 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.tencent.mm, role=UNKNOWN, class=com.tencent.mm.plugin.lite.ui.wxaliteapppaytransparentliteui, sensitive=false,
+10-12 10:53:39.091 30429 30429 I CheckoutAccessibilityService: 支付窗口列表(4): 3:com.android.systemui:FrameLayout | 3:com.miui.notes:LinearLayout | 3:com.mipay.wallet:View | 1:com.tencent.mm:FrameLayo
+10-12 10:53:39.093 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.tencent.mm, role=UNKNOWN, class=com.tencent.mm.plugin.wallet_index.ui.orderhandlerui, sensitive=false, windows
+10-12 10:53:39.094 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.tencent.mm, role=UNKNOWN, class=com.tencent.mm.plugin.wallet_index.ui.orderhandlerui, sensitive=false, windows
+10-12 10:53:39.999 30429 30429 I CheckoutAccessibilityService: 无障碍事件采样: pkg=com.tencent.mm(eventPkg=com.tencent.mm, rootPkg=com.tencent.mm), type=TYPE_WINDOW_CONTENT_CHANGED, class=android.widget
+10-12 10:53:40.000 30429 30429 I CheckoutAccessibilityService: 支付交接诊断: payment=com.tencent.mm, currentStable=false, handoffStable=false, previousShopping=null, coordRef=null
+10-12 10:53:40.010 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.tencent.mm, role=UNKNOWN, class=android.widget.framelayout, sensitive=false, windows=active, rootPkg=com.tence
+10-12 10:53:40.011 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.tencent.mm, role=UNKNOWN, class=android.widget.framelayout, sensitive=false, windows=active, rootPkg=com.tence
+10-12 10:53:40.033 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.tencent.mm, role=UNKNOWN, class=, sensitive=false, windows=active, rootPkg=com.tencent.mm, rootClass=FrameLayo
+10-12 10:53:40.034 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.tencent.mm, role=UNKNOWN, class=, sensitive=false, windows=active, rootPkg=com.tencent.mm, rootClass=View, chi
+10-12 10:53:40.051 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.tencent.mm, role=UNKNOWN, class=, sensitive=false, windows=active, rootPkg=com.tencent.mm, rootClass=FrameLayo
+10-12 10:53:40.052 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.tencent.mm, role=UNKNOWN, class=, sensitive=false, windows=active, rootPkg=com.tencent.mm, rootClass=View, chi
+10-12 10:53:40.288 30429 30429 I CheckoutAccessibilityService: 支付结果页截图兜底已禁止: 支付包页面为敏感页面，跳过证据提取与截图兜底 pkg=com.tencent.mm, role=UNKNOWN, class=android.widget.linearlayout
+10-12 10:53:40.299 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.tencent.mm, role=UNKNOWN, class=android.widget.linearlayout, sensitive=false, windows=active, rootPkg=com.andr
+10-12 10:53:40.590 30429 30429 I CheckoutAccessibilityService: 支付窗口列表(4): 3:com.android.systemui:FrameLayout | 3:com.miui.notes:LinearLayout | 3:com.mipay.wallet:View | 1:com.tencent.mm:FrameLayo
+10-12 10:53:41.011 30429 30429 I CheckoutAccessibilityService: 无障碍事件采样: pkg=com.tencent.mm(eventPkg=com.tencent.mm, rootPkg=com.tencent.mm), type=TYPE_WINDOW_CONTENT_CHANGED, class=null, contentC
+10-12 10:53:41.011 30429 30429 I CheckoutAccessibilityService: 支付交接诊断: payment=com.tencent.mm, currentStable=false, handoffStable=false, previousShopping=null, coordRef=null
+10-12 10:53:41.444 30429 30429 I CheckoutAccessibilityService: 支付窗口列表(4): 3:com.android.systemui:FrameLayout | 3:com.miui.notes:LinearLayout | 3:com.mipay.wallet:View | 1:com.tencent.mm:FrameLayo
+10-12 10:53:41.566 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.tencent.mm, role=UNKNOWN, class=, sensitive=false, windows=active, rootPkg=com.tencent.mm, rootClass=FrameLayo
+10-12 10:53:41.569 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.tencent.mm, role=UNKNOWN, class=, sensitive=false, windows=active, rootPkg=com.tencent.mm, rootClass=View, chi
+10-12 10:53:41.584 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.tencent.mm, role=UNKNOWN, class=, sensitive=false, windows=active, rootPkg=com.tencent.mm, rootClass=FrameLayo
+10-12 10:53:41.588 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.tencent.mm, role=UNKNOWN, class=, sensitive=false, windows=active, rootPkg=com.tencent.mm, rootClass=View, chi
+10-12 10:53:41.610 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.tencent.mm, role=UNKNOWN, class=, sensitive=false, windows=active, rootPkg=com.tencent.mm, rootClass=FrameLayo
+10-12 10:53:41.613 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.tencent.mm, role=UNKNOWN, class=, sensitive=false, windows=active, rootPkg=com.tencent.mm, rootClass=View, chi
+10-12 10:53:41.641 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.tencent.mm, role=UNKNOWN, class=, sensitive=false, windows=active, rootPkg=com.tencent.mm, rootClass=FrameLayo
+10-12 10:53:41.643 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.tencent.mm, role=UNKNOWN, class=, sensitive=false, windows=active, rootPkg=com.tencent.mm, rootClass=View, chi
+10-12 10:53:41.650 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.tencent.mm, role=UNKNOWN, class=, sensitive=false, windows=active, rootPkg=com.tencent.mm, rootClass=FrameLayo
+10-12 10:53:41.651 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.tencent.mm, role=UNKNOWN, class=, sensitive=false, windows=active, rootPkg=com.tencent.mm, rootClass=View, chi
+10-12 10:53:41.659 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.tencent.mm, role=UNKNOWN, class=, sensitive=false, windows=active, rootPkg=com.tencent.mm, rootClass=FrameLayo
+10-12 10:53:41.660 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.tencent.mm, role=UNKNOWN, class=, sensitive=false, windows=active, rootPkg=com.tencent.mm, rootClass=View, chi
+10-12 10:53:41.676 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.tencent.mm, role=UNKNOWN, class=, sensitive=false, windows=active, rootPkg=com.tencent.mm, rootClass=FrameLayo
+10-12 10:53:41.678 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.tencent.mm, role=UNKNOWN, class=, sensitive=false, windows=active, rootPkg=com.tencent.mm, rootClass=View, chi
+10-12 10:53:41.691 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.tencent.mm, role=UNKNOWN, class=, sensitive=false, windows=active, rootPkg=com.tencent.mm, rootClass=FrameLayo
+10-12 10:53:41.694 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.tencent.mm, role=UNKNOWN, class=, sensitive=false, windows=active, rootPkg=com.tencent.mm, rootClass=View, chi
+10-12 10:53:41.700 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.tencent.mm, role=UNKNOWN, class=, sensitive=false, windows=active, rootPkg=com.tencent.mm, rootClass=FrameLayo
+10-12 10:53:41.703 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.tencent.mm, role=UNKNOWN, class=, sensitive=false, windows=active, rootPkg=com.tencent.mm, rootClass=View, chi
+10-12 10:53:41.718 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.tencent.mm, role=UNKNOWN, class=, sensitive=false, windows=active, rootPkg=com.tencent.mm, rootClass=FrameLayo
+10-12 10:53:41.723 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.tencent.mm, role=UNKNOWN, class=, sensitive=false, windows=active, rootPkg=com.tencent.mm, rootClass=View, chi
+10-12 10:53:41.735 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.tencent.mm, role=UNKNOWN, class=, sensitive=false, windows=active, rootPkg=com.tencent.mm, rootClass=FrameLayo
+10-12 10:53:41.737 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.tencent.mm, role=UNKNOWN, class=, sensitive=false, windows=active, rootPkg=com.tencent.mm, rootClass=View, chi
+10-12 10:53:41.742 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.tencent.mm, role=UNKNOWN, class=, sensitive=false, windows=active, rootPkg=com.tencent.mm, rootClass=FrameLayo
+10-12 10:53:41.744 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.tencent.mm, role=UNKNOWN, class=, sensitive=false, windows=active, rootPkg=com.tencent.mm, rootClass=View, chi
+10-12 10:53:41.750 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.tencent.mm, role=UNKNOWN, class=, sensitive=false, windows=active, rootPkg=com.tencent.mm, rootClass=FrameLayo
+10-12 10:53:41.752 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.tencent.mm, role=UNKNOWN, class=, sensitive=false, windows=active, rootPkg=com.tencent.mm, rootClass=View, chi
+10-12 10:53:41.752 30429 30429 I CheckoutAccessibilityService: 支付结果页截图兜底已禁止: 结算页截图识别链路已停用 pkg=com.tencent.mm, 期间已抑制58次
+10-12 10:53:41.757 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.tencent.mm, role=UNKNOWN, class=, sensitive=false, windows=active, rootPkg=com.tencent.mm, rootClass=FrameLayo
+10-12 10:53:41.759 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.tencent.mm, role=UNKNOWN, class=, sensitive=false, windows=active, rootPkg=com.tencent.mm, rootClass=View, chi
+10-12 10:53:41.764 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.tencent.mm, role=UNKNOWN, class=, sensitive=false, windows=active, rootPkg=com.tencent.mm, rootClass=FrameLayo
+10-12 10:53:41.767 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.tencent.mm, role=UNKNOWN, class=, sensitive=false, windows=active, rootPkg=com.tencent.mm, rootClass=View, chi
+10-12 10:53:41.772 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.tencent.mm, role=UNKNOWN, class=, sensitive=false, windows=active, rootPkg=com.tencent.mm, rootClass=FrameLayo
+10-12 10:53:41.774 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.tencent.mm, role=UNKNOWN, class=, sensitive=false, windows=active, rootPkg=com.tencent.mm, rootClass=View, chi
+10-12 10:53:41.779 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.tencent.mm, role=UNKNOWN, class=, sensitive=false, windows=active, rootPkg=com.tencent.mm, rootClass=FrameLayo
+10-12 10:53:41.781 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.tencent.mm, role=UNKNOWN, class=, sensitive=false, windows=active, rootPkg=com.tencent.mm, rootClass=View, chi
+10-12 10:53:41.787 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.tencent.mm, role=UNKNOWN, class=, sensitive=false, windows=active, rootPkg=com.tencent.mm, rootClass=FrameLayo
+10-12 10:53:41.789 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.tencent.mm, role=UNKNOWN, class=, sensitive=false, windows=active, rootPkg=com.tencent.mm, rootClass=View, chi
+10-12 10:53:41.794 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.tencent.mm, role=UNKNOWN, class=, sensitive=false, windows=active, rootPkg=com.tencent.mm, rootClass=FrameLayo
+10-12 10:53:41.797 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.tencent.mm, role=UNKNOWN, class=, sensitive=false, windows=active, rootPkg=com.tencent.mm, rootClass=View, chi
+10-12 10:53:41.802 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.tencent.mm, role=UNKNOWN, class=, sensitive=false, windows=active, rootPkg=com.tencent.mm, rootClass=FrameLayo
+10-12 10:53:41.804 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.tencent.mm, role=UNKNOWN, class=, sensitive=false, windows=active, rootPkg=com.tencent.mm, rootClass=View, chi
+10-12 10:53:41.810 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.tencent.mm, role=UNKNOWN, class=, sensitive=false, windows=active, rootPkg=com.tencent.mm, rootClass=FrameLayo
+10-12 10:53:41.813 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.tencent.mm, role=UNKNOWN, class=, sensitive=false, windows=active, rootPkg=com.tencent.mm, rootClass=View, chi
+10-12 10:53:41.820 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.tencent.mm, role=UNKNOWN, class=, sensitive=false, windows=active, rootPkg=com.tencent.mm, rootClass=FrameLayo
+10-12 10:53:41.823 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.tencent.mm, role=UNKNOWN, class=, sensitive=false, windows=active, rootPkg=com.tencent.mm, rootClass=View, chi
+10-12 10:53:41.829 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.tencent.mm, role=UNKNOWN, class=, sensitive=false, windows=active, rootPkg=com.tencent.mm, rootClass=FrameLayo
+10-12 10:53:41.832 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.tencent.mm, role=UNKNOWN, class=, sensitive=false, windows=active, rootPkg=com.tencent.mm, rootClass=View, chi
+10-12 10:53:41.837 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.tencent.mm, role=UNKNOWN, class=, sensitive=false, windows=active, rootPkg=com.tencent.mm, rootClass=FrameLayo
+10-12 10:53:41.840 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.tencent.mm, role=UNKNOWN, class=, sensitive=false, windows=active, rootPkg=com.tencent.mm, rootClass=View, chi
+10-12 10:53:41.845 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.tencent.mm, role=UNKNOWN, class=, sensitive=false, windows=active, rootPkg=com.tencent.mm, rootClass=FrameLayo
+10-12 10:53:41.848 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.tencent.mm, role=UNKNOWN, class=, sensitive=false, windows=active, rootPkg=com.tencent.mm, rootClass=View, chi
+10-12 10:53:41.853 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.tencent.mm, role=UNKNOWN, class=, sensitive=false, windows=active, rootPkg=com.tencent.mm, rootClass=FrameLayo
+10-12 10:53:41.855 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.tencent.mm, role=UNKNOWN, class=, sensitive=false, windows=active, rootPkg=com.tencent.mm, rootClass=View, chi
+10-12 10:53:41.862 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.tencent.mm, role=UNKNOWN, class=, sensitive=false, windows=active, rootPkg=com.tencent.mm, rootClass=FrameLayo
+10-12 10:53:41.864 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.tencent.mm, role=UNKNOWN, class=, sensitive=false, windows=active, rootPkg=com.tencent.mm, rootClass=View, chi
+10-12 10:53:41.869 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.tencent.mm, role=UNKNOWN, class=, sensitive=false, windows=active, rootPkg=com.tencent.mm, rootClass=FrameLayo
+10-12 10:53:41.871 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.tencent.mm, role=UNKNOWN, class=, sensitive=false, windows=active, rootPkg=com.tencent.mm, rootClass=View, chi
+10-12 10:53:41.875 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.tencent.mm, role=UNKNOWN, class=, sensitive=false, windows=active, rootPkg=com.tencent.mm, rootClass=FrameLayo
+10-12 10:53:41.878 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.tencent.mm, role=UNKNOWN, class=, sensitive=false, windows=active, rootPkg=com.tencent.mm, rootClass=View, chi
+10-12 10:53:41.885 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.tencent.mm, role=UNKNOWN, class=, sensitive=false, windows=active, rootPkg=com.tencent.mm, rootClass=FrameLayo
+10-12 10:53:41.887 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.tencent.mm, role=UNKNOWN, class=, sensitive=false, windows=active, rootPkg=com.tencent.mm, rootClass=View, chi
+10-12 10:53:41.892 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.tencent.mm, role=UNKNOWN, class=, sensitive=false, windows=active, rootPkg=com.tencent.mm, rootClass=FrameLayo
+10-12 10:53:41.895 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.tencent.mm, role=UNKNOWN, class=, sensitive=false, windows=active, rootPkg=com.tencent.mm, rootClass=View, chi
+10-12 10:53:41.900 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.tencent.mm, role=UNKNOWN, class=, sensitive=false, windows=active, rootPkg=com.tencent.mm, rootClass=FrameLayo
+10-12 10:53:41.903 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.tencent.mm, role=UNKNOWN, class=, sensitive=false, windows=active, rootPkg=com.tencent.mm, rootClass=View, chi
+10-12 10:53:41.907 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.tencent.mm, role=UNKNOWN, class=, sensitive=false, windows=active, rootPkg=com.tencent.mm, rootClass=FrameLayo
+10-12 10:53:41.910 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.tencent.mm, role=UNKNOWN, class=, sensitive=false, windows=active, rootPkg=com.tencent.mm, rootClass=View, chi
+10-12 10:53:42.996 30429 30429 I CheckoutAccessibilityService: 无障碍事件采样: pkg=com.tencent.mm(eventPkg=com.android.systemui, rootPkg=com.tencent.mm), type=TYPE_WINDOW_CONTENT_CHANGED, class=android.
+10-12 10:53:42.996 30429 30429 I CheckoutAccessibilityService: 支付交接诊断: payment=com.tencent.mm, currentStable=false, handoffStable=false, previousShopping=null, coordRef=null
+10-12 10:53:43.021 30429 30429 I CheckoutAccessibilityService: 支付窗口列表(4): 3:com.android.systemui:FrameLayout | 3:com.miui.notes:LinearLayout | 3:com.mipay.wallet:View | 1:com.tencent.mm:FrameLayo
+10-12 10:53:43.024 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.tencent.mm, role=UNKNOWN, class=android.widget.framelayout, sensitive=false, windows=all, rootPkg=com.tencent.
+10-12 10:53:43.027 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.tencent.mm, role=UNKNOWN, class=android.widget.framelayout, sensitive=false, windows=all, rootPkg=com.android.
+10-12 10:53:43.030 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.tencent.mm, role=UNKNOWN, class=android.widget.framelayout, sensitive=false, windows=all, rootPkg=com.tencent.
+10-12 10:53:43.101 30429 30429 I CheckoutAccessibilityService: 支付结果页解析到证据: 金额=5490分, 状态=SUCCESS, textLength=21
+10-12 10:53:43.117 30429  1043 I CheckoutPaymentMatcher: 孤立支付证据已落待确认: pending=pending-orphan-5, amount=5490, merchant=拼多多, account=default-account-wechat, reason=NO_ACTIVE_SESSION, inserted=true
+10-12 10:53:43.118 30429 30429 D CheckoutAccessibilityService: 支付结果页同一事件已处理，跳过重复解析: 11e10df3d693
+10-12 10:53:43.118 30429  1043 I PendingChangeHub: pending变更事件: id=pending-orphan-5, type=expense, amount=5490, source=accessibility, reason=NO_ACTIVE_SESSION, isNew=true
+10-12 10:53:43.121 30429  1043 I PendingReminder: 待确认提醒已发送: id=pending-orphan-5, type=expense, amount=5490, source=accessibility
+10-12 10:53:43.129 30429  1034 I CheckoutAccessibilityService: 支付结果页无关联活跃会话，已转待确认（不回落猜测）
+10-12 10:53:43.130 30429 30429 D CheckoutAccessibilityService: 支付结果页同一事件已处理，跳过重复解析: 11e10df3d693
+10-12 10:53:43.130 30429  1034 W CheckoutAccessibilityService: 支付结果页派发跳过: 购买意图协调器不可用
+10-12 10:53:43.130 30429  1034 W CheckoutAccessibilityService: PAYMENT_RESULT_AI_DISPATCH_UNAVAILABLE: 无会话可关联，已由孤儿待确认承载
+10-12 10:53:43.143 30429 30429 D CheckoutAccessibilityService: 支付结果页同一事件已处理，跳过重复解析: 11e10df3d693
+10-12 10:53:43.151 30429 30429 D CheckoutAccessibilityService: 支付结果页同一事件已处理，跳过重复解析: 11e10df3d693
+10-12 10:53:43.172 30429 30429 D CheckoutAccessibilityService: 支付结果页同一事件已处理，跳过重复解析: 11e10df3d693
+10-12 10:53:43.190 30429 30429 D CheckoutAccessibilityService: 支付结果页同一事件已处理，跳过重复解析: 11e10df3d693
+10-12 10:53:43.202 30429 30429 D CheckoutAccessibilityService: 支付结果页同一事件已处理，跳过重复解析: 11e10df3d693
+10-12 10:53:43.211 30429 30429 D CheckoutAccessibilityService: 支付结果页同一事件已处理，跳过重复解析: 11e10df3d693
+10-12 10:53:43.219 30429 30429 D CheckoutAccessibilityService: 支付结果页同一事件已处理，跳过重复解析: 11e10df3d693
+10-12 10:53:43.227 30429 30429 D CheckoutAccessibilityService: 支付结果页同一事件已处理，跳过重复解析: 11e10df3d693
+10-12 10:53:43.234 30429 30429 D CheckoutAccessibilityService: 支付结果页同一事件已处理，跳过重复解析: 11e10df3d693
+10-12 10:53:43.235 30429 30429 I PendingConfirmOverlay: 弹窗门禁判定: id=pending-orphan-5, allowed=true, reason=PASS(age=2ms, foreground=com.tencent.mm)
+10-12 10:53:43.255 30429 30429 D CheckoutAccessibilityService: 支付结果页同一事件已处理，跳过重复解析: 11e10df3d693
+10-12 10:53:43.272 30429 30429 D CheckoutAccessibilityService: 支付结果页同一事件已处理，跳过重复解析: 11e10df3d693
+10-12 10:53:43.284 30429 30429 D CheckoutAccessibilityService: 支付结果页同一事件已处理，跳过重复解析: 11e10df3d693
+10-12 10:53:43.292 30429 30429 D CheckoutAccessibilityService: 支付结果页同一事件已处理，跳过重复解析: 11e10df3d693
+10-12 10:53:43.299 30429 30429 D CheckoutAccessibilityService: 支付结果页同一事件已处理，跳过重复解析: 11e10df3d693
+10-12 10:53:43.306 30429 30429 D CheckoutAccessibilityService: 支付结果页同一事件已处理，跳过重复解析: 11e10df3d693
+10-12 10:53:43.317 30429 30429 D CheckoutAccessibilityService: 支付结果页同一事件已处理，跳过重复解析: 11e10df3d693
+10-12 10:53:43.342 30429 30429 I PendingConfirmOverlay: 付款确认弹窗已显示: id=pending-orphan-5, amount=5490, source=accessibility
+10-12 10:53:43.363 30429 30429 I PendingConfirmOverlay: 前台变更: foreground=com.jotbill.app, isSelf=true
+10-12 10:53:43.547 30429 30429 I PendingConfirmOverlay: 前台变更: foreground=com.android.systemui, isSelf=false
+10-12 10:53:43.602 30429 30429 I PendingConfirmOverlay: 前台变更: foreground=com.jotbill.app, isSelf=true
+10-12 10:53:43.646 30429 30429 I PendingConfirmOverlay: 前台变更: foreground=com.android.systemui, isSelf=false
+10-12 10:53:43.842 30429 30429 I PendingConfirmOverlay: 付款确认弹窗已上屏确认: id=pending-orphan-5, attached=true
+10-12 10:53:44.047 30429 30429 I CheckoutAccessibilityService: 无障碍事件采样: pkg=com.android.systemui(eventPkg=com.android.systemui, rootPkg=com.jotbill.app), type=TYPE_WINDOW_CONTENT_CHANGED, class=a
+10-12 10:53:45.700 30429  1035 I PendingChangeHub: pending变更事件: id=pending-orphan-5, type=expense, amount=5490, source=accessibility, reason=null, isNew=false
+10-12 10:53:45.701 30429  1035 I PendingReminder: 已消除待确认通知: id=pending-orphan-5
+10-12 10:53:45.783 30429 30429 I CheckoutAccessibilityService: 无障碍事件采样: pkg=com.jotbill.app(eventPkg=com.jotbill.app, rootPkg=com.jotbill.app), type=TYPE_WINDOW_CONTENT_CHANGED, class=android.wid
+10-12 10:53:45.784 30429 30429 I PendingConfirmOverlay: 前台变更: foreground=com.jotbill.app, isSelf=true
+10-12 10:53:45.819 30429 30429 I PendingConfirmOverlay: 前台变更: foreground=com.android.systemui, isSelf=false
+10-12 10:53:45.886 30429 30429 I PendingConfirmOverlay: 前台变更: foreground=com.jotbill.app, isSelf=true
+10-12 10:53:45.921 30429 30429 I PendingConfirmOverlay: 前台变更: foreground=com.android.systemui, isSelf=false
+10-12 10:53:47.204 30429 30429 I PendingConfirmOverlay: 付款确认弹窗已关闭: reason=SUCCESS
+10-12 10:53:47.343 30429 30429 I CheckoutAccessibilityService: 无障碍事件采样: pkg=com.tencent.mm(eventPkg=com.tencent.mm, rootPkg=com.tencent.mm), type=TYPE_WINDOW_STATE_CHANGED, class=com.tencent.mm.p
+10-12 10:53:47.344 30429 30429 I CheckoutAccessibilityService: 支付交接诊断: payment=com.tencent.mm, currentStable=false, handoffStable=false, previousShopping=null, coordRef=null
+10-12 10:53:47.355 30429 30429 I CheckoutAccessibilityService: 支付窗口列表(4): 3:com.android.systemui:FrameLayout | 3:com.miui.notes:LinearLayout | 3:com.mipay.wallet:View | 1:com.tencent.mm:FrameLayo
+10-12 10:53:47.367 30429 30429 D CheckoutAccessibilityService: 支付结果页同一事件已处理，跳过重复解析: 11e10df3d693
+10-12 10:53:47.368 30429 30429 I CheckoutAccessibilityService: 支付交接事件补发: stable=false, fingerprint=null, foreground=com.tencent.mm
+10-12 10:53:47.772 30429 30429 D CheckoutAccessibilityService: 支付结果页同一事件已处理，跳过重复解析: 11e10df3d693
+10-12 10:53:47.784 30429 30429 D CheckoutAccessibilityService: 支付结果页同一事件已处理，跳过重复解析: 11e10df3d693
+10-12 10:53:47.798 30429 30429 D CheckoutAccessibilityService: 支付结果页同一事件已处理，跳过重复解析: 11e10df3d693
+10-12 10:53:47.805 30429 30429 I CheckoutAccessibilityService: 支付结果页未生成成功证据: reason=INVALID_AMOUNT
+10-12 10:53:47.806 30429 30429 I CheckoutAccessibilityService: 支付结果页截图兜底已禁止: 结算页截图识别链路已停用 pkg=com.tencent.mm, 期间已抑制21次
+10-12 10:53:47.814 30429 30429 I CheckoutAccessibilityService: 支付结果页未生成成功证据: reason=INVALID_AMOUNT
+10-12 10:53:47.822 30429 30429 D CheckoutAccessibilityService: 支付结果页未命中可确认的结果语义
+10-12 10:53:47.830 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.tencent.mm, role=UNKNOWN, class=, sensitive=false, windows=active, rootPkg=com.tencent.mm, rootClass=FrameLayo
+10-12 10:53:47.831 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.tencent.mm, role=UNKNOWN, class=, sensitive=false, windows=active, rootPkg=com.tencent.mm, rootClass=View, chi
+10-12 10:53:47.838 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.tencent.mm, role=UNKNOWN, class=, sensitive=false, windows=active, rootPkg=com.tencent.mm, rootClass=FrameLayo
+10-12 10:53:47.839 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.tencent.mm, role=UNKNOWN, class=, sensitive=false, windows=active, rootPkg=com.tencent.mm, rootClass=View, chi
+10-12 10:53:47.864 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.tencent.mm, role=UNKNOWN, class=, sensitive=false, windows=active, rootPkg=com.tencent.mm, rootClass=FrameLayo
+10-12 10:53:47.865 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.tencent.mm, role=UNKNOWN, class=, sensitive=false, windows=active, rootPkg=com.tencent.mm, rootClass=View, chi
+10-12 10:53:47.913 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.tencent.mm, role=UNKNOWN, class=, sensitive=false, windows=active, rootPkg=com.xunmeng.pinduoduo, rootClass=Fr
+10-12 10:53:47.914 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.tencent.mm, role=UNKNOWN, class=, sensitive=false, windows=active, rootPkg=com.tencent.mm, rootClass=View, chi
+10-12 10:53:48.035 30429 30429 I CheckoutAccessibilityService: 结算页门禁: NOT_CHECKOUT_PAGE, pkg=com.xunmeng.pinduoduo, role=UNKNOWN, amountSignal=false, actionSignal=false, classSemantic=false, sens
+10-12 10:53:48.563 30429 30429 I CheckoutAccessibilityService: 无障碍事件采样: pkg=com.xunmeng.pinduoduo(eventPkg=com.xunmeng.pinduoduo, rootPkg=com.xunmeng.pinduoduo), type=TYPE_WINDOW_CONTENT_CHANGED,
+10-12 10:53:49.613 30429 30429 I CheckoutAccessibilityService: 无障碍事件采样: pkg=com.xunmeng.pinduoduo(eventPkg=com.xunmeng.pinduoduo, rootPkg=com.xunmeng.pinduoduo), type=TYPE_VIEW_SCROLLED, class=an
+10-12 10:53:50.792 30429 30429 I CheckoutAccessibilityService: 无障碍事件采样: pkg=com.xunmeng.pinduoduo(eventPkg=com.xunmeng.pinduoduo, rootPkg=com.xunmeng.pinduoduo), type=TYPE_WINDOW_CONTENT_CHANGED,
+10-12 10:53:51.092 30429 30429 I CheckoutAccessibilityService: 结算页门禁: NOT_CHECKOUT_PAGE, pkg=com.xunmeng.pinduoduo, role=UNKNOWN, amountSignal=false, actionSignal=false, classSemantic=false, sens
+10-12 10:53:51.435 30429 30429 I CheckoutAccessibilityService: 结算页门禁: ACCEPTED, pkg=com.xunmeng.pinduoduo, role=CHECKOUT, amountSignal=true, actionSignal=true, classSemantic=false, sensitive=fals
+10-12 10:53:51.484 30429 30429 I CheckoutAccessibilityService: 敏感页锁存提前解除: 连续 3 帧明确非敏感购物页, pkg=com.xunmeng.pinduoduo, role=CHECKOUT
+10-12 10:53:51.512 30429 30429 I CheckoutAccessibilityService: 敏感页锁存提前解除: 连续 3 帧明确非敏感购物页, pkg=com.xunmeng.pinduoduo, role=CHECKOUT
+10-12 10:53:51.595 30429 30429 I CheckoutAccessibilityService: 敏感页锁存提前解除: 连续 3 帧明确非敏感购物页, pkg=com.xunmeng.pinduoduo, role=CHECKOUT
+10-12 10:53:51.619 30429 30429 I CheckoutAccessibilityService: 敏感页锁存提前解除: 连续 3 帧明确非敏感购物页, pkg=com.xunmeng.pinduoduo, role=CHECKOUT
+10-12 10:53:51.653 30429 30429 I CheckoutAccessibilityService: 敏感页锁存提前解除: 连续 3 帧明确非敏感购物页, pkg=com.xunmeng.pinduoduo, role=CHECKOUT
+10-12 10:53:51.678 30429 30429 I CheckoutAccessibilityService: 敏感页锁存提前解除: 连续 3 帧明确非敏感购物页, pkg=com.xunmeng.pinduoduo, role=CHECKOUT
+10-12 10:53:51.734 30429 30429 I CheckoutAccessibilityService: 敏感页锁存提前解除: 连续 3 帧明确非敏感购物页, pkg=com.xunmeng.pinduoduo, role=CHECKOUT
+10-12 10:53:51.822 30429 30429 I CheckoutAccessibilityService: 敏感页锁存提前解除: 连续 3 帧明确非敏感购物页, pkg=com.xunmeng.pinduoduo, role=CHECKOUT
+10-12 10:53:51.937 30429 30429 I CheckoutAccessibilityService: 无障碍事件采样: pkg=com.xunmeng.pinduoduo(eventPkg=com.xunmeng.pinduoduo, rootPkg=com.xunmeng.pinduoduo), type=TYPE_WINDOW_CONTENT_CHANGED,
+10-12 10:53:53.400 30429 30429 I CheckoutAccessibilityService: 无障碍事件采样: pkg=com.xunmeng.pinduoduo(eventPkg=com.xunmeng.pinduoduo, rootPkg=com.xunmeng.pinduoduo), type=TYPE_WINDOW_CONTENT_CHANGED,
+10-12 10:53:54.637 30429 30429 I CheckoutAccessibilityService: 无障碍事件采样: pkg=com.xunmeng.pinduoduo(eventPkg=com.xunmeng.pinduoduo, rootPkg=com.xunmeng.pinduoduo), type=TYPE_WINDOW_CONTENT_CHANGED,
+10-12 10:53:55.009 30429 30429 I CheckoutAccessibilityService: 结算页门禁: ACCEPTED, pkg=com.xunmeng.pinduoduo, role=PRODUCT_DETAIL, amountSignal=true, actionSignal=false, classSemantic=false, sensiti
+10-12 10:53:55.054 30429 30429 I CheckoutAccessibilityService: 结算页门禁: NOT_CHECKOUT_PAGE, pkg=com.xunmeng.pinduoduo, role=UNKNOWN, amountSignal=false, actionSignal=false, classSemantic=false, sens
+10-12 10:53:55.445 30429 30429 I CheckoutAccessibilityService: 支付交接诊断: payment=com.eg.android.AlipayGphone, currentStable=false, handoffStable=false, previousShopping=com.xunmeng.pinduoduo, coord
+10-12 10:53:55.538 30429 30429 I CheckoutAccessibilityService: 支付窗口列表(2): 3:com.android.systemui:FrameLayout | 1:com.eg.android.AlipayGphone:FrameLayout
+10-12 10:53:55.539 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.eg.android.AlipayGphone, role=UNKNOWN, class=com.xunmeng.pinduoduo.app_pay.core.payactivity, sensitive=false, 
+10-12 10:53:55.540 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.eg.android.AlipayGphone, role=UNKNOWN, class=com.xunmeng.pinduoduo.app_pay.core.payactivity, sensitive=false, 
+10-12 10:53:55.540 30429 30429 I CheckoutAccessibilityService: 支付结果页截图兜底已禁止: 结算页截图识别链路已停用 pkg=com.eg.android.AlipayGphone, 期间已抑制6次
+10-12 10:53:55.540 30429 30429 I CheckoutAccessibilityService: 支付交接事件补发: stable=false, fingerprint=null, foreground=com.eg.android.AlipayGphone
+10-12 10:53:55.559 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.eg.android.AlipayGphone, role=UNKNOWN, class=androidx.compose.ui.viewinterop.viewfactoryholder, sensitive=fals
+10-12 10:53:55.631 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.eg.android.AlipayGphone, role=UNKNOWN, class=androidx.compose.ui.viewinterop.viewfactoryholder, sensitive=fals
+10-12 10:53:55.635 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.eg.android.AlipayGphone, role=UNKNOWN, class=androidx.compose.ui.viewinterop.viewfactoryholder, sensitive=fals
+10-12 10:53:55.653 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.eg.android.AlipayGphone, role=UNKNOWN, class=androidx.compose.ui.viewinterop.viewfactoryholder, sensitive=fals
+10-12 10:53:55.655 30429 30429 I CheckoutAccessibilityService: 无障碍事件采样: pkg=com.eg.android.AlipayGphone(eventPkg=com.eg.android.AlipayGphone, rootPkg=com.eg.android.AlipayGphone), type=TYPE_WINDO
+10-12 10:53:55.656 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.eg.android.AlipayGphone, role=UNKNOWN, class=android.widget.framelayout, sensitive=false, windows=active, root
+10-12 10:53:55.662 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.eg.android.AlipayGphone, role=UNKNOWN, class=android.widget.framelayout, sensitive=false, windows=active, root
+10-12 10:53:55.663 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.eg.android.AlipayGphone, role=UNKNOWN, class=android.widget.framelayout, sensitive=false, windows=active, root
+10-12 10:53:55.664 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.eg.android.AlipayGphone, role=UNKNOWN, class=android.widget.framelayout, sensitive=false, windows=active, root
+10-12 10:53:55.673 30429 30429 I CheckoutAccessibilityService: 支付窗口列表(2): 3:com.android.systemui:FrameLayout | 1:com.eg.android.AlipayGphone:FrameLayout
+10-12 10:53:55.677 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.eg.android.AlipayGphone, role=UNKNOWN, class=com.alipay.android.msp.ui.widget.miniprogressdialog, sensitive=fa
+10-12 10:53:55.678 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.eg.android.AlipayGphone, role=UNKNOWN, class=com.alipay.android.msp.ui.widget.miniprogressdialog, sensitive=fa
+10-12 10:53:55.679 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.eg.android.AlipayGphone, role=UNKNOWN, class=com.alipay.android.msp.ui.widget.miniprogressdialog, sensitive=fa
+10-12 10:53:55.695 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.eg.android.AlipayGphone, role=UNKNOWN, class=android.widget.imageview, sensitive=false, windows=active, rootPk
+10-12 10:53:55.696 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.eg.android.AlipayGphone, role=UNKNOWN, class=android.widget.imageview, sensitive=false, windows=active, rootPk
+10-12 10:53:56.030 30429 30429 I CheckoutAccessibilityService: 支付窗口列表(2): 3:com.android.systemui:FrameLayout | 1:com.eg.android.AlipayGphone:FrameLayout
+10-12 10:53:56.032 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.eg.android.AlipayGphone, role=UNKNOWN, class=com.alipay.android.msp.ui.views.mspcontaineractivity, sensitive=f
+10-12 10:53:56.034 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.eg.android.AlipayGphone, role=UNKNOWN, class=com.alipay.android.msp.ui.views.mspcontaineractivity, sensitive=f
+10-12 10:53:56.274 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.eg.android.AlipayGphone, role=UNKNOWN, class=androidx.compose.ui.viewinterop.viewfactoryholder, sensitive=fals
+10-12 10:53:56.288 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.eg.android.AlipayGphone, role=UNKNOWN, class=androidx.compose.ui.viewinterop.viewfactoryholder, sensitive=fals
+10-12 10:53:56.820 30429 30429 I CheckoutAccessibilityService: 无障碍事件采样: pkg=com.eg.android.AlipayGphone(eventPkg=com.eg.android.AlipayGphone, rootPkg=com.eg.android.AlipayGphone), type=TYPE_WINDO
+10-12 10:53:56.820 30429 30429 I CheckoutAccessibilityService: 支付交接诊断: payment=com.eg.android.AlipayGphone, currentStable=false, handoffStable=false, previousShopping=null, coordRef=null
+10-12 10:53:56.837 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.eg.android.AlipayGphone, role=UNKNOWN, class=android.widget.framelayout, sensitive=false, windows=active, root
+10-12 10:53:56.847 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.eg.android.AlipayGphone, role=UNKNOWN, class=android.widget.framelayout, sensitive=false, windows=active, root
+10-12 10:53:56.852 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.eg.android.AlipayGphone, role=UNKNOWN, class=android.widget.framelayout, sensitive=false, windows=active, root
+10-12 10:53:56.854 30429 30429 I CheckoutAccessibilityService: 支付窗口列表(2): 3:com.android.systemui:FrameLayout | 1:com.eg.android.AlipayGphone:FrameLayout
+10-12 10:53:56.863 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.eg.android.AlipayGphone, role=UNKNOWN, class=com.alipay.android.msp.ui.views.mspcontaineractivity, sensitive=f
+10-12 10:53:56.867 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.eg.android.AlipayGphone, role=UNKNOWN, class=com.alipay.android.msp.ui.views.mspcontaineractivity, sensitive=f
+10-12 10:53:56.872 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.eg.android.AlipayGphone, role=UNKNOWN, class=com.alipay.android.msp.ui.views.mspcontaineractivity, sensitive=f
+10-12 10:53:57.464 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.eg.android.AlipayGphone, role=UNKNOWN, class=android.widget.linearlayout, sensitive=false, windows=active, roo
+10-12 10:53:57.465 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.eg.android.AlipayGphone, role=UNKNOWN, class=android.widget.linearlayout, sensitive=false, windows=active, roo
+10-12 10:53:57.479 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.eg.android.AlipayGphone, role=UNKNOWN, class=android.widget.framelayout, sensitive=false, windows=active, root
+10-12 10:53:57.491 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.eg.android.AlipayGphone, role=UNKNOWN, class=android.widget.framelayout, sensitive=false, windows=active, root
+10-12 10:53:57.691 30429 30429 I CheckoutAccessibilityService: 支付结果页截图兜底已禁止: 支付包页面为敏感页面，跳过证据提取与截图兜底 pkg=com.eg.android.AlipayGphone, role=UNKNOWN, class=android.widget.framelayout, 期间已抑制73次
+10-12 10:53:57.725 30429 30429 I CheckoutAccessibilityService: 支付窗口列表(4): 3:com.android.systemui:FrameLayout | 3:com.miui.notes:LinearLayout | 1:com.eg.android.AlipayGphone:FrameLayout | 1:com.eg
+10-12 10:53:57.805 30429 30429 I CheckoutAccessibilityService: 支付窗口列表(4): 3:com.android.systemui:FrameLayout | 3:com.miui.notes:LinearLayout | 1:com.eg.android.AlipayGphone:FrameLayout | 1:com.eg
+10-12 10:53:58.237 30429 30429 I CheckoutAccessibilityService: 无障碍事件采样: pkg=com.eg.android.AlipayGphone(eventPkg=com.android.systemui, rootPkg=com.eg.android.AlipayGphone), type=TYPE_WINDOW_STATE
+10-12 10:53:58.237 30429 30429 I CheckoutAccessibilityService: 支付交接诊断: payment=com.eg.android.AlipayGphone, currentStable=false, handoffStable=false, previousShopping=null, coordRef=null
+10-12 10:53:58.240 30429 30429 I CheckoutAccessibilityService: 支付窗口列表(3): 3:com.android.systemui:FrameLayout | 3:com.miui.notes:LinearLayout | 1:com.eg.android.AlipayGphone:FrameLayout
+10-12 10:53:58.788 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.eg.android.AlipayGphone, role=UNKNOWN, class=android.widget.framelayout, sensitive=false, windows=active, root
+10-12 10:53:58.795 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.eg.android.AlipayGphone, role=UNKNOWN, class=android.widget.framelayout, sensitive=false, windows=active, root
+10-12 10:53:58.796 30429 30429 I CheckoutAccessibilityService: 支付结果页截图兜底已禁止: 结算页截图识别链路已停用 pkg=com.eg.android.AlipayGphone, 期间已抑制24次
+10-12 10:53:58.811 30429 30429 I CheckoutAccessibilityService: 支付窗口列表(2): 3:com.android.systemui:FrameLayout | 1:com.eg.android.AlipayGphone:FrameLayout
+10-12 10:53:58.822 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.eg.android.AlipayGphone, role=UNKNOWN, class=com.alipay.android.msp.ui.views.mspcontaineractivity, sensitive=f
+10-12 10:53:58.828 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.eg.android.AlipayGphone, role=UNKNOWN, class=com.alipay.android.msp.ui.views.mspcontaineractivity, sensitive=f
+10-12 10:53:58.832 30429 30429 I CheckoutAccessibilityService: 支付包页面未分类为结果页: pkg=com.eg.android.AlipayGphone, role=UNKNOWN, class=com.alipay.android.msp.ui.views.mspcontaineractivity, sensitive=f
+10-12 10:53:59.834 30429 30429 I CheckoutAccessibilityService: 无障碍事件采样: pkg=com.eg.android.AlipayGphone(eventPkg=com.eg.android.AlipayGphone, rootPkg=com.eg.android.AlipayGphone), type=TYPE_WINDO
+10-12 10:53:59.834 30429 30429 I CheckoutAccessibilityService: 支付交接诊断: payment=com.eg.android.AlipayGphone, currentStable=false, handoffStable=false, previousShopping=null, coordRef=null
+10-12 10:53:59.864 30429 30429 I CheckoutAccessibilityService: 支付结果页解析到证据: 金额=8800分, 状态=SUCCESS, textLength=48
+10-12 10:53:59.874 30429  1044 I CheckoutPaymentMatcher: 孤立支付证据已落待确认: pending=pending-orphan-b, amount=8800, merchant=null, account=default-account-alipay, reason=NO_ACTIVE_SESSION, inserted=true
+10-12 10:53:59.874 30429  1044 I PendingChangeHub: pending变更事件: id=pending-orphan-b, type=expense, amount=8800, source=accessibility, reason=NO_ACTIVE_SESSION, isNew=true
+10-12 10:53:59.884 30429  1044 I PendingReminder: 待确认提醒已发送: id=pending-orphan-b, type=expense, amount=8800, source=accessibility
+10-12 10:53:59.886 30429  1035 I CheckoutAccessibilityService: 支付结果页无关联活跃会话，已转待确认（不回落猜测）
+10-12 10:53:59.887 30429  1035 W CheckoutAccessibilityService: 支付结果页派发跳过: 购买意图协调器不可用
+10-12 10:53:59.887 30429  1035 W CheckoutAccessibilityService: PAYMENT_RESULT_AI_DISPATCH_UNAVAILABLE: 无会话可关联，已由孤儿待确认承载
+10-12 10:53:59.889 30429 30429 I PendingConfirmOverlay: 弹窗门禁判定: id=pending-orphan-b, allowed=false, reason=NO_OVERLAY_PERMISSION(foreground=com.eg.android.AlipayGphone, age=28ms, device=Xiaomi 25
+10-12 10:53:59.889 30429 30429 I PendingConfirmOverlay: 弹窗候选挂起等待非敏感帧: id=pending-orphan-b, sensitive=false, foreground=com.eg.android.AlipayGphone, blockedBy=NO_OVERLAY_PERMISSION(foreground=com.
+10-12 10:53:59.964 30429 30429 D CheckoutAccessibilityService: 支付结果页同一事件已处理，跳过重复解析: bbf46b66bc7b
+10-12 10:54:00.049 30429 30429 I CheckoutAccessibilityService: 支付结果页解析到证据: 金额=8800分, 状态=SUCCESS, textLength=48
+10-12 10:54:00.058 30429  1044 I CheckoutPaymentMatcher: 孤立支付证据判为重复观测(同包同额90秒内)，未新建待确认: pending=pending-orphan-b, incoming=pending-orphan-3, amount=8800, reason=NO_ACTIVE_SESSION
+10-12 10:54:00.059 30429  1035 I CheckoutAccessibilityService: 支付结果页无关联活跃会话，已转待确认（不回落猜测）
+10-12 10:54:00.059 30429  1035 W CheckoutAccessibilityService: 支付结果页派发跳过: 购买意图协调器不可用
+10-12 10:54:00.059 30429  1035 W CheckoutAccessibilityService: PAYMENT_RESULT_AI_DISPATCH_UNAVAILABLE: 无会话可关联，已由孤儿待确认承载
+10-12 10:54:00.166 30429 30429 D CheckoutAccessibilityService: 支付结果页同一事件已处理，跳过重复解析: 5acee7eb00c6
+10-12 10:54:00.563 30429 30429 D CheckoutAccessibilityService: 支付结果页同一事件已处理，跳过重复解析: 5acee7eb00c6
+10-12 10:54:00.563 30429 30429 I CheckoutAccessibilityService: 支付交接事件补发: stable=false, fingerprint=null, foreground=com.eg.android.AlipayGphone
+10-12 10:54:00.597 30429 30429 I CheckoutAccessibilityService: 支付窗口列表(2): 3:com.android.systemui:FrameLayout | 1:com.eg.android.AlipayGphone:FrameLayout
+10-12 10:54:00.692 30429 30429 D CheckoutAccessibilityService: 支付结果页同一事件已处理，跳过重复解析: 5acee7eb00c6
+10-12 10:54:00.719 30429 30429 D CheckoutAccessibilityService: 支付结果页同一事件已处理，跳过重复解析: 5acee7eb00c6
+10-12 10:54:00.729 30429 30429 D CheckoutAccessibilityService: 支付结果页同一事件已处理，跳过重复解析: 5acee7eb00c6
+10-12 10:54:00.759 30429 30429 D CheckoutAccessibilityService: 支付结果页同一事件已处理，跳过重复解析: 5acee7eb00c6
+10-12 10:54:00.787 30429 30429 D CheckoutAccessibilityService: 支付结果页同一事件已处理，跳过重复解析: 5acee7eb00c6
+10-12 10:54:00.819 30429 30429 D CheckoutAccessibilityService: 支付结果页同一事件已处理，跳过重复解析: 5acee7eb00c6
+10-12 10:54:00.836 30429 30429 D CheckoutAccessibilityService: 支付结果页同一事件已处理，跳过重复解析: 5acee7eb00c6
+10-12 10:54:00.837 30429 30429 I CheckoutAccessibilityService: 无障碍事件采样: pkg=com.eg.android.AlipayGphone(eventPkg=com.eg.android.AlipayGphone, rootPkg=com.eg.android.AlipayGphone), type=TYPE_WINDO
+10-12 10:54:00.837 30429 30429 I CheckoutAccessibilityService: 支付交接诊断: payment=com.eg.android.AlipayGphone, currentStable=false, handoffStable=false, previousShopping=null, coordRef=null
+10-12 10:54:00.861 30429 30429 D CheckoutAccessibilityService: 支付结果页同一事件已处理，跳过重复解析: 5acee7eb00c6
+10-12 10:54:00.909 30429 30429 D CheckoutAccessibilityService: 支付结果页同一事件已处理，跳过重复解析: 5acee7eb00c6
+10-12 10:54:03.148 30429 30429 I CheckoutAccessibilityService: 无障碍事件采样: pkg=com.eg.android.AlipayGphone(eventPkg=com.eg.android.AlipayGphone, rootPkg=com.eg.android.AlipayGphone), type=TYPE_WINDO
+10-12 10:54:03.148 30429 30429 I CheckoutAccessibilityService: 支付交接诊断: payment=com.eg.android.AlipayGphone, currentStable=false, handoffStable=false, previousShopping=null, coordRef=null
+10-12 10:54:03.158 30429 30429 I CheckoutAccessibilityService: 支付窗口列表(2): 3:com.android.systemui:FrameLayout | 1:com.eg.android.AlipayGphone:FrameLayout
+10-12 10:54:03.173 30429 30429 D CheckoutAccessibilityService: 支付结果页同一事件已处理，跳过重复解析: 5acee7eb00c6
+10-12 10:54:03.345 30429 30429 D CheckoutAccessibilityService: 支付结果页同一事件已处理，跳过重复解析: 5acee7eb00c6
+10-12 10:54:03.416 30429 30429 D CheckoutAccessibilityService: 支付结果页同一事件已处理，跳过重复解析: 5acee7eb00c6
+10-12 10:54:03.578 30429 30429 I CheckoutAccessibilityService: 结算页门禁: NOT_CHECKOUT_PAGE, pkg=com.xunmeng.pinduoduo, role=UNKNOWN, amountSignal=false, actionSignal=false, classSemantic=false, sens
+10-12 10:54:03.632 30429 30429 I PendingConfirmOverlay: 弹窗候选挂起后放行: id=pending-orphan-b, waitedMs=3744, reason=PASS(age=1ms, foreground=com.xunmeng.pinduoduo)
+10-12 10:54:03.665 30429 30429 I PendingConfirmOverlay: 付款确认弹窗已显示: id=pending-orphan-b, amount=8800, source=accessibility
+10-12 10:54:03.711 30429 30429 I PendingConfirmOverlay: 前台变更: foreground=com.android.systemui, isSelf=false
+10-12 10:54:03.772 30429 30429 I PendingConfirmOverlay: 前台变更: foreground=com.jotbill.app, isSelf=true
+10-12 10:54:04.165 30429 30429 I PendingConfirmOverlay: 付款确认弹窗已上屏确认: id=pending-orphan-b, attached=true
+10-12 10:54:04.177 30429 30429 I CheckoutAccessibilityService: 无障碍事件采样: pkg=com.xunmeng.pinduoduo(eventPkg=com.xunmeng.pinduoduo, rootPkg=com.jotbill.app), type=TYPE_WINDOW_STATE_CHANGED, class=c
+10-12 10:54:04.279 30429 30429 I PendingConfirmOverlay: 前台变更: foreground=com.android.systemui, isSelf=false
+10-12 10:54:05.181 30429 30429 I CheckoutAccessibilityService: 无障碍事件采样: pkg=com.android.systemui(eventPkg=com.android.systemui, rootPkg=com.jotbill.app), type=TYPE_WINDOW_CONTENT_CHANGED, class=a
+10-12 10:54:05.281 30429  1035 I PendingChangeHub: pending变更事件: id=pending-orphan-b, type=expense, amount=8800, source=accessibility, reason=null, isNew=false
+10-12 10:54:05.282 30429  1035 I PendingReminder: 已消除待确认通知: id=pending-orphan-b
+10-12 10:54:05.365 30429 30429 I PendingConfirmOverlay: 前台变更: foreground=com.jotbill.app, isSelf=true
+10-12 10:54:05.381 30429 30429 I PendingConfirmOverlay: 前台变更: foreground=com.android.systemui, isSelf=false
+10-12 10:54:05.466 30429 30429 I PendingConfirmOverlay: 前台变更: foreground=com.jotbill.app, isSelf=true
+10-12 10:54:05.484 30429 30429 I PendingConfirmOverlay: 前台变更: foreground=com.android.systemui, isSelf=false
+10-12 10:54:06.383 30429 30429 I CheckoutAccessibilityService: 无障碍事件采样: pkg=com.android.systemui(eventPkg=com.android.systemui, rootPkg=com.jotbill.app), type=TYPE_WINDOW_STATE_CHANGED, class=and
+10-12 10:54:06.785 30429 30429 I PendingConfirmOverlay: 付款确认弹窗已关闭: reason=SUCCESS
+10-12 10:54:06.822 30429 30429 I CheckoutAccessibilityService: 结算页门禁: NOT_CHECKOUT_PAGE, pkg=com.xunmeng.pinduoduo, role=UNKNOWN, amountSignal=false, actionSignal=false, classSemantic=false, sens
+10-12 10:54:07.428 30429 30429 I CheckoutAccessibilityService: 无障碍事件采样: pkg=com.xunmeng.pinduoduo(eventPkg=com.android.systemui, rootPkg=com.xunmeng.pinduoduo), type=TYPE_WINDOW_CONTENT_CHANGED, 
+10-12 10:54:12.131 30429 30429 I CheckoutAccessibilityService: 无障碍事件采样: pkg=com.xunmeng.pinduoduo(eventPkg=com.android.systemui, rootPkg=com.xunmeng.pinduoduo), type=TYPE_WINDOW_CONTENT_CHANGED, 
+10-12 10:54:12.241 30429 30429 I CheckoutAccessibilityService: 结算页门禁: NOT_CHECKOUT_PAGE, pkg=com.xunmeng.pinduoduo, role=SHOPPING_HOME, amountSignal=true, actionSignal=false, classSemantic=false,
+10-12 10:54:15.446 30429 30429 I CheckoutAccessibilityService: 无障碍事件采样: pkg=com.xunmeng.pinduoduo(eventPkg=com.xunmeng.pinduoduo, rootPkg=com.xunmeng.pinduoduo), type=TYPE_WINDOW_CONTENT_CHANGED,
+10-12 10:54:15.528 30429 30429 I CheckoutAccessibilityService: 结算页门禁: NOT_CHECKOUT_PAGE, pkg=com.xunmeng.pinduoduo, role=SHOPPING_HOME, amountSignal=true, actionSignal=false, classSemantic=false,
+10-12 10:54:16.478 30429 30429 I CheckoutAccessibilityService: 无障碍事件采样: pkg=com.xunmeng.pinduoduo(eventPkg=com.xunmeng.pinduoduo, rootPkg=com.xunmeng.pinduoduo), type=TYPE_WINDOW_CONTENT_CHANGED,
