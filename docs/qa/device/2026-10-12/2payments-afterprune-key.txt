@@ -1,0 +1,16 @@
+﻿10-12 13:39:06.597 27786 27786 I CheckoutAccessibilityService: 支付结果页解析到证据: 金额=10840分, 状态=SUCCESS, textLength=92
+10-12 13:39:06.619 27786 27843 I PendingChangeHub: pending变更事件: id=pending-orphan-3, type=expense, amount=10840, source=accessibility, reason=NO_ACTIVE_SESSION, isNew=true
+10-12 13:39:06.895 27786 27786 I PendingConfirmOverlay: 弹窗门禁判定: id=pending-orphan-3, allowed=false, reason=NO_OVERLAY_PERMISSION(foreground=com.eg.android.AlipayGphone, age=5ms, device=Xiaomi 25128PNA1C sdk=37)
+10-12 13:39:06.895 27786 27786 I PendingConfirmOverlay: 弹窗候选挂起等待非敏感帧: id=pending-orphan-3, sensitive=false, foreground=com.eg.android.AlipayGphone, blockedBy=NO_OVERLAY_PERMISSION(foreground=com.eg.android.AlipayGphone, age=5ms, device=Xiaomi 25128PNA1C sdk=37)
+10-12 13:39:08.008 27786 27786 I PendingConfirmOverlay: 弹窗候选挂起后放行: id=pending-orphan-3, waitedMs=1113, reason=PASS(age=1ms, foreground=com.eg.android.AlipayGphone)
+10-12 13:39:08.040 27786 27786 I PendingConfirmOverlay: 付款确认弹窗已显示: id=pending-orphan-3, amount=10840, source=accessibility
+10-12 13:39:08.539 27786 27786 I PendingConfirmOverlay: 付款确认弹窗已上屏确认: id=pending-orphan-3, attached=true
+10-12 13:39:08.870 27786  5618 I PendingChangeHub: pending变更事件: id=pending-orphan-3, type=expense, amount=10840, source=accessibility, reason=null, isNew=false
+10-12 13:39:10.374 27786 27786 I PendingConfirmOverlay: 付款确认弹窗已关闭: reason=SUCCESS
+10-12 13:39:30.314 27786 27786 I CheckoutAccessibilityService: 支付结果页解析到证据: 金额=6000分, 状态=SUCCESS, textLength=21
+10-12 13:39:30.325 27786 27843 I PendingChangeHub: pending变更事件: id=pending-orphan-8, type=expense, amount=6000, source=accessibility, reason=NO_ACTIVE_SESSION, isNew=true
+10-12 13:39:31.123 27786 27786 I PendingConfirmOverlay: 弹窗门禁判定: id=pending-orphan-8, allowed=true, reason=PASS(age=2ms, foreground=com.tencent.mm)
+10-12 13:39:31.502 27786 27786 I PendingConfirmOverlay: 付款确认弹窗已显示: id=pending-orphan-8, amount=6000, source=accessibility
+10-12 13:39:32.002 27786 27786 I PendingConfirmOverlay: 付款确认弹窗已上屏确认: id=pending-orphan-8, attached=true
+10-12 13:39:32.401 27786  5620 I PendingChangeHub: pending变更事件: id=pending-orphan-8, type=expense, amount=6000, source=accessibility, reason=null, isNew=false
+10-12 13:39:33.905 27786 27786 I PendingConfirmOverlay: 付款确认弹窗已关闭: reason=SUCCESS
