@@ -466,6 +466,18 @@ internal class CheckoutPaymentMatcher(
      * 收款人是个人而非商户，不作为消费证据参与会话匹配；文本解析与截图
      * AI 两条路径识别到同一笔转账时，由确定性 ID（包名+2 分钟桶+金额+收款人）
      * 幂等收敛为一条，避免"同一笔转账出现两个金额"。
+     *
+     * ⚠️ 2026-10-12 修：此前**只插库、从不 [PendingChangeHub.emit]** ——
+     * 待确认中心里能看到这张卡，但付款确认弹窗永远不弹。真机验收要求
+     * "识别到支付成功页就弹出来"，转账同属支付，不能例外。
+     *
+     * ⚠️ 同批修：`sourceType` 原写死 `"accessibility_transfer"`，但
+     * [normalizePaymentEvidenceSourceType] 只接受 `notification` /
+     * `accessibility` / `manual`，该值不在 Native.d.ts 的契约内 ——
+     * ① 弹窗来源文案退到 `else` 分支显示通用句；② 待确认中心
+     * `ReviewScreen.tsx:1161` 的 `SOURCE_LABELS` 无此键，会把原始英文串
+     * 直接显示给用户。转账的业务语义由 `type = "transfer"` 承载，
+     * `sourceType` 描述的是**证据从哪来**，此处本就该是 `accessibility`。
      */
     suspend fun recordPersonalTransfer(
         amountMinor: Long,
@@ -487,25 +499,39 @@ internal class CheckoutPaymentMatcher(
         if (dao.getById(pendingId) != null) {
             return
         }
+        val pending = PendingTransactionEntity(
+            id = pendingId,
+            candidateId = null,
+            sessionId = null,
+            amountMinor = amountMinor,
+            type = "transfer",
+            occurredAt = effectiveOccurredAt,
+            platform = paymentPackage,
+            merchant = recipient,
+            productDescription = null,
+            orderId = null,
+            accountId = null,
+            categoryId = null,
+            conflictReason = null,
+            sourceType = "accessibility",
+            createdAt = now,
+            version = 1
+        )
         database.withTransaction {
-            dao.insertIfAbsent(
-                PendingTransactionEntity(
-                    id = pendingId,
-                    candidateId = null,
-                    sessionId = null,
-                    amountMinor = amountMinor,
-                    type = "transfer",
-                    occurredAt = effectiveOccurredAt,
-                    platform = paymentPackage,
-                    merchant = recipient,
-                    productDescription = null,
-                    orderId = null,
-                    accountId = null,
-                    categoryId = null,
-                    conflictReason = null,
-                    sourceType = "accessibility_transfer",
-                    createdAt = now,
-                    version = 1
+            // emit 与插入放在同一个事务内：弹窗侧按 pendingId 回查该行，
+            // 事务提交前发出等于让弹窗去读一条还不存在的记录。
+            if (dao.insertIfAbsent(pending) == -1L) {
+                return@withTransaction
+            }
+            PendingChangeHub.emit(
+                PendingChangeInfo(
+                    pendingId = pendingId,
+                    type = pending.type,
+                    amountMinor = pending.amountMinor,
+                    sourceType = pending.sourceType,
+                    conflictReason = pending.conflictReason,
+                    occurredAt = pending.occurredAt,
+                    isNew = true
                 )
             )
         }
@@ -703,9 +729,19 @@ internal class CheckoutPaymentMatcher(
                 version = 1
             )
 
+            // ⚠️ 2026-10-12 修两处：
+            //  ① emit 用的 `pendingId` 是 `stableId("pending-orphan", …)`，
+            //     而真正插入的行主键是 `stableId("pending-ambiguous", sessionId, …)`
+            //     —— 弹窗侧按 ID 回查必然落空，指向一条不存在的记录。
+            //  ② 兜底分支 `dao.insertIfAbsent(pending)` 插了行，却因为
+            //     `insertedAmbiguousPending == false` 跳过 emit 直接 return
+            //     —— 落库了、不弹窗。
+            // 现在记录**真实插入的 ID**，只 emit 一条（弹窗同刻只可能有一张，
+            // 其余 Ambiguous 行留给待确认中心），且保证 ID 一定存在。
             if (sessionIds.isNotEmpty()) {
                 val sessionDao = database.checkoutSessionDao()
                 var insertedAmbiguousPending = false
+                var firstInsertedId: String? = null
                 sessionIds
                     .map { it.trim() }
                     .filter { it.isNotBlank() }
@@ -713,40 +749,39 @@ internal class CheckoutPaymentMatcher(
                     .forEach { sessionId ->
                         val session = sessionDao.getById(sessionId) ?: return@forEach
                         if (session.isClosedOrExpired(now)) return@forEach
+                        val ambiguousId = stableId("pending-ambiguous", sessionId, sourceEventKey)
                         val insertResult = dao.insertIfAbsent(
-                            pending.copy(
-                                id = stableId("pending-ambiguous", sessionId, sourceEventKey),
-                                sessionId = sessionId
-                            )
+                            pending.copy(id = ambiguousId, sessionId = sessionId)
                         )
                         if (insertResult != -1L) {
                             insertedAmbiguousPending = true
-                          }
+                            if (firstInsertedId == null) firstInsertedId = ambiguousId
+                        }
                     }
-                  if (!insertedAmbiguousPending) {
-                      dao.insertIfAbsent(pending)
-                  }
-                JotBillLog.i(
-                    "CheckoutPaymentMatcher",
-                    "孤立支付证据已落待确认(并发会话): pending=${pendingId.take(16)}, " +
-                        "amount=${signal.amountMinor}, sessions=${sessionIds.size}, " +
-                        "ambiguous=$insertedAmbiguousPending, reason=$effectiveConflictReason"
-                )
-                if (insertedAmbiguousPending) {
-                    PendingChangeHub.emit(
-                        PendingChangeInfo(
-                            pendingId = pendingId,
-                            type = pending.type,
-                            amountMinor = pending.amountMinor,
-                            sourceType = pending.sourceType,
-                            conflictReason = effectiveConflictReason,
-                            occurredAt = pending.occurredAt,
-                            isNew = true
-                        )
-                    )
+                if (!insertedAmbiguousPending) {
+                    if (dao.insertIfAbsent(pending) != -1L) firstInsertedId = pendingId
                 }
-                return@withTransaction
-            }
+                    JotBillLog.i(
+                        "CheckoutPaymentMatcher",
+                        "孤立支付证据已落待确认(并发会话): pending=${firstInsertedId?.take(16)}, " +
+                            "amount=${signal.amountMinor}, sessions=${sessionIds.size}, " +
+                            "ambiguous=$insertedAmbiguousPending, reason=$effectiveConflictReason"
+                    )
+                    if (firstInsertedId != null) {
+                        PendingChangeHub.emit(
+                            PendingChangeInfo(
+                                pendingId = firstInsertedId,
+                                type = pending.type,
+                                amountMinor = pending.amountMinor,
+                                sourceType = pending.sourceType,
+                                conflictReason = effectiveConflictReason,
+                                occurredAt = pending.occurredAt,
+                                isNew = true
+                            )
+                        )
+                    }
+                    return@withTransaction
+                }
             val inserted = dao.insertIfAbsent(pending)
             JotBillLog.i(
                 "CheckoutPaymentMatcher",

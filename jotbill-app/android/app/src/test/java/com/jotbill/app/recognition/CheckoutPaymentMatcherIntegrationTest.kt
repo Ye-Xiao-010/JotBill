@@ -6,6 +6,8 @@ import androidx.test.core.app.ApplicationProvider
 import com.jotbill.app.data.JotBillDatabase
 import com.jotbill.app.data.entity.PaymentEvidenceEntity
 import com.jotbill.app.data.entity.TransactionCandidateEntity
+import com.jotbill.app.pending.PendingChangeHub
+import com.jotbill.app.pending.PendingChangeInfo
 import com.jotbill.app.pending.isUserAssertedConflictReason
 import kotlinx.coroutines.runBlocking
 import org.junit.After
@@ -54,6 +56,109 @@ class CheckoutPaymentMatcherIntegrationTest {
     @After
     fun tearDown() {
         database.close()
+    }
+
+    // ---------- 契约 N:落待确认必须发事件,否则付款确认弹窗不弹 ----------
+
+    /**
+     * 三条 emit 契约（2026-10-12）。
+     *
+     * 背景：`PendingConfirmOverlayManager` 只订阅 `PendingChangeHub`，
+     * 落库不等于会弹窗 —— 真机验收要求"识别到支付成功页就弹出来"，
+     * 而此前有三条落库路径**只插库不 emit** 或 **emit 的 ID 不存在**。
+     * 这三个用例就是把那条因果链接钉死在单测里，避免再退化。
+     */
+    @Test
+    fun personalTransferEmitsPendingChangeWithInsertedId() = runBlocking {
+        val seen = mutableListOf<PendingChangeInfo>()
+        val listener: (PendingChangeInfo) -> Unit = { seen += it }
+        PendingChangeHub.addListener(listener)
+        try {
+            matcher.recordPersonalTransfer(
+                amountMinor = 5000L,
+                paymentPackage = "com.tencent.mm",
+                recipient = "张三",
+                occurredAt = now
+            )
+            val rows = database.pendingTransactionDao().getPage(10, 0)
+            assertEquals(1, rows.size)
+
+            // 事件必须发出去 —— 这条断了，弹窗永远不会弹
+            assertEquals(1, seen.size)
+            // emit 的 ID 必须等于真正插入的主键 —— 弹窗按 ID 回查该行
+            assertEquals(rows.single().id, seen.single().pendingId)
+            assertEquals("transfer", seen.single().type)
+            assertEquals(5000L, seen.single().amountMinor)
+        } finally {
+            PendingChangeHub.removeListener(listener)
+        }
+    }
+
+    @Test
+    fun personalTransferSourceTypeIsWithinNativeContract() = runBlocking {
+        matcher.recordPersonalTransfer(
+            amountMinor = 5000L,
+            paymentPackage = "com.tencent.mm",
+            recipient = "张三",
+            occurredAt = now
+        )
+        val row = database.pendingTransactionDao().getPage(10, 0).single()
+        // `normalizePaymentEvidenceSourceType` 只认这三个值，且 RN 侧
+        // SOURCE_LABELS 按字面量映射中文 —— 越界值会把原始英文串显示给用户。
+        // 转账的业务语义由 type="transfer" 承载，不该塞进 sourceType。
+        assertTrue(
+            "sourceType=${row.sourceType} 不在 Native.d.ts 契约内",
+            normalizePaymentEvidenceSourceType(row.sourceType) != null
+        )
+        assertEquals("accessibility", row.sourceType)
+    }
+
+    @Test
+    fun personalTransferDuplicateDoesNotEmitTwice() = runBlocking {
+        matcher.recordPersonalTransfer(5000L, "com.tencent.mm", "张三", now)
+        val seen = mutableListOf<PendingChangeInfo>()
+        val listener: (PendingChangeInfo) -> Unit = { seen += it }
+        PendingChangeHub.addListener(listener)
+        try {
+            matcher.recordPersonalTransfer(5000L, "com.tencent.mm", "张三", now)
+            assertEquals(1, database.pendingTransactionDao().getPage(10, 0).size)
+            // 幂等跳过时不得再发事件，否则弹窗会对同一张卡弹两次
+            assertTrue("重复转账发出了多余事件: ${seen.size}", seen.isEmpty())
+        } finally {
+            PendingChangeHub.removeListener(listener)
+        }
+    }
+
+    @Test
+    fun ambiguousOrphanEmitsAnIdThatActuallyExists() = runBlocking {
+        matcher.ensureSession(
+            reference = checkoutReference(),
+            requestKey = CheckoutRequestKey.from(SESSION, PKG, FP_A)
+        )
+        val seen = mutableListOf<PendingChangeInfo>()
+        val listener: (PendingChangeInfo) -> Unit = { seen += it }
+        PendingChangeHub.addListener(listener)
+        try {
+            matcher.recordOrphanPaymentSignal(
+                paymentSignal(),
+                sourceType = "ACCESSIBILITY",
+                conflictReason = "AMBIGUOUS_SESSION_IDS:$SESSION",
+                sessionIds = listOf(SESSION)
+            )
+            val rows = database.pendingTransactionDao().getPage(10, 0)
+            assertEquals(1, rows.size)
+            assertEquals(1, seen.size)
+            // 核心断言：emit 的 ID 必须在库里真实存在。
+            // 修复前这里发的是 stableId("pending-orphan", …)，而插入的是
+            // stableId("pending-ambiguous", sessionId, …) —— 弹窗按 ID 回查必然落空。
+            assertTrue(
+                "emit 的 pendingId=${seen.single().pendingId} 在库中不存在",
+                database.pendingTransactionDao().getById(seen.single().pendingId) != null
+            )
+            assertEquals(rows.single().id, seen.single().pendingId)
+        } finally {
+            PendingChangeHub.removeListener(listener)
+        }
     }
 
     private fun paymentSignal(
