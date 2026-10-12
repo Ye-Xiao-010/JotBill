@@ -151,9 +151,6 @@ class MainApplication : Application(), ReactApplication {
     PendingReminderNotifier.init(this)
     // 付款确认弹窗:订阅待确认创建事件,悬浮权限+非敏感帧门禁通过时就地弹窗
     PendingConfirmOverlayManager.init(this)
-    // 识别能力开关:无障碍服务可能在 RN 进程未启动时被系统拉起,先于任何识别门禁
-    // 把持久值读进内存镜像,避免两处读到不同的开关状态
-    com.jotbill.app.recognition.RecognitionCapabilities.load(this)
     // 预算超支提醒:账单增删改后由 DataModule 触发检查,应用未启动也能发系统通知
     BudgetReminderNotifier.init(this)
     HotUpdateModule.recoverInterruptedSwap(this)

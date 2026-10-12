@@ -1,69 +1,9 @@
-import { NativeEventEmitter, NativeModules } from 'react-native';
-
-export type CheckoutOverlayMode = 'always_on' | 'checkout_only' | 'off';
-
-export type CheckoutOverlayStatus =
-  | 'HIDDEN'
-  | 'READY'
-  | 'CAPTURING'
-  | 'CAPTURED_WAITING_PAYMENT'
-  | 'EXPIRED_RETRY'
-  | 'SENSITIVE'
-  | 'UNAVAILABLE'
-  | 'SERVICE_NOT_CONNECTED';
-
-export interface CheckoutOverlayState {
-  status: CheckoutOverlayStatus;
-  visible: boolean;
-  enabled: boolean;
-  mode: CheckoutOverlayMode;
-  reasonCode?: string | null;
-  shoppingPackage?: string | null;
-  pageFingerprint?: string | null;
-  sessionId?: string | null;
-  snapshotId?: string | null;
-  candidateRevision?: number | null;
-  requiresDisambiguation: boolean;
-}
-
-export interface SnapshotCaptureResult {
-  status:
-    | 'STORED'
-    | 'EXPIRED'
-    | 'REJECTED'
-    | 'UNAVAILABLE'
-    | 'DUPLICATE'
-    | 'CANCELLED'
-    | 'FAILED';
-  sourceReason: 'CHECKOUT_STABLE' | 'MANUAL_CAPTURE';
-  reasonCode: string;
-  sessionId?: string | null;
-  slotId?: string | null;
-  shoppingPackage?: string | null;
-  pageFingerprint?: string | null;
-  snapshotId?: string | null;
-  candidateRevision?: number | null;
-  requiresDisambiguation: boolean;
-}
+import { NativeModules } from 'react-native';
 
 interface RawOverlayModule {
-  getOverlayPermissionStatus(): Promise<'authorized' | 'denied'>;
-  requestOverlayPermission(): Promise<void>;
-  setManualCaptureButtonEnabled(enabled: boolean): Promise<void>;
-  setManualCaptureButtonMode(mode: CheckoutOverlayMode): Promise<void>;
-  getManualCaptureButtonMode(): Promise<CheckoutOverlayMode>;
-  getManualCaptureButtonState(): Promise<CheckoutOverlayState>;
-  requestManualCapture(): Promise<SnapshotCaptureResult>;
   setPendingConfirmPopupEnabled(enabled: boolean): Promise<void>;
   getPendingConfirmPopupEnabled(): Promise<boolean>;
-  setCheckoutCaptureEnabled(enabled: boolean): Promise<void>;
-  getCheckoutCaptureEnabled(): Promise<boolean>;
-  addListener(eventName: string): void;
-  removeListeners(count: number): void;
 }
-
-export const CHECKOUT_CAPTURE_OVERLAY_STATE_EVENT =
-  'onCheckoutCaptureOverlayStateChanged';
 
 function getRawOverlayModule(): RawOverlayModule {
   const module = NativeModules.Overlay as RawOverlayModule | undefined;
@@ -73,35 +13,23 @@ function getRawOverlayModule(): RawOverlayModule {
   return module;
 }
 
+/**
+ * 2026-10-12 精简：截图识别链路已整链删除，本文件随之只剩"付款确认弹窗开关"一个出口。
+ *
+ * 删除的（连同原生侧实现，见 PendingConfirmOverlayManager 同分支提交）：
+ *   · `getOverlayPermissionStatus` / `requestOverlayPermission` —— 手动截图悬浮按钮的
+ *     权限读写。**注意别与 PaymentNotificationModule 的同名方法混淆**：后者服务的是
+ *     通知悬浮窗，仍在 `PaymentNotificationSettings.tsx` 使用，保留未动。
+ *   · `setManualCaptureButtonEnabled` / `setManualCaptureButtonMode` /
+ *     `getManualCaptureButtonMode` / `getManualCaptureButtonState` —— 悬浮按钮三件套。
+ *   · `requestManualCapture` —— 手动触发结算页截图。
+ *   · `setCheckoutCaptureEnabled` / `getCheckoutCaptureEnabled` —— 识别链路开关本身。
+ *     原设置页那张「🛒 结算页识别」卡片已整块移除，开关不再有入口。
+ *   · `addCheckoutCaptureOverlayStateListener` + `CHECKOUT_CAPTURE_OVERLAY_STATE_EVENT`
+ *     —— 状态事件。本文件曾是本模块唯一的 `NativeEventEmitter` 使用点，删掉后
+ *     原生侧的 `addListener` / `removeListeners` 也不再需要，一并移除。
+ */
 export const nativeOverlay = {
-  async getOverlayPermissionStatus(): Promise<'authorized' | 'denied'> {
-    return getRawOverlayModule().getOverlayPermissionStatus();
-  },
-
-  async requestOverlayPermission(): Promise<void> {
-    await getRawOverlayModule().requestOverlayPermission();
-  },
-
-  async setManualCaptureButtonEnabled(enabled: boolean): Promise<void> {
-    await getRawOverlayModule().setManualCaptureButtonEnabled(enabled);
-  },
-
-  async setManualCaptureButtonMode(mode: CheckoutOverlayMode): Promise<void> {
-    await getRawOverlayModule().setManualCaptureButtonMode(mode);
-  },
-
-  async getManualCaptureButtonMode(): Promise<CheckoutOverlayMode> {
-    return getRawOverlayModule().getManualCaptureButtonMode();
-  },
-
-  async getManualCaptureButtonState(): Promise<CheckoutOverlayState> {
-    return getRawOverlayModule().getManualCaptureButtonState();
-  },
-
-  async requestManualCapture(): Promise<SnapshotCaptureResult> {
-    return getRawOverlayModule().requestManualCapture();
-  },
-
   async setPendingConfirmPopupEnabled(enabled: boolean): Promise<void> {
     await getRawOverlayModule().setPendingConfirmPopupEnabled(enabled);
   },
@@ -109,27 +37,6 @@ export const nativeOverlay = {
   async getPendingConfirmPopupEnabled(): Promise<boolean> {
     return getRawOverlayModule().getPendingConfirmPopupEnabled();
   },
-
-  /**
-   * 结算页截图识别链路开关（精简版）。false = 不做稳定帧监测/截图/AI 派发，
-   * 只保留支付结果页文本证据 → 待确认弹窗这条链路。
-   *
-   * 与 setPendingConfirmPopupEnabled 正交：关掉它不会关掉弹窗。
-   */
-  async setCheckoutCaptureEnabled(enabled: boolean): Promise<void> {
-    await getRawOverlayModule().setCheckoutCaptureEnabled(enabled);
-  },
-
-  async getCheckoutCaptureEnabled(): Promise<boolean> {
-    return getRawOverlayModule().getCheckoutCaptureEnabled();
-  },
 };
-
-export function addCheckoutCaptureOverlayStateListener(
-  listener: (state: CheckoutOverlayState) => void,
-): { remove: () => void } {
-  const emitter = new NativeEventEmitter(getRawOverlayModule() as never);
-  return emitter.addListener(CHECKOUT_CAPTURE_OVERLAY_STATE_EVENT, listener);
-}
 
 export type NativeOverlay = typeof nativeOverlay;

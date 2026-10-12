@@ -126,9 +126,6 @@ android {
             signingConfig signingConfigs.debug
             manifestPlaceholders = [usesCleartextTraffic: "true"]
             buildConfigField "String", "SENTRY_DSN", "\"${getSentryDsn("debug")}\""
-            // 精简版真机验收包：默认走精简形态（不开结算页截图 AI 识别）。
-            // 可用 -PleanDefault=false 覆盖，便于 A/B 对比完整版行为。
-            buildConfigField "boolean", "LEAN_DEFAULT", "${project.hasProperty('leanDefault') ? project.property('leanDefault') : 'true'}"
         }
         release {
             signingConfig signingConfigs.release
@@ -137,7 +134,6 @@ android {
             // 发布包禁止明文网络，AI/更新通道必须使用 HTTPS；debug 仍保留本地开发回环能力。
             manifestPlaceholders = [usesCleartextTraffic: "false"]
             buildConfigField "String", "SENTRY_DSN", "\"${getSentryDsn("release")}\""
-            buildConfigField "boolean", "LEAN_DEFAULT", "${project.hasProperty('leanDefault') ? project.property('leanDefault') : 'true'}"
             // 真机验证专用开关：允许 adb run-as 读取应用私有数据（数据库导出/诊断）。
             // 仓库默认关闭；本地诊断构建时在 ~/.gradle/gradle.properties 设置
             // enableReleaseDebuggable=true 后重打 release 包，勿在正式发布时开启。
