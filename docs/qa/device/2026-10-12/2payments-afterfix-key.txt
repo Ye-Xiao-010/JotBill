@@ -1,0 +1,17 @@
+﻿10-12 11:30:37.312 12969 12969 I CheckoutAccessibilityService: 支付结果页解析到证据: 金额=5900分, 状态=SUCCESS, textLength=48
+10-12 11:30:37.326 12969 13131 I PendingChangeHub: pending变更事件: id=pending-orphan-6, type=expense, amount=5900, source=accessibility, reason=NO_ACTIVE_SESSION, isNew=true
+10-12 11:30:37.338 12969 12969 I PendingConfirmOverlay: 弹窗门禁判定: id=pending-orphan-6, allowed=false, reason=NO_OVERLAY_PERMISSION(foreground=com.eg.android.AlipayGphone, age=28ms, device=Xiao
+10-12 11:30:37.338 12969 12969 I PendingConfirmOverlay: 弹窗候选挂起等待非敏感帧: id=pending-orphan-6, sensitive=false, foreground=com.eg.android.AlipayGphone, blockedBy=NO_OVERLAY_PERMISSION(foreground
+10-12 11:30:41.368 12969 12969 I PendingConfirmOverlay: 弹窗候选挂起后放行: id=pending-orphan-6, waitedMs=4031, reason=PASS(age=0ms, foreground=com.xunmeng.pinduoduo)
+10-12 11:30:41.467 12969 12969 I PendingConfirmOverlay: 付款确认弹窗已显示: id=pending-orphan-6, amount=5900, source=accessibility
+10-12 11:30:42.513 12969 13152 I PendingChangeHub: pending变更事件: id=pending-orphan-6, type=expense, amount=5900, source=accessibility, reason=null, isNew=false
+10-12 11:30:44.016 12969 12969 I PendingConfirmOverlay: 付款确认弹窗已关闭: reason=SUCCESS
+10-12 11:30:57.217 12969 12969 I CheckoutAccessibilityService: 支付结果页解析到证据: 金额=8807分, 状态=SUCCESS, textLength=21
+10-12 11:30:57.228 12969 13024 I PendingChangeHub: pending变更事件: id=pending-orphan-d, type=expense, amount=8807, source=accessibility, reason=NO_ACTIVE_SESSION, isNew=true
+10-12 11:30:57.478 12969 12969 I PendingConfirmOverlay: 弹窗门禁判定: id=pending-orphan-d, allowed=true, reason=PASS(age=2ms, foreground=com.tencent.mm)
+10-12 11:30:57.580 12969 12969 I PendingConfirmOverlay: 付款确认弹窗已显示: id=pending-orphan-d, amount=8807, source=accessibility
+10-12 11:30:58.539 12969 13021 I PendingChangeHub: pending变更事件: id=pending-orphan-d, type=expense, amount=8807, source=accessibility, reason=null, isNew=false
+10-12 11:31:00.041 12969 12969 I PendingConfirmOverlay: 付款确认弹窗已关闭: reason=SUCCESS
+10-12 11:31:00.123 12969 12969 I CheckoutAccessibilityService: 支付结果页解析到证据: 金额=8807分, 状态=SUCCESS, textLength=21
+10-12 11:31:00.132 12969 13026 I PendingChangeHub: pending变更事件: id=pending-orphan-6, type=expense, amount=8807, source=accessibility, reason=SUSPECTED_DUPLICATE, isNew=true
+10-12 11:31:00.138 12969 12969 I PendingConfirmOverlay: 弹窗跳过: DEDUP_WINDOW, id=pending-orphan-6
