@@ -896,15 +896,12 @@ class CheckoutAccessibilityService : AccessibilityService() {
             } else {
                 handoffStableCheckout = null
                 handoffForegroundPackage = null
-                // 前台已离开白名单购物/支付应用（可能是本应用、桌面、其它任意应用）。
-                // 这是弹窗「前台是本应用时不弹」守卫**唯一**能拿到真实包名的位置 ——
-                // 该守卫此前是死代码：lastForegroundPackage 只由观察帧喂入，而观察帧
-                // 只在白名单包上产生，本应用包名永远进不去，导致切回本应用后弹窗
-                // 照样盖在我们的界面上（2026-10-10 真机现象）。
-                //
-                // 放在这里而不是 `onObservationState`：那个入口会顺带刷新观察帧时间戳，
-                // 把陈旧帧伪装成新鲜帧，反而放松 30 秒新鲜度门禁。
-                PendingConfirmOverlayManager.onForegroundChanged(shoppingPackage)
+                // 2026-10-12：此处原有的
+                // `PendingConfirmOverlayManager.onForegroundChanged(shoppingPackage)`
+                // 已随该方法一并回退。它把状态栏/输入法/桌面事件当成"前台变更"喂入，
+                // 真机实测每次点屏幕都会击穿弹窗的"前台是本应用时不弹"守卫
+                // （证据见 docs/qa/device/2026-10-12/ 与 PendingConfirmOverlayManager
+                // 同文件处的回退说明）。本分支不再向弹窗侧投递任何数据。
             }
             lastWindowPackage = null
             lastWindowClass = null

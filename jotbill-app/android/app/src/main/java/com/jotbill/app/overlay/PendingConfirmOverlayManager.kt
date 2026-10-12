@@ -113,17 +113,67 @@ internal object PendingConfirmOverlayManager {
     /** @see waitingCandidate */
     private var candidateExpiryRunnable: Runnable? = null
 
+    /**
+     * 已过策略门禁、正在读行 / 准备上屏的候选。**仅主线程读写**。
+     *
+     * **为什么必须有它（2026-10-12 修）**：[waitingCandidate] 一个字段被同时当作
+     * "挂起等待非敏感帧的存储"和"防重入的守卫"用，而它会在 [showCandidate] 之前
+     * 就被清空；[showCandidate] 内部又要跨一次协程（读库 + `mainHandler.post`），
+     * 期间 `overlayView` 也还是 null（它在 [displayOverlay] 里 `addView` 之后才赋值）。
+     *
+     * 于是窗口期内**两道守卫同时为空**：
+     * ```
+     *   主线程 M1: maybeShowCandidate(#1) → 守卫过 → showCandidate(#1) → 进 IO
+     *   主线程 M2: maybeShowCandidate(#2) → 守卫**仍然**过（两者都是 null）→ 进 IO
+     *   主线程 D1: displayOverlay(#1) → addView → overlayView = view1
+     *   主线程 D2: displayOverlay(#2) → addView → overlayView = view2   ← view1 成了孤儿
+     * ```
+     * [dismissInternal] 只移除 `overlayView` 指向的那一个 ⇒ view1 作为
+     * `MATCH_PARENT` + `FLAG_LAYOUT_IN_SCREEN` 的全屏半透明遮罩**永久残留**，
+     * 用户点不到任何东西，只能杀进程。
+     *
+     * 真实触发条件较窄（需要两条 merchant|amount 不同的 pending 在毫秒级内到达），
+     * 但故障后果是不可恢复的，属于不能带上线的缺陷。
+     * 本字段在 [maybeShowCandidate] / [maybeShowPendingCandidate] 里**占位**，
+     * 在 [showCandidate] 回到主线程时释放。
+     */
+    private var inFlightCandidate: PromptCandidate? = null
+
     private lateinit var prefs: SharedPreferences
 
     /**
- * 策略运行状态：去重键 → 最近弹窗时间；滑动窗口内的弹窗时间戳。
+     * 策略运行状态：去重键 → 最近弹窗时间；滑动窗口内的弹窗时间戳。
      *
      * **仅主线程读写** —— HashMap 非线程安全，并发写可损坏内部结构导致去重永久失效
-     * （弹窗无限轰炸）。[onPendingChange] 的决策 IO 协程只读副本（`.toMap()`），
-     * 写入一律 `mainHandler.post` 回主线程。
+     * （弹窗无限轰炸）。写入一律 `mainHandler.post` 回主线程；
+     * **读取必须走 [snapshotPolicyState]**，不得在 IO 协程里直接迭代这两个集合。
+     *
+     * ⚠️ 此前 [onPendingChange] 的决策 IO 协程写的是 `recentDedupKeys.toMap()` /
+     * `recentPromptTimes.toList()`，并被当作"安全副本"注释了十余行。**那个注释是错的**：
+     * `.toMap()` / `.toList()` 是**遍历**，不是原子快照。`ArrayList.toList()` 会读
+     * `modCount` 与迭代器的 `cursor`，并发 `+=` 会让它抛
+     * `ConcurrentModificationException`；`HashMap.toMap()` 在并发 `put` 触发扩容时
+     * 同样会抛，甚至可能读到扩容中的半成品 table。本对象是单例，`onPendingChange`
+     * 每来一条 pending 就 `scope.launch` 一个 IO 协程 —— **两笔支付间隔几十毫秒就足以
+     * 命中**，而这里抛出的异常在 `SupervisorJob` 且无 `CoroutineExceptionHandler`
+     * 的协程里会一路冒泡到默认处理器，**直接杀掉进程**。
+     *
+     * 修法：决策所需的快照在主线程取（见 [snapshotPolicyState]），整条
+     * `evaluate` 调用一起挪回主线程 —— 它是纯内存计算（见 [PendingPromptPolicy]），
+     * 不碰数据库，不存在必须离开主线程的理由。
      */
     private val recentDedupKeys = HashMap<String, Long>()
     private val recentPromptTimes = mutableListOf<Long>()
+
+    /**
+     * 供 [PendingPromptPolicy.evaluate] 使用的去重/频控快照。**仅主线程调用**，
+     * 调用点位于 [onPendingChange] 里 `scope.launch` **之前**。
+     *
+     * 返回的两份集合都是新建的独立副本，与本对象内的集合不再共享结构，
+     * 因此后续持有它们跨越协程边界也不会与主线程的写入产生结构性竞争。
+     */
+    private fun snapshotPolicyState(): Pair<Map<String, Long>, List<Long>> =
+        recentDedupKeys.toMap() to recentPromptTimes.toList()
 
     /** 当前弹窗的选中状态（仅主线程读写）。 */
     private var selectedCategory: CategoryEntity? = null
@@ -180,54 +230,38 @@ internal object PendingConfirmOverlayManager {
         mainHandler.post { maybeShowPendingCandidate() }
     }
 
-    /**
-     * 前台包名变更喂入；**只**更新 [lastForegroundPackage]，不碰观察帧的新鲜度与敏感判定。
-     *
-     * 由 [com.jotbill.app.recognition.CheckoutAccessibilityService] 在判定"前台已离开
-     * 白名单购物/支付应用"（即本应用、桌面或其它任意应用）时调用。
-     *
-     * ## 为什么不复用 [onObservationState]
-     *
-     * 那个方法会把 [lastObservationAt] 刷成当前时刻，等于把一条**陈旧的**观察帧
-     * 伪装成新鲜的 —— 而 30 秒新鲜度门禁恰恰靠这个时间戳挡掉超龄判定。用户切回
-     * 本应用时若走这条入口，残留的支付页帧会被当成"刚刚观察过"，反而让本不该弹的
-     * 弹窗更容易放行。两个语义的字段必须分开喂。
-     *
-     * ## 动机（2026-10-10）
-     *
-     * [evaluateGate] 里"前台是本应用时不弹"这条守卫此前是**死代码**：
-     * [lastForegroundPackage] 只在 [onObservationState] 里更新，而全仓只有两处调用
-     * （购物包分支 [CheckoutAccessibilityService:1048] 与支付包分支 [:1688]），
-     * 传入的包名分别被 8 个购物包与两个支付包的白名单锁死 —— **本应用包名永远
-     * 喂不进来**，那个分支恒为假。
-     *
-     * 后果有两层：① 用户切回本应用后弹窗照样盖在我们的界面上，与守卫的设计意图
-     * （"应用内待确认中心已覆盖该场景"）正好相反；② 弹窗因此**并不绑定在支付
-     * 成功页上**，它只绑定"最近 30 秒内有过一帧非敏感观察"—— 而 L1 验收要的
-     * 正是"弹窗出现在支付成功页"，当前实现没有任何机制保证这一点。
-     *
-     * 空包名一律忽略：[CheckoutAccessibilityService.resolveEffectiveShoppingPackage]
-     * 在事件包名为空且活动窗口不可读时可能回落到空串，那不是"前台变成了空"。
-     *
-     * 重复喂入同一包名不打日志：本入口由无障碍事件驱动，切换应用期间事件密集。
-     */
-    fun onForegroundChanged(foregroundPackage: String?) {
-        if (foregroundPackage.isNullOrBlank()) {
-            return
-        }
-        val changed = lastForegroundPackage != foregroundPackage
-        lastForegroundPackage = foregroundPackage
-        if (changed) {
-            JotBillLog.i(
-                TAG,
-                "前台变更: foreground=$foregroundPackage, " +
-                    "isSelf=${foregroundPackage == appContext?.packageName}"
-            )
-        }
-        // 前台变了，挂起的候选需要按新前台重评一次（可能从"挡住"变为"可弹"，
-        // 也可能相反）。waitingCandidate 为空时该调用立即返回，开销可忽略。
-        mainHandler.post { maybeShowPendingCandidate() }
-    }
+    // ────────────────────────────────────────────────────────────────────────
+    // 2026-10-12 回退：原 onForegroundChanged() 已删除。
+    //
+    // 它是为修复"前台是本应用时不弹"这条死守卫而加的（守卫见 [evaluateGate]）：
+    // 该守卫读 lastForegroundPackage，而后者此前只由 [onObservationState] 喂入，
+    // 喂入方被白名单锁死，本应用包名永远进不去。
+    //
+    // **真机实测证明这个修法是错的**（2026-10-12，见 docs/qa/device/2026-10-12/）：
+    //   10:16:39.331  前台变更: foreground=com.android.systemui, isSelf=false
+    //   10:16:40.329  前台变更: foreground=com.jotbill.app,     isSelf=true
+    //   10:16:43.340  前台变更: foreground=com.android.systemui, isSelf=false  ← 击穿
+    //   10:16:43.913  前台变更: foreground=com.jotbill.app,     isSelf=true
+    //   （此后在 10:53:43 / 10:54:03 的两笔支付中重复出现同一模式）
+    //
+    // 原因：入口只接受"离开白名单购物/支付应用"的事件，而状态栏、输入法、
+    // 桌面、通知下拉全都会产生这类事件。resolveEffectiveShoppingPackage 对它们
+    // 一律回落到 eventPackage，于是每次点屏幕都会把 lastForegroundPackage 从
+    // com.jotbill.app 覆盖成 com.android.systemui 之类的值，守卫随之失效。
+    // 真机 logcat 里这类事件在用户操作期间持续高频出现（MIUI 状态栏噪声）。
+    //
+    // **为什么整条回退而不是加白名单过滤**：
+    //   ① SYSTEM_UI_PACKAGES 本身就漏（缺 GMS 输入法 com.google.android.inputmethod.latin、
+    //      MIUI 桌面 com.miui.home、视频通话悬浮窗等），靠"列举不是自己"必然继续漏；
+    //   ② 真正的正解是读真实前台包名，而两条可行路径都更贵
+    //      （UsageStatsManager 需特殊权限；ActivityManager.getRunningAppProcesses
+    //        自 5.1 起对第三方无效），rootInActiveWindow 同样会被 systemui 事件污染；
+    //   ③ 而这条守卫本身**不是当前症状的成因** —— 实测两笔支付的弹窗门禁分别是
+    //      PASS(微信) 与 NO_OVERLAY_PERMISSION(支付宝)，都与"前台是不是本应用"无关。
+    //
+    // 该守卫连同其数据来源一起保持现状（仍是死代码），留待与"弹窗绑定到支付成功页"
+    // 这个更大的问题一并重做。
+    // ────────────────────────────────────────────────────────────────────────
 
     private fun onPendingChangeFromHub(info: PendingChangeInfo) {
         mainHandler.post { onPendingChange(info) }
@@ -284,45 +318,46 @@ internal object PendingConfirmOverlayManager {
     private fun onPendingChange(info: PendingChangeInfo) {
         val context = appContext ?: return
         val db = database ?: return
-        if (overlayView != null || waitingCandidate != null) {
-            // 已有弹窗或挂起候选：不叠加（去重由 policy 的窗口键兜底跨笔场景）。
+        if (overlayView != null || waitingCandidate != null || inFlightCandidate != null) {
+            // 已有弹窗 / 挂起候选 / 在途上屏：不叠加
+            // （去重由 policy 的窗口键兜底跨笔场景）。
             return
         }
         scope.launch {
             val pendingRow = readPendingRow(db, info.pendingId) ?: return@launch
-            val decision = PendingPromptPolicy.evaluate(
-                info = info,
-                merchant = pendingRow.merchant,
-                enabled = isEnabled(context),
-                now = System.currentTimeMillis(),
-                recentDedupKeys = recentDedupKeys.toMap(),
-                recentPromptTimes = recentPromptTimes.toList()
-            )
-            when (decision) {
-                is PendingPromptPolicy.Decision.Skip -> {
-                    JotBillLog.i(TAG, "弹窗跳过: ${decision.reason.wireValue}, id=${info.pendingId.take(16)}")
-                }
+            // ⚠️ 必须回主线程执行 evaluate：它要读 [recentDedupKeys] / [recentPromptTimes]
+            // 两个"仅主线程"集合。此前在 IO 协程里就地 `.toMap()` / `.toList()`，
+            // 而这两个方法是遍历不是原子快照 —— 并发 `put` / `+=` 会抛
+            // ConcurrentModificationException，在无 handler 的 SupervisorJob 协程里
+            // 直接杀掉进程（详见 [recentDedupKeys] 的注释）。
+            // evaluate 是纯内存计算（不碰数据库），移回主线程无任何代价。
+            //
+            // 同时保证：快照、决策、recordPrompted、maybeShowCandidate 四步在**同一个
+            // 主线程任务内**完成，不会出现"拿旧快照决策、用新表记录"的时间错位。
+            mainHandler.post {
+                val (dedupSnapshot, promptSnapshot) = snapshotPolicyState()
+                val decision = PendingPromptPolicy.evaluate(
+                    info = info,
+                    merchant = pendingRow.merchant,
+                    enabled = isEnabled(context),
+                    now = System.currentTimeMillis(),
+                    recentDedupKeys = dedupSnapshot,
+                    recentPromptTimes = promptSnapshot
+                )
+                when (decision) {
+                    is PendingPromptPolicy.Decision.Skip -> {
+                        JotBillLog.i(
+                            TAG,
+                            "弹窗跳过: ${decision.reason.wireValue}, id=${info.pendingId.take(16)}"
+                        )
+                    }
 
-                is PendingPromptPolicy.Decision.Prompt -> {
-                    // ⚠️ 必须回主线程：recordPrompted / maybeShowCandidate 读写的是
-                    // 一组"仅主线程"字段（overlayView、waitingCandidate、
-                    // candidateExpiryRunnable、recentDedupKeys、recentPromptTimes），
-                    // 而本协程跑在 Dispatchers.IO 上。直接在 IO 线程调用会造成：
-                    // ① 两条并发 pending 各自通过 :218 与 :260 的双重守卫
-                    //    （守卫之间的状态变更在 IO 线程，主线程看不见），
-                    //    两次 displayOverlay → 两次 windowManager.addView，
-                    //    而 dismissInternal 只移除 overlayView 指向的最后一个视图
-                    //    ⇒ 第一个系统窗口永久残留、无法关闭；
-                    // ② waitingCandidate 非 volatile ⇒ 主线程读不到 IO 线程的写，
-                    //    候选丢失（弹窗不出现）或留下永不触发的僵尸超时 runnable。
-                    // recordPrompted 同样必须与守卫在同一线程，否则去重表
-                    // 会在 IO 线程被并发修改（HashMap 非线程安全，可损坏内部结构）。
-                    val candidate = PromptCandidate(
-                        pendingId = info.pendingId,
-                        dedupKey = decision.dedupKey,
-                        createdAt = System.currentTimeMillis()
-                    )
-                    mainHandler.post {
+                    is PendingPromptPolicy.Decision.Prompt -> {
+                        val candidate = PromptCandidate(
+                            pendingId = info.pendingId,
+                            dedupKey = decision.dedupKey,
+                            createdAt = System.currentTimeMillis()
+                        )
                         recordPrompted(decision.dedupKey, candidate.createdAt)
                         maybeShowCandidate(candidate)
                     }
@@ -342,7 +377,7 @@ internal object PendingConfirmOverlayManager {
 
     /** 主线程：尝试立即显示候选；观察状态不可信时挂起等待非敏感帧。 */
     private fun maybeShowCandidate(candidate: PromptCandidate) {
-        if (overlayView != null || waitingCandidate != null) {
+        if (overlayView != null || waitingCandidate != null || inFlightCandidate != null) {
             return
         }
         val gate = evaluateGate()
@@ -354,6 +389,8 @@ internal object PendingConfirmOverlayManager {
                 "reason=${gate.reason}"
         )
         if (gate.allowed) {
+            // 先占位再走异步：见 [inFlightCandidate] 的注释。
+            inFlightCandidate = candidate
             showCandidate(candidate)
             return
         }
@@ -379,6 +416,8 @@ internal object PendingConfirmOverlayManager {
         val candidate = waitingCandidate ?: return
         if (System.currentTimeMillis() - candidate.createdAt > PendingPromptPolicy.CANDIDATE_TTL_MILLIS) {
             waitingCandidate = null
+            candidateExpiryRunnable?.let(mainHandler::removeCallbacks)
+            candidateExpiryRunnable = null
             return
         }
         val gate = evaluateGate()
@@ -392,6 +431,7 @@ internal object PendingConfirmOverlayManager {
                 "弹窗候选挂起后放行: id=${candidate.pendingId.take(16)}, waitedMs=" +
                     "${System.currentTimeMillis() - candidate.createdAt}, reason=${gate.reason}"
             )
+            inFlightCandidate = candidate
             showCandidate(candidate)
         }
     }
@@ -464,6 +504,7 @@ internal object PendingConfirmOverlayManager {
     private fun showCandidate(candidate: PromptCandidate) {
         val context = appContext
         if (context == null) {
+            releaseInFlight(candidate)
             JotBillLog.w(
                 TAG,
                 "弹窗放弃: 应用上下文未初始化, id=${candidate.pendingId.take(16)}"
@@ -472,6 +513,7 @@ internal object PendingConfirmOverlayManager {
         }
         val db = database
         if (db == null) {
+            releaseInFlight(candidate)
             JotBillLog.w(
                 TAG,
                 "弹窗放弃: 数据库不可用, id=${candidate.pendingId.take(16)}"
@@ -480,23 +522,41 @@ internal object PendingConfirmOverlayManager {
         }
         scope.launch {
             val pendingRow = readPendingRow(db, candidate.pendingId)
-            if (pendingRow == null) {
-                JotBillLog.w(
-                    TAG,
-                    "弹窗放弃: 预读待确认为空(事务未提交或行已被处理), id=${candidate.pendingId.take(16)}"
-                )
-                return@launch
+            // 行内容复核与占位释放在**同一个主线程任务**内完成，中间不留窗口：
+            // 先做 async 读、再 post 释放，会让 inFlightCandidate 在读行期间失效，
+            // 防重入守卫重新出现空洞。
+            mainHandler.post {
+                if (inFlightCandidate !== candidate) {
+                    // 已被 dismissInternal / setEnabled(false) 作废。读行期间用户
+                    // 关掉了弹窗或停用了功能，此时不得再上屏。
+                    return@post
+                }
+                inFlightCandidate = null
+                if (pendingRow == null) {
+                    JotBillLog.w(
+                        TAG,
+                        "弹窗放弃: 预读待确认为空(事务未提交或行已被处理), " +
+                            "id=${candidate.pendingId.take(16)}"
+                    )
+                    return@post
+                }
+                if (pendingRow.status != PendingTransactionEntity.STATUS_PENDING) {
+                    JotBillLog.i(
+                        TAG,
+                        "弹窗放弃: 待确认已被其他入口处理, id=${candidate.pendingId.take(16)}, " +
+                            "status=${pendingRow.status}"
+                    )
+                    return@post
+                }
+                displayOverlay(pendingRow)
             }
-            // 行内容复核：事件到达后可能已被其他入口确认/忽略
-            if (pendingRow.status != PendingTransactionEntity.STATUS_PENDING) {
-                JotBillLog.i(
-                    TAG,
-                    "弹窗放弃: 待确认已被其他入口处理, id=${candidate.pendingId.take(16)}, " +
-                        "status=${pendingRow.status}"
-                )
-                return@launch
-            }
-            mainHandler.post { displayOverlay(pendingRow) }
+        }
+    }
+
+    /** 释放在途占位；仅主线程调用。 */
+    private fun releaseInFlight(candidate: PromptCandidate) {
+        if (inFlightCandidate === candidate) {
+            inFlightCandidate = null
         }
     }
 
@@ -504,6 +564,18 @@ internal object PendingConfirmOverlayManager {
         val context = appContext ?: return
         if (!hasOverlayPermission(context)) {
             JotBillLog.i(TAG, "无悬浮窗权限,弹窗放弃(通知兜底)")
+            return
+        }
+        // 提交点复核：[displayOverlay] 是唯一给 overlayView 赋值的地方，也是 addView
+        // 的实际发起处。走到这里之前经过了读库协程与一次主线程投递，
+        // 期间可能已有另一张卡上屏（见 [inFlightCandidate] 的注释）。
+        // 这里再挡一次：宁可这一笔少弹一次，也不能产生一个关不掉的全屏遮罩。
+        if (overlayView != null) {
+            JotBillLog.w(
+                TAG,
+                "弹窗放弃: 已有弹窗在屏,拒绝重复上屏: id=${pendingRow.id.take(16)}, " +
+                    "待显示=${pendingRow.id.take(8)}, 在屏=${displayedPendingId?.take(8)}"
+            )
             return
         }
         try {
@@ -1018,6 +1090,10 @@ internal object PendingConfirmOverlayManager {
             waitingCandidate = null
             candidateExpiryRunnable?.let(mainHandler::removeCallbacks)
             candidateExpiryRunnable = null
+            // 在途候选一并作废：否则读行协程回来后仍会通过 [showCandidate] 的
+            // `inFlightCandidate !== candidate` 检查并补弹一张 —— 用户刚点的"关闭"
+            // 会表现为"关了又冒出来"（见 [inFlightCandidate]）。
+            inFlightCandidate = null
             JotBillLog.i(TAG, "付款确认弹窗已关闭: reason=$reason")
         }
     }
