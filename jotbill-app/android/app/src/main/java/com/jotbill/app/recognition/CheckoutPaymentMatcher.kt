@@ -3,6 +3,7 @@ package com.jotbill.app.recognition
 import androidx.room.withTransaction
 import com.jotbill.app.pending.PendingChangeHub
 import com.jotbill.app.pending.PendingChangeInfo
+import com.jotbill.app.pending.RecentPaymentCooldown
 import com.jotbill.app.data.CreateBillOutcome
 import com.jotbill.app.data.JotBillDatabase
 import com.jotbill.app.data.LedgerRepository
@@ -591,6 +592,24 @@ internal class CheckoutPaymentMatcher(
                 )
                 return@withTransaction
             }
+            // 同额支付刚被处理过（确认入账/忽略）⇒ 用户多半还停在同一个结果页，
+            // 本帧是同一笔的重复观测。不建卡、不 emit（见 [RecentPaymentCooldown]
+            // 的完整失效分析）。必须早于下面三道既有去重：它们分别依赖
+            // sourceEventKey 不跨桶、内存事件记忆、以及**仍然存活的** pending 行，
+            // 而消费之后这三者都不成立。
+            val cooldownRemaining = RecentPaymentCooldown.cooldownRemaining(
+                paymentPackage = signal.paymentPackage,
+                amountMinor = signal.amountMinor,
+                now = now
+            )
+            if (cooldownRemaining != null) {
+                JotBillLog.i(
+                    "CheckoutPaymentMatcher",
+                    "支付结果页重复观测已抑制(该笔刚被处理): pkg=${signal.paymentPackage}, " +
+                        "amount=${signal.amountMinor}, 剩余冷却=${cooldownRemaining}ms"
+                )
+                return@withTransaction
+            }
             val sourceEventKey = sourceEventKey(signal)
             val pendingId = stableId("pending-orphan", sourceEventKey)
             val dao = database.pendingTransactionDao()
@@ -768,6 +787,11 @@ internal class CheckoutPaymentMatcher(
                             "ambiguous=$insertedAmbiguousPending, reason=$effectiveConflictReason"
                     )
                     if (firstInsertedId != null) {
+                        RecentPaymentCooldown.rememberCard(
+                            pendingId = firstInsertedId,
+                            paymentPackage = signal.paymentPackage,
+                            amountMinor = signal.amountMinor
+                        )
                         PendingChangeHub.emit(
                             PendingChangeInfo(
                                 pendingId = firstInsertedId,
@@ -791,6 +815,13 @@ internal class CheckoutPaymentMatcher(
                     "inserted=${inserted != -1L}"
             )
             if (inserted != -1L) {
+                // 必须在 emit 之前登记：emit 是同步的，监听方可能在同一栈上立刻
+                // 走到"确认入账"，那时若还没登记就查不到冷却键（见 [RecentPaymentCooldown]）。
+                RecentPaymentCooldown.rememberCard(
+                    pendingId = pendingId,
+                    paymentPackage = signal.paymentPackage,
+                    amountMinor = signal.amountMinor
+                )
                 PendingChangeHub.emit(
                     PendingChangeInfo(
                         pendingId = pendingId,
