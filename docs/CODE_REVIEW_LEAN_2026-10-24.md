@@ -707,3 +707,33 @@ eslint 对 6 个改动文件检查，无新增错误（2 个 error 为 Dashboard
 测试报告：233 / 0 失败 / 0 忽略（228 基线 + 5 条新增：哈希区分力 ×2 + 确认广播 ×3）
 eslint（3 个 RN 改动文件）：0 error（3 个既有 no-void 警告）
 ```
+
+---
+
+## 十八、P2-5 落地：支付结果页重扫兜底（2026-10-24 晚）
+
+§十五遗留项 P2-5（"结果页无轮询兜底，完全依赖无障碍事件驱动"）按 §七 修复顺序 #6 的建议实现。
+
+### 设计
+
+| 项 | 内容 |
+|---|---|
+| 触发 | `scanPaymentResultCore` 每帧**无证据产出**（含空树帧）即排一次重扫；Success/转账/幂等命中路径提前 return 不排 |
+| 节奏 | 1s 间隔 × 上限 8 次；**任一真实事件到达即重置预算**（`observePaymentResultIfApplicable` 入口 `count=0` + 撤销待执行重扫）——交互中的页面不受影响，只兜"完全静止"的场景 |
+| 执行体 | 合成事件（`TYPE_WINDOW_CONTENT_CHANGED` + 记忆的 windowClass）走 `scanPaymentResultCore` **同一管线**：读行重试、三道去重、敏感门禁、幂等键、`onObservationState` 喂帧全部复用——静止页不再饿死弹窗门禁 |
+| 停止条件 | 预算用尽；活动窗口根不再是白名单支付包（含本应用弹窗在前台——证据已产出过）；`onUnbind`/`onDestroy` 摘回调（Handler 比服务实例活得长） |
+| 线程 | 无障碍回调与 Handler 同在主 looper，字段无竞争 |
+
+日志锚点：`支付结果页重扫兜底: pkg=..., count=N/8` / `支付结果页重扫兜底停止: 已离开支付包`。每会话最多 8 行，无刷屏风险。
+
+### 为什么这样实现而不是给事件循环加定时器
+
+直接在 `onAccessibilityEvent` 上挂全局定时器会把"用户停在支付页"与"用户已离开"两种状态耦合进事件流；重扫体复用扫描核心意味着**不会出现第二套解析逻辑**，去重与敏感门禁的既有正确性直接继承。合成事件只填 `eventType/packageName/className` 三个字段，`findPaymentResultRoots` 对 `event.source` 已有 try/catch 防护。
+
+### 验证
+
+```
+:app:compileDebugKotlin + :app:testDebugUnitTest   BUILD SUCCESSFUL（233 基线全绿）
+```
+
+⚠️ **未真机验证**：重扫与 MIUI 事件流的交互（尤其敏感帧期间的重扫日志量、弹窗门禁新鲜度提升效果）需 L1 真机确认。若日志中重扫行异常频繁出现 `count=8/8`，说明存在持续无证据的页面形态，按行内 pkg/class 现场归因。

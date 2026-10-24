@@ -55,6 +55,10 @@ class CheckoutAccessibilityService : AccessibilityService() {
         /** 支付交接补发节流窗口：同一支付包在该窗口内只补发一次交接事件。 */
         private const val PAYMENT_HANDOFF_REDISPATCH_THROTTLE_MILLIS = 5_000L
 
+        /** 支付结果页重扫兜底（P2-5）：重扫间隔与单次会话上限。 */
+        private const val PAYMENT_RESCAN_INTERVAL_MILLIS = 1_000L
+        private const val PAYMENT_RESCAN_MAX_COUNT = 8
+
         /**
          * 敏感支付页面的截图禁止锁存窗口。
          *
@@ -217,6 +221,17 @@ class CheckoutAccessibilityService : AccessibilityService() {
     private var lastWindowClass: String? = null
     private var lastObservedEventLogAt = 0L
     private var lastPaymentWindowScanAt = 0L
+
+    // ── 支付结果页重扫兜底（P2-5，2026-10-24 场景审查）──────────────────────
+    // 结果页在开场动画结束后可能完全静止：无障碍事件流停摆 ⇒ 证据提取与弹窗
+    // 门禁全部饿死（"全被挡 + 无后续事件 = 零证据"）。任一帧无证据产出时排一个
+    // 短周期重扫，仍走同一扫描管线；任一真实事件到达即重置预算。
+    // **仅主线程访问**（无障碍回调与 Handler 都在主 looper）。
+    private var paymentRescanCount = 0
+    private var paymentRescanPackage: String? = null
+    private var paymentRescanWindowClass: String? = null
+    private val paymentRescanHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val paymentRescanRunnable = Runnable { runPaymentResultRescan() }
 
     /**
      * 敏感页锁存（D-9：增加"读到明确非敏感购物页 ×N 帧 ⇒ 提前解除"）。
@@ -630,6 +645,9 @@ class CheckoutAccessibilityService : AccessibilityService() {
         serviceConnected = false
         lastWindowPackage = null
         lastWindowClass = null
+        // 重扫兜底的 Handler 挂在主 looper 上，比服务实例活得长：解绑即摘，
+        // 否则服务销毁后 runnable 仍会触碰本实例字段。
+        paymentRescanHandler.removeCallbacks(paymentRescanRunnable)
         if (activeService === this) {
             activeService = null
         }
@@ -642,6 +660,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
         serviceConnected = false
         lastWindowPackage = null
         lastWindowClass = null
+        paymentRescanHandler.removeCallbacks(paymentRescanRunnable)
         shutdownPaymentMatcher()
         evidenceFallbackScope.cancel()
         if (activeService === this) {
@@ -770,13 +789,30 @@ class CheckoutAccessibilityService : AccessibilityService() {
     }
 
     /**
+     * 真实无障碍事件入口：重置重扫兜底预算并撤销待执行的重扫，本帧立即全量扫描。
+     * 重扫兜底（[runPaymentResultRescan]）复用同一扫描核心 [scanPaymentResultCore]。
+     */
+    private fun observePaymentResultIfApplicable(
+        event: AccessibilityEvent,
+        paymentPackage: String
+    ) {
+        paymentRescanCount = 0
+        paymentRescanHandler.removeCallbacks(paymentRescanRunnable)
+        scanPaymentResultCore(event, paymentPackage)
+    }
+
+    /**
      * 阶段四 T3：在支付应用中观察支付结果页，提取结构化证据。
+     *
+     * 由两条路径驱动：真实无障碍事件（[observePaymentResultIfApplicable]）与
+     * 静止页重扫兜底（[runPaymentResultRescan]，合成事件）。两者走同一管线，
+     * 读行重试 / 三道去重 / 敏感门禁 / 幂等键全部复用。
      *
      * 只读取无障碍节点文本，不截图、不读密码/付款码/银行卡号。
      * 支付成功的结果生成 PaymentResultEvidence，交给匹配器落库。
      * 支付失败的结果不生成成功证据，只记录诊断日志。
      */
-    private fun observePaymentResultIfApplicable(
+    private fun scanPaymentResultCore(
         event: AccessibilityEvent,
         paymentPackage: String
     ) {
@@ -794,6 +830,8 @@ class CheckoutAccessibilityService : AccessibilityService() {
                 "支付结果页无可用节点树: pkg=$paymentPackage, " +
                     "type=${AccessibilityEvent.eventTypeToString(event.eventType)}, class=${event.className}"
             )
+            // 空树帧也可能是支付交接瞬间的暂态（D-9 记录过）：同样进入重扫兜底。
+            schedulePaymentResultRescan(paymentPackage, event.className?.toString())
             return
         }
 
@@ -988,6 +1026,62 @@ class CheckoutAccessibilityService : AccessibilityService() {
                     // 系统节点已经回收时无需再次处理。
                 }
             }
+        }
+
+        // 走到这里 = 本帧没有任何证据产出（Success / 转账 / 幂等命中都提前 return）。
+        // 结果页静止后事件流停摆是"证据饿死"的最后一个成因，排短周期重扫兜底。
+        schedulePaymentResultRescan(paymentPackage, event.className?.toString())
+    }
+
+    /**
+     * 排一次重扫兜底；仅主线程调用。预算 [PAYMENT_RESCAN_MAX_COUNT] 次用尽后静默
+     * 停止（最后一次重扫的日志行可见 count=N/N，不再新增行）。
+     */
+    private fun schedulePaymentResultRescan(paymentPackage: String, windowClass: String?) {
+        if (paymentRescanCount >= PAYMENT_RESCAN_MAX_COUNT) {
+            return
+        }
+        paymentRescanPackage = paymentPackage
+        paymentRescanWindowClass = windowClass
+        paymentRescanHandler.removeCallbacks(paymentRescanRunnable)
+        paymentRescanHandler.postDelayed(paymentRescanRunnable, PAYMENT_RESCAN_INTERVAL_MILLIS)
+    }
+
+    /**
+     * 重扫兜底执行体（P2-5）：用合成事件走 [scanPaymentResultCore] 同一管线。
+     * 仅主线程调用。离开支付包（活动窗口根已不是白名单支付包，含本应用弹窗
+     * 在前台 —— 那意味着证据已产出过）即停止；无障碍回调与 Handler 同在主
+     * looper，字段访问无竞争。
+     */
+    private fun runPaymentResultRescan() {
+        val paymentPackage = paymentRescanPackage ?: return
+        val activeRoot = try {
+            rootInActiveWindow
+        } catch (_: RuntimeException) {
+            null
+        }
+        val rootPackage = try {
+            activeRoot?.packageName?.toString()?.trim().orEmpty()
+        } catch (_: RuntimeException) {
+            ""
+        }
+        if (rootPackage.isNotBlank() && !pageDetector.supportsPaymentPackage(rootPackage)) {
+            JotBillLog.i(TAG, "支付结果页重扫兜底停止: 已离开支付包, rootPkg=$rootPackage")
+            return
+        }
+        paymentRescanCount += 1
+        JotBillLog.i(
+            TAG,
+            "支付结果页重扫兜底: pkg=$paymentPackage, " +
+                "count=$paymentRescanCount/$PAYMENT_RESCAN_MAX_COUNT"
+        )
+        val rescanEvent = AccessibilityEvent.obtain(AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED)
+        try {
+            rescanEvent.packageName = paymentPackage
+            rescanEvent.className = paymentRescanWindowClass
+            scanPaymentResultCore(rescanEvent, paymentPackage)
+        } finally {
+            rescanEvent.recycle()
         }
     }
 
