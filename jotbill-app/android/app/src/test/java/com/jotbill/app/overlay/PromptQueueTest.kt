@@ -138,6 +138,41 @@ class PromptQueueTest {
         assertEquals(PromptQueue.PollResult.Empty, queue.poll())
     }
 
+    /** 重入队保留首次入队时刻：出队→重入队不得把 TTL 清零（复审 🟡-6）。 */
+    @Test
+    fun reofferAfterPollKeepsOriginalAge() {
+        var now = START
+        val queue = PromptQueue(CAPACITY, TTL) { now }
+        assertEquals(PromptQueue.OfferResult.Enqueued, queue.offer(info("pending-1")))
+        now += 10_000L
+        assertTrue(queue.poll() is PromptQueue.PollResult.Ready)
+        now += 25_000L
+
+        assertEquals(PromptQueue.OfferResult.Enqueued, queue.offer(info("pending-1")))
+        assertTrue(
+            "距首次入队已 35s > TTL，重入队后必须判过期而不是再等 30s",
+            queue.poll() is PromptQueue.PollResult.Expired
+        )
+    }
+
+    /** forget（终态）后重新入队：TTL 从零起算。 */
+    @Test
+    fun forgetResetsAge() {
+        var now = START
+        val queue = PromptQueue(CAPACITY, TTL) { now }
+        queue.offer(info("pending-1"))
+        now += 20_000L
+        queue.poll()
+        queue.forget("pending-1")
+        now += 20_000L
+
+        assertEquals(PromptQueue.OfferResult.Enqueued, queue.offer(info("pending-1")))
+        assertTrue(
+            "终态后重新入队是新的队列生命周期",
+            queue.poll() is PromptQueue.PollResult.Ready
+        )
+    }
+
     /** 清空：功能停用时不得再补播任何历史候选。 */
     @Test
     fun clearDropsEverything() {

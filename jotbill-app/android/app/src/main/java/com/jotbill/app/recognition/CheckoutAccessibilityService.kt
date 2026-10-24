@@ -888,11 +888,22 @@ class CheckoutAccessibilityService : AccessibilityService() {
                             return
                         }
                         is PaymentResultParseResult.Failure -> {
-                            // 2026-10-24 审查 P2-4：roots 依次是 rootInActiveWindow /
-                            // event.source / 活动窗口 root。首个 root 可能指向叠加在
-                            // 支付页上的系统对话框（权限弹窗/输入法/MIUI 安全提示），
-                            // 它失败不代表支付页不可读 —— 必须继续检查其余 root，
-                            // 只有证据已落库/已处理（Success/PersonalTransfer）才终止本帧。
+                            // 2026-10-24 复审（子智能体报告后收敛）：失败分两性。
+                            // PAYMENT_FAILED = 整窗文本含失败关键词（解析器先查失败
+                            // 词后查成功词），是**明确的反向证据**——不得被同帧其他
+                            // root 推翻：event.source 子树文本可能恰好不含位于兄弟
+                            // 分支的失败词、却含成功词+金额，继续扫描会为一笔已失败
+                            // 的支付落成功卡（摘樱桃误报）。保持 return（改动前行为）。
+                            if (parseResult.reason == PaymentResultFailureReason.PAYMENT_FAILED) {
+                                JotBillLog.i(TAG, "支付结果页含失败语义，终止本帧: ${parseResult.reason}")
+                                return
+                            }
+                            // 证据不足类（金额/时间解析不出）与 NotPaymentResult 一样
+                            // 只是"这个 root 读不出结果"——继续检查其余 root：
+                            // roots 依次是 rootInActiveWindow / event.source / 活动窗口
+                            // root，首个可能指向叠加在支付页上的系统对话框（权限弹窗/
+                            // 输入法/MIUI 安全提示），它失败不代表支付页不可读。
+                            // 只有证据已处理（Success/PersonalTransfer）才终止本帧。
                             JotBillLog.i(
                                 TAG,
                                 "支付结果页未生成成功证据: reason=${parseResult.reason}, " +

@@ -368,6 +368,19 @@ internal object PendingConfirmOverlayManager {
 
     /** 仅主线程调用。 */
     private fun onPendingChange(info: PendingChangeInfo) {
+        // 终态/更新事件不入队也不占槽位（2026-10-24 复审补）：removed=true 的
+        // 确定性来源是"弹窗自己确认成功"（emit 时成功页还在屏 ⇒ 必然命中下方
+        // 槽位忙分支）—— 入队只会在补播后读空行、刷"事务未提交"WARN 假线索，
+        // 还白占容量 3 的队列坑；isNew=false 的更新事件 evaluate 必返回
+        // UPDATED_NOT_NEW，提前过滤省一次读行。两者都不可能弹窗。
+        if (info.removed) {
+            JotBillLog.i(TAG, "弹窗忽略已删除事件: id=${info.pendingId.take(16)}")
+            return
+        }
+        if (!info.isNew) {
+            JotBillLog.i(TAG, "弹窗忽略更新事件: id=${info.pendingId.take(16)}")
+            return
+        }
         if (overlayView != null || waitingCandidate != null || inFlightCandidate != null) {
             // 已有弹窗 / 挂起候选 / 在途上屏：不叠加
             // （去重由 policy 的窗口键兜底跨笔场景）。
@@ -385,7 +398,15 @@ internal object PendingConfirmOverlayManager {
         val context = appContext ?: return
         val db = database ?: return
         scope.launch {
-            val pendingRow = readPendingRow(db, info.pendingId) ?: return@launch
+            val pendingRow = readPendingRow(db, info.pendingId)
+            if (pendingRow == null) {
+                // 读行失败（行已被删/事务未提交）：管线终止。若本次来自队列补播，
+                // 队尾条目会失去唯一的触发点 —— 回主线程补一次 drain（幂等，
+                // 槽位忙时自动 no-op）。同因（终态）清除 TTL 起点。
+                promptQueue.forget(info.pendingId)
+                mainHandler.post { drainQueuedPrompts() }
+                return@launch
+            }
             // evaluate 是纯函数（2026-10-12 起不依赖任何历史状态），主线程调用无代价。
             // 保留 mainHandler.post 是因为 [maybeShowCandidate] 的下游
             // （waitingCandidate / inFlightCandidate / overlayView）均为主线程状态。
@@ -401,6 +422,11 @@ internal object PendingConfirmOverlayManager {
                             TAG,
                             "弹窗跳过: ${decision.reason.wireValue}, id=${info.pendingId.take(16)}"
                         )
+                        // 终态（2026-10-24 复审补）：清除 TTL 起点，并让队列里排
+                        // 在后面的条目获得补播机会 —— 否则"补播这笔恰好 Skip"会
+                        // 中断补播链，队尾静默滞留。
+                        promptQueue.forget(info.pendingId)
+                        drainQueuedPrompts()
                     }
 
                     is PendingPromptPolicy.Decision.Prompt -> {
@@ -426,6 +452,9 @@ internal object PendingConfirmOverlayManager {
             return
         }
         val gate = evaluateGate()
+        // 队列生命周期终点：门禁放行 → 上屏；被挡 → waitingCandidate（走自己的
+        // 30s 时钟）。两者都不会再重入队，清除 TTL 起点（2026-10-24 复审补）。
+        promptQueue.forget(info.pendingId)
         // 无论放行与否都留痕：放行时这一行是"弹窗本该出现"的基准线，
         // 与随后的"付款确认弹窗已显示"配对即可判定 addView 环节（2026-10-10）。
         JotBillLog.i(
@@ -451,6 +480,10 @@ internal object PendingConfirmOverlayManager {
             if (waitingCandidate === candidate) {
                 waitingCandidate = null
                 JotBillLog.i(TAG, "弹窗候选超时放弃(敏感页未结束), 通知兜底: id=${candidate.pendingId.take(16)}")
+                // 槽位已释放，补播队列（2026-10-24 复审补）。这是挂起超时的**主执行
+                // 路径**：runnable 按 due 时间排在后续观察帧之前， Handler 先执行它 ——
+                // maybeShowPendingCandidate 的超时分支只在墙钟前跳时可达。
+                drainQueuedPrompts()
             }
         }
         mainHandler.postDelayed(candidateExpiryRunnable!!, PendingPromptPolicy.CANDIDATE_TTL_MILLIS)
@@ -674,6 +707,10 @@ internal object PendingConfirmOverlayManager {
         val context = appContext ?: return
         if (!hasOverlayPermission(context)) {
             JotBillLog.i(TAG, "无悬浮窗权限,弹窗放弃(通知兜底)")
+            // inFlightCandidate 已在 showCandidate 释放 ⇒ 此刻槽位空闲，
+            // 补播队列（2026-10-24 复审补：门禁放行到本处的 TOCTOU 窗口内
+            // MIUI 收权时，队列会因此滞留）。
+            drainQueuedPrompts()
             return
         }
         // 提交点复核：[displayOverlay] 是唯一给 overlayView 赋值的地方，也是 addView
@@ -793,6 +830,8 @@ internal object PendingConfirmOverlayManager {
                 }
             }
             overlayView = null
+            // addView 失败 ⇒ 槽位空闲，补播队列（2026-10-24 复审补）。
+            drainQueuedPrompts()
         }
     }
 

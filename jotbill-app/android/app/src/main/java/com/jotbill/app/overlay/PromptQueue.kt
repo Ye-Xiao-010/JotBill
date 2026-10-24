@@ -15,8 +15,11 @@ import com.jotbill.app.pending.PendingChangeInfo
  * 设计：
  * - **有界**：超过 [capacity] 即拒绝并让调用方留痕（可归因），不无界堆积；
  * - **FIFO 补播**：槽位释放时由调用方 [poll]，按入队顺序逐笔补播；
- * - **TTL**：入队超过 [ttlMillis] 的条目出队即弃 —— 支付时刻早已过去，
- *   系统通知兜底已覆盖该笔，补弹只是过时打扰；
+ * - **TTL 以首次入队时刻起算**：出队后管线撞上槽位忙会重入队（同一笔），
+ *   重入队保留**首次**入队时刻，否则每次"出队→重入队"都把 TTL 清零，
+ *   条目可在持续的槽位竞争下无限续期（2026-10-24 复审 🟡）。出队后该笔
+ *   走到**终态**（已上屏 / 已挂起等帧 / 管线 Skip / 读行失败），由调用方
+ *   调 [forget] 忘记起点 —— 此后同 pendingId 的新入队从零起算；
  * - **幂等**：同 pendingId 只保留最早一条（重复 emit 通常是同一笔的更新事件）。
  *
  * 纯逻辑类，时钟可注入以便单测；**无锁** —— 所有调用点都在弹窗管理器的
@@ -34,6 +37,9 @@ internal class PromptQueue(
     )
 
     private val entries = ArrayDeque<Entry>()
+
+    /** pendingId → 首次入队时刻；条目出队后仍保留，供重入队延续 TTL。 */
+    private val firstSeenAt = HashMap<String, Long>()
 
     val size: Int get() = entries.size
 
@@ -56,7 +62,7 @@ internal class PromptQueue(
         if (entries.size >= capacity) {
             return OfferResult.Full
         }
-        entries.addLast(Entry(info, now()))
+        entries.addLast(Entry(info, firstSeenAt.getOrPut(info.pendingId) { now() }))
         return OfferResult.Enqueued
     }
 
@@ -78,6 +84,8 @@ internal class PromptQueue(
             val ageMs = now() - head.enqueuedAt
             entries.removeFirst()
             if (ageMs > ttlMillis) {
+                // 过期即终态：不会再有重入队，起点一并清除。
+                firstSeenAt.remove(head.info.pendingId)
                 return PollResult.Expired(head.info.pendingId, ageMs)
             }
             return PollResult.Ready(head.info, ageMs)
@@ -85,10 +93,19 @@ internal class PromptQueue(
         return PollResult.Empty
     }
 
+    /**
+     * 忘记某笔的首次入队时刻。队列生命周期的**终态**（已上屏 / 已挂起等帧 /
+     * 管线 Skip / 读行失败）时由调用方调用，此后同 pendingId 的新入队从零起算 TTL。
+     */
+    fun forget(pendingId: String) {
+        firstSeenAt.remove(pendingId)
+    }
+
     /** 清空队列（功能停用、进程状态重置时调用），返回清除的条数。 */
     fun clear(): Int {
         val removed = entries.size
         entries.clear()
+        firstSeenAt.clear()
         return removed
     }
 }

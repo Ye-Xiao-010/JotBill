@@ -1,6 +1,6 @@
 # 精简版代码审查（2026-10-24）
 
-> **状态**：[滚动更新] —— 审查结论 + 修复记录（§七/§九~§十五）。P1-1/P2-1/P2-4 与 L6 已修（§十五），仍遗留 P2-3/P2-5、死代码清单与全部真机验证
+> **状态**：[滚动更新] —— 审查结论 + 修复记录（§七/§九~§十六）。P1-1/P2-1/P2-4 与 L6 已修并经子智能体复审收敛，仍遗留 P2-3/P2-5、死代码清单与全部真机验证
 >
 > | 项 | 值 |
 > |---|---|
@@ -607,3 +607,43 @@ eslint 对 6 个改动文件检查，无新增错误（2 个 error 为 Dashboard
 - §十一未修项：`RecentResultObservation` 与 D-25 等价的冗余判定（删否需拍板）、confirm 无超时、页面时间只到分钟时撞 `sourceEventKey`
 - §十二 P0-2 敏感词 × 通知全停（根因 C）—— 按 ISSUE 判断，等 1、2 落地重跑 L1 后再动
 - **全部修复未真机验证**，L1 20 笔待跑；P1-1 的队列补播无单测覆盖（OverlayManager 依赖 View/WindowManager，需真机或 instrumented 验证）
+
+---
+
+## 十六、第四轮子智能体复审（2026-10-24，针对 §十五 的队列补播与多 root 续检）
+
+两个独立代理分别复核「P1-1 队列接线」「P2-4 continue 改动」；第三个（五提交功能级冲突）中途取消未出报告。
+以下只列**经主审核实**的条目。
+
+### 已核实并修复（本批）
+
+| 级别 | 问题 | 核实结论 | 修法 |
+|---|---|---|---|
+| 🟠 | **挂起候选超时的主执行路径漏接 drain**：drain 接在了 `maybeShowPendingCandidate` 的超时分支，但 `candidateExpiryRunnable` 按 due 时间排在后续观察帧之前先执行，该分支只在墙钟前跳时可达（近乎死臂） | ✅ 成立——正是 MIUI 挂起 30s 后第二笔入队的场景，补播不触发 | runnable 放弃分支补 `drainQueuedPrompts()`；死臂保留作墙钟前跳的安全网（drain 幂等） |
+| 🟠 | **`removed=true` / `isNew=false` 事件被入队占坑**：弹窗自己确认成功会同步 emit removed（此刻成功页在屏 ⇒ 必然槽位忙）⇒ 入队 ⇒ 补播后读空行刷"事务未提交"WARN 假线索，且白占容量 3 的队列坑，可挤掉真实新支付 | ✅ 成立，确定性命中路径 | `onPendingChange` 入口按 `removed` / `!isNew` 过滤并留痕（与 `Skip(REMOVED)` / `Skip(UPDATED_NOT_NEW)` 语义一致，免读行） |
+| 🟠 | **混合文案页"摘樱桃"误报（P2-4 副作用）**：`PAYMENT_FAILED` 是整窗文本含失败关键词的**明确反向证据**（解析器先查失败词后查成功词）；continue 后 `event.source` 子树文本可能恰好不含失败词却含成功词+金额，会为一笔已失败的支付落成功卡 | ✅ 成立，为本批新增行为面 | 收敛：`PAYMENT_FAILED` 保持 `return`（反向证据不被同帧推翻）；仅证据不足类（`INVALID_AMOUNT`/`INVALID_OCCURRED_AT`）与 `NotPaymentResult` continue——P2-4 的目标场景（系统对话框 root）产生的正是 `NotPaymentResult`，不受影响 |
+| 🟡 | `displayOverlay` 无悬浮窗权限提前 return 漏 drain（门禁放行到本处的 TOCTOU 窗口内 MIUI 收权） | ✅ 成立 | 该分支补 drain |
+| 🟡 | `displayOverlay` catch（addView 抛异常）漏 drain | ✅ 成立 | catch 末尾补 drain |
+| 🟡 | **补播链中断**：drain 每次只补一笔，若补播的这笔读行失败或 evaluate Skip，队尾失去唯一触发点静默滞留 | ✅ 成立 | 读行失败回主线程补 drain；Skip 分支补 forget + drain |
+| 🟡 | **重入队刷新 TTL，候选可无限续期**：出队→管线撞上槽位忙→重入队，`enqueuedAt` 取当前时刻 | ✅ 成立（逻辑推演，路径确定） | `PromptQueue` 记忆 pendingId 的**首次**入队时刻，重入队延续 TTL；终态（上屏/挂起/Skip/读行失败/过期/清空）由调用方 `forget` 或内部清除。新增 2 条判别性测试 |
+
+### 已核实、暂不修（登记）
+
+- **陈旧结果页窗口的重复落卡**（P2-4 复审 🟡）：无页面时间 + 遗留窗口仍活动/聚焦 + 距原卡 >15s 时，sourceEventKey 跨桶、哈希 15s 过期、D-25 窗口 miss，三道防线全部失效 ⇒ 同一笔旧支付再建一条待确认。**主路径预存在**（root1 角色分支 continue 本就可达），本批仅扩大暴露面；方向是可删误报，与"真实第二笔不被吞"的裁定取舍同向。若要收口需把哈希防线从"15 秒"放宽到"行仍 pending"，**需拍板**，暂不动。
+- `支付包页面未分类为结果页` 逐 root 逐事件 Log.i + 为取 pageTextLength 做整树遍历 —— **预存在**的 D-9 形态噪声源（量级远大于本批改动的两条日志），归入死代码/日志清理批次。
+- 同窗口双实例（`===` 去重失效）一帧处理两次、窗口清单 root 未 recycle —— 预存在，API 33+ 靠 GC 兜底，登记备查。
+
+### 复审确认无问题（两代理一致 + 主审核实）
+
+- 无无限循环/自激：每次 drain 至多补播一笔，重入队需经历"异步读行 + 主线程投递 + 另一事件占槽"三个外部条件，主线程串行下无同步自环。
+- 主线程约定成立：promptQueue 全部触点（offer/poll/forget/clear/drain）均在主线程。
+- 补播后新建 candidate 的 30s 从补播时刻起算，无"放行即弃"的双计；代价是总放弃窗口最长约 60s（队列 30s + 挂起 30s），语义一致。
+- 与冷却/哈希登记解耦：两者都在落库事务内、emit 之前完成，弹窗排队/补播不影响其正确性；补播卡确认走同一 `PendingConfirmService.confirm`。
+- `PromptQueue` 类与 8+2 条测试无恒真断言；`pollsExactlyAtTtlBoundary` 可杀死 `>=` 回归。
+
+### 验证（实际输出）
+
+```
+:app:compileDebugKotlin + :app:testDebugUnitTest   BUILD SUCCESSFUL
+测试报告：228 / 0 失败 / 0 忽略（226 基线 + 2 条新增：重入队不重置 TTL / forget 重置）
+```
