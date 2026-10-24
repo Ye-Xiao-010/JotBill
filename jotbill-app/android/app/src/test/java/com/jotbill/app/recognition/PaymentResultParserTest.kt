@@ -26,6 +26,59 @@ class PaymentResultParserTest {
     }
 
     @Test
+    fun sameTextDifferentOrderIdProducesDifferentRawTextHash() {
+        // 场景 5 承诺的根基（2026-10-24 场景审查补，此前零覆盖）：同商户同额
+        // 同文本、仅订单号不同的两笔，哈希必须不同 —— 否则 15 秒内的真实第二笔
+        // 会被"同哈希合并"吞掉。区分力来自 orderIdDigest（sha256("order|…")），
+        // 页面文本其余部分经 sanitizeForHash 收敛为同一形态。
+        val first = PaymentResultParser.parseResult(
+            pageText = "支付成功 实付 ¥19.90 订单号: ORDER1000001",
+            sourcePackage = "com.tencent.mm",
+            pageFingerprint = "f".repeat(64),
+            observedAt = observedAt
+        )
+        val second = PaymentResultParser.parseResult(
+            pageText = "支付成功 实付 ¥19.90 订单号: ORDER2000002",
+            sourcePackage = "com.tencent.mm",
+            pageFingerprint = "f".repeat(64),
+            observedAt = observedAt
+        )
+
+        assertTrue(first is PaymentResultParseResult.Success)
+        assertTrue(second is PaymentResultParseResult.Success)
+        assertNotEquals(
+            "仅订单号不同 ⇒ 哈希必须不等",
+            (first as PaymentResultParseResult.Success).evidence.rawTextHash,
+            (second as PaymentResultParseResult.Success).evidence.rawTextHash
+        )
+    }
+
+    @Test
+    fun samePageRepeatedObservationProducesStableRawTextHash() {
+        // 反向不变式：同一页面（同订单号）重复观测，哈希必须稳定 —— 否则
+        // "同一笔不重复建卡"的合并判据永远不命中。
+        val text = "支付成功 实付 ¥19.90 订单号: ORDER3000003"
+        val first = PaymentResultParser.parseResult(
+            pageText = text,
+            sourcePackage = "com.tencent.mm",
+            pageFingerprint = "f".repeat(64),
+            observedAt = observedAt
+        )
+        val second = PaymentResultParser.parseResult(
+            pageText = text,
+            sourcePackage = "com.tencent.mm",
+            pageFingerprint = "f".repeat(64),
+            observedAt = observedAt + 20_000L
+        )
+
+        assertTrue(first is PaymentResultParseResult.Success)
+        assertEquals(
+            (first as PaymentResultParseResult.Success).evidence.rawTextHash,
+            (second as PaymentResultParseResult.Success).evidence.rawTextHash
+        )
+    }
+
+    @Test
     fun failedPaymentPageNeverProducesSuccessEvidence() {
         val result = PaymentResultParser.parseResult(
             pageText = "支付失败 支付成功 实付 ¥12.34",

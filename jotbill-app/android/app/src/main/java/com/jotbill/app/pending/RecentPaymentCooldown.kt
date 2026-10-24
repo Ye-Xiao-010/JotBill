@@ -164,6 +164,10 @@ internal object RecentPaymentCooldown {
             val at = consumedAt[key] ?: return null
             val elapsed = now - at
 
+            // 边界口径（2026-10-24 场景审查推演后保留 >=）：恰在 15.000s 时即使
+            // 冷却放行，下游去重链（哈希 / D-25 均为闭区间）也会判同一笔合并，
+            // 与"冷却仍在生效"的卡结果等价 —— 这 1ms 差异不可观测，不值得为
+            // 口径整齐改语义（allowsSameAmountPaymentAfterCooldownExpires 钉死此行为）。
             if (elapsed >= COOLDOWN_MILLIS) {
                 consumedAt.remove(key)
                 null
