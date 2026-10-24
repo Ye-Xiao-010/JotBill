@@ -799,7 +799,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
 
         var sawResultPage = false
         try {
-            for (root in roots) {
+            for ((rootIndex, root) in roots.withIndex()) {
                 try {
                     val observation = AccessibilityPageSummaryCollector.collect(
                         shoppingPackage = paymentPackage,
@@ -888,12 +888,24 @@ class CheckoutAccessibilityService : AccessibilityService() {
                             return
                         }
                         is PaymentResultParseResult.Failure -> {
-                            JotBillLog.i(TAG, "支付结果页未生成成功证据: reason=${parseResult.reason}")
-                            return
+                            // 2026-10-24 审查 P2-4：roots 依次是 rootInActiveWindow /
+                            // event.source / 活动窗口 root。首个 root 可能指向叠加在
+                            // 支付页上的系统对话框（权限弹窗/输入法/MIUI 安全提示），
+                            // 它失败不代表支付页不可读 —— 必须继续检查其余 root，
+                            // 只有证据已落库/已处理（Success/PersonalTransfer）才终止本帧。
+                            JotBillLog.i(
+                                TAG,
+                                "支付结果页未生成成功证据: reason=${parseResult.reason}, " +
+                                    "root=${rootIndex + 1}/${roots.size}"
+                            )
+                            continue
                         }
                         PaymentResultParseResult.NotPaymentResult -> {
-                            JotBillLog.d(TAG, "支付结果页未命中可确认的结果语义")
-                            return
+                            JotBillLog.d(
+                                TAG,
+                                "支付结果页未命中可确认的结果语义: root=${rootIndex + 1}/${roots.size}"
+                            )
+                            continue
                         }
                     }
 

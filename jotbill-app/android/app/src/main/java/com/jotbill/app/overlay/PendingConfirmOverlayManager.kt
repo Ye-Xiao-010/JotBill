@@ -83,6 +83,15 @@ internal object PendingConfirmOverlayManager {
      */
     private const val ALREADY_HANDLED_DISMISS_DELAY = 3_000L
 
+    /**
+     * 槽位忙时弹窗候选的排队上限（2026-10-24 审查 P1-1）。
+     *
+     * 槽位 = 在屏弹窗 / 挂起候选 / 在途上屏三者占其一。MIUI 还权挂起最长实测 57s，
+     * 期间到达的支付不能丢：入队待补播。上限 3 笔覆盖 L1 连续支付场景，
+     * 超出即丢弃并留痕（QUEUE_FULL），不无界堆积。
+     */
+    private const val PROMPT_QUEUE_CAPACITY = 3
+
     /** 观察状态的新鲜度：超龄的"非敏感"判定不可信，宁可弹不出来也不冒险。 */
     private const val OBSERVATION_FRESH_MILLIS = 30_000L
 
@@ -161,6 +170,20 @@ internal object PendingConfirmOverlayManager {
      */
     private var inFlightCandidate: PromptCandidate? = null
 
+    /**
+     * 槽位忙时的候选等待队列（2026-10-24 审查 P1-1）。
+     *
+     * 此前 [onPendingChange] / [maybeShowCandidate] 在槽位忙时直接 return ——
+     * 第二笔支付的弹窗事件被静默丢弃：pending 行照常落库、系统通知照常发送，
+     * 但弹窗永久不出现，日志里只有一条门禁判定后便无下文。改为入队，
+     * 槽位释放时经 [drainQueuedPrompts] FIFO 补播。
+     * **仅主线程读写**（与上方三个槽位状态同一约定）。
+     */
+    private val promptQueue = PromptQueue(
+        capacity = PROMPT_QUEUE_CAPACITY,
+        ttlMillis = PendingPromptPolicy.CANDIDATE_TTL_MILLIS
+    )
+
     private lateinit var prefs: SharedPreferences
 
     // ⚠️ 2026-10-12：`recentDedupKeys` / `recentPromptTimes` / `snapshotPolicyState()`
@@ -236,6 +259,11 @@ internal object PendingConfirmOverlayManager {
             .edit().putBoolean(KEY_ENABLED, enabled).apply()
         if (!enabled) {
             mainHandler.post {
+                // 停用即清队列：功能关掉后不得再补播任何历史候选。
+                val dropped = promptQueue.clear()
+                if (dropped > 0) {
+                    JotBillLog.i(TAG, "弹窗候选队列已清空(功能停用): dropped=$dropped")
+                }
                 dismissInternal("DISABLED")
             }
         }
@@ -340,13 +368,22 @@ internal object PendingConfirmOverlayManager {
 
     /** 仅主线程调用。 */
     private fun onPendingChange(info: PendingChangeInfo) {
-        val context = appContext ?: return
-        val db = database ?: return
         if (overlayView != null || waitingCandidate != null || inFlightCandidate != null) {
             // 已有弹窗 / 挂起候选 / 在途上屏：不叠加
             // （去重由 policy 的窗口键兜底跨笔场景）。
+            // 2026-10-24 审查 P1-1：不再静默丢弃 —— 那会让 MIUI 还权挂起期间
+            // 到达的第二笔支付永久不弹（落库与通知不受影响，但日志无痕）。
+            // 入队待槽位释放后补播。
+            enqueuePrompt(info)
             return
         }
+        processPendingChange(info)
+    }
+
+    /** 读行 + 策略评估 + 尝试上屏的完整管线；主线程调用，槽位必须空闲。 */
+    private fun processPendingChange(info: PendingChangeInfo) {
+        val context = appContext ?: return
+        val db = database ?: return
         scope.launch {
             val pendingRow = readPendingRow(db, info.pendingId) ?: return@launch
             // evaluate 是纯函数（2026-10-12 起不依赖任何历史状态），主线程调用无代价。
@@ -372,16 +409,20 @@ internal object PendingConfirmOverlayManager {
                             dedupKey = decision.dedupKey,
                             createdAt = System.currentTimeMillis()
                         )
-                        maybeShowCandidate(candidate)
+                        maybeShowCandidate(candidate, info)
                     }
                 }
             }
         }
     }
 
-    /** 主线程：尝试立即显示候选；观察状态不可信时挂起等待非敏感帧。 */
-    private fun maybeShowCandidate(candidate: PromptCandidate) {
+    /** 主线程：尝试立即显示候选；槽位忙时入队，观察状态不可信时挂起等待非敏感帧。 */
+    private fun maybeShowCandidate(candidate: PromptCandidate, info: PendingChangeInfo) {
         if (overlayView != null || waitingCandidate != null || inFlightCandidate != null) {
+            // 2026-10-24 审查 P1-1：onPendingChange 放行之后、本方法执行之前隔着
+            // 读行协程与一次主线程投递，期间槽位可能已被并发事件占住 ——
+            // 同样入队，不留静默丢弃。
+            enqueuePrompt(info)
             return
         }
         val gate = evaluateGate()
@@ -422,6 +463,8 @@ internal object PendingConfirmOverlayManager {
             waitingCandidate = null
             candidateExpiryRunnable?.let(mainHandler::removeCallbacks)
             candidateExpiryRunnable = null
+            // 挂起候选超时放弃，槽位随之空闲：队列里的候选获得补播机会。
+            drainQueuedPrompts()
             return
         }
         val gate = evaluateGate()
@@ -437,6 +480,66 @@ internal object PendingConfirmOverlayManager {
             )
             inFlightCandidate = candidate
             showCandidate(candidate)
+        }
+    }
+
+    /**
+     * 槽位忙时的入队决策；仅主线程调用。
+     * 三种结果都留痕，保证任何一笔未弹出的支付都能从日志归因（审查 P1-1）。
+     */
+    private fun enqueuePrompt(info: PendingChangeInfo) {
+        when (promptQueue.offer(info)) {
+            PromptQueue.OfferResult.Enqueued -> JotBillLog.i(
+                TAG,
+                "弹窗候选入队: reason=SLOT_BUSY, id=${info.pendingId.take(16)}, " +
+                    "queueSize=${promptQueue.size}"
+            )
+            PromptQueue.OfferResult.Duplicate -> JotBillLog.i(
+                TAG,
+                "弹窗候选入队去重(队列已有该笔): id=${info.pendingId.take(16)}, " +
+                    "queueSize=${promptQueue.size}"
+            )
+            PromptQueue.OfferResult.Full -> JotBillLog.w(
+                TAG,
+                "弹窗候选丢弃: reason=QUEUE_FULL, id=${info.pendingId.take(16)}, " +
+                    "capacity=$PROMPT_QUEUE_CAPACITY, queueSize=${promptQueue.size}"
+            )
+        }
+    }
+
+    /**
+     * 槽位释放后的队列补播；仅主线程调用，可安全重复触发。
+     *
+     * 每次最多补播一笔：出队 → 走完整 [processPendingChange] 管线 —— 重读行、
+     * 重过策略与门禁。排队期间该笔可能已被其他入口处理（RN 待确认中心）、
+     * 或页面状态已变化，直接重放旧的上屏决策是不安全的；管线内的各项校验
+     * （行存在、status=PENDING、策略、门禁）天然覆盖这些情形。
+     */
+    private fun drainQueuedPrompts() {
+        if (overlayView != null || waitingCandidate != null || inFlightCandidate != null) {
+            return
+        }
+        if (appContext == null || database == null) {
+            // 管线起点的两个前置不满足时不得出队，否则条目会被无痕吞掉。
+            return
+        }
+        while (true) {
+            when (val result = promptQueue.poll()) {
+                PromptQueue.PollResult.Empty -> return
+                is PromptQueue.PollResult.Expired -> JotBillLog.i(
+                    TAG,
+                    "弹窗候选出队后超时丢弃: id=${result.pendingId.take(16)}, ageMs=${result.ageMs}"
+                )
+                is PromptQueue.PollResult.Ready -> {
+                    JotBillLog.i(
+                        TAG,
+                        "弹窗候选出队补播: id=${result.info.pendingId.take(16)}, " +
+                            "waitedMs=${result.waitedMs}"
+                    )
+                    processPendingChange(result.info)
+                    return
+                }
+            }
         }
     }
 
@@ -542,6 +645,7 @@ internal object PendingConfirmOverlayManager {
                         "弹窗放弃: 预读待确认为空(事务未提交或行已被处理), " +
                             "id=${candidate.pendingId.take(16)}"
                     )
+                    drainQueuedPrompts()
                     return@post
                 }
                 if (pendingRow.status != PendingTransactionEntity.STATUS_PENDING) {
@@ -550,6 +654,7 @@ internal object PendingConfirmOverlayManager {
                         "弹窗放弃: 待确认已被其他入口处理, id=${candidate.pendingId.take(16)}, " +
                             "status=${pendingRow.status}"
                     )
+                    drainQueuedPrompts()
                     return@post
                 }
                 displayOverlay(pendingRow)
@@ -557,10 +662,11 @@ internal object PendingConfirmOverlayManager {
         }
     }
 
-    /** 释放在途占位；仅主线程调用。 */
+    /** 释放在途占位；仅主线程调用。释放后槽位空闲，尝试补播队列。 */
     private fun releaseInFlight(candidate: PromptCandidate) {
         if (inFlightCandidate === candidate) {
             inFlightCandidate = null
+            drainQueuedPrompts()
         }
     }
 
@@ -1207,6 +1313,8 @@ internal object PendingConfirmOverlayManager {
             // 会表现为"关了又冒出来"（见 [inFlightCandidate]）。
             inFlightCandidate = null
             JotBillLog.i(TAG, "付款确认弹窗已关闭: reason=$reason")
+            // 槽位已释放：补播排队中的候选（2026-10-24 审查 P1-1）。
+            drainQueuedPrompts()
         }
     }
 

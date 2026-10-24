@@ -1,6 +1,6 @@
 # 精简版代码审查（2026-10-24）
 
-> **状态**：[快照·含未处置项] —— 审查结论，**缺陷尚未修复**
+> **状态**：[滚动更新] —— 审查结论 + 修复记录（§七/§九~§十五）。P1-1/P2-1/P2-4 与 L6 已修（§十五），仍遗留 P2-3/P2-5、死代码清单与全部真机验证
 >
 > | 项 | 值 |
 > |---|---|
@@ -567,3 +567,43 @@ eslint 对 6 个改动文件检查，无新增错误（2 个 error 为 Dashboard
 - 未审查 RN 侧 60+ 页面的 UI 逻辑（仅核对了 `ReviewScreen` 的 `sourceType` 映射与 `PendingTransaction` 契约）。
 - 未审查导入、备份、AI 对话、热更新、Sentry 等非弹窗链路。
 - 行号会漂，复现请用符号名（`maybeShowCandidate`、`showSuccessFeedback`、`shouldSkipForeignEventCollection`）。
+
+---
+
+## 十五、第三批修复：P1-1 候选队列 + P2-4 多 root 续检 + L6 改写（2026-10-24）
+
+### P1-1 弹窗候选有界队列（修复）
+
+| 项 | 内容 |
+|---|---|
+| 新增 `overlay/PromptQueue.kt` | 有界 FIFO 补播队列（纯逻辑类，时钟注入可单测）：容量上限、入队幂等（同 pendingId 保留最早）、出队 TTL 丢弃、`clear()` |
+| `PendingConfirmOverlayManager` | ① `onPendingChange` / `maybeShowCandidate` 两处"槽位忙即 return"改为 `enqueuePrompt`；② 原管线体抽出为 `processPendingChange`，补播走**完整管线**（重读行、重过策略与门禁 —— 排队期间该笔可能已被 RN 待确认中心处理，直接重放旧的上屏决策不安全）；③ 补播触发点：`dismissInternal` 收尾 / `releaseInFlight` / 读行失败与"已被处理"两分支 / 挂起候选超时；④ 三种入队结果全留痕：`弹窗候选入队: SLOT_BUSY` / `入队去重` / `丢弃: QUEUE_FULL`；⑤ 功能停用即清队列 |
+| 容量 = 3 | MIUI 还权挂起最长 57s，3 笔覆盖 L1 连续支付场景；超出丢弃但可归因 —— 审查建议的"治本（队列）+ 取证（日志）"同时满足 |
+
+### P2-4 首个 root 失败改 continue（修复）
+
+`observePaymentResultIfApplicable` 的 root 循环：`Failure` / `NotPaymentResult` 由 `return` 改为 `continue`，日志追加 `root=i/N` 定位；只有证据已处理（Success / PersonalTransfer）才终止本帧。"一帧最多产一条证据"的性质不变（Success/转账路径本身 return）。
+
+### L6 验收标准改写（纯文档）
+
+原操作"完成一笔支付"在精简版不可执行（无障碍关闭 ⇒ 零证据 ⇒ 零 pending）。改写前**先验证了替代路径可达**：`ImportEngine` 对语义不安全行建 pending 并 emit `isNew=true`，`PendingReminderNotifier` 监听同一枢纽发"有一笔交易待确认"，链路不经过无障碍 ⇒ L6 操作改为「关闭无障碍 → 导入账单 → 验证系统通知」，并注明 0 金额条目被通知侧拦截、手动记账直接落账单不建待确认（不能用于本条）。
+
+### 测试
+
+- 新增 `PromptQueueTest` 8 条：FIFO / 同 pendingId 幂等 / 容量满拒绝且出队后恢复 / waitedMs / TTL 整点（含端点）补播 / 超时首条弃且不拖累下一笔 / 全超时归零 / clear。
+- 首跑 1 条失败（226 中唯一）：`expiredHeadIsDroppedAndNextIsStillServed` 原写法两笔**同时**入队后才推时钟，第二笔同样超时，用例却把 poll 结果强转 Ready ⇒ ClassCastException。属**用例设计错误**（实现行为正确：drain 循环本就逐条消化 Expired），修正为"第二笔在首笔已超时后入队"。
+
+### 验证（实际输出）
+
+```
+:app:compileDebugKotlin + :app:testDebugUnitTest   BUILD SUCCESSFUL
+测试报告：226 / 0 失败 / 0 忽略（218 基线 + 8 条新增）
+```
+
+### 截至2026-10-24 仍未修
+
+- §七清单中仅剩：P2-5 支付包短周期重扫兜底、死代码清理（§三 13 项，单独批次）
+- P2-3 冷却映射被同额并存卡覆盖；P2-6 服务层不校验分类/账户存在性（纵深防御）
+- §十一未修项：`RecentResultObservation` 与 D-25 等价的冗余判定（删否需拍板）、confirm 无超时、页面时间只到分钟时撞 `sourceEventKey`
+- §十二 P0-2 敏感词 × 通知全停（根因 C）—— 按 ISSUE 判断，等 1、2 落地重跑 L1 后再动
+- **全部修复未真机验证**，L1 20 笔待跑；P1-1 的队列补播无单测覆盖（OverlayManager 依赖 View/WindowManager，需真机或 instrumented 验证）
