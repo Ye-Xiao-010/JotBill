@@ -46,7 +46,7 @@
 | [`TESTING.md`](./TESTING.md) | 测试指南 | 稳定 |
 | [`LITENOTE_COMPARISON_2026-10-10_payment_overlay.md`](./LITENOTE_COMPARISON_2026-10-10_payment_overlay.md) | 上游 LiteNote 弹窗机制对照：**上游无无障碍服务，纯通知驱动零门禁**；精简版砍掉通知换无障碍，继承"等 AI 定论"假设而 AI 已砍 ⇒ 架构债 |
 
-### ⚠️ 快照 · 含未处置项（4 份）—— 问题还活着，查缺陷时读
+### ⚠️ 快照 · 含未处置项（5 份）—— 问题还活着，查缺陷时读
 
 | 文档 | 活着的条目 |
 |---|---|
@@ -54,6 +54,7 @@
 | [`ISSUE_REGISTER_2026-09-11.md`](./ISSUE_REGISTER_2026-09-11.md) | P2 / P4 / P6 / P7 / P8 / P9 / P11 / P12 / P13 / P14 / P16 / P17 / P19 / P22 |
 | [`SCHEME_INVENTORY_2026-09-10.md`](./SCHEME_INVENTORY_2026-09-10.md) | §6.9 多订单推演未验证；⚠️ 全文描述**已被取代的旧状态**（版本 A / 90s / 单槽） |
 | [`ISSUE_2026-10-10_lean_payment_overlay_popup_timing.md`](./ISSUE_2026-10-10_lean_payment_overlay_popup_timing.md) | 🔴 **精简版付款确认弹窗不在支付成功页出现，切回本应用后才弹**（直接阻断 L1 验收）；根因 A（前台守卫是死代码）/ B（30s vs 15s 窗口打架）/ C（成功页误判敏感）+ 附带 D/E/F。**代码层已定位，根因待日志确认** |
+| [`CODE_REVIEW_LEAN_2026-10-24.md`](./CODE_REVIEW_LEAN_2026-10-24.md) | 🔴 **精简版全量代码审查**：候选单槽位导致第二笔静默漏弹（P1）、90s 同额去重吞真实第二笔（P1）、成功反馈误关下一张（P2）等 5 项行为缺陷 + 13 处残留死代码 + L6 验收标准不可执行 |
 
 ### 📦 快照 · 已失效（6 份）—— 勿据此改代码
 
