@@ -74,6 +74,15 @@ internal object PendingConfirmOverlayManager {
     private const val AUTO_DISMISS_DELAY = 30_000L
     private const val SUCCESS_DISPLAY_DELAY = 1_500L
 
+    /**
+     * "该待确认已在其他入口处理"错误页的自动关闭延时（2026-10-24 复审补）。
+     *
+     * 错误页会把 `content_main` 整体置 GONE，X/稍后按钮随之消失，只剩一个"重试"；
+     * 而确认入口已经取消了 `autoDismissRunnable`。不补这个短超时，用户不点重试
+     * 就会永久停在全屏遮罩上（只能杀进程）。3 秒足够读完提示。
+     */
+    private const val ALREADY_HANDLED_DISMISS_DELAY = 3_000L
+
     /** 观察状态的新鲜度：超龄的"非敏感"判定不可信，宁可弹不出来也不冒险。 */
     private const val OBSERVATION_FRESH_MILLIS = 30_000L
 
@@ -174,6 +183,17 @@ internal object PendingConfirmOverlayManager {
     /** 当前弹窗的金额输入框。金额参与就绪判据（D-21），输入变化时重算按钮状态。 */
     private var currentAmountInput: EditText? = null
     private var displayedPendingId: String? = null
+
+    /**
+     * 确认入账进行中（2026-10-24）。
+     *
+     * 为什么需要：[onConfirmClicked] 会把按钮置灰并写"入账中..."，但
+     * [updateConfirmEnabled] 会被金额输入、分类 chip、账户 chip 三处回调触发。
+     * 用户在写库期间碰一下金额或点一下分类，按钮就会被重新点亮、文案却仍是
+     * "入账中..." —— 再点一次会走第二次 `PendingConfirmService.confirm`，
+     * 返回 `AlreadyHandled` 并把成功页覆盖成"已在其他入口处理"，用户以为没记上。
+     */
+    private var isConfirming = false
 
     /**
      * 当前在屏弹窗对应的待确认行关键字段，仅 [AUTO_DISMISS] 自动关闭时用来补发通知。
@@ -713,12 +733,22 @@ internal object PendingConfirmOverlayManager {
                     "visibility=${view.visibility}, size=${view.width}x${view.height}, " +
                     "windowToken=${view.windowToken != null}"
             )
+            // 必须清理：否则 overlayView 仍非空，30 秒内所有新候选都会被
+            // maybeShowCandidate 的 `overlayView != null` 挡掉，表现为连续漏弹。
+            // 走 dismissInternal 保证窗口/计时器/状态一起收口；reason 不是
+            // AUTO_DISMISS，不会补发"这笔还没记上"的通知。
+            dismissInternal("NOT_ATTACHED")
         }
         visibilityCheckRunnable = runnable
         mainHandler.postDelayed(runnable, VISIBILITY_CHECK_DELAY)
     }
 
     private fun onConfirmClicked(view: View, pendingRow: PendingTransactionEntity, confirmButton: Button) {
+        // 防重入：写库期间用户改金额/点分类会经 updateConfirmEnabled 重新点亮按钮，
+        // 没有这道闸就会二次进入 confirm（见 isConfirming 的 KDoc）。
+        if (isConfirming) {
+            return
+        }
         val category = selectedCategory
         val account = selectedAccount
         if (category == null || account == null) {
@@ -730,6 +760,12 @@ internal object PendingConfirmOverlayManager {
             return
         }
         val remark = view.findViewById<EditText>(R.id.et_remark).text?.toString()?.trim()?.takeIf { it.isNotBlank() }
+        isConfirming = true
+        // 确认开始即取消自动关闭：否则 30 秒后 AUTO_DISMISS 会给一笔已经入账、
+        // pending 行已删的条目补发"这笔还没记上"的假通知，且之后没有 removed
+        // 事件来 cancel，通知会永久挂在通知栏（见 notifyAutoDismissIfNeeded）。
+        autoDismissRunnable?.let(mainHandler::removeCallbacks)
+        autoDismissRunnable = null
         confirmButton.isEnabled = false
         confirmButton.text = "入账中..."
         scope.launch {
@@ -751,27 +787,81 @@ internal object PendingConfirmOverlayManager {
                 null
             }
             mainHandler.post {
+                // 卡片身份（2026-10-24 复审）：写库期间用户可能已点 X/稍后关掉这张卡，
+                // 并且下一张已经上屏。此时：
+                // - UI 操作必须丢弃（否则成功页 1.5s dismiss 会关掉新卡；
+                //   AlreadyHandled 残留 isConfirming=true 会让新卡按钮永久灰；
+                //   Invalid/null 会抹掉新卡正在进行的确认状态）；
+                // - 但**写库已成功的全局副作用不能丢**（缓存失效 / 最近分类），
+                //   否则 RN 侧会一直显示旧账单，直到用户下次回前台。
+                val isCurrentCard = overlayView === view
                 when (outcome) {
                     is PendingConfirmService.Outcome.Confirmed -> {
+                        // 全局副作用：无条件执行。
                         prefs.edit().putString(KEY_LAST_CATEGORY_ID, category.id).apply()
-                        emitJsEvents(outcome.bill)
-                        showSuccessFeedback(view, outcome.bill.amountMinor, category.name)
+                        emitJsEvents(outcome.bill, pendingRow.id)
+                        if (isCurrentCard) {
+                            showSuccessFeedback(view, outcome.bill.amountMinor, category.name)
+                        } else {
+                            JotBillLog.i(
+                                TAG,
+                                "确认成功但卡片已更换：仅刷新缓存，不展示成功页 " +
+                                    "id=${pendingRow.id.take(16)}"
+                            )
+                        }
                     }
 
                     is PendingConfirmService.Outcome.AlreadyHandled -> {
+                        if (!isCurrentCard) {
+                            JotBillLog.i(
+                                TAG,
+                                "确认结果已过期(卡片已更换)，丢弃: id=${pendingRow.id.take(16)}"
+                            )
+                            return@post
+                        }
+                        // 该笔已被其他入口处理：保持 isConfirming=true，不允许再点。
                         showErrorFeedback(view, "该待确认已在其他入口处理", dismissAfter = true)
+                        // 错误页隐藏了 X/稍后，而 autoDismiss 已在确认入口取消 ⇒
+                        // 必须补一个短超时，否则不点"重试"就永久卡住。
+                        // expect=view：3 秒内若已换卡，不得关掉新卡。
+                        mainHandler.postDelayed(
+                            { dismissInternal("ALREADY_HANDLED", expect = view) },
+                            ALREADY_HANDLED_DISMISS_DELAY
+                        )
                     }
 
                     is PendingConfirmService.Outcome.Invalid -> {
+                        if (!isCurrentCard) {
+                            JotBillLog.i(
+                                TAG,
+                                "确认校验结果已过期(卡片已更换)，丢弃: id=${pendingRow.id.take(16)}"
+                            )
+                            return@post
+                        }
+                        // 校验失败（金额/类型/来源非法）：这笔还没入账，允许修正后重试。
+                        isConfirming = false
                         showErrorFeedback(view, outcome.reason)
-                        confirmButton.isEnabled = true
+                        // 重新排队自动关闭：确认入口已取消原计时器，不重排就失去
+                        // "30 秒兜底"（错误页隐藏了 X/稍后，用户只能点重试）。
+                        scheduleAutoDismiss()
                         confirmButton.text = "确认入账"
+                        updateConfirmEnabled(confirmButton)
                     }
 
                     null -> {
+                        if (!isCurrentCard) {
+                            JotBillLog.i(
+                                TAG,
+                                "确认异常结果已过期(卡片已更换)，丢弃: id=${pendingRow.id.take(16)}"
+                            )
+                            return@post
+                        }
+                        // 写库异常：同上，允许重试。
+                        isConfirming = false
                         showErrorFeedback(view, "入账失败，请稍后在待确认中心重试")
-                        confirmButton.isEnabled = true
+                        scheduleAutoDismiss()
                         confirmButton.text = "确认入账"
+                        updateConfirmEnabled(confirmButton)
                     }
                 }
             }
@@ -779,12 +869,12 @@ internal object PendingConfirmOverlayManager {
     }
 
     /** 弹窗确认与 App 内确认等价：广播同一组 JS 事件刷新账单/待确认缓存。 */
-    private fun emitJsEvents(bill: com.jotbill.app.data.entity.BillEntity) {
+    private fun emitJsEvents(bill: com.jotbill.app.data.entity.BillEntity, pendingId: String) {
         val emitter = sharedJsEventEmitter ?: return
         try {
             emitter.emit(
                 "onPendingChanged",
-                JSONObject().put("pendingId", displayedPendingId).put("deleted", true)
+                JSONObject().put("pendingId", pendingId).put("deleted", true)
             )
             emitter.emit("onBillCreated", BridgeDtoMapper.bill(bill))
         } catch (error: RuntimeException) {
@@ -808,6 +898,12 @@ internal object PendingConfirmOverlayManager {
             }
             val defaultCategoryId = resolveDefaultCategoryId(db, pendingRow)
             mainHandler.post {
+                // 身份校验：查询返回前弹窗可能已被关闭、并已上屏下一张。
+                // 旧回调若继续执行，会往**全局** categoryViews 追加已 detach 的视图、
+                // 并 selectCategory 改写新卡的选中态与按钮状态。
+                if (overlayView !== view) {
+                    return@post
+                }
                 categoriesContainer.removeAllViews()
                 loadingContainer.visibility = View.GONE
                 if (categories.isEmpty()) {
@@ -894,6 +990,10 @@ internal object PendingConfirmOverlayManager {
                 emptyList()
             }
             mainHandler.post {
+                // 身份校验：理由同 loadCategories —— 旧卡的回调不得改写新卡的账户选中态。
+                if (overlayView !== view) {
+                    return@post
+                }
                 container.removeAllViews()
                 accountViews.clear()
                 val density = app.resources.displayMetrics.density
@@ -997,6 +1097,12 @@ internal object PendingConfirmOverlayManager {
      * 选择回调三处触发 —— 缺任一处都会让按钮状态卡死。
      */
     private fun updateConfirmEnabled(confirmButton: Button?) {
+        if (isConfirming) {
+            // 写库期间金额输入 / 分类 / 账户三处回调都可能走到这里，
+            // 必须挡住，否则按钮被重新点亮、文案仍是"入账中..."（见 isConfirming）。
+            confirmButton?.isEnabled = false
+            return
+        }
         val ready = PendingConfirmReadiness.isReady(
             hasCategory = selectedCategory != null,
             hasAccount = selectedAccount != null,
@@ -1012,7 +1118,9 @@ internal object PendingConfirmOverlayManager {
         successContent?.visibility = View.VISIBLE
         view.findViewById<TextView>(R.id.tv_success_detail)?.text =
             "¥${formatYuan(amountMinor)} - $categoryName"
-        mainHandler.postDelayed({ dismissInternal("SUCCESS") }, SUCCESS_DISPLAY_DELAY)
+        // 必须带 expect：成功页停留 1.5s 期间用户可能已被新卡顶替，
+        // 无身份校验的 dismiss 会关掉新卡（2026-10-24 复审 P0）。
+        mainHandler.postDelayed({ dismissInternal("SUCCESS", expect = view) }, SUCCESS_DISPLAY_DELAY)
     }
 
     private fun showErrorFeedback(view: View, message: String, dismissAfter: Boolean = false) {
@@ -1055,8 +1163,18 @@ internal object PendingConfirmOverlayManager {
         mainHandler.postDelayed(autoDismissRunnable!!, AUTO_DISMISS_DELAY)
     }
 
-    /** 关闭弹窗；主线程调用。 */
-    private fun dismissInternal(reason: String) {
+    /**
+     * 关闭弹窗；主线程调用。
+     *
+     * @param expect 期望关闭的卡片。延迟回调（成功反馈、已处理超时）必须传入发起时的
+     *   `view` —— 否则回调执行时若已换卡，`dismissInternal` 会关掉**新卡**。
+     *   用户主动关闭（X / 稍后）不传，作用于当前卡。
+     */
+    private fun dismissInternal(reason: String, expect: View? = null) {
+        if (expect != null && overlayView !== expect) {
+            JotBillLog.i(TAG, "弹窗关闭已跳过(目标卡片已更换): reason=$reason")
+            return
+        }
         try {
             autoDismissRunnable?.let(mainHandler::removeCallbacks)
             autoDismissRunnable = null
@@ -1080,6 +1198,7 @@ internal object PendingConfirmOverlayManager {
             currentAmountInput = null
             displayedPendingId = null
             displayedAutoDismissInfo = null
+            isConfirming = false
             waitingCandidate = null
             candidateExpiryRunnable?.let(mainHandler::removeCallbacks)
             candidateExpiryRunnable = null

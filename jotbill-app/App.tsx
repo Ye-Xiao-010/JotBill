@@ -15,8 +15,6 @@ import { useAppStateManager } from './src/hooks';
 import { ThemeProvider, useTheme, AlertProvider, ToastProvider } from './src/providers';
 import AppNavigator from './src/navigation/AppNavigator';
 
-const { PaymentNotificationModule } = NativeModules;
-
 function AppContent() {
   // 管理应用状态，处理后台缓存清理
   useAppStateManager();
@@ -31,36 +29,26 @@ function AppContent() {
     markBundleLoaded();
   }, []);
 
-  // 监听账单创建成功事件
+  // 监听账单创建成功事件（悬浮窗确认入账后由 DataModule 发出）。
+  //
+  // ⚠️ 2026-10-24 修正：此前监听的是 PaymentNotificationModule，而事件实际从
+  // DataModule 的 sharedJsEventEmitter 发出（PendingConfirmOverlayManager.emitJsEvents
+  // → DataModule），模块不匹配 ⇒ 监听器注册了但永远收不到 —— 这正是
+  // “悬浮窗确认后 RN 缓存不刷新、用户以为没记上再记一遍”的根因。
+  // （PaymentNotificationModule:295 的注释也确认了事件已迁移到 sharedJsEventEmitter。）
   useEffect(() => {
-    console.log('[App] 开始注册账单创建事件监听器...');
-
-    if (!PaymentNotificationModule) {
-      console.warn('[App] PaymentNotificationModule 不可用');
+    const rawDataModule = NativeModules.Data;
+    if (!rawDataModule) {
+      console.warn('[App] Data module 不可用，账单创建事件无法订阅');
       return;
     }
-
-    console.log('[App] PaymentNotificationModule 可用，创建事件监听器');
-    const eventEmitter = new NativeEventEmitter(PaymentNotificationModule);
-
-    const subscription = eventEmitter.addListener('onBillCreated', () => {
-      console.log('========================================');
-      console.log('[App] ✓ 收到账单创建成功事件！');
-      console.log('[App] 开始刷新数据...');
-      console.log('========================================');
-
-      // 使账单相关的所有缓存失效
-      invalidateCache.bills();
-
-      console.log('[App] 缓存失效完成，等待重新获取数据');
-    });
-
-    console.log('[App] ✓ 事件监听器注册成功');
-
-    return () => {
-      console.log('[App] 注销事件监听器');
-      subscription.remove();
-    };
+    const subscription = new NativeEventEmitter(rawDataModule).addListener(
+      'onBillCreated',
+      () => {
+        invalidateCache.bills();
+      },
+    );
+    return () => subscription.remove();
   }, []);
 
   // 待确认创建/更新事件:失效识别链路缓存,保证待确认中心及时刷新
@@ -73,10 +61,12 @@ function AppContent() {
     return () => subscription.remove();
   }, []);
 
-  // 待确认确认/忽略后的终态事件:刷新识别链路缓存,核销页与待确认入口及时同步
+  // 待确认确认/忽略后的终态事件：确认会写账单+删待确认+更新余额，忽略会删待确认，
+  // 两侧缓存都要失效（此前只刷 recognition，确认入账后账单页仍是旧数据）。
   useEffect(() => {
     const subscription = addPendingChangedListener(() => {
       invalidateCache.recognition();
+      invalidateCache.bills();
     });
     return () => subscription.remove();
   }, []);

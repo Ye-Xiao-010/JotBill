@@ -163,4 +163,50 @@ class PendingConfirmServiceTest {
         assertTrue(outcome is PendingConfirmService.Outcome.Invalid)
         assertEquals(0, database.billDao().count())
     }
+
+    /**
+     * 悬空分类引用必须返回 Invalid，而不是让 FK 约束在插入时抛 SQL 异常。
+     *
+     * 场景：RN 待确认中心的快捷确认（`handleConfirm` 传 `input={}`）不传分类，
+     * 服务层回退到 `pending.categoryId`；若该分类已被删除（`deleteCategory`
+     * 只检查 bills 不检查 pending），旧实现会在 `withTransaction` 里抛 FK 异常、
+     * 英文透传，且 RN 编辑面板没有分类选择器 ⇒ 永久无法入账。
+     */
+    @Test
+    fun confirmRejectsDeletedCategoryAsInvalid() = runBlocking {
+        insertPending()
+        // 给待确认挂一个不存在的分类（模拟"分类已删、pending 悬空"）
+        val pending = database.pendingTransactionDao().getById(PENDING_ID)!!
+        database.pendingTransactionDao().update(
+            pending.copy(categoryId = "cat-deleted", version = pending.version)
+        )
+
+        val outcome = service.confirm(
+            pendingId = PENDING_ID,
+            overrides = PendingConfirmService.Overrides(amountMinor = 3580L)
+        )
+        assertTrue("悬空分类应返回 Invalid: $outcome", outcome is PendingConfirmService.Outcome.Invalid)
+        assertEquals("不落账单", 0, database.billDao().count())
+        assertEquals("待确认保留，等用户改选分类", 1, database.pendingTransactionDao().getPage(10, 0).size)
+    }
+
+    /** 悬空账户引用同理（FK RESTRICT 提前到服务层拒绝）。 */
+    @Test
+    fun confirmRejectsDeletedAccountAsInvalid() = runBlocking {
+        insertPending()
+        val pending = database.pendingTransactionDao().getById(PENDING_ID)!!
+        database.pendingTransactionDao().update(
+            pending.copy(accountId = "account-deleted", version = pending.version)
+        )
+
+        val outcome = service.confirm(
+            pendingId = PENDING_ID,
+            overrides = PendingConfirmService.Overrides(
+                amountMinor = 3580L,
+                categoryId = CATEGORY_ID
+            )
+        )
+        assertTrue("悬空账户应返回 Invalid: $outcome", outcome is PendingConfirmService.Outcome.Invalid)
+        assertEquals("不落账单", 0, database.billDao().count())
+    }
 }

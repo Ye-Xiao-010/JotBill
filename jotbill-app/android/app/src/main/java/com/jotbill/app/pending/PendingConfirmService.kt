@@ -86,18 +86,28 @@ internal class PendingConfirmService(private val database: JotBillDatabase) {
         val rulePatch = ruleEngine.sanitizePatch(
             (ruleDecision as? RuleEngine.Decision.Continue)?.patch ?: RuleEngine.FieldPatch()
         )
+        val resolvedCategoryId = overrides.categoryId ?: rulePatch.categoryId ?: pending.categoryId
+        val resolvedAccountId = overrides.accountId ?: rulePatch.accountId ?: pending.accountId
+        // 分类/账户引用校验（2026-10-24）：`bills.category_id` / `account_id` 是
+        // ForeignKey(RESTRICT) —— pending 上的引用可能指向已被删除的行
+        // （`DataModule.deleteCategory` 只检查 bills，不检查 pending）。
+        // 悬空引用会让插入抛 SQL 异常，错误信息以英文透传给用户；而 RN 待确认
+        // 中心的快捷确认（`handleConfirm` 传 `input={}`）不传分类，编辑面板也没有
+        // 分类选择器 ⇒ 那条待确认将永久无法入账。在服务层提前拒绝并给出中文提示。
+        if (resolvedCategoryId != null && database.categoryDao().getById(resolvedCategoryId) == null) {
+            return Outcome.Invalid("分类已被删除，请编辑后重新选择分类")
+        }
+        if (resolvedAccountId != null && database.accountDao().getById(resolvedAccountId) == null) {
+            return Outcome.Invalid("账户已被删除，请编辑后重新选择账户")
+        }
         val bill = BillEntity(
             id = UUID.randomUUID().toString(),
             amountMinor = amountMinor,
             type = type,
             occurredAt = overrides.occurredAt ?: pending.occurredAt,
             description = overrides.description,
-            categoryId = overrides.categoryId
-                ?: rulePatch.categoryId
-                ?: pending.categoryId,
-            accountId = overrides.accountId
-                ?: rulePatch.accountId
-                ?: pending.accountId,
+            categoryId = resolvedCategoryId,
+            accountId = resolvedAccountId,
             targetAccountId = overrides.targetAccountId,
             platform = overrides.platform
                 ?: rulePatch.platform

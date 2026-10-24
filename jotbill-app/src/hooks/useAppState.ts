@@ -4,7 +4,7 @@
  */
 import { useEffect, useRef } from 'react';
 import { AppState, AppStateStatus } from 'react-native';
-import { cleanupStaleCache, queryClient } from '../lib/queryClient';
+import { cleanupStaleCache, invalidateCache, queryClient } from '../lib/queryClient';
 
 /**
  * 监听应用状态变化，在适当时机清理缓存
@@ -22,8 +22,13 @@ export function useAppStateManager() {
 
       // 应用从后台切换到前台
       if (appState.current.match(/inactive|background/) && nextAppState === 'active') {
-        // 可以在这里触发关键数据的刷新
-        // 例如：queryClient.invalidateQueries({ queryKey: ['dashboard'] });
+        // 弹窗确认入账发生在**原生侧**，RN 的 query 缓存不会自动失效：
+        // 原生确实广播了 onBillCreated / onPendingChanged，但全仓没有任何订阅者
+        // （AIChatScreen 的注释也记录了这一点），而 refetchOnWindowFocus 为 false。
+        // 不主动失效的话，用户从悬浮窗确认后切回 App，看到的仍是旧余额与旧账单，
+        // 容易以为没记上、手工再记一遍，造成重复账单。
+        invalidateCache.bills();
+        invalidateCache.recognition();
       }
 
       appState.current = nextAppState;

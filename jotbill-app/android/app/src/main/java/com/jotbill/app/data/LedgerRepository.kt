@@ -11,6 +11,7 @@ import com.jotbill.app.pending.PendingChangeHub
 import com.jotbill.app.pending.PendingChangeInfo
 import com.jotbill.app.rules.DuplicateGuard
 import com.jotbill.app.rules.FieldPriorityResolver
+import com.jotbill.app.utils.JotBillLog
 import org.json.JSONObject
 import java.util.UUID
 
@@ -521,18 +522,31 @@ class LedgerRepository(private val database: JotBillDatabase) {
         }
         // 事务提交后广播终态事件：提醒消费方消除该待确认的系统通知
         // (pending 物理删除,用入参的 pending 携带通知所需的字段)
-        PendingChangeHub.emit(
-            PendingChangeInfo(
-                pendingId = pending.id,
-                type = pending.type,
-                amountMinor = pending.amountMinor,
-                sourceType = pending.sourceType,
-                conflictReason = null,
-                occurredAt = pending.occurredAt,
-                isNew = false,
-                removed = true
+        //
+        // ⚠️ 2026-10-24 复审修复：只在**真正成功**时广播。此前无条件 emit，
+        // 而 `ConfirmResult(false)` 的两个分支（pending 不存在 / 版本冲突）根本没有
+        // 删除该行 —— 结果是一条仍然存活的待确认被当成终态：系统通知被撤、
+        // `RecentPaymentCooldown` 启动 15 秒冷却、`RecentResultObservation` 清除登记。
+        // 表现为「卡还在、通知没了、同额新支付被静默抑制」。
+        if (result.success) {
+            PendingChangeHub.emit(
+                PendingChangeInfo(
+                    pendingId = pending.id,
+                    type = pending.type,
+                    amountMinor = pending.amountMinor,
+                    sourceType = pending.sourceType,
+                    conflictReason = null,
+                    occurredAt = pending.occurredAt,
+                    isNew = false,
+                    removed = true
+                )
             )
-        )
+        } else {
+            JotBillLog.i(
+                "LedgerRepository",
+                "待确认未变更，跳过终态广播: id=${pending.id.take(16)}"
+            )
+        }
         return result
     }
 
