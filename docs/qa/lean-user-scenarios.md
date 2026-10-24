@@ -12,7 +12,7 @@
 
 | # | 场景 | 承诺 | 状态 | 代码依据 / 验收看什么 |
 |---|---|---|---|---|
-| 1 | 标准一笔：支付完停结果页 → 弹窗 → 确认 → 切回 App 已刷新 | 弹窗预填金额/账户，确认后 1.5s 成功页消失，回 App 缓存已刷新 | ✅（延迟口径见注） | 预填链 `resolveDefaultCategoryId`/`loadAccounts`；缓存刷新链 `emitJsEvents`→`NativeModules.Data`→`invalidateCache`（端到端核实通）。**延迟不承诺 1~2 秒**：受观察帧敏感门禁、MIUI 收权（实测 1.1~57s）、根因 C 影响，按 A/B 档口径验收 |
+| 1 | 标准一笔：支付完停结果页 → 弹窗 → 确认 → 切回 App 已刷新 | 弹窗预填金额/账户，确认后 0.8s 成功页消失（**停留期间点击屏幕任意位置可立即关闭**，2026-10-24 用户裁定），回 App 缓存已刷新 | ✅（延迟口径见注） | 预填链 `resolveDefaultCategoryId`/`loadAccounts`；缓存刷新链 `emitJsEvents`→`NativeModules.Data`→`invalidateCache`（端到端核实通）。**延迟不承诺 1~2 秒**：受观察帧敏感门禁、MIUI 收权（实测 1.1~57s）、根因 C 影响，按 A/B 档口径验收 |
 | 2 | 弹窗 30s 没管 | 自动关闭 + "这笔还没记上"通知 + 卡在待确认中心 | ✅ | `AUTO_DISMISS`→`notifyAutoDismissIfNeeded`；建卡/超时两通知共用 `pendingId.hashCode()` 原地更新；**通知点击只打开 App 首页**，需自行进 设置→待确认中心（直达路由未做，登记） |
 | 3 | 完全忘记 | 卡片一直在待确认中心 | ✅ | `AUTO_DISMISS` 只清 UI 不动行；召回靠**系统通知**，应用内**没有**红点/角标（原"红点提示"说法不成立，已修正；加角标是候选改进，需拍板） |
 

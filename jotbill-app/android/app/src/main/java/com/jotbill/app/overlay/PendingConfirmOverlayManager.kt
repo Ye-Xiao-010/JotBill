@@ -72,7 +72,14 @@ internal object PendingConfirmOverlayManager {
      * 避免用户误以为已入账。
      */
     private const val AUTO_DISMISS_DELAY = 30_000L
-    private const val SUCCESS_DISPLAY_DELAY = 1_500L
+
+    /**
+     * 成功反馈页停留时长（用户裁定 2026-10-24：1.5s → 0.8s）。
+     *
+     * 停留期间**点击屏幕任意位置立即关闭**（见 [showSuccessFeedback]）——
+     * 此前触摸被全屏遮罩吞掉，0.8s 内用户点屏幕毫无反应，像"卡住了"。
+     */
+    private const val SUCCESS_DISPLAY_DELAY = 800L
 
     /**
      * "该待确认已在其他入口处理"错误页的自动关闭延时（2026-10-24 复审补）。
@@ -934,7 +941,7 @@ internal object PendingConfirmOverlayManager {
             mainHandler.post {
                 // 卡片身份（2026-10-24 复审）：写库期间用户可能已点 X/稍后关掉这张卡，
                 // 并且下一张已经上屏。此时：
-                // - UI 操作必须丢弃（否则成功页 1.5s dismiss 会关掉新卡；
+                // - UI 操作必须丢弃（否则成功页 0.8s dismiss 会关掉新卡；
                 //   AlreadyHandled 残留 isConfirming=true 会让新卡按钮永久灰；
                 //   Invalid/null 会抹掉新卡正在进行的确认状态）；
                 // - 但**写库已成功的全局副作用不能丢**（缓存失效 / 最近分类），
@@ -1270,7 +1277,12 @@ internal object PendingConfirmOverlayManager {
             } else {
                 "¥${formatYuan(amountMinor)} - $categoryName"
             }
-        // 必须带 expect：成功页停留 1.5s 期间用户可能已被新卡顶替，
+        // 用户裁定（2026-10-24）：成功反馈期间点击屏幕任意位置立即关闭。
+        // 监听挂在全屏根 view 上 —— 此刻 content_main 已 GONE、无并发交互；
+        // 点按与到点自动关闭走同一条 dismissInternal 收口，reason 区分归因。
+        // expect=view：0.8s 内若已换卡，不得关掉新卡。
+        view.setOnClickListener { dismissInternal("SUCCESS_TAP", expect = view) }
+        // 必须带 expect：成功页停留 0.8s 期间用户可能已被新卡顶替，
         // 无身份校验的 dismiss 会关掉新卡（2026-10-24 复审 P0）。
         mainHandler.postDelayed({ dismissInternal("SUCCESS", expect = view) }, SUCCESS_DISPLAY_DELAY)
     }
