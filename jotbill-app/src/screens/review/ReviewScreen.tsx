@@ -41,6 +41,7 @@ import {
   type TransactionType,
 } from '../../native';
 import { invalidateCache, QUERY_KEYS } from '../../lib/queryClient';
+import { formatPlatform } from '../../utils/platform';
 import { useAlert } from '../../providers';
 import { borderRadius, borderWidth, spacing } from '../../theme/spacing';
 import { ThemeColors } from '../../theme/colors';
@@ -559,7 +560,11 @@ function PendingCard({
           />
         )}
         {pending.platform ? (
-          <MetaRow label="平台" value={pending.platform} colors={colors} />
+          <MetaRow
+            label="平台"
+            value={formatPlatform(pending.platform)}
+            colors={colors}
+          />
         ) : null}
         {pending.merchant ? (
           <MetaRow label="商户" value={pending.merchant} colors={colors} />

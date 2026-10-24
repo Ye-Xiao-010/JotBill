@@ -16,6 +16,7 @@ import { ThemeColors } from '../../theme/colors';
 import { borderRadius, borderWidth, spacing, shadow } from '../../theme/spacing';
 import { nativeData, type Bill, type Category } from '../../native';
 import { invalidateCache } from '../../lib/queryClient';
+import { formatPlatform } from '../../utils/platform';
 import { useStyles } from '../../hooks';
 import { useAlert } from '../../providers';
 
@@ -171,7 +172,7 @@ export default function BillDetailScreen() {
               <View style={styles.divider} />
               <View style={styles.detailRow}>
                 <Text style={styles.detailLabel}>来源</Text>
-                <Text style={styles.detailValue}>{bill.platform}</Text>
+                <Text style={styles.detailValue}>{formatPlatform(bill.platform)}</Text>
               </View>
             </>
           )}

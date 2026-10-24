@@ -22,6 +22,7 @@ import { BillItem } from '../../components';
 import { useToast, useStyles } from '../../hooks';
 import { nativeData, type Category } from '../../native';
 import { CACHE_TIME, GC_TIME, QUERY_KEYS } from '../../lib/queryClient';
+import { formatPlatform } from '../../utils/platform';
 import { ThemeColors } from '../../theme/colors';
 import { spacing, borderRadius, borderWidth } from '../../theme';
 import {
@@ -302,7 +303,7 @@ const AllBillsScreen: React.FC = () => {
                           category:
                             bill.merchant ||
                             bill.productDescription ||
-                            bill.platform ||
+                            formatPlatform(bill.platform) ||
                             '未分类',
                           amount: bill.amountMinor / 100,
                           type:

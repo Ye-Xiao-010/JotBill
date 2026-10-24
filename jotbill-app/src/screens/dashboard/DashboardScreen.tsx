@@ -34,6 +34,7 @@ import { ProgressBar, BrutalPressable } from '../../components/ui';
 import { DashboardSkeleton } from '../../components/skeleton';
 import { useDashboard, useStyles } from '../../hooks';
 import { nativeData } from '../../native';
+import { formatPlatform } from '../../utils/platform';
 import { CACHE_TIME, GC_TIME, QUERY_KEYS } from '../../lib/queryClient';
 import type {
   Bill,
@@ -528,7 +529,7 @@ export default function DashboardScreen() {
                 category?.name ||
                 rawBill.merchant ||
                 rawBill.productDescription ||
-                rawBill.platform ||
+                formatPlatform(rawBill.platform) ||
                 '未分类';
               const categoryIcon =
                 category?.icon || getCategoryIcon(category?.name);
@@ -539,7 +540,7 @@ export default function DashboardScreen() {
                   rawBill.merchant ||
                   rawBill.productDescription ||
                   categoryName,
-                platform: rawBill.platform || categoryName,
+                platform: formatPlatform(rawBill.platform) || categoryName,
               };
 
               return (
@@ -577,7 +578,7 @@ export default function DashboardScreen() {
                             'zh-CN',
                             { month: 'short', day: 'numeric' },
                           )}{' '}
-                          · {bill.platform || '未分类'}
+                          · {formatPlatform(bill.platform) || '未分类'}
                         </Text>
                       </View>
                     </View>
