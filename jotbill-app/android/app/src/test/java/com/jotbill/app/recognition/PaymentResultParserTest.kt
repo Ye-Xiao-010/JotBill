@@ -155,12 +155,13 @@ class PaymentResultParserTest {
     // ---------- D-6：结果页事件去重键桶宽（主路径 = 文本解析成功） ----------
 
     /**
-     * 同一结果页在 30 秒内的重复读取必须收敛到同一事件键。
+     * 同一结果页在 15 秒内的重复读取必须收敛到同一事件键。
      *
      * 防噪原意保留：无障碍结果页会秒级连发多条事件，同一页不得落多条证据。
+     * ⚠️ 2026-10-24 桶宽由 30 秒收窄至 15 秒（用户裁定：同额第二笔 15 秒内接受合并）。
      */
     @Test
-    fun sameResultPageWithinThirtySecondBucketKeepsSingleEventKey() {
+    fun sameResultPageWithinFifteenSecondBucketKeepsSingleEventKey() {
         val pageText = "支付成功 拼多多 实付 ¥39.60"
 
         assertEquals(
@@ -171,28 +172,32 @@ class PaymentResultParserTest {
     }
 
     /**
-     * 同包同金额两单相隔 40 秒（< 2 分钟）时事件键必须不同。
+     * 同包同金额两单相隔 20 秒时事件键必须不同。
      *
      * 否则第二单证据会被 `markPaymentResultEvent` 静默吞掉（不落待确认、不派 AI）。
      *
-     * **判别性**：40 秒的间隔仍落在同一个 120 秒桶内 ⇒ 旧实现（`/ 120_000`）两键相同、
-     * 本用例必红；收窄为 30 秒桶后两键必须不同。该用例专钉**文本主路径**
-     * （`PaymentResultParser`），因为只测截图兜底路径会漏掉这一处的漏改。
+     * **判别性（2026-10-24 修订）**：`observedAt` 恰为 30 秒桶边界
+     * （`1_800_000_000_000 % 30_000 == 0`），20 秒后**仍落在同一 30 秒桶内**、
+     * 但已跨过 15 秒桶。因此：
+     * - 桶宽 15 秒 ⇒ 两键不同（本例通过）；
+     * - 桶宽回退到 30 秒 ⇒ 两键相同（本例必红）。
+     *
+     * 原先用 40 秒间隔时，30 秒桶下也已跨桶 ⇒ 回退到 30 秒照样通过，用例不判别。
      */
     @Test
-    fun sameResultPageAcrossThirtySecondBucketProducesDistinctEventKeys() {
+    fun sameResultPageAcrossFifteenSecondBucketProducesDistinctEventKeys() {
         val pageText = "支付成功 拼多多 实付 ¥39.60"
-        val secondOrderObservedAt = observedAt + 40_000L
+        val secondOrderObservedAt = observedAt + 20_000L
 
-        // 前提自检：这两次读取在旧 120 秒桶下确实撞键 —— 本用例判别力的来源。
+        // 前提自检：这两次读取在 30 秒桶下确实同桶 —— 本用例判别力的来源。
         assertEquals(
-            "前提：相隔 40 秒的两次读取仍落在同一 120 秒桶内",
-            observedAt / 120_000L,
-            secondOrderObservedAt / 120_000L
+            "前提：相隔 20 秒的两次读取仍落在同一 30 秒桶内",
+            observedAt / 30_000L,
+            secondOrderObservedAt / 30_000L
         )
 
         assertNotEquals(
-            "同包同金额两单相隔 40 秒不得撞键，否则第二单被静默丢弃",
+            "同包同金额两单相隔 20 秒不得撞键，否则第二单被静默丢弃",
             eventKeyOf(pageText, observedAt),
             eventKeyOf(pageText, secondOrderObservedAt)
         )

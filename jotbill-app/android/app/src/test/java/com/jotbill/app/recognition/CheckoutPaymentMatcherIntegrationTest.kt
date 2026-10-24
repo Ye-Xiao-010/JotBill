@@ -8,6 +8,8 @@ import com.jotbill.app.data.entity.PaymentEvidenceEntity
 import com.jotbill.app.data.entity.TransactionCandidateEntity
 import com.jotbill.app.pending.PendingChangeHub
 import com.jotbill.app.pending.PendingChangeInfo
+import com.jotbill.app.pending.RecentPaymentCooldown
+import com.jotbill.app.pending.RecentResultObservation
 import com.jotbill.app.pending.isUserAssertedConflictReason
 import kotlinx.coroutines.runBlocking
 import org.junit.After
@@ -51,10 +53,18 @@ class CheckoutPaymentMatcherIntegrationTest {
             .allowMainThreadQueries()
             .build()
         matcher = CheckoutPaymentMatcher(database) { now }
+        // 同一笔判据的内存表是单例：必须复位，否则用例之间互相污染。
+        // init() 注册 removed 监听（生产在 MainApplication 调用）；重复注册无害，
+        // forget 是幂等的。
+        RecentPaymentCooldown.reset()
+        RecentResultObservation.reset()
+        RecentResultObservation.init()
     }
 
     @After
     fun tearDown() {
+        RecentPaymentCooldown.reset()
+        RecentResultObservation.reset()
         database.close()
     }
 
@@ -165,12 +175,14 @@ class CheckoutPaymentMatcherIntegrationTest {
         amountMinor: Long = 1234,
         sourceEventKey: String = "evt-1",
         paymentPackage: String = "com.tencent.mm",
-        occurredAt: Long = now
+        occurredAt: Long = now,
+        rawTextHash: String? = null
     ) = PaymentNotificationFallbackSignal(
         paymentPackage = paymentPackage,
         amountMinor = amountMinor,
         occurredAt = occurredAt,
-        sourceEventKey = sourceEventKey
+        sourceEventKey = sourceEventKey,
+        rawTextHash = rawTextHash
     )
 
     private fun checkoutReference(
@@ -297,8 +309,8 @@ class CheckoutPaymentMatcherIntegrationTest {
 
     @Test
     fun orphanSourceTypeVariantsNormalizeToWireValues() = runBlocking {
-        // ⚠️ 两笔用不同金额：D-25 起同支付包 + 同金额 + 60 秒内的信号会被判为同一笔的
-        // 重复观测而不再建卡（见下方 `孤儿跨桶重复观测_*` 系列用例）。本用例验的是
+        // ⚠️ 两笔用不同金额：同支付包 + 同金额 + 同文本哈希的信号会被判为同一笔的
+        // 重复观测而不再建卡（见下方 `孤儿同哈希重复观测_*` 系列用例）。本用例验的是
         // 来源类型归一化，两条必须互相独立，否则第二个信号会被去重挡掉、验不到归一化。
         matcher.recordOrphanPaymentSignal(
             paymentSignal(amountMinor = 1234, sourceEventKey = "evt-a"),
@@ -316,36 +328,46 @@ class CheckoutPaymentMatcherIntegrationTest {
         )
     }
 
-    // ---------- D-25：孤儿待确认跨桶重复观测去重 ----------
+    // ---------- 孤儿待确认重复观测去重（文本哈希主判据 + 时间窗兜底） ----------
 
     /**
-     * D-25 正例：同一笔支付的结果页被观测两次，事件键跨了 30 秒时间桶 ⇒
-     * `sourceEventKey` 幂等键挡不住 ⇒ 必须靠"同包同额 + 60 秒窗"补口。
+     * 正例：同一笔支付的结果页被观测两次，事件键跨了时间桶 ⇒
+     * `sourceEventKey` 幂等键挡不住 ⇒ 必须靠"同包同额 + 同文本哈希 + 15 秒内"补口。
      *
      * 真机数据（2026-09-29 拼多多 build 0.0.98，¥19.90）：
      * `occurredAt=1790687322157`（桶 59689577）与 `occurredAt=1790687342160`（桶 59689578），
      * 间隔 20 秒。旧实现落了两条待确认（`pending-orphan-2` / `pending-orphan-4`）。
+     *
+     * ⚠️ 2026-10-24：用户裁定"同额第二笔 15 秒内接受合并，超过即新交易"。
+     * 本例间隔改为 **10 秒**（窗口内），仍钉死"同一笔不得建两张卡"；
+     * 20 秒的场景由 `孤儿同哈希_超过15秒仍各自建卡` 覆盖（那里断言的是 2 张）。
      */
     @Test
-    fun 孤儿跨桶重复观测_同包同额60秒内不新建第二张卡() = runBlocking {
+    fun 孤儿同哈希重复观测_间隔10秒不新建第二张卡() = runBlocking {
         matcher.recordOrphanPaymentSignal(
-            paymentSignal(amountMinor = 1990, sourceEventKey = "evt-bucket-a", occurredAt = now),
+            paymentSignal(
+                amountMinor = 1990,
+                sourceEventKey = "evt-bucket-a",
+                occurredAt = now,
+                rawTextHash = "hash-1990-same-page"
+            ),
             sourceType = "ACCESSIBILITY",
             conflictReason = "NO_ACTIVE_SESSION"
         )
-        // 跨桶：不同 sourceEventKey，但同包同额、间隔 20 秒 ⇒ 同一笔的重复观测
+        // 跨桶：不同 sourceEventKey，但同包同额、同文本哈希、间隔 10 秒 ⇒ 同一笔的重复观测
         matcher.recordOrphanPaymentSignal(
             paymentSignal(
                 amountMinor = 1990,
                 sourceEventKey = "evt-bucket-b",
-                occurredAt = now + 20_000L
+                occurredAt = now + 10_000L,
+                rawTextHash = "hash-1990-same-page"
             ),
             sourceType = "ACCESSIBILITY",
             conflictReason = "NO_ACTIVE_SESSION"
         )
 
         val rows = database.pendingTransactionDao().getPage(10, 0)
-        assertEquals("同包同额 90 秒内只落一张待确认卡", 1, rows.size)
+        assertEquals("同包同额同文本哈希、15 秒内只落一张待确认卡", 1, rows.size)
         assertEquals(
             "重复观测不得重复追加同一码",
             "NO_ACTIVE_SESSION",
@@ -354,18 +376,21 @@ class CheckoutPaymentMatcherIntegrationTest {
     }
 
     /**
-     * **真机回归用例**（2026-09-30 10:05~10:06，小米 25128PNA1C / 拼多多 build 0.0.98）。
+     * **真机场景 · 裁定取舍**（2026-09-30 10:05~10:06，小米 25128PNA1C / 拼多多 build 0.0.98）。
      *
      * 同一笔 ¥2.68 的微信结果页被观测两次，`textLength` 均为 20（同一页面），
      * `occurredAt` 分别为 1790733945898 / 1790734006291，相差 **60393 ms**。
      * 当时 `ORPHAN_DEDUP_WINDOW_MILLIS = 60_000` ⇒ **超了 393 毫秒，两条都建了卡**
      * （`pending-orphan-044f32b` / `pending-orphan-bf77dd6`）。
      *
-     * 本例用真机原值钉死该场景，防止窗口被改回 60 秒。
-     * 判别性：窗口 ≤ 60393 ms 时本例必红。
+     * ⚠️ **2026-10-24 用户裁定后，本例故意断言 2 张**：页面不显示时间时
+     * `occurredAt` 回退观测时刻，60 秒已超出 15 秒窗口 ⇒ 同一笔会被再建一张卡。
+     * 这是裁定明确接受的取舍 —— 宁可多一张可删的卡，也不静默吞掉真实的第二笔。
+     *
+     * 判别性：把窗口改回 90 秒，本例会变成 1 张 ⇒ 必红。
      */
     @Test
-    fun 孤儿去重_真机实测60393毫秒的同一结果页重复观测只建一张卡() = runBlocking {
+    fun 孤儿同哈希_超过15秒仍各自建卡_真机60393毫秒场景() = runBlocking {
         val firstOccurredAt = 1_790_733_945_898L
         val secondOccurredAt = 1_790_734_006_291L
         assertEquals(
@@ -377,32 +402,146 @@ class CheckoutPaymentMatcherIntegrationTest {
             paymentSignal(
                 amountMinor = 268,
                 sourceEventKey = "evt-real-a",
-                occurredAt = firstOccurredAt
+                occurredAt = firstOccurredAt,
+                rawTextHash = "hash-268-same-page"
+            ),
+            sourceType = "ACCESSIBILITY",
+            conflictReason = "NO_ACTIVE_SESSION"
+        )
+        // 关键：哈希判据的 15 秒上限基于**观测时刻**（`nowMillis()`），不是 `occurredAt`。
+        // 测试时钟若一直停在 START_NOW，两次调用的间隔会被算成 0 秒，本例就验不到
+        // "超过 15 秒即新交易"。这里让时钟前进到第二次观测时刻。
+        now = secondOccurredAt
+        matcher.recordOrphanPaymentSignal(
+            paymentSignal(
+                amountMinor = 268,
+                sourceEventKey = "evt-real-b",
+                occurredAt = secondOccurredAt,
+                rawTextHash = "hash-268-same-page"
+            ),
+            sourceType = "ACCESSIBILITY",
+            conflictReason = "NO_ACTIVE_SESSION"
+        )
+        assertEquals(
+            "15 秒窗口外，同一页面也会各自建卡（裁定取舍：宁可误报不可误杀）",
+            2,
+            database.pendingTransactionDao().getPage(10, 0).size
+        )
+    }
+
+    /**
+     * 反例（2026-10-24 用户裁定）：同包同额、间隔 20 秒、**文本哈希不同** ⇒ 两笔真实交易。
+     *
+     * 这是"15 秒内合并、超过即视为新交易"的核心判别：时间窗已过，且页面内容不同，
+     * 不得因为"同额"就静默吞掉第二笔（误杀不可恢复，误报只是多一张可删的卡）。
+     */
+    @Test
+    fun 孤儿不同哈希_间隔20秒视为两笔真实交易() = runBlocking {
+        matcher.recordOrphanPaymentSignal(
+            paymentSignal(
+                amountMinor = 1990,
+                sourceEventKey = "evt-order-1",
+                occurredAt = now,
+                rawTextHash = "hash-1990-order-1"
             ),
             sourceType = "ACCESSIBILITY",
             conflictReason = "NO_ACTIVE_SESSION"
         )
         matcher.recordOrphanPaymentSignal(
             paymentSignal(
-                amountMinor = 268,
-                sourceEventKey = "evt-real-b",
-                occurredAt = secondOccurredAt
+                amountMinor = 1990,
+                sourceEventKey = "evt-order-2",
+                occurredAt = now + 20_000L,
+                rawTextHash = "hash-1990-order-2"
             ),
             sourceType = "ACCESSIBILITY",
             conflictReason = "NO_ACTIVE_SESSION"
         )
+
         assertEquals(
-            "真机实测的 60393 ms 重复必须被去重挡下（窗口 ≤ 该值时本例必红）",
+            "同额但文本哈希不同、且超过 15 秒 ⇒ 必须建两张卡",
+            2,
+            database.pendingTransactionDao().getPage(10, 0).size
+        )
+    }
+
+    /**
+     * 反例：前一笔已确认（`removed=true`）⇒ 哈希登记必须解除，
+     * 之后同额同文本的真实新支付不得被吞。
+     *
+     * 这是"内存表"方案最容易漏的一环：只登记不清除，就会把"确认后立刻又买一次同价商品"
+     * 永久判成重复观测（误杀方向）。
+     */
+    @Test
+    fun 孤儿同哈希_前一笔确认后再次出现视为新交易() = runBlocking {
+        matcher.recordOrphanPaymentSignal(
+            paymentSignal(
+                amountMinor = 990,
+                sourceEventKey = "evt-repeat-1",
+                occurredAt = now,
+                rawTextHash = "hash-990-same-page"
+            ),
+            sourceType = "ACCESSIBILITY",
+            conflictReason = "NO_ACTIVE_SESSION"
+        )
+        val first = database.pendingTransactionDao().getPage(10, 0).single()
+
+        // 模拟用户在弹窗/待确认中心确认入账：LedgerRepository 删行后 emit removed=true
+        PendingChangeHub.emit(
+            PendingChangeInfo(
+                pendingId = first.id,
+                type = first.type,
+                amountMinor = first.amountMinor,
+                sourceType = first.sourceType,
+                conflictReason = null,
+                occurredAt = first.occurredAt,
+                isNew = false,
+                removed = true
+            )
+        )
+        database.pendingTransactionDao().deleteByIdIfVersion(first.id, first.version)
+
+        // 判别性：删掉 RecentResultObservation.init() 时，这里仍会命中残留登记
+        // （下面的建卡兜底会在"行已不在"时自愈，掩盖接线缺失）⇒ 必须直接断言。
+        assertNull(
+            "removed 事件必须立即解除登记，而不是靠建卡时的兜底自愈",
+            RecentResultObservation.findSameObservation(
+                paymentPackage = "com.tencent.mm",
+                amountMinor = 990L,
+                rawTextHash = "hash-990-same-page",
+                now = now
+            )
+        )
+
+        // 同额同文本的第二笔真实支付
+        matcher.recordOrphanPaymentSignal(
+            paymentSignal(
+                amountMinor = 990,
+                sourceEventKey = "evt-repeat-2",
+                occurredAt = now + 20_000L,
+                rawTextHash = "hash-990-same-page"
+            ),
+            sourceType = "ACCESSIBILITY",
+            conflictReason = "NO_ACTIVE_SESSION"
+        )
+
+        assertEquals(
+            "前一笔已确认后，同额同文本的新支付必须重新建卡",
             1,
             database.pendingTransactionDao().getPage(10, 0).size
         )
     }
 
-    /** D-25：重复观测**不得丢证据** —— 后到的 conflictReason 必须合并进既有卡。 */
+    /** 重复观测**不得丢证据** —— 后到的 conflictReason 必须合并进既有卡。 */
     @Test
-    fun 孤儿跨桶重复观测_冲突原因合并进既有卡() = runBlocking {
+    fun 孤儿同哈希重复观测_冲突原因合并进既有卡() = runBlocking {
         matcher.recordOrphanPaymentSignal(
-            paymentSignal(amountMinor = 1990, sourceEventKey = "evt-bucket-a", occurredAt = now),
+            paymentSignal(
+                amountMinor = 1990,
+                sourceEventKey = "evt-bucket-a",
+                occurredAt = now,
+                rawTextHash = "hash-1990-same-page"
+            ),
             sourceType = "ACCESSIBILITY",
             conflictReason = "NO_ACTIVE_SESSION"
         )
@@ -410,7 +549,8 @@ class CheckoutPaymentMatcherIntegrationTest {
             paymentSignal(
                 amountMinor = 1990,
                 sourceEventKey = "evt-bucket-b",
-                occurredAt = now + 20_000L
+                occurredAt = now + 10_000L,
+                rawTextHash = "hash-1990-same-page"
             ),
             sourceType = "ACCESSIBILITY",
             conflictReason = PAYMENT_RESULT_NO_MATCHING_SESSION
@@ -425,18 +565,16 @@ class CheckoutPaymentMatcherIntegrationTest {
     }
 
     /**
-     * D-25 负例：**超过窗口**必须各自建卡。
+     * 负例：**超过窗口**必须各自建卡。
      *
-     * ⚠️ 2026-09-30 修订：本例原用 `now + 90_000L`（当时的"超过 60 秒"）。
-     * 窗口调至 90 秒后该值**正好卡在边界上**（`BETWEEN` 两端闭区间 ⇒ 仍会去重），
-     * 用它当负例会假绿。改用 `now + 150_000L`：落在窗口外，且**仍在 D-6 的 2 分钟内**
-     * —— 顺带证明本窗口确实窄于 D-6，没有把"同额两单撞键"的风险引回来。
+     * ⚠️ 2026-10-24 修订：窗口由 90 秒收窄至 15 秒。原用例用 `now + 150_000L`
+     * 仍在窗口外，断言不变（2 张）。改用 `now + 20_000L` 更能体现新窗口的边界：
+     * 20 秒已超出 15 秒，且哈希缺失（通知回退场景）⇒ 只能靠时间窗，必须各自建卡。
      *
-     * 判别性：若窗口写错（误用 `PAYMENT_EVIDENCE_MERGE_WINDOW_MILLIS` 的 2 分钟），
-     * 本用例必红 —— 而那正好会重现 D-6 明确要避免的"同包同金额、2 分钟内两单撞键"。
+     * 判别性：若窗口误写成 90 秒，本用例必红。
      */
     @Test
-    fun 孤儿去重_超过90秒窗口的同额两笔各自建卡() = runBlocking {
+    fun 孤儿去重_超过15秒窗口且无哈希的同额两笔各自建卡() = runBlocking {
         matcher.recordOrphanPaymentSignal(
             paymentSignal(amountMinor = 1990, sourceEventKey = "evt-t0", occurredAt = now),
             sourceType = "ACCESSIBILITY"
@@ -444,8 +582,8 @@ class CheckoutPaymentMatcherIntegrationTest {
         matcher.recordOrphanPaymentSignal(
             paymentSignal(
                 amountMinor = 1990,
-                sourceEventKey = "evt-t150",
-                occurredAt = now + 150_000L
+                sourceEventKey = "evt-t20",
+                occurredAt = now + 20_000L
             ),
             sourceType = "ACCESSIBILITY"
         )

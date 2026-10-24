@@ -18,8 +18,10 @@ package com.jotbill.app.pending
  *
  * 副作用（本是有意为之，不是回归）：
  * - 同一笔支付若被重复观测成两条 pending（跨 [CheckoutPaymentMatcher] 的
- *   `ORPHAN_DEDUP_WINDOW_MILLIS = 90s` 窗口），现在会弹两次而非一次。
+ *   `ORPHAN_DEDUP_WINDOW_MILLIS = 15s` 窗口、且页面文本哈希不同），现在会弹两次而非一次。
  *   落库去重与弹窗去重是两套机制，废弃的是后者。
+ *   ⚠️ 2026-10-24 起"同一笔"的主判据是文本哈希（[RecentResultObservation]），
+ *   同一页面的重复观测不会走到这里；时间窗只兜哈希缺失/漂移。
  * - 高频支付用户一天可能被打扰数十次。缓解手段是弹窗 30s 自动关闭
  *   （见 `PendingConfirmOverlayManager.AUTO_DISMISS_DELAY`），
  *   自动关闭时发系统通知提示已转入待确认中心，不静默吞掉。
@@ -100,6 +102,10 @@ internal object PendingPromptPolicy {
         ) {
             return Decision.Skip(SkipReason.USER_ASSERTED)
         }
+        // 非支出型不弹窗。**转账不弹窗是 2026-10-24 用户明确裁定**，不是遗漏：
+        // 转账没有"消费分类"语义，弹窗里选支出分类会记错账；它只进待确认中心，
+        // 由用户自行处理。`CheckoutPaymentMatcher.recordPersonalTransfer` 仍然 emit，
+        // 那是为了让待确认中心实时刷新 —— **不要**据此认为"转账也应该弹窗"。
         if (info.type != "expense") return Decision.Skip(SkipReason.NOT_EXPENSE)
         return Decision.Prompt("${merchant?.trim().orEmpty()}|${info.amountMinor}")
     }

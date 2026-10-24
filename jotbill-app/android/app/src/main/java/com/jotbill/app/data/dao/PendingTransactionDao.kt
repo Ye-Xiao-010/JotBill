@@ -60,8 +60,9 @@ interface PendingTransactionDao {
     /**
      * D-25：查"同支付包 + 同金额 + 落在时间窗内"的待确认记录（孤儿去重用）。
      *
-     * 背景：支付结果页的事件键含 30 秒时间桶（`PaymentResultParser`，D-6 为防
-     * "同包同金额、2 分钟内两单撞键"而定的窄桶），跨桶即产生第二个幂等键。
+     * 背景：支付结果页的事件键含 15 秒时间桶（`PaymentResultParser` 引用
+     * `PaymentTiming.SAME_TXN_WINDOW_MILLIS`，2026-10-24 前为 30 秒），
+     * 跨桶即产生第二个幂等键。
      * `CheckoutPaymentMatcher.mergeSessionEvidence` 的 2 分钟收敛只作用于**证据行**，
      * 收敛不到由 `recordOrphanPaymentSignal` 独立新建的**孤儿待确认卡**
      * ⇒ 真机上同一笔 ¥19.90 落了两条待确认（`FIX_TASK_2026-09-29` §三）。

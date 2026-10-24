@@ -4,6 +4,7 @@ import androidx.room.withTransaction
 import com.jotbill.app.pending.PendingChangeHub
 import com.jotbill.app.pending.PendingChangeInfo
 import com.jotbill.app.pending.RecentPaymentCooldown
+import com.jotbill.app.pending.RecentResultObservation
 import com.jotbill.app.data.CreateBillOutcome
 import com.jotbill.app.data.JotBillDatabase
 import com.jotbill.app.data.LedgerRepository
@@ -16,6 +17,7 @@ import com.jotbill.app.data.entity.PaymentEvidenceEntity
 import com.jotbill.app.rules.DuplicateGuard
 import com.jotbill.app.rules.RuleEngine
 import com.jotbill.app.utils.JotBillLog
+import com.jotbill.app.utils.PaymentTiming
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 import java.time.Instant
@@ -83,39 +85,48 @@ internal fun classifyPaymentAmount(
 /**
  * 同会话跨来源证据收敛窗口。
  *
- * ⚠️ 刻意**宽于**结果页事件去重桶（D-6 已把事件桶收窄为 30 秒）：事件键跨桶后不再命中，
- * 同一结果页的跨桶重复读（同包同金额，读取间隔 > 30 秒）靠本窗口收敛为一条证据。
+ * ⚠️ 刻意**宽于**结果页事件去重桶（D-6 已把事件桶收窄为 15 秒）：事件键跨桶后不再命中，
+ * 同一结果页的跨桶重复读（同包同金额，读取间隔 > 15 秒）靠本窗口收敛为一条证据。
  * ⇒ **不得随事件桶一并收窄**，否则跨桶重复读会落成两条证据（D-6 裁定：本常量值不动）。
  */
 private const val PAYMENT_EVIDENCE_MERGE_WINDOW_MILLIS = 2 * 60 * 1000L
 
 /**
- * 孤儿待确认去重窗口（D-25，2026-09-29 定案 / 2026-09-30 修订）。
+ * 孤儿待确认去重窗口（D-25，2026-09-29 定案 / 09-30 修订 / **2026-10-24 收窄至 15 秒**）。
  *
  * ⚠️ **为什么必须存在**：`sourceEventKey` 幂等键挡不住重复观测 —— 结果页事件键含
- * 30 秒时间桶（`PaymentResultParser`，D-6 为防"同额两单撞键"而定的窄桶），
+ * 15 秒时间桶（`PaymentResultParser`，D-6 为防"同额两单撞键"而定的窄桶），
  * 跨桶即换键。`PAYMENT_EVIDENCE_MERGE_WINDOW_MILLIS` 的 2 分钟收敛只作用于**证据行**，
  * 收敛不到本函数独立新建的**孤儿卡**。
  *
- * ⚠️ **2026-09-30 由 60 秒调至 90 秒**（真机实证，定案值当天的实测就漏了）：
- * 真机（小米 25128PNA1C / 拼多多 build 0.0.98）同一笔 ¥2.68 的结果页在
- * 10:05:45 与 10:06:46 被各观测一次，`textLength` 均为 20（同一页面），
- * `occurredAt=1790733945898` 与 `1790734006291` 相差 **60393 ms** ——
- * 比原 60 秒窗多 **393 毫秒**，两条都建了卡。
- * 且 `CheckoutAccessibilityService.PAYMENT_RESULT_EVENT_MEMORY_MILLIS`（第一道防线）
- * 同为 60 秒，**三道判据的阈值全部挤在 30~60 秒窄带内**，于是在同一刻集体失效。
+ * ⚠️ **2026-10-24 起本窗口降为兜底，主判据改为页面文本哈希**
+ * （[com.jotbill.app.pending.RecentResultObservation]）。纯时间窗无法区分
+ * "同一笔停留 60 秒"与"真实的第二笔同额支付"，只能二选一：窗口宽 ⇒ 吞掉第二笔
+ * （误杀，不可恢复）；窗口窄 ⇒ 同一笔多建一张卡（误报，可删）。
+ * 文本哈希能区分：同一笔的重复观测文本一致，真实第二笔的时间/订单号至少一处不同。
  *
- * 90 秒的依据：覆盖实测的 60.393 秒；**仍远小于 D-6 关心的 2 分钟**
- * （"同包同金额、2 分钟内两单不得撞键"），不把那个风险重新引进来。
- * ⚠️ 须与 `PAYMENT_RESULT_EVENT_MEMORY_MILLIS` **保持同值** —— 阈值不一致时，
- * 先失效的那道防线形同虚设。
+ * ⚠️ **为什么是 15 秒**（用户 2026-10-24 裁定）：同额第二笔若发生在 15 秒内，
+ * 接受合并 —— 物理上不可能在 15 秒内完成"离开支付 App → 回商户应用 → 重新下单 →
+ * 拉起支付 → 输密码"全流程。超过 15 秒则一律视为新交易，宁可多一张可删的卡，
+ * 也不静默吞掉真实的第二笔。数值统一由 [PaymentTiming.SAME_TXN_WINDOW_MILLIS] 提供。
  *
- * ⚠️ **这不是根治**：本判据是纯时间维度，必然随用户停留时长失效
- * （用户在结果页停留超 90 秒仍会重复）。根治方向是把"同一笔"锚到**结算上下文**
- * 而非时间，但孤儿路径拿不到 `sessionId`（0 命中时实参即 `null`/`emptyList`，
- * 且 `orphanSink` 是非 suspend 的 fire-and-forget）。已记为待办。
+ * ⚠️ **本窗口用的是 `signal.occurredAt`（页面时间优先），不是观测时刻** ——
+ * 这是有意的，且带来一个关键性质：
+ * - 页面显示时间 ⇒ 同一笔的 `occurredAt` 恒定 ⇒ 窗口永远命中（重复卡不会出现）；
+ *   真实第二笔页面时间不同 ⇒ 超出窗口 ⇒ 正常建卡。
+ * - 页面不显示时间 ⇒ 回退观测时刻 ⇒ 15 秒窗口按真实观测间隔生效（用户裁定的场景）。
+ *
+ * 历史依据（保留取证价值）：2026-09-30 真机（小米 25128PNA1C / 拼多多 build 0.0.98）
+ * 同一笔 ¥2.68 的结果页在 10:05:45 与 10:06:46 被各观测一次，`textLength` 均为 20
+ * （同一页面），`occurredAt=1790733945898` 与 `1790734006291` 相差 **60393 ms**。
+ * 当时窗口为 60 秒 ⇒ 超了 393 毫秒、两条都建了卡 ⇒ 随后调至 90 秒。
+ * **该场景现在由文本哈希 + 15 秒窗口共同判定**：页面无时间时 60 秒已超窗，
+ * 会各自建卡 —— 这是 2026-10-24 裁定明确接受的取舍（宁可误报，不可误杀）。
+ *
+ * ⚠️ 须与 `PAYMENT_RESULT_EVENT_MEMORY_MILLIS` **保持同值** —— 两者都引用
+ * [PaymentTiming.SAME_TXN_WINDOW_MILLIS]，不要再各自写死数字。
  */
-private const val ORPHAN_DEDUP_WINDOW_MILLIS = 90_000L
+private const val ORPHAN_DEDUP_WINDOW_MILLIS = PaymentTiming.SAME_TXN_WINDOW_MILLIS
 
 private const val PAYMENT_CONFIRMED_STATUS = "PAYMENT_CONFIRMED"
 private const val AI_PENDING_STATUS = "AI_PENDING"
@@ -493,7 +504,10 @@ internal class CheckoutPaymentMatcher(
             "personal-transfer",
             paymentPackage,
             amountMinor.toString(),
-            (effectiveOccurredAt / 120_000L).toString(),
+            // 桶宽与同一笔判定统一（2026-10-24）：原 120 秒会让"同收款人同额、
+            // 间隔 2 分钟内"的两笔真实转账被静默合并（第二笔不落卡），是误杀方向。
+            // 15 秒内物理上不可能完成两笔转账，合并是安全的。
+            (effectiveOccurredAt / PaymentTiming.SAME_TXN_WINDOW_MILLIS).toString(),
             recipient.orEmpty()
         )
         val dao = database.pendingTransactionDao()
@@ -550,11 +564,14 @@ internal class CheckoutPaymentMatcher(
      * 会话解析 NoMatch），不丢弃证据：直接落一条纯通知待确认交易
      * （sessionId 为空、candidateId 为空），由用户在待确认中心处理。
      *
-     * 幂等：两道。
+     * 幂等：三道。
      * 1. **同 sourceEventKey** —— 待确认 ID 由 sourceEventKey 确定性生成，重复信号不产生第二条；
-     * 2. **D-25 跨桶重复观测** —— 同支付包 + 同金额 + [ORPHAN_DEDUP_WINDOW_MILLIS]
-     *    窗内已有 pending 时不新建第二张卡，只把 `conflictReason` 合并进既有记录。
-     *    （第 1 道挡不住：结果页事件键含 30 秒时间桶，跨桶即换键。）
+     * 2. **同页面文本哈希**（2026-10-24 新增，主判据）—— 同支付包 + 同金额 +
+     *    同 `rawTextHash` 且该笔仍未处理 ⇒ 判为同一笔的重复观测，合并冲突码。
+     *    见 [com.jotbill.app.pending.RecentResultObservation]；
+     * 3. **D-25 时间窗**（兜底）—— 同支付包 + 同金额 + [ORPHAN_DEDUP_WINDOW_MILLIS]
+     *    窗内已有 pending 时不新建第二张卡。只哈希缺失（通知回退）或页面动态漂移时生效。
+     *    （第 1 道挡不住：结果页事件键含 15 秒时间桶，跨桶即换键。）
      */
     suspend fun recordOrphanPaymentSignal(
         signal: PaymentNotificationFallbackSignal,
@@ -641,12 +658,49 @@ internal class CheckoutPaymentMatcher(
                 }
                 return@withTransaction
             }
+            // ---- 2026-10-24：同一笔的重复观测按"页面文本哈希"识别（主判据）----
+            // 时间窗无法区分"同一笔停留 60 秒"与"真实的第二笔同额支付"：前者页面文本
+            // 完全一致，后者时间/订单号至少一处不同。完整分析见 RecentResultObservation。
+            // 位置在 sourceEventKey 幂等**之后**：同键仍走上面的既有幂等，行为不变；
+            // 只有"跨键"（时间桶漂移）的重复观测才落到这里。
+            val sameObservationId = RecentResultObservation.findSameObservation(
+                paymentPackage = signal.paymentPackage,
+                amountMinor = signal.amountMinor,
+                rawTextHash = signal.rawTextHash,
+                now = now
+            )
+            if (sameObservationId != null) {
+                val sameObservation = dao.getById(sameObservationId)
+                if (
+                    sameObservation != null &&
+                    sameObservation.status == PendingTransactionEntity.STATUS_PENDING
+                ) {
+                    val mergedReason = mergeOrphanConflictReason(
+                        sameObservation.conflictReason,
+                        conflictReason
+                    )
+                    if (mergedReason != sameObservation.conflictReason) {
+                        dao.updateConflictReason(sameObservation.id, mergedReason)
+                    }
+                    JotBillLog.i(
+                        "CheckoutPaymentMatcher",
+                        "孤立支付证据判为同一笔重复观测(文本哈希一致)，未新建待确认: " +
+                            "pending=${sameObservation.id.take(16)}, incoming=${pendingId.take(16)}, " +
+                            "amount=${signal.amountMinor}, reason=$conflictReason"
+                    )
+                    return@withTransaction
+                }
+                // 登记还在、行已不在（确认/忽略后 removed 事件丢失）：清理后继续。
+                // 否则这条过期登记会永久吞掉同额同文本的真实新支付（误杀方向）。
+                RecentResultObservation.forget(sameObservationId)
+            }
             // ---- D-25：跨桶重复观测去重（孤儿待确认专用）----
-            // 上面的幂等键按 sourceEventKey 判重，而结果页事件键含 30 秒时间桶
+            // 上面的幂等键按 sourceEventKey 判重，而结果页事件键含 15 秒时间桶
             // （D-6 为防"同额两单撞键"而定的窄桶），跨桶即换键 ⇒ 挡不住重复观测。
             // 证据层有 mergeSessionEvidence 的 2 分钟窗口兜底，孤儿卡没有 ⇒ 补这一道。
-            // 口径：同支付包 + 同金额 + 60 秒窗内已有 pending ⇒ 判为同一笔的重复观测，
+            // 口径：同支付包 + 同金额 + 窗口内已有 pending ⇒ 判为同一笔的重复观测，
             // 合并 conflictReason 而不新建第二张卡（证据不丢弃，冲突码照旧保全）。
+            // 本道是**兜底**：哈希缺失（通知回退）或页面动态漂移导致哈希不同时才生效。
             if (signal.occurredAt > 0L) {
                 val duplicate = dao.findRecentPendingByPlatformAndAmount(
                     platform = signal.paymentPackage,
@@ -792,6 +846,13 @@ internal class CheckoutPaymentMatcher(
                             paymentPackage = signal.paymentPackage,
                             amountMinor = signal.amountMinor
                         )
+                        RecentResultObservation.remember(
+                            pendingId = firstInsertedId,
+                            paymentPackage = signal.paymentPackage,
+                            amountMinor = signal.amountMinor,
+                            rawTextHash = signal.rawTextHash,
+                            now = now
+                        )
                         PendingChangeHub.emit(
                             PendingChangeInfo(
                                 pendingId = firstInsertedId,
@@ -821,6 +882,14 @@ internal class CheckoutPaymentMatcher(
                     pendingId = pendingId,
                     paymentPackage = signal.paymentPackage,
                     amountMinor = signal.amountMinor
+                )
+                // 同一笔判据的登记，同样必须在 emit 之前（见 [RecentResultObservation]）。
+                RecentResultObservation.remember(
+                    pendingId = pendingId,
+                    paymentPackage = signal.paymentPackage,
+                    amountMinor = signal.amountMinor,
+                    rawTextHash = signal.rawTextHash,
+                    now = now
                 )
                 PendingChangeHub.emit(
                     PendingChangeInfo(

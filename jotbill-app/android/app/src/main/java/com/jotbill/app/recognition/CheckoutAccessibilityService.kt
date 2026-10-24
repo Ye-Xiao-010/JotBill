@@ -7,6 +7,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import com.jotbill.app.utils.JotBillLog
+import com.jotbill.app.utils.PaymentTiming
 import android.view.Display
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
@@ -63,13 +64,18 @@ class CheckoutAccessibilityService : AccessibilityService() {
         private const val SENSITIVE_PAGE_SCREENSHOT_BLOCK_MILLIS = 60_000L
 
         /**
-         * 支付结果页事件键记忆窗（去重第一道防线），**2026-09-30 由 60 秒调至 90 秒**。
+         * 支付结果页事件键记忆窗（去重第一道防线），**2026-10-24 由 90 秒收窄至 15 秒**。
          *
-         * 依据见 [recentPaymentResultEventKeys] 的 KDoc（真机实测同一结果页被观测两次、
-         * `occurredAt` 相差 60393 ms，比原 60 秒窗多 393 毫秒而漏过去）。
-         * ⚠️ 须与 `CheckoutPaymentMatcher.ORPHAN_DEDUP_WINDOW_MILLIS` 保持同值。
+         * 依据见 [recentPaymentResultEventKeys] 的 KDoc。收窄到 15 秒是用户
+         * 2026-10-24 的裁定：同额第二笔在 15 秒内接受合并，超过 15 秒一律视为新交易。
+         * 数值统一由 [PaymentTiming.SAME_TXN_WINDOW_MILLIS] 提供。
+         *
+         * ⚠️ 须与 `CheckoutPaymentMatcher.ORPHAN_DEDUP_WINDOW_MILLIS` 保持同值
+         * （两者引用同一常量，不要再写死数字）。
+         * ⚠️ "同一笔停留超过 15 秒"的重复观测同样会各自建卡 —— 这是裁定的取舍，
+         *    不是遗漏（页面显示时间时 `occurredAt` 恒定，仍会命中）。
          */
-        private const val PAYMENT_RESULT_EVENT_MEMORY_MILLIS = 90_000L
+        private const val PAYMENT_RESULT_EVENT_MEMORY_MILLIS = PaymentTiming.SAME_TXN_WINDOW_MILLIS
 
         /** 支付结果页截图兜底的系统回调看门狗：MIUI 等可能静默丢弃回调，超时强制复位。 */
         private const val PAYMENT_SCREENSHOT_FALLBACK_WATCHDOG_MILLIS = 8_000L
@@ -229,8 +235,8 @@ class CheckoutAccessibilityService : AccessibilityService() {
     /**
      * 支付结果页事件键记忆窗（去重第一道防线）。
      *
-     * ⚠️ **2026-09-30 由 60 秒调至 90 秒**（真机实证）。原 60 秒与
-     * `PaymentResultParser` 的 30 秒时间桶、[D-25] 的孤儿去重窗**阈值重叠**：
+     * ⚠️ **2026-09-30 由 60 秒调至 90 秒，2026-10-24 又收窄至 15 秒**（用户裁定）。
+     * 原 60 秒与 `PaymentResultParser` 的 30 秒时间桶、[D-25] 的孤儿去重窗**阈值重叠**：
      * 三个 30~60 秒的判据挤在窄带里，只要用户在微信结果页停留超过 60 秒，
      * 三道防线在同一刻集体失效。
      *
@@ -239,11 +245,11 @@ class CheckoutAccessibilityService : AccessibilityService() {
      * `occurredAt` 相差 **60393 ms** —— 比原 60 秒窗多 393 毫秒，
      * 事件层记忆过期 + 跨桶 + 越过 D-25 窗 ⇒ 落了两条待确认。
      *
-     * 90 秒的依据：覆盖实测的 60.393 秒；**仍远小于 D-6 关心的 2 分钟**
-     * （"同包同金额、2 分钟内两单不得撞键"），不把那个风险重新引进来。
+     * ⚠️ **该场景现在不再保证合并**：2026-10-24 用户裁定"超过 15 秒即视为新交易"。
+     * 页面不显示时间时，60.393 秒的同一笔会被再建一张卡（误报方向，用户可在
+     * 待确认中心删除）—— 这是裁定明确接受的取舍，不是遗漏。
+     * 页面显示时间时 `occurredAt` 恒定，D-25 窗口仍会命中，不受影响。
      *
-     * ⚠️ **这不是根治**：纯时间判据必然随用户停留时长失效。停留超 90 秒仍会重复。
-     * 根治方向见 `FIX_TASK_2026-09-29` §三.② 的待办（把判据从时间锚到结算上下文）。
      * 本常量须与 `CheckoutPaymentMatcher.ORPHAN_DEDUP_WINDOW_MILLIS` **保持同值** ——
      * 两道防线阈值不一致时，先失效的那道形同虚设。
      */

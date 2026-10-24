@@ -24,6 +24,7 @@ import com.jotbill.app.overlay.OverlayPackage
 import com.jotbill.app.bridge.RecognitionPackage
 import com.jotbill.app.pending.PendingReminderNotifier
 import com.jotbill.app.pending.RecentPaymentCooldown
+import com.jotbill.app.pending.RecentResultObservation
 import com.jotbill.app.budget.BudgetReminderNotifier
 import com.facebook.react.ReactInstanceManager
 import com.facebook.react.bridge.JSBundleLoader
@@ -154,10 +155,13 @@ class MainApplication : Application(), ReactApplication {
     PendingConfirmOverlayManager.init(this)
     // 预算超支提醒:账单增删改后由 DataModule 触发检查,应用未启动也能发系统通知
     BudgetReminderNotifier.init(this)
-    // 同额支付被处理后的 10 秒冷却:拦支付结果页的重复观测,否则用户确认入账后
+    // 同额支付被处理后的 15 秒冷却:拦支付结果页的重复观测,否则用户确认入账后
     // 仍停在结果页会再建一张卡、再弹一次窗(见 RecentPaymentCooldown 的失效分析)。
     // 必须早于 loadReactNative —— 结果页观测不依赖 RN。
     RecentPaymentCooldown.init()
+    // 同一笔支付的重复观测识别(页面文本哈希):区分"同一笔停留"与"真实第二笔"。
+    // 与冷却互补 —— 冷却管消费后 15 秒,本类管消费前的重复观测(见 RecentResultObservation)。
+    RecentResultObservation.init()
     HotUpdateModule.recoverInterruptedSwap(this)
     loadReactNative(this)
     initializeSentry()

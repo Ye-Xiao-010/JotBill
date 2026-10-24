@@ -1,6 +1,7 @@
 package com.jotbill.app.pending
 
 import com.jotbill.app.utils.JotBillLog
+import com.jotbill.app.utils.PaymentTiming
 
 /**
  * 同额支付被处理后的短暂冷却（2026-10-13）。
@@ -12,9 +13,9 @@ import com.jotbill.app.utils.JotBillLog
  *
  * | 防线 | 位置 | 失效原因 |
  * |---|---|---|
- * | 事件键幂等 `stableId("pending-orphan", sourceEventKey)` | `CheckoutPaymentMatcher:595` | `sourceEventKey` 含 **30 秒时间桶**（`PaymentResultParser:227` 的 `occurredAt / 30_000`）。用户填个分类再点确认通常已跨桶 → 换键 → 换 pendingId |
+ * | 事件键幂等 `stableId("pending-orphan", sourceEventKey)` | `CheckoutPaymentMatcher` | `sourceEventKey` 含 **时间桶**（`PaymentResultParser` 的 `occurredAt / 15_000`，2026-10-24 前为 30 秒）。用户填个分类再点确认通常已跨桶 → 换键 → 换 pendingId |
  * | 内存事件记忆 `markPaymentResultEvent` | `CheckoutAccessibilityService:986` | 同上，按 `sourceEventKey` 记，跨桶即失效 |
- * | 同包同额 90 秒去重 `findRecentPendingByPlatformAndAmount` | `CheckoutPaymentMatcher:632` | 查的是 **pending 表**，而确认入账后该行已被 `deleteByIdIfVersion` **物理删除**（`LedgerRepository:483`）→ 查不到即视为"未处理过" |
+ * | 同包同额去重 `findRecentPendingByPlatformAndAmount` | `CheckoutPaymentMatcher` | 查的是 **pending 表**，而确认入账后该行已被 `deleteByIdIfVersion` **物理删除**（`LedgerRepository`）→ 查不到即视为"未处理过" |
  *
  * 真机实测（2026-10-12，微信 ¥39.06）确认重新观测紧跟在消费之后 147ms：
  * ```
@@ -32,8 +33,8 @@ import com.jotbill.app.utils.JotBillLog
  * 而分钟级窗口会**静默吞掉真实的第二笔同额支付** —— 那比重复弹窗严重得多
  * （误杀不可恢复，误报用户能在待确认中心看见并删除）。
  *
- * 本类用 10 秒窗口：物理上不可能在 10 秒内完成第二笔支付（须离开支付 App、
- * 回商户应用、重新下单、拉起支付、输密码），所以误杀概率趋近于零。
+ * 本类用 15 秒窗口（2026-10-24 由 10 秒统一）：物理上不可能在 15 秒内完成第二笔支付
+ * （须离开支付 App、回商户应用、重新下单、拉起支付、输密码），所以误杀概率趋近于零。
  *
  * ## 为什么拦在**建卡**而非**弹窗**
  *
@@ -57,11 +58,12 @@ internal object RecentPaymentCooldown {
      * 冷却时长：从该笔被处理（确认入账/忽略）起算，期间同 `(支付包, 金额)` 的
      * 新证据不建卡。
      *
-     * 10 秒而非 5 秒：重新观测的实测延迟是 147ms，但那个数字取自主线程空闲时；
-     * 用户点确认的那一刻恰是主线程最忙的时刻（写账单、刷余额、发事件），重新
-     * 观测可能因排队延迟到第 6 秒才发生 —— 5 秒窗口会漏，10 秒成本几乎为零。
+     * **2026-10-24 由 10 秒统一为 15 秒**，与 [PaymentTiming.SAME_TXN_WINDOW_MILLIS]
+     * 同值 —— 用户裁定"同额第二笔 15 秒内接受合并"，两套阈值不一致时先失效的那道
+     * 形同虚设。重新观测的实测延迟只有 147ms，15 秒远大于它；多抑制的 5 秒内
+     * 物理上不可能完成第二笔支付，不会丢账。
      */
-    const val COOLDOWN_MILLIS = 10_000L
+    const val COOLDOWN_MILLIS = PaymentTiming.CONSUMED_COOLDOWN_MILLIS
 
     /**
      * pendingId → 冷却键 `(支付包|金额)`。建卡时登记，消费时反查。
@@ -90,7 +92,7 @@ internal object RecentPaymentCooldown {
      * 订阅 pending 变更，**只关心 `removed=true`**（确认入账 / 忽略 / 自动入账清理）。
      *
      * 弹窗 30 秒自动关闭（`AUTO_DISMISS`）**不会**产生该事件 —— 那一笔的 pending
-     * 仍在库里，由既有的 90 秒同包同额去重负责，与本类职责不重叠。
+     * 仍在库里，由既有的 15 秒同包同额去重负责，与本类职责不重叠。
      */
     private fun onPendingChange(info: PendingChangeInfo) {
         if (!info.removed) return
