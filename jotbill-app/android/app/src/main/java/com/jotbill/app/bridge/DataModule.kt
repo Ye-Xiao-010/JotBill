@@ -1020,7 +1020,14 @@ class DataModule(
         }
         events.emit("onPendingChanged", JSONObject().put("pendingId", pending.id).put("deleted", true))
         events.emit("onBillCreated", BridgeDtoMapper.bill(settledBill))
-        BridgeDtoMapper.bill(settledBill).toString()
+        val response = BridgeDtoMapper.bill(settledBill)
+        // P1-5（2026-10-24 场景审查）：合并路径（同 sourceType+orderId 已有账单）
+        // 会丢弃用户本次的修改，RN 侧必须知道以便如实提示，而不是让用户以为
+        // "按我改的记上了"。
+        if (outcome is PendingConfirmService.Outcome.Confirmed && outcome.merged) {
+            response.put("mergedIntoExistingBill", true)
+        }
+        response.toString()
     }
 
     private fun categoryStats(rows: List<CategoryStatRow>, total: Long): JSONArray =

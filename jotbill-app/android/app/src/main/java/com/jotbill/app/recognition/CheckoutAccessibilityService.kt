@@ -1218,14 +1218,18 @@ class CheckoutAccessibilityService : AccessibilityService() {
         extra: String? = null
     ) {
         val now = System.currentTimeMillis()
-        val lastAt = lastScreenshotFallbackBlockLogAt[reason]
+        // 采样键必须含支付包名（2026-10-24 场景审查）：微信/支付宝共用同一份
+        // reason 文本会共享 3s 窗口，L1 连续 20 笔跨两平台时互相抑制，
+        // 漏捕获的归因会少记。行内仍输出 pkg=。
+        val sampleKey = "$reason|$paymentPackage"
+        val lastAt = lastScreenshotFallbackBlockLogAt[sampleKey]
         if (lastAt != null && now - lastAt < SCREENSHOT_FALLBACK_BLOCK_LOG_INTERVAL_MILLIS) {
-            suppressedScreenshotFallbackBlockCount[reason] =
-                (suppressedScreenshotFallbackBlockCount[reason] ?: 0) + 1
+            suppressedScreenshotFallbackBlockCount[sampleKey] =
+                (suppressedScreenshotFallbackBlockCount[sampleKey] ?: 0) + 1
             return
         }
-        lastScreenshotFallbackBlockLogAt[reason] = now
-        val suppressed = suppressedScreenshotFallbackBlockCount.remove(reason) ?: 0
+        lastScreenshotFallbackBlockLogAt[sampleKey] = now
+        val suppressed = suppressedScreenshotFallbackBlockCount.remove(sampleKey) ?: 0
         JotBillLog.i(
             TAG,
             "支付结果页截图兜底已禁止: $reason pkg=$paymentPackage" +

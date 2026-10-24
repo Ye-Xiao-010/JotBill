@@ -105,8 +105,18 @@ export default function ReviewScreen() {
       pending: PendingTransaction;
       input: PendingConfirmationInput;
     }) => nativeData.confirmPendingTransaction(pending.pendingId, input, pending.version),
-    onSuccess: () => {
+    onSuccess: (bill) => {
       invalidateAll();
+      // P1-5（2026-10-24 场景审查）：合并路径（同来源同订单号已有账单）会丢弃
+      // 用户本次的修改，原生在响应里带 mergedIntoExistingBill 标志 —— 必须如实
+      // 提示，不能让用户以为"按我改的记上了"。
+      const merged = (bill as { mergedIntoExistingBill?: boolean }).mergedIntoExistingBill;
+      if (merged) {
+        alert(
+          '已并入既有账单',
+          `该笔支付此前已记过账（¥${((bill.amountMinor ?? 0) / 100).toFixed(2)}），本次修改未生效。如需调整，请到账单列表修改那条账单。`,
+        );
+      }
     },
     onError: (error) => {
       // 不再回显裸 pendingId：那是内部 UUID，对用户零信息量，
@@ -172,9 +182,15 @@ export default function ReviewScreen() {
 
   const handleConfirm = useCallback(
     (pending: PendingTransaction) => {
+      // 转账卡缺源/目标账户时快捷确认必然失败（LedgerRepository.validateBillAccounts），
+      // 与其让用户点了再看报错，不如直接引导到编辑面板（2026-10-24 场景审查）。
+      if (pending.type === 'transfer') {
+        alert('转账需选择账户', '请点「编辑」选择付款账户与转入账户后再确认。');
+        return;
+      }
       confirmMutation.mutate({ pending, input: {} });
     },
-    [confirmMutation],
+    [alert, confirmMutation],
   );
 
   /** 编辑后确认：类型/金额/账户/目标账户/原交易经 input 通道提交，不改方法签名。 */
@@ -1225,6 +1241,15 @@ function describeConfirmError(error: unknown): string {
     [/Bill version/i, '这条待确认已被更新，请下拉刷新后重试。'],
     [/INVALID_TYPE|invalid bill type/i, '账单类型无效，请点「编辑」重新选择。'],
     [/INVALID_SOURCE_TYPE/i, '来源类型无效，请下拉刷新后重试。'],
+    // NOT_FOUND 原文含内部 UUID（"Pending transaction <uuid> was not found"），
+    // 直出零信息量：通常是这条卡已被其他入口（弹窗/另一台设备）处理掉。
+    [/was not found/i, '这条待确认已被处理或已不存在，请下拉刷新。'],
+    // 服务端对悬空分类的拦截（PendingConfirmService）。编辑面板没有分类选择器，
+    // 提示必须指向真实可行的出路，不能让用户去找不存在的控件。
+    [
+      /分类已被删除/i,
+      '这条待确认的分类已被删除：付款确认弹窗中可直接重选分类；在待确认中心可忽略此卡，或到「规则」页为对应平台设置默认分类。',
+    ],
   ];
   for (const [pattern, message] of rules) {
     if (pattern.test(raw)) return message;

@@ -6,6 +6,7 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.os.Build
+import com.jotbill.app.rules.DuplicateGuard
 import com.jotbill.app.utils.JotBillLog
 
 /**
@@ -108,17 +109,23 @@ internal object PendingReminderNotifier {
             return
         }
         val now = System.currentTimeMillis()
-        synchronized(this) {
-            if (now - lastNotifiedAt < MIN_NOTIFY_INTERVAL_MILLIS) {
-                suppressedCount++
-                JotBillLog.i(
-                    TAG,
-                    "节流抑制提醒: suppressed=$suppressedCount, id=${info.pendingId.take(16)}"
-                )
-                return
+        // 批量导入的 emit 在同一执行循环内连发（本地库写入远快于 2s），若参与
+        // 节流，一次导入 N 条待确认只有第 1 条有系统通知、其余只留日志 ——
+        // 用户对导入产生的待确认量级失去感知。导入来源豁免节流
+        // （2026-10-24 场景审查）；量级兜底在 ImportScreen 结果页计数与待确认中心。
+        if (info.sourceType != DuplicateGuard.IMPORT_SOURCE_TYPE) {
+            synchronized(this) {
+                if (now - lastNotifiedAt < MIN_NOTIFY_INTERVAL_MILLIS) {
+                    suppressedCount++
+                    JotBillLog.i(
+                        TAG,
+                        "节流抑制提醒: suppressed=$suppressedCount, id=${info.pendingId.take(16)}"
+                    )
+                    return
+                }
+                lastNotifiedAt = now
+                suppressedCount = 0
             }
-            lastNotifiedAt = now
-            suppressedCount = 0
         }
         try {
             manager.notify(info.pendingId.hashCode(), buildNotification(context, info))

@@ -137,20 +137,20 @@ export default function NotificationPermissionScreen() {
                   : isLoading
                   ? '正在读取状态…'
                   : enabled
-                    ? '已授权通知访问权限，可读取微信/支付宝支付成功通知'
-                    : '请前往系统设置开启服务，开启后才能确认支付成功'}
+                    ? '已授权通知访问权限，当前用于识别退款/手续费类通知（不参与支付自动记账）'
+                    : '未开启不影响支付自动记账（依赖无障碍读取支付结果页）；开启后可识别退款/手续费类通知'}
               </Text>
             </View>
           </View>
         </View>
 
         <View style={styles.sectionCard}>
-          <Text style={styles.sectionTitle}>为什么要开启？</Text>
+          <Text style={styles.sectionTitle}>这个开关管什么？</Text>
           <Text style={styles.sectionText}>
-            AI 识别结果只说明"买了什么"，不能单独入账；只有微信或支付宝的
-            支付成功通知才能证明"确实付款了"。开启通知监听后，
-            应用会把支付成功通知解析为支付证据，与 AI 候选匹配后自动入账，
-            匹配失败时进入待确认中心由你处理。
+            精简版中，支付成功通知不再用于支付自动记账——自动记账依赖
+            无障碍读取支付结果页，支付后由确认弹窗/待确认中心处理。
+            开启通知监听后，应用只用通知识别退款、手续费等辅助信息。
+            不开启也不影响正常记账。
           </Text>
         </View>
 

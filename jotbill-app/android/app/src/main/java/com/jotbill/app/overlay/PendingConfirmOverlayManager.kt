@@ -946,7 +946,7 @@ internal object PendingConfirmOverlayManager {
                         prefs.edit().putString(KEY_LAST_CATEGORY_ID, category.id).apply()
                         emitJsEvents(outcome.bill, pendingRow.id)
                         if (isCurrentCard) {
-                            showSuccessFeedback(view, outcome.bill.amountMinor, category.name)
+                            showSuccessFeedback(view, outcome.bill.amountMinor, category.name, outcome.merged)
                         } else {
                             JotBillLog.i(
                                 TAG,
@@ -1257,12 +1257,19 @@ internal object PendingConfirmOverlayManager {
         confirmButton?.alpha = if (ready) 1.0f else 0.5f
     }
 
-    private fun showSuccessFeedback(view: View, amountMinor: Long, categoryName: String) {
+    private fun showSuccessFeedback(view: View, amountMinor: Long, categoryName: String, merged: Boolean = false) {
         view.findViewById<LinearLayout>(R.id.content_main)?.visibility = View.GONE
         val successContent = view.findViewById<LinearLayout>(R.id.content_success)
         successContent?.visibility = View.VISIBLE
         view.findViewById<TextView>(R.id.tv_success_detail)?.text =
-            "¥${formatYuan(amountMinor)} - $categoryName"
+            if (merged) {
+                // P1-5（2026-10-24 场景审查）：合并路径**丢弃**用户本次的修改
+                // （金额/分类/账户都不写进既有账单）。原实现显示"用户选的分类 +
+                // 旧金额"，把丢弃伪装成按输入入账。如实告知。
+                "已并入既有账单 ¥${formatYuan(amountMinor)}，本次修改未生效"
+            } else {
+                "¥${formatYuan(amountMinor)} - $categoryName"
+            }
         // 必须带 expect：成功页停留 1.5s 期间用户可能已被新卡顶替，
         // 无身份校验的 dismiss 会关掉新卡（2026-10-24 复审 P0）。
         mainHandler.postDelayed({ dismissInternal("SUCCESS", expect = view) }, SUCCESS_DISPLAY_DELAY)
