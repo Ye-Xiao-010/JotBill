@@ -115,7 +115,11 @@ class AutoBookkeeper(
             amountMinor = amountMinor,
             type = type,
             occurredAt = occurredAt,
-            description = null,
+            // 无商户的支付（支付宝主结果页只抽得到金额）给出渠道级描述，
+            // 账单列表不至于出现光秃秃的金额；后续账单详情页二次抽取补上
+            // 商户时以商户为准展示。
+            description = merchant ?: "${channelLabel(record.sourcePackage)}" +
+                (if (type == "income") "收入" else "支出"),
             categoryId = categoryId,
             accountId = accountId,
             targetAccountId = null,
@@ -146,15 +150,17 @@ class AutoBookkeeper(
             null
         }
         if (similar != null && similar.isNotEmpty()) {
-            // 自源相似命中 = 规则管线自己刚入账的同一笔被另一条规则（如结果页
-            // 规则入账后几秒支付宝「支出」通知再命中通知规则）二次抽取 —— 静默
-            // 丢弃即可（引擎 15s 指纹窗之外的第二道防线，对齐小米 status==2）。
-            // 命中的若是用户手工/导入账单，保持 SUSPECTED_DUPLICATE → 待确认。
-            if (similar.any { it.bill.sourceType == BILL_SOURCE_TYPE }) {
-                JotBillLog.i(
-                    TAG,
-                    "规则记录命中本管线既有账单，按重复丢弃: rule=${record.ruleId}, " +
-                        "amount=$amountMinor, hits=${similar.size}"
+            val selfHits = similar.filter { it.bill.sourceType == BILL_SOURCE_TYPE }
+            if (selfHits.isNotEmpty()) {
+                // 本管线二次抽取命中自己刚入账的账单（典型：支付宝/微信主结果页
+                // 先只有金额，用户随后打开账单详情页，2000107/2000108 抽出商户/
+                // 收支类型）—— 对齐小米服务端「指纹合并+字段补全」的本地形态：
+                // 只补既有账单的空缺字段，金额/账户/类型绝不改动。
+                enrichExistingBill(
+                    existing = selfHits.maxByOrNull { it.bill.createdAt }!!.bill,
+                    merchant = merchant,
+                    orderId = orderId,
+                    categoryId = categoryId
                 )
                 return
             }
@@ -296,6 +302,51 @@ class AutoBookkeeper(
         false
     }
 
+    /**
+     * 二次抽取（账单详情页/通知）对既有账单的字段回填：只补空缺，绝不覆盖。
+     * 走 [FieldPriorityResolver.Source.EVIDENCE] 级（4 级）—— 低于用户编辑与
+     * 用户规则，锁定字段自动受保护；金额/账户/类型不参与回填，余额不动。
+     */
+    private suspend fun enrichExistingBill(
+        existing: BillEntity,
+        merchant: String?,
+        orderId: String?,
+        categoryId: String?
+    ) {
+        val fills = computeFieldFills(existing, merchant, orderId, categoryId)
+        if (fills.merchant == null && fills.orderId == null && fills.categoryId == null) {
+            JotBillLog.i(
+                TAG,
+                "二次抽取无字段可补（既有账单已完整），丢弃: bill=${existing.id.take(8)}"
+            )
+            return
+        }
+        val categoryFill = fills.categoryId
+            ?.takeIf { database.categoryDao().getById(it) != null }
+        val updated = existing.copy(
+            merchant = fills.merchant ?: existing.merchant,
+            orderId = fills.orderId ?: existing.orderId,
+            categoryId = categoryFill ?: existing.categoryId,
+            version = existing.version + 1
+        )
+        val applied = try {
+            ledger.updateBillWithBalanceUpdate(
+                existing,
+                updated,
+                com.jotbill.app.rules.FieldPriorityResolver.Source.EVIDENCE
+            )
+        } catch (error: Exception) {
+            JotBillLog.w(TAG, "二次抽取字段回填失败", error)
+            false
+        }
+        JotBillLog.i(
+            TAG,
+            "二次抽取字段回填${if (applied) "成功" else "跳过(版本竞争/校验未过)"}: " +
+                "bill=${existing.id.take(8)}, merchant=${fills.merchant != null}, " +
+                "orderId=${fills.orderId != null}, category=${categoryFill != null}"
+        )
+    }
+
     // ── 兜底：转待确认（弹窗管线已被认领让路时，证据不能丢）──────────────
 
     private suspend fun fallbackToPending(
@@ -366,8 +417,29 @@ class AutoBookkeeper(
             "com.eg.android.AlipayGphone" -> "支付宝"
             "com.tencent.mm" -> "微信支付"
             "com.unionpay" -> "云闪付"
+            "com.jingdong.app.mall" -> "京东"
+            "com.sankuai.meituan" -> "美团"
+            "com.xunmeng.pinduoduo" -> "拼多多"
+            "com.ss.android.ugc.aweme" -> "抖音"
             "com.android.mms" -> "银行短信"
             else -> "自动记账"
         }
+
+        /**
+         * 纯函数：既有账单的空缺字段与二次抽取值的合并决策（只补空，不覆盖）。
+         * 独立成函数以便单测钉死「绝不覆盖非空字段」不变式。
+         */
+        class FieldFills(val merchant: String?, val orderId: String?, val categoryId: String?)
+
+        fun computeFieldFills(
+            existing: BillEntity,
+            merchant: String?,
+            orderId: String?,
+            categoryId: String?
+        ): FieldFills = FieldFills(
+            merchant = merchant?.takeIf { existing.merchant.isNullOrBlank() },
+            orderId = orderId?.takeIf { existing.orderId.isNullOrBlank() },
+            categoryId = categoryId?.takeIf { existing.categoryId.isNullOrBlank() }
+        )
     }
 }
