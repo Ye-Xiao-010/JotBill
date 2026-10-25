@@ -735,19 +735,14 @@ internal object PendingConfirmOverlayManager {
         try {
             val inflater = LayoutInflater.from(context)
             val view = inflater.inflate(R.layout.pending_confirm_overlay, null)
+            // 黄色来源条幅已按用户裁定（2026-10-24）删除常显来源文案 —— 对用户无信息量。
+            // 仅保留 D-21 的 0 金额占位说明：用户必须看懂"为什么是 0、下一步做什么"。
             val sourceText = view.findViewById<TextView>(R.id.tv_source)
-            // D-21：0 金额占位（AI 失败/金额缺失）允许弹窗，但用户必须看懂
-            // "为什么是 0、下一步做什么" ⇒ 金额缺失文案优先于来源文案
-            // （否则会显示"截图识别到一笔支付"，与空金额自相矛盾）。
-            sourceText.text = if (pendingRow.amountMinor <= 0L) {
-                "未识别到金额，请补充金额后确认"
+            if (pendingRow.amountMinor <= 0L) {
+                sourceText.text = "未识别到金额，请补充金额后确认"
+                sourceText.visibility = View.VISIBLE
             } else {
-                when (pendingRow.sourceType) {
-                    "notification" -> "检测到支付通知，待确认入账"
-                    "accessibility" -> "检测到支付结果页，待确认入账"
-                    "ai_vision" -> "截图识别到一笔支付，待确认"
-                    else -> "检测到一笔待确认支付"
-                }
+                sourceText.visibility = View.GONE
             }
             val merchantText = view.findViewById<TextView>(R.id.tv_merchant)
             // 精简版：结算页截图 AI 已停用，商户只剩"支付结果页文本解析"一个来源，

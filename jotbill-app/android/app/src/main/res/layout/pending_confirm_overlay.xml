@@ -55,16 +55,18 @@
                     android:padding="6dp" />
             </LinearLayout>
 
-            <!-- 来源提示 -->
+            <!-- 来源提示条:2026-10-24 用户裁定删除常显的来源文案（对用户无信息量）。
+                 仅 0 金额占位时显示 D-21 说明文案（见 displayOverlay），默认 gone -->
             <TextView
                 android:id="@+id/tv_source"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="16dp"
-                android:text="检测到一笔待确认支付"
+                android:text="未识别到金额，请补充金额后确认"
                 android:textSize="14sp"
                 android:textColor="#1A1A1A"
                 android:textStyle="bold"
+                android:visibility="gone"
                 android:background="@drawable/bg_source_banner"
                 android:padding="12dp"
                 android:gravity="center" />
@@ -136,7 +138,7 @@
                 android:minHeight="44dp"
                 android:background="@drawable/btn_outline_gray"
                 android:gravity="top|start"
-                android:hint="买了什么？（可选）"
+                android:hint="备注"
                 android:importantForAutofill="no"
                 android:inputType="textMultiLine|textCapSentences"
                 android:maxLines="3"
