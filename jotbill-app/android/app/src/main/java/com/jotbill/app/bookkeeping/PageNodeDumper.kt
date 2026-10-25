@@ -23,10 +23,14 @@ package com.jotbill.app.bookkeeping
  */
 object PageNodeDumper {
 
+    /** dump 节点硬上限：安全熔断，正常规则预算（≤1000）永远到不了这里。 */
+    const val MAX_DUMP_NODES = 4_000
+
     class DumpResult(
         val dump: String,
         val located: Boolean,
-        val nodeCount: Int
+        val nodeCount: Int,
+        val elapsedMs: Long
     )
 
     /** dump 页面并按 [rule] 的定位锚点判定是否命中。 */
@@ -59,13 +63,19 @@ object PageNodeDumper {
         maxTraverseCount: Int,
         locateMatches: (String?) -> Boolean
     ): DumpResult {
+        val startedAt = android.os.SystemClock.elapsedRealtime()
         val state = State()
         val builder = StringBuilder()
         appendNode(root, builder, 0, locateAttribute, maxTraverseCount, locateMatches, state)
         if (builder.isNotEmpty()) {
             builder.deleteCharAt(builder.length - 1)
         }
-        return DumpResult(dump = builder.toString(), located = state.located, nodeCount = state.count)
+        return DumpResult(
+            dump = builder.toString(),
+            located = state.located,
+            nodeCount = state.count,
+            elapsedMs = android.os.SystemClock.elapsedRealtime() - startedAt
+        )
     }
 
     private class State {
@@ -83,6 +93,11 @@ object PageNodeDumper {
         state: State
     ) {
         if (node == null) {
+            return
+        }
+        // 安全熔断（不足#7）：异常深的脏树（超出任何规则的预算语义）直接停，
+        // 防主线程被一次 dump 拖死。资产规则预算最大 1000，此上限对正常规则零影响。
+        if (state.count > MAX_DUMP_NODES) {
             return
         }
         if (locateAttribute == -1) {

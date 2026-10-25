@@ -34,30 +34,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 const SETTINGS_QUERY_KEY = QUERY_KEYS.bookkeeping.settings;
 
-interface ChannelRow {
-  key:
-    | 'alipay'
-    | 'wechat'
-    | 'unionpay'
-    | 'jd'
-    | 'meituan'
-    | 'pdd'
-    | 'douyin'
-    | 'mms';
-  label: string;
-  description: string;
-}
 
-const CHANNELS: ChannelRow[] = [
-  { key: 'alipay', label: '支付宝', description: '收银台 / 支付结果页 / 账单详情 / 通知' },
-  { key: 'wechat', label: '微信支付', description: '扫码 / 转账 / 红包 / 账单详情' },
-  { key: 'unionpay', label: '云闪付', description: '支付结果页 / 银联收银台' },
-  { key: 'jd', label: '京东', description: '支付结果页 / 支付结果弹框' },
-  { key: 'meituan', label: '美团', description: '支付结果页' },
-  { key: 'pdd', label: '拼多多', description: '多多支付收银台（确认后入账）' },
-  { key: 'douyin', label: '抖音', description: '商城 / 团购下单页（确认后入账）' },
-  { key: 'mms', label: '银行短信', description: '扣款 / 入账短信（经系统通知，无需短信权限）' },
-];
 
 /** 自动记账设置页组件。 */
 export default function AutoBookkeepingScreen() {
@@ -87,13 +64,8 @@ export default function AutoBookkeepingScreen() {
     onSuccess: invalidate,
   });
   const channelMutation = useMutation({
-    mutationFn: ({
-      channel,
-      enabled,
-    }: {
-      channel: ChannelRow['key'];
-      enabled: boolean;
-    }) => nativeAutoBookkeeping.setChannelEnabled(channel, enabled),
+    mutationFn: ({ channel, enabled }: { channel: string; enabled: boolean }) =>
+      nativeAutoBookkeeping.setChannelEnabled(channel, enabled),
     onSuccess: invalidate,
   });
 
@@ -160,14 +132,14 @@ export default function AutoBookkeepingScreen() {
 
         <View style={styles.sectionCard}>
           <Text style={styles.sectionTitle}>支付渠道</Text>
-          {CHANNELS.map((channel) => (
+          {(settings?.channelMeta ?? []).map((channel) => (
             <View key={channel.key} style={styles.channelRow}>
               <View style={styles.masterText}>
                 <Text style={styles.channelLabel}>{channel.label}</Text>
                 <Text style={styles.sectionText}>{channel.description}</Text>
               </View>
               <Switch
-                value={settings?.channels[channel.key] ?? false}
+                value={settings?.channels[channel.key] ?? channel.defaultEnabled}
                 onValueChange={(enabled) =>
                   channelMutation.mutate({ channel: channel.key, enabled })
                 }
@@ -181,11 +153,18 @@ export default function AutoBookkeepingScreen() {
         <View style={styles.sectionCard}>
           <View style={styles.privacyRow}>
             <Info size={16} color={styles._colors.textSecondary} />
-            <Text style={styles.privacyText}>
-              内置 {statsQuery.data?.rules ?? '—'} 条页面规则
-              （{statsQuery.data?.keys ?? '—'} 类页面）。只读取白名单应用的
-              支付结果页文字，不截图、不读短信内容；识别在本地完成。
-            </Text>
+            {statsQuery.data && statsQuery.data.rules === 0 ? (
+              <Text style={[styles.privacyText, { color: styles._colors.error }]}>
+                内置规则未加载{statsQuery.data.error ? `（${statsQuery.data.error}）` : ''}，
+                自动记账当前不会工作，请更新应用或反馈日志。
+              </Text>
+            ) : (
+              <Text style={styles.privacyText}>
+                内置 {statsQuery.data?.rules ?? '—'} 条页面规则
+                （{statsQuery.data?.keys ?? '—'} 类页面）。只读取白名单应用的
+                支付结果页文字，不截图、不读短信内容；识别在本地完成。
+              </Text>
+            )}
           </View>
           <View style={styles.privacyRow}>
             <ShieldCheck size={16} color={styles._colors.textSecondary} />

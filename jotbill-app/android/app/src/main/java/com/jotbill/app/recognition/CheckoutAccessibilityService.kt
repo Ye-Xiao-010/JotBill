@@ -783,7 +783,8 @@ class CheckoutAccessibilityService : AccessibilityService() {
             channels = { packageName ->
                 BookkeepingChannels.shouldProcess(appContext, packageName)
             },
-            sink = AutoBookkeeper(appContext, evidenceFallbackScope)
+            sink = AutoBookkeeper(appContext, evidenceFallbackScope),
+            rescanScheduler = HandlerRescanScheduler()
         )
         bookkeepingEngine = engine
         evidenceFallbackScope.launch {
@@ -829,6 +830,31 @@ class CheckoutAccessibilityService : AccessibilityService() {
             rootInActiveWindow?.let(::AccessibilityPageNode)
         } catch (_: RuntimeException) {
             null
+        }
+    }
+
+    /**
+     * 引擎静止页重扫调度器：主线程 Handler 单槽实现 —— 新补扫总是替换旧补扫
+     * （跟踪窗口只有一个），cancelAll 同时清槽摘回调，防服务销毁后残跑。
+     */
+    private class HandlerRescanScheduler : AutoBookkeepingEngine.RescanScheduler {
+        private val handler = android.os.Handler(android.os.Looper.getMainLooper())
+        private var pendingAction: (() -> Unit)? = null
+        private val bridge = Runnable {
+            val action = pendingAction
+            pendingAction = null
+            action?.invoke()
+        }
+
+        override fun postDelayed(delayMillis: Long, action: () -> Unit) {
+            pendingAction = action
+            handler.removeCallbacks(bridge)
+            handler.postDelayed(bridge, delayMillis)
+        }
+
+        override fun cancelAll() {
+            pendingAction = null
+            handler.removeCallbacks(bridge)
         }
     }
 

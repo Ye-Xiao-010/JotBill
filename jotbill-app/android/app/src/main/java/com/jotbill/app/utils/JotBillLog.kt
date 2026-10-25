@@ -40,7 +40,8 @@ import java.util.concurrent.LinkedBlockingQueue
  *
  * - **不按 tag / 级别过滤** —— 调用点自己决定记什么。
  * - **不脱敏** —— 写进去就是 logcat 里的原文。
- * - **只在 debug 构建落盘**（`BuildConfig.DEBUG`）—— 避免给正式包引入一个持续增长的文件。
+ * - **所有构建一律落盘**（2026-10-25 起）—— 原先只在 debug 落盘，结果 release 包
+ *   出现"弹窗未出"时完全无日志可查（当日真机实miss）。文件增长由 10MB×2 旋转兜底。
  * - **logcat 仍然保留** —— 崩溃 / ANR / 系统侧拒绝（如 MIUI `Reject RestartService`）
  *   只有 logcat 拿得到，那是本文件的**补充**而非替代。
  */
@@ -75,7 +76,8 @@ object JotBillLog {
      * 在那里做文件 I/O 会造成卡顿甚至 ANR。
      */
     fun init(context: Context) {
-        if (!com.jotbill.app.BuildConfig.DEBUG) return
+        // 所有构建一律落盘（2026-10-25）：release 出现"弹窗未出"类问题时必须有日志可查，
+        // 文件增长由 MAX_BYTES 旋转兜底（10MB × 2）。
         val dir = context.getExternalFilesDir(null) ?: return
         dir.mkdirs()
         val file = File(dir, FILE_NAME)

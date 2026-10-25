@@ -1,22 +1,24 @@
 import { NativeModules } from 'react-native';
 
+/** 渠道元信息由 native 单一事实源下发，RN 不再硬编码渠道清单。 */
+export interface AutoBookkeepingChannelMeta {
+  key: string;
+  label: string;
+  description: string;
+  defaultEnabled: boolean;
+}
+
 export interface AutoBookkeepingSettings {
   masterEnabled: boolean;
-  channels: {
-    alipay: boolean;
-    wechat: boolean;
-    unionpay: boolean;
-    jd: boolean;
-    meituan: boolean;
-    pdd: boolean;
-    douyin: boolean;
-    mms: boolean;
-  };
+  channels: Record<string, boolean>;
+  channelMeta: AutoBookkeepingChannelMeta[];
 }
 
 export interface AutoBookkeepingRuleStats {
   keys: number;
   rules: number;
+  /** 资产加载失败原因；非空表示规则集为空、引擎空转。 */
+  error?: string | null;
 }
 
 interface RawAutoBookkeepingModule {

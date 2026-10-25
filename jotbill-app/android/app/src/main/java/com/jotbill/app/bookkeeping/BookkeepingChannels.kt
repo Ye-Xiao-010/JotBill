@@ -21,35 +21,69 @@ object BookkeepingChannels {
 
     private const val KEY_CHANNEL_PREFIX = "channel_"
 
+    /** 通道元信息：**渠道的唯一事实源** —— native 开关、RN 设置页列表、
+     * 桥接层校验全部从这里派生，新增渠道只改这一处（不足#5 的修复）。 */
+    class ChannelInfo(
+        val key: String,
+        val label: String,
+        val description: String,
+        val defaultEnabled: Boolean,
+        val packages: List<String>
+    )
+
     /**
-     * 引擎需要监听的渠道包名 → 通道键。新增渠道只改这里 + 默认值 + 设置页列表。
-     *
-     * 对齐小米 26 包白名单中与「付款后自动记账」相关的全部 App：内置资产里
+     * 对齐小米 26 包白名单中与「付款后自动记账」相关的全部 App。内置资产里
      * 京东/美团/拼多多/抖音 6 条规则曾因渠道缺失而是死规则（2026-10-25 差距
      * 复查修正）。淘宝走支付宝收银台（MspContainerActivity），无需单独渠道。
      */
-    private val PACKAGES = mapOf(
-        "com.eg.android.AlipayGphone" to "alipay",
-        "com.tencent.mm" to "wechat",
-        "com.unionpay" to "unionpay",
-        "com.jingdong.app.mall" to "jd",
-        "com.sankuai.meituan" to "meituan",
-        "com.xunmeng.pinduoduo" to "pdd",
-        "com.ss.android.ugc.aweme" to "douyin",
-        "com.android.mms" to "mms"
+    val CHANNELS: List<ChannelInfo> = listOf(
+        ChannelInfo(
+            "alipay", "支付宝", "收银台 / 支付结果页 / 账单详情 / 通知",
+            defaultEnabled = true,
+            packages = listOf("com.eg.android.AlipayGphone")
+        ),
+        ChannelInfo(
+            "wechat", "微信支付", "扫码 / 转账 / 红包 / 账单详情",
+            defaultEnabled = true,
+            packages = listOf("com.tencent.mm")
+        ),
+        ChannelInfo(
+            "unionpay", "云闪付", "支付结果页 / 银联收银台",
+            defaultEnabled = true,
+            packages = listOf("com.unionpay")
+        ),
+        ChannelInfo(
+            "jd", "京东", "支付结果页 / 支付结果弹框",
+            defaultEnabled = true,
+            packages = listOf("com.jingdong.app.mall")
+        ),
+        ChannelInfo(
+            "meituan", "美团", "支付结果页",
+            defaultEnabled = true,
+            packages = listOf("com.sankuai.meituan")
+        ),
+        ChannelInfo(
+            "pdd", "拼多多", "多多支付收银台（确认后入账）",
+            defaultEnabled = true,
+            packages = listOf("com.xunmeng.pinduoduo")
+        ),
+        ChannelInfo(
+            "douyin", "抖音", "商城 / 团购下单页（确认后入账）",
+            defaultEnabled = true,
+            packages = listOf("com.ss.android.ugc.aweme")
+        ),
+        ChannelInfo(
+            "mms", "银行短信", "扣款 / 入账短信（经系统通知，无需短信权限）",
+            defaultEnabled = false,
+            packages = listOf("com.android.mms")
+        )
     )
 
-    /** 通道默认开关；false 的通道规则不删（M6 翻开关即启用）。 */
-    private val DEFAULTS = mapOf(
-        "alipay" to true,
-        "wechat" to true,
-        "unionpay" to true,
-        "jd" to true,
-        "meituan" to true,
-        "pdd" to true,
-        "douyin" to true,
-        "mms" to false
-    )
+    private val PACKAGES: Map<String, ChannelInfo> =
+        CHANNELS.flatMap { info -> info.packages.map { it to info } }.toMap()
+
+    private val DEFAULTS: Map<String, Boolean> =
+        CHANNELS.associate { it.key to it.defaultEnabled }
 
     private fun prefs(context: Context) =
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -74,6 +108,9 @@ object BookkeepingChannels {
     fun shouldProcess(context: Context, packageName: String): Boolean {
         if (!isMasterEnabled(context)) return false
         val channel = PACKAGES[packageName] ?: return false
-        return isChannelEnabled(context, channel)
+        return isChannelEnabled(context, channel.key)
     }
+
+    /** 通道键是否合法（桥接层 setChannelEnabled 校验用）。 */
+    fun isValidChannelKey(channel: String): Boolean = DEFAULTS.containsKey(channel)
 }

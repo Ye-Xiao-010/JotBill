@@ -31,8 +31,21 @@ class AutoBookkeepingEngine(
     private val registryRef: AtomicReference<PageRuleRegistry?>,
     private val channels: ChannelGate,
     private val sink: Sink,
+    private val rescanScheduler: RescanScheduler,
     private val clock: () -> Long = System::currentTimeMillis
 ) {
+    /**
+     * 重扫调度器：生产实现基于主线程 Handler；单测用手动实现驱动「虚拟时间」。
+     * lean 弹窗管线的 P2-5 教训：结果页渲染完即静止、事件流停摆 —— 规则引擎
+     * 若只靠下一个内容变化事件重试，最后一次事件先于金额渲染到达时这笔就
+     * 永远错过。跟踪窗口分析失败后由调度器补扫（[RESCAN_INTERVAL_MILLIS] ×
+     * [RESCAN_MAX_COUNT] 预算内），对齐既有管线的自愈语义。
+     */
+    interface RescanScheduler {
+        fun postDelayed(delayMillis: Long, action: () -> Unit)
+
+        fun cancelAll()
+    }
     /** 事件快照：由服务适配层从 AccessibilityEvent 提取，引擎不触碰框架类。 */
     class EventSnapshot(
         val eventType: Int,
@@ -91,6 +104,16 @@ class AutoBookkeepingEngine(
     private var reportedWindowId = 0
 
     private val pendingConfirms = mutableMapOf<String, PendingConfirm>()
+
+    // ── 静止页重扫兜底（仅主线程访问）─────────────────────────────────────
+    private var rescanCount = 0
+
+    private var rescanPackageName: String? = null
+
+    private var rescanRootProvider: (() -> PageNode?)? = null
+
+    /** 失败诊断日志节流：键 = 包名|规则key。 */
+    private val lastAnalyzeDiagAt = mutableMapOf<String, Long>()
 
     /** 主线程入口。引擎内部吞掉一切异常，绝不影响宿主服务。 */
     fun onEvent(snapshot: EventSnapshot, rootProvider: () -> PageNode?) {
@@ -173,8 +196,10 @@ class AutoBookkeepingEngine(
             trackedActivityName = className
             trackedRuleKey = matchedKey
             if (analyzeTrackedPage(packageName, rootProvider)) {
+                onAnalyzeSucceeded()
                 return
             }
+            scheduleRescan(packageName, rootProvider)
         }
         if (isConfirmActivity(packageName, className)) {
             trackedWindowId = snapshot.windowId
@@ -196,14 +221,59 @@ class AutoBookkeepingEngine(
         }
         val packageName = snapshot.packageName ?: return
         if (analyzeTrackedPage(packageName, rootProvider)) {
+            onAnalyzeSucceeded()
             return
         }
         if (isConfirmActivity(packageName, trackedActivityName)) {
             tryPendingConfirmByPage(packageName, rootProvider)
+            return
         }
+        scheduleRescan(packageName, rootProvider)
     }
 
     // ── 页面分析（h0/Z/Q）：dump → 定位 → 抽取 → 交付或挂二次确认 ──────────
+
+    /** 分析成功：取消挂起的重扫并重置预算（窗口跟踪由分析内部按规则语义复位）。 */
+    private fun onAnalyzeSucceeded() {
+        rescanScheduler.cancelAll()
+        rescanCount = 0
+    }
+
+    /**
+     * 静止页重扫兜底（对齐既有管线 P2-5 的自愈语义）：跟踪窗口分析失败时补一拍。
+     * 真实事件先到则重扫被取消/覆盖；预算 [RESCAN_MAX_COUNT] 用尽后静默停止。
+     */
+    private fun scheduleRescan(packageName: String, rootProvider: () -> PageNode?) {
+        if (rescanCount >= RESCAN_MAX_COUNT) {
+            return
+        }
+        rescanCount += 1
+        rescanPackageName = packageName
+        rescanRootProvider = rootProvider
+        rescanScheduler.postDelayed(RESCAN_INTERVAL_MILLIS) { runRescan() }
+    }
+
+    private fun runRescan() {
+        val packageName = rescanPackageName ?: return
+        val rootProvider = rescanRootProvider ?: return
+        // 跟踪已被成功分析清除（或换窗）→ 无事可做。换窗时 32 事件路径会重新
+        // 建立跟踪并重置预算，这里的旧残跑不会误配。
+        if (trackedWindowId == 0) {
+            return
+        }
+        JotBillLog.d(
+            TAG,
+            "静止页重扫兜底: pkg=$packageName, count=$rescanCount/$RESCAN_MAX_COUNT, " +
+                "key=$trackedRuleKey"
+        )
+        if (analyzeTrackedPage(packageName, rootProvider)) {
+            onAnalyzeSucceeded()
+            return
+        }
+        if (rescanCount < RESCAN_MAX_COUNT) {
+            scheduleRescan(packageName, rootProvider)
+        }
+    }
 
     private fun analyzeTrackedPage(
         sourcePackage: String,
@@ -212,12 +282,28 @@ class AutoBookkeepingEngine(
         val key = trackedRuleKey ?: return false
         val rules = registryRef.get()?.rulesFor(key) ?: return false
         val root = rootProvider() ?: return false
+        // 诊断留样（不足#1）：真机规则打不中时必须能看到页面 dump 长什么样，
+        // 否则正则调优无从下手。节流输出，内容只进内存日志不落盘。
+        var locatedAny = false
+        var sampleDump = ""
         for (rule in rules) {
             val dump = PageNodeDumper.dump(root, rule)
+            sampleDump = dump.dump
             if (!dump.located) {
                 continue
             }
-            val fields = rule.extractFrom(dump.dump) ?: continue
+            locatedAny = true
+            val fields = rule.extractFrom(dump.dump)
+            if (fields == null) {
+                logAnalyzeDiag(
+                    packageName = sourcePackage,
+                    ruleKey = key,
+                    headline = "锚点已命中但抽取正则未匹配: ruleId=${rule.ruleId}(${rule.note})"
+                        .let { "$it, pattern 差在字段抽取段" },
+                    dump = dump.dump
+                )
+                continue
+            }
             val record = ExtractedRecord(
                 fields = fields,
                 ruleId = rule.ruleId,
@@ -249,7 +335,26 @@ class AutoBookkeepingEngine(
             }
             return true
         }
+        logAnalyzeDiag(
+            packageName = sourcePackage,
+            ruleKey = key,
+            headline = "规则未命中: locatedAny=$locatedAny, rules=${rules.size}, " +
+                "ruleIds=${rules.joinToString(",") { it.ruleId.toString() }}",
+            dump = sampleDump
+        )
         return false
+    }
+
+    /** 诊断日志（3s 节流/键）：dump 样本压缩为单行、截断 [DIAG_DUMP_LIMIT]。 */
+    private fun logAnalyzeDiag(packageName: String, ruleKey: String, headline: String, dump: String) {
+        val throttleKey = "$packageName|$ruleKey"
+        val now = clock()
+        if (now - (lastAnalyzeDiagAt[throttleKey] ?: 0L) < DIAG_LOG_INTERVAL_MILLIS) {
+            return
+        }
+        lastAnalyzeDiagAt[throttleKey] = now
+        val sample = dump.replace('\n', '│').take(DIAG_DUMP_LIMIT)
+        JotBillLog.i(TAG, "[ABK诊断] $headline, pkg=$packageName, key=$ruleKey, dump样本=$sample")
     }
 
     // ── 二次确认（W/X/j0/k0）───────────────────────────────────────────────
@@ -375,6 +480,10 @@ class AutoBookkeepingEngine(
         reportedWindowId = 0
         lastContentChangeAt = 0L
         pendingConfirms.clear()
+        rescanScheduler.cancelAll()
+        rescanCount = 0
+        rescanPackageName = null
+        rescanRootProvider = null
     }
 
     /**
@@ -396,6 +505,16 @@ class AutoBookkeepingEngine(
 
         /** 对齐小米 pending_confirm 5 分钟窗口。 */
         const val CONFIRM_WINDOW_MILLIS = 300_000L
+
+        /** 静止页重扫：间隔与单窗预算（对齐既有管线 P2-5 参数）。 */
+        const val RESCAN_INTERVAL_MILLIS = 1_000L
+
+        const val RESCAN_MAX_COUNT = 8
+
+        /** 诊断日志节流与 dump 样本上限（只进内存日志，防刷屏防泄漏整页）。 */
+        const val DIAG_LOG_INTERVAL_MILLIS = 3_000L
+
+        const val DIAG_DUMP_LIMIT = 800
 
         /** 与 PaymentTiming.SAME_TXN_WINDOW_MILLIS 同值（15s，同额合并裁定）。 */
         const val CLAIM_WINDOW_MILLIS = 15_000L

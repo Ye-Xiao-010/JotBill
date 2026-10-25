@@ -21,7 +21,9 @@ import org.json.JSONObject
 class PageRuleRegistry private constructor(
     private val rulesByKey: Map<String, List<PageRule>>,
     /** 解析期规则条数（逗号 key 展开前），即资产中的唯一规则数。 */
-    val parsedRuleCount: Int
+    val parsedRuleCount: Int,
+    /** 资产加载失败原因；非 null 时规则集为空（引擎空转），设置页据此显式警示。 */
+    val loadError: String? = null
 ) {
     /** 命中的 key；未命中返回 null。 */
     fun matchKey(packageName: String?, className: String?): String? {
@@ -87,14 +89,19 @@ class PageRuleRegistry private constructor(
         private fun load(context: Context): PageRuleRegistry = try {
             val text = context.assets.open(ASSET_PATH).bufferedReader().use { it.readText() }
             val registry = fromJsonText(text)
-            JotBillLog.i(
-                TAG,
-                "内置页面规则已加载: keys=${registry.keyCount}, rules=${registry.ruleCount}"
-            )
+            if (registry.parsedRuleCount == 0) {
+                JotBillLog.w(TAG, "内置页面规则解析结果为空，自动记账将空转")
+            } else {
+                JotBillLog.i(
+                    TAG,
+                    "内置页面规则已加载: keys=${registry.keyCount}, " +
+                        "rules=${registry.parsedRuleCount}"
+                )
+            }
             registry
         } catch (error: Exception) {
             JotBillLog.w(TAG, "内置页面规则加载失败，自动记账将空转", error)
-            PageRuleRegistry(emptyMap(), 0)
+            PageRuleRegistry(emptyMap(), 0, error.message ?: error.javaClass.simpleName)
         }
     }
 }

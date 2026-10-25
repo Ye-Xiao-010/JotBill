@@ -22,14 +22,35 @@ class AutoBookkeepingEngineTest {
         }
     }
 
+    /** 手动调度器：镜像宿主单槽语义，测试里用它驱动「虚拟时间」。 */
+    class ManualScheduler : AutoBookkeepingEngine.RescanScheduler {
+        val pending = mutableListOf<() -> Unit>()
+        override fun postDelayed(delayMillis: Long, action: () -> Unit) {
+            pending.clear()
+            pending += action
+        }
+
+        override fun cancelAll() {
+            pending.clear()
+        }
+
+        fun runNext() {
+            if (pending.isNotEmpty()) {
+                pending.removeAt(0).invoke()
+            }
+        }
+    }
+
     private class Harness {
         val clock = mutableMapOf("now" to 1_000_000L)
         val sink = RecordingSink()
+        val scheduler = ManualScheduler()
         val registry = AtomicReference<PageRuleRegistry?>(PageRuleRegistry.fromJsonText(TEST_REGISTRY_TEXT))
         val engine = AutoBookkeepingEngine(
             registryRef = registry,
             channels = { true },
             sink = sink,
+            rescanScheduler = scheduler,
             clock = { clock["now"]!! }
         )
 
@@ -199,6 +220,35 @@ class AutoBookkeepingEngineTest {
         assertEquals(990L, AutoBookkeepingEngine.parseAmountMinor("¥9.9"))
         assertEquals(null, AutoBookkeepingEngine.parseAmountMinor("abc"))
         assertEquals(null, AutoBookkeepingEngine.parseAmountMinor(null))
+    }
+
+    @Test
+    fun `静止页重扫兜底补上迟到的金额渲染`() {
+        val h = Harness()
+        // 可变页面容器：真实场景里 rootProvider 每次读的是实时活动窗口
+        var page: FakePageNode = FakePageNode(null, null)
+        h.engine.onEvent(h.windowEvent("com.alipay.android.msp.ui.views.MspContainerActivity")) {
+            page
+        }
+        assertEquals("金额未渲染时不得交付", 0, h.sink.records.size)
+        assertEquals("分析失败应排一次重扫", 1, h.scheduler.pending.size)
+        // 1 秒后重扫执行，页面此时已渲染完整 —— P2-5 自愈语义
+        page = alipayResultPage()
+        h.scheduler.runNext()
+        assertEquals(1, h.sink.records.size)
+        assertEquals("成功后清空补扫队列", 0, h.scheduler.pending.size)
+    }
+
+    @Test
+    fun `重扫预算用尽后静默停止`() {
+        val h = Harness()
+        h.engine.onEvent(h.windowEvent("com.alipay.android.msp.ui.views.MspContainerActivity")) {
+            FakePageNode(null, null)
+        }
+        repeat(20) { h.scheduler.runNext() }
+        assertEquals("预算内不产生交付", 0, h.sink.records.size)
+        // 8 次预算（事件路径 1 次 + 重扫 7 次）后队列必须清空
+        assertEquals(0, h.scheduler.pending.size)
     }
 
     companion object {

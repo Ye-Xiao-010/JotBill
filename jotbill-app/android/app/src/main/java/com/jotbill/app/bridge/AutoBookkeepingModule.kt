@@ -22,16 +22,26 @@ class AutoBookkeepingModule(private val reactContext: ReactApplicationContext) :
     @ReactMethod
     fun getSettings(promise: Promise) {
         try {
+            val channelsJson = JSONObject().apply {
+                for (info in BookkeepingChannels.CHANNELS) {
+                    put(info.key, BookkeepingChannels.isChannelEnabled(reactContext, info.key))
+                }
+            }
+            val metaJson = org.json.JSONArray().apply {
+                for (info in BookkeepingChannels.CHANNELS) {
+                    put(
+                        JSONObject()
+                            .put("key", info.key)
+                            .put("label", info.label)
+                            .put("description", info.description)
+                            .put("defaultEnabled", info.defaultEnabled)
+                    )
+                }
+            }
             val result = JSONObject()
                 .put("masterEnabled", BookkeepingChannels.isMasterEnabled(reactContext))
-                .put(
-                    "channels",
-                    JSONObject().apply {
-                        for (channel in CHANNELS) {
-                            put(channel, BookkeepingChannels.isChannelEnabled(reactContext, channel))
-                        }
-                    }
-                )
+                .put("channels", channelsJson)
+                .put("channelMeta", metaJson)
             promise.resolve(result.toString())
         } catch (error: Exception) {
             promise.reject("AUTO_BOOKKEEPING_SETTINGS_FAILED", error)
@@ -50,7 +60,7 @@ class AutoBookkeepingModule(private val reactContext: ReactApplicationContext) :
 
     @ReactMethod
     fun setChannelEnabled(channel: String, enabled: Boolean, promise: Promise) {
-        if (channel !in CHANNELS) {
+        if (!BookkeepingChannels.isValidChannelKey(channel)) {
             promise.reject("AUTO_BOOKKEEPING_UNKNOWN_CHANNEL", "Unknown channel: $channel")
             return
         }
@@ -69,6 +79,7 @@ class AutoBookkeepingModule(private val reactContext: ReactApplicationContext) :
             val stats = JSONObject()
                 .put("keys", registry.keyCount)
                 .put("rules", registry.parsedRuleCount)
+                .putOpt("error", registry.loadError)
             promise.resolve(stats.toString())
         } catch (error: Exception) {
             JotBillLog.w("AutoBookkeepingModule", "规则统计读取失败", error)
@@ -87,10 +98,5 @@ class AutoBookkeepingModule(private val reactContext: ReactApplicationContext) :
         }
     }
 
-    companion object {
-        /** 与 BookkeepingChannels.DEFAULTS 的键保持一致（设置页所见全部通道）。 */
-        private val CHANNELS = listOf(
-            "alipay", "wechat", "unionpay", "jd", "meituan", "pdd", "douyin", "mms"
-        )
-    }
+    companion object
 }
