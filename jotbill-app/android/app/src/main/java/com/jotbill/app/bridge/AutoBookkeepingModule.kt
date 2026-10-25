@@ -76,8 +76,21 @@ class AutoBookkeepingModule(private val reactContext: ReactApplicationContext) :
         }
     }
 
+    @ReactMethod
+    fun getServiceRunning(promise: Promise) {
+        try {
+            promise.resolve(
+                com.jotbill.app.recognition.CheckoutAccessibilityService.isServiceRunning()
+            )
+        } catch (error: Exception) {
+            promise.reject("AUTO_BOOKKEEPING_STATUS_FAILED", error)
+        }
+    }
+
     companion object {
-        /** 与 BookkeepingChannels.DEFAULTS 的键保持一致（RN 只见这四个）。 */
-        private val CHANNELS = listOf("alipay", "wechat", "unionpay", "mms")
+        /** 与 BookkeepingChannels.DEFAULTS 的键保持一致（设置页所见全部通道）。 */
+        private val CHANNELS = listOf(
+            "alipay", "wechat", "unionpay", "jd", "meituan", "pdd", "douyin", "mms"
+        )
     }
 }

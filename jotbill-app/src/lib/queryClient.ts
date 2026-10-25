@@ -87,6 +87,7 @@ export const QUERY_KEYS = {
   bookkeeping: {
     settings: ['bookkeeping', 'settings'] as const,
     stats: ['bookkeeping', 'stats'] as const,
+    service: ['bookkeeping', 'service'] as const,
   },
 };
 

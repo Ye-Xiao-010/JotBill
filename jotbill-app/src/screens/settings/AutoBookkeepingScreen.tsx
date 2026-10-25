@@ -18,6 +18,7 @@ import {
 import { useNavigation } from '@react-navigation/native';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
+  AlertCircle,
   ChevronLeft,
   Info,
   ShieldCheck,
@@ -34,7 +35,15 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 const SETTINGS_QUERY_KEY = QUERY_KEYS.bookkeeping.settings;
 
 interface ChannelRow {
-  key: 'alipay' | 'wechat' | 'unionpay' | 'mms';
+  key:
+    | 'alipay'
+    | 'wechat'
+    | 'unionpay'
+    | 'jd'
+    | 'meituan'
+    | 'pdd'
+    | 'douyin'
+    | 'mms';
   label: string;
   description: string;
 }
@@ -42,7 +51,11 @@ interface ChannelRow {
 const CHANNELS: ChannelRow[] = [
   { key: 'alipay', label: '支付宝', description: '收银台 / 支付结果页 / 账单详情 / 通知' },
   { key: 'wechat', label: '微信支付', description: '扫码 / 转账 / 红包 / 账单详情' },
-  { key: 'unionpay', label: '云闪付', description: '支付结果页' },
+  { key: 'unionpay', label: '云闪付', description: '支付结果页 / 银联收银台' },
+  { key: 'jd', label: '京东', description: '支付结果页 / 支付结果弹框' },
+  { key: 'meituan', label: '美团', description: '支付结果页' },
+  { key: 'pdd', label: '拼多多', description: '多多支付收银台（确认后入账）' },
+  { key: 'douyin', label: '抖音', description: '商城 / 团购下单页（确认后入账）' },
   { key: 'mms', label: '银行短信', description: '扣款 / 入账短信（经系统通知，无需短信权限）' },
 ];
 
@@ -59,6 +72,10 @@ export default function AutoBookkeepingScreen() {
   const statsQuery = useQuery({
     queryKey: QUERY_KEYS.bookkeeping.stats,
     queryFn: nativeAutoBookkeeping.getRuleStats,
+  });
+  const serviceQuery = useQuery({
+    queryKey: QUERY_KEYS.bookkeeping.service,
+    queryFn: nativeAutoBookkeeping.getServiceRunning,
   });
 
   const invalidate = () => {
@@ -81,6 +98,9 @@ export default function AutoBookkeepingScreen() {
   });
 
   const settings = settingsQuery.data;
+  const masterEnabled = settings?.masterEnabled ?? false;
+  const serviceRunning = serviceQuery.data ?? false;
+  const broken = masterEnabled && !serviceRunning;
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
@@ -100,6 +120,23 @@ export default function AutoBookkeepingScreen() {
         showsVerticalScrollIndicator={false}
         contentContainerStyle={styles.content}
       >
+        {broken ? (
+          <View style={styles.warningCard}>
+            <AlertCircle size={20} color={styles._colors.error} />
+            <View style={styles.masterText}>
+              <Text style={styles.warningTitle}>自动记账已失效</Text>
+              <Text style={styles.warningText}>
+                无障碍服务未运行（系统更新后可能被静默关闭）。不处理则不会自动记任何账。
+              </Text>
+              <TouchableOpacity
+                style={styles.warningAction}
+                onPress={() => navigation.navigate('AccessibilityPermission')}
+              >
+                <Text style={styles.warningActionText}>去开启无障碍服务</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        ) : null}
         <View style={styles.sectionCard}>
           <View style={styles.masterRow}>
             <View style={styles.iconContainer}>
@@ -113,7 +150,7 @@ export default function AutoBookkeepingScreen() {
               </Text>
             </View>
             <Switch
-              value={settings?.masterEnabled ?? false}
+              value={masterEnabled}
               onValueChange={(enabled) => masterMutation.mutate(enabled)}
               trackColor={{ false: styles._colors.divider, true: styles._colors.primary }}
               thumbColor="#FFFFFF"
@@ -247,6 +284,43 @@ const createStyles = (colors: ThemeColors) => ({
     channelLabel: {
       fontSize: 14,
       fontWeight: '700',
+      color: colors.textPrimary,
+    },
+    warningCard: {
+      flexDirection: 'row',
+      alignItems: 'flex-start',
+      gap: spacing.sm,
+      padding: spacing.lg,
+      backgroundColor: colors.surface,
+      borderWidth: borderWidth.thick,
+      borderColor: colors.error,
+      borderRadius: borderRadius.card,
+    },
+    warningTitle: {
+      fontSize: 14,
+      fontWeight: '800',
+      color: colors.error,
+    },
+    warningText: {
+      fontSize: 12,
+      fontWeight: '600',
+      color: colors.textSecondary,
+      lineHeight: 18,
+      marginTop: 2,
+    },
+    warningAction: {
+      marginTop: spacing.sm,
+      alignSelf: 'flex-start',
+      paddingHorizontal: spacing.md,
+      paddingVertical: spacing.xs,
+      borderRadius: borderRadius.small,
+      borderWidth: borderWidth.thin,
+      borderColor: colors.stroke,
+      backgroundColor: colors.primaryLight,
+    },
+    warningActionText: {
+      fontSize: 12,
+      fontWeight: '800',
       color: colors.textPrimary,
     },
     privacyRow: {

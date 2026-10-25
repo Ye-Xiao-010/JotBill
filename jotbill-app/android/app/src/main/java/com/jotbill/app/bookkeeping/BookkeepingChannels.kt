@@ -21,11 +21,21 @@ object BookkeepingChannels {
 
     private const val KEY_CHANNEL_PREFIX = "channel_"
 
-    /** 引擎需要监听的渠道包名 → 通道键。新增渠道只改这里 + 默认值。 */
+    /**
+     * 引擎需要监听的渠道包名 → 通道键。新增渠道只改这里 + 默认值 + 设置页列表。
+     *
+     * 对齐小米 26 包白名单中与「付款后自动记账」相关的全部 App：内置资产里
+     * 京东/美团/拼多多/抖音 6 条规则曾因渠道缺失而是死规则（2026-10-25 差距
+     * 复查修正）。淘宝走支付宝收银台（MspContainerActivity），无需单独渠道。
+     */
     private val PACKAGES = mapOf(
         "com.eg.android.AlipayGphone" to "alipay",
         "com.tencent.mm" to "wechat",
         "com.unionpay" to "unionpay",
+        "com.jingdong.app.mall" to "jd",
+        "com.sankuai.meituan" to "meituan",
+        "com.xunmeng.pinduoduo" to "pdd",
+        "com.ss.android.ugc.aweme" to "douyin",
         "com.android.mms" to "mms"
     )
 
@@ -34,6 +44,10 @@ object BookkeepingChannels {
         "alipay" to true,
         "wechat" to true,
         "unionpay" to true,
+        "jd" to true,
+        "meituan" to true,
+        "pdd" to true,
+        "douyin" to true,
         "mms" to false
     )
 

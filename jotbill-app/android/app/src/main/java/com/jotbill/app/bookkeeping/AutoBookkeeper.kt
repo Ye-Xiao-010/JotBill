@@ -102,6 +102,12 @@ class AutoBookkeeper(
             return
         }
         val categoryId = patch.categoryId?.takeIf { database.categoryDao().getById(it) != null }
+            ?: BookkeepingCategoryHints.guess(
+                merchant = merchant,
+                platform = patch.platform ?: channelLabel(record.sourcePackage),
+                ruleNote = record.ruleNote,
+                type = type
+            )?.takeIf { database.categoryDao().getById(it) != null }
 
         val now = System.currentTimeMillis()
         val bill = BillEntity(
