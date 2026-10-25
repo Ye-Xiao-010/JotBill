@@ -76,10 +76,12 @@ class AutoBookkeeper(
         )
 
         // 用户分类规则补全（金额/平台/商户/描述 → set_category/set_account 等）。
-        // ignore/强转待确认类决策在自动路径的落点是「不自动入账」：证据转待确认，
-        // 与用户在待确认中心的显式处理衔接（RuleEngine 契约：ignore 只挡自动路径）。
-        val patch = try {
-            val decision = RuleEngine(database).evaluateAndRecord(
+        // 决策三分支对齐 RuleEngine 契约与 CheckoutPaymentMatcher 三处先例：
+        // - Ignored（如「星巴克不自动记账」）= 丢弃：不写 Bill、不进待确认；
+        // - ToReview = 转待确认由用户处理（CONFLICT_RULE_FORCED_REVIEW）；
+        // - Continue = 取 patch 继续自动入账。
+        val decision = try {
+            RuleEngine(database).evaluateAndRecord(
                 RuleEngine.Subject(
                     amountMinor = amountMinor,
                     platform = channelLabel(record.sourcePackage),
@@ -90,11 +92,34 @@ class AutoBookkeeper(
                     sourceType = BILL_SOURCE_TYPE
                 )
             )
+        } catch (error: RuntimeException) {
+            JotBillLog.w(TAG, "分类规则执行失败，按无规则补全处理", error)
+            null
+        }
+        when (decision) {
+            is RuleEngine.Decision.Ignored -> {
+                JotBillLog.i(
+                    TAG,
+                    "规则决策=忽略，丢弃自动记账记录: rule=${record.ruleId}, " +
+                        "amount=$amountMinor, hits=${decision.hits.size}"
+                )
+                return
+            }
+            is RuleEngine.Decision.ToReview -> {
+                fallbackToPending(
+                    record, amountMinor, merchant, orderId, occurredAt,
+                    RuleEngine.CONFLICT_RULE_FORCED_REVIEW
+                )
+                return
+            }
+            else -> Unit
+        }
+        val patch = try {
             RuleEngine(database).sanitizePatch(
                 (decision as? RuleEngine.Decision.Continue)?.patch ?: RuleEngine.FieldPatch()
             )
         } catch (error: RuntimeException) {
-            JotBillLog.w(TAG, "分类规则执行失败，按无规则补全处理", error)
+            JotBillLog.w(TAG, "分类规则补全净化失败，按无规则补全处理", error)
             RuleEngine.FieldPatch()
         }
 
@@ -148,29 +173,48 @@ class AutoBookkeeper(
                 excludeId = bill.id
             )
         } catch (error: RuntimeException) {
+            // 协程取消不是落库失败：不得在已取消的作用域里再做兜底落库
+            if (error is kotlinx.coroutines.CancellationException) throw error
             JotBillLog.w(TAG, "相似度去重检查失败，转待确认", error)
             null
         }
         if (similar != null && similar.isNotEmpty()) {
             val selfHits = similar.filter { it.bill.sourceType == BILL_SOURCE_TYPE }
-            if (selfHits.isNotEmpty()) {
-                // 本管线二次抽取命中自己刚入账的账单（典型：支付宝/微信主结果页
-                // 先只有金额，用户随后打开账单详情页，2000107/2000108 抽出商户/
-                // 收支类型）—— 对齐小米服务端「指纹合并+字段补全」的本地形态：
-                // 只补既有账单的空缺字段，金额/账户/类型绝不改动。
-                enrichExistingBill(
-                    existing = selfHits.maxByOrNull { it.bill.createdAt }!!.bill,
-                    merchant = merchant,
-                    orderId = orderId,
-                    categoryId = categoryId
-                )
-                return
+            // orderId 判别收窄（对齐「真实第二笔不再被吞」裁定方向）：双方都有
+            // 订单号且不同 ⇒ 是同商户同金额的两笔真实支付，不得吸收进既有账单。
+            val absorbable = selfHits.filter { hit ->
+                isSameTransaction(hit.bill.orderId, orderId)
             }
-            fallbackToPending(
-                record, amountMinor, merchant, orderId, occurredAt,
-                DuplicateGuard.CONFLICT_SUSPECTED_DUPLICATE
-            )
-            return
+            when {
+                absorbable.isNotEmpty() -> {
+                    // 本管线二次抽取命中自己刚入账的账单（典型：支付宝/微信主结果页
+                    // 先只有金额，用户随后打开账单详情页，2000107/2000108 抽出商户/
+                    // 收支类型）—— 对齐小米服务端「指纹合并+字段补全」的本地形态：
+                    // 只补既有账单的空缺字段，金额/账户/类型绝不改动。
+                    enrichExistingBill(
+                        existing = absorbable.maxByOrNull { it.bill.createdAt }!!.bill,
+                        merchant = merchant,
+                        orderId = orderId,
+                        categoryId = categoryId
+                    )
+                    return
+                }
+                selfHits.isNotEmpty() -> {
+                    // 同额但订单号不同的自源账单：疑似真实第二笔，转待确认由用户判断
+                    fallbackToPending(
+                        record, amountMinor, merchant, orderId, occurredAt,
+                        DuplicateGuard.CONFLICT_SUSPECTED_DUPLICATE
+                    )
+                    return
+                }
+                else -> {
+                    fallbackToPending(
+                        record, amountMinor, merchant, orderId, occurredAt,
+                        DuplicateGuard.CONFLICT_SUSPECTED_DUPLICATE
+                    )
+                    return
+                }
+            }
         }
 
         try {
@@ -197,6 +241,8 @@ class AutoBookkeeper(
                 )
             }
         } catch (error: Exception) {
+            // 协程取消（服务销毁等）静默退出，不做兜底（兜底也必然再被取消）
+            if (error is kotlinx.coroutines.CancellationException) throw error
             JotBillLog.w(TAG, "自动入账失败，转待确认", error)
             fallbackToPending(record, amountMinor, merchant, orderId, occurredAt, "AUTO_BOOK_FAILED")
         }
@@ -237,80 +283,7 @@ class AutoBookkeeper(
         return if (account.isActive) accountId else null
     }
 
-    /**
-     * businessTime 文本 → epoch 毫秒。覆盖内置规则产出的全部格式：
-     * `2026年10月25日 14:30:25`、`10月25日 14:30`、`10-25 14:30`、`14:30`。
-     * 只有时刻（HH:mm）时按当天解释；算出的时间超过参照时刻 60 分钟以上按
-     * 前一天/前一年解释（跨零点支付、跨年短信）。全部失败回退抽取时刻。
-     */
-    private fun parseBusinessTimeMillis(raw: String?, fallback: Long): Long {
-        val text = raw?.trim()?.takeIf { it.isNotEmpty() } ?: return fallback
-        val zone = ZoneId.systemDefault()
-        val now = LocalDateTime.ofInstant(Instant.ofEpochMilli(fallback), zone)
-
-        FULL_TIME_PATTERN.matcher(text).takeIf { it.find() }?.let { matcher ->
-            val time = LocalDateTime.of(
-                matcher.group(1)!!.toInt(),
-                matcher.group(2)!!.toInt(),
-                matcher.group(3)!!.toInt(),
-                matcher.group(4)!!.toInt(),
-                matcher.group(5)!!.toInt(),
-                matcher.group(6)?.toInt() ?: 0
-            )
-            return time.atZone(zone).toInstant().toEpochMilli()
-        }
-
-        monthDayTime(text, now, zone)?.let { return it }
-        dayTimeDash(text, now, zone)?.let { return it }
-        hourMinuteOnly(text, now, zone)?.let { return it }
-        return fallback
-    }
-
-    private fun monthDayTime(text: String, now: LocalDateTime, zone: ZoneId): Long? {
-        val matcher = MONTH_DAY_TIME.matcher(text).takeIf { it.find() } ?: return null
-        val month = matcher.group(1)!!.toInt()
-        val day = matcher.group(2)!!.toInt()
-        val hour = matcher.group(3)!!.toInt()
-        val minute = matcher.group(4)!!.toInt()
-        if (!isValidMonthDay(now.year, month, day)) return null
-        var time = LocalDate.of(now.year, month, day).atTime(hour, minute)
-        if (time.isAfter(now.plusMinutes(CROSS_DAY_TOLERANCE_MINUTES))) {
-            time = LocalDate.of(now.year - 1, month, day).atTime(hour, minute)
-        }
-        return time.atZone(zone).toInstant().toEpochMilli()
-    }
-
-    private fun dayTimeDash(text: String, now: LocalDateTime, zone: ZoneId): Long? {
-        val matcher = DAY_DASH_TIME.matcher(text).takeIf { it.find() } ?: return null
-        val month = matcher.group(1)!!.toInt()
-        val day = matcher.group(2)!!.toInt()
-        val hour = matcher.group(3)!!.toInt()
-        val minute = matcher.group(4)!!.toInt()
-        if (!isValidMonthDay(now.year, month, day)) return null
-        val time = LocalDate.of(now.year, month, day).atTime(hour, minute)
-        return time.atZone(zone).toInstant().toEpochMilli()
-    }
-
-    private fun hourMinuteOnly(text: String, now: LocalDateTime, zone: ZoneId): Long? {
-        val matcher = HOUR_MINUTE.matcher(text).takeIf { it.matches() } ?: return null
-        val hour = matcher.group(1)!!.toInt()
-        val minute = matcher.group(2)!!.toInt()
-        if (hour > 23 || minute > 59) return null
-        var time = now.toLocalDate().atTime(hour, minute)
-        if (time.isAfter(now.plusMinutes(CROSS_DAY_TOLERANCE_MINUTES))) {
-            time = time.minusDays(1)
-        }
-        return time.atZone(zone).toInstant().toEpochMilli()
-    }
-
-    private fun isValidMonthDay(year: Int, month: Int, day: Int): Boolean = try {
-        LocalDate.of(year, month, day)
-        true
-    } catch (_: java.time.DateTimeException) {
-        false
-    }
-
-    /**
+        /**
      * 二次抽取（账单详情页/通知）对既有账单的字段回填：只补空缺，绝不覆盖。
      * 走 [FieldPriorityResolver.Source.EVIDENCE] 级（4 级）—— 低于用户编辑与
      * 用户规则，锁定字段自动受保护；金额/账户/类型不参与回填，余额不动。
@@ -354,7 +327,6 @@ class AutoBookkeeper(
                 "orderId=${fills.orderId != null}, category=${categoryFill != null}"
         )
     }
-
     // ── 兜底：转待确认（弹窗管线已被认领让路时，证据不能丢）──────────────
 
     private suspend fun fallbackToPending(
@@ -423,6 +395,86 @@ class AutoBookkeeper(
             "^(\\d{1,2}):(\\d{2})$"
         )
 
+        // ── 时间解析（纯函数，单测直接驱动）───────────────────────────────
+
+    /**
+         * businessTime 文本 → epoch 毫秒。覆盖内置规则产出的全部格式：
+         * `2026年10月25日 14:30:25`、`10月25日 14:30`、`10-25 14:30`、`14:30`。
+         * 只有时刻（HH:mm）时按当天解释；算出的时间超过参照时刻 60 分钟以上按
+         * 前一天/前一年解释（跨零点支付、跨年短信）。全部失败回退抽取时刻。
+         */
+        internal fun parseBusinessTimeMillis(raw: String?, fallback: Long): Long {
+            val text = raw?.trim()?.takeIf { it.isNotEmpty() } ?: return fallback
+            val zone = ZoneId.systemDefault()
+            val now = LocalDateTime.ofInstant(Instant.ofEpochMilli(fallback), zone)
+
+            FULL_TIME_PATTERN.matcher(text).takeIf { it.find() }?.let { matcher ->
+                val time = LocalDateTime.of(
+                    matcher.group(1)!!.toInt(),
+                    matcher.group(2)!!.toInt(),
+                    matcher.group(3)!!.toInt(),
+                    matcher.group(4)!!.toInt(),
+                    matcher.group(5)!!.toInt(),
+                    matcher.group(6)?.toInt() ?: 0
+                )
+                return time.atZone(zone).toInstant().toEpochMilli()
+            }
+
+            monthDayTime(text, now, zone)?.let { return it }
+            dayTimeDash(text, now, zone)?.let { return it }
+            hourMinuteOnly(text, now, zone)?.let { return it }
+            return fallback
+        }
+
+        internal fun monthDayTime(text: String, now: LocalDateTime, zone: ZoneId): Long? {
+            val matcher = MONTH_DAY_TIME.matcher(text).takeIf { it.find() } ?: return null
+            val month = matcher.group(1)!!.toInt()
+            val day = matcher.group(2)!!.toInt()
+            val hour = matcher.group(3)!!.toInt()
+            val minute = matcher.group(4)!!.toInt()
+            if (!isValidMonthDay(now.year, month, day)) return null
+            var time = LocalDate.of(now.year, month, day).atTime(hour, minute)
+            if (time.isAfter(now.plusMinutes(CROSS_DAY_TOLERANCE_MINUTES))) {
+                time = LocalDate.of(now.year - 1, month, day).atTime(hour, minute)
+            }
+            return time.atZone(zone).toInstant().toEpochMilli()
+        }
+
+        internal fun dayTimeDash(text: String, now: LocalDateTime, zone: ZoneId): Long? {
+            val matcher = DAY_DASH_TIME.matcher(text).takeIf { it.find() } ?: return null
+            val month = matcher.group(1)!!.toInt()
+            val day = matcher.group(2)!!.toInt()
+            val hour = matcher.group(3)!!.toInt()
+            val minute = matcher.group(4)!!.toInt()
+            if (!isValidMonthDay(now.year, month, day)) return null
+            var time = LocalDate.of(now.year, month, day).atTime(hour, minute)
+            // 与 monthDayTime 同款跨年容差：1 月初收到的 12-28 短信按去年解释，
+            // 否则会记出一笔「未来 11 个月」的账单
+            if (time.isAfter(now.plusMinutes(CROSS_DAY_TOLERANCE_MINUTES))) {
+                time = LocalDate.of(now.year - 1, month, day).atTime(hour, minute)
+            }
+            return time.atZone(zone).toInstant().toEpochMilli()
+        }
+
+        internal fun hourMinuteOnly(text: String, now: LocalDateTime, zone: ZoneId): Long? {
+            val matcher = HOUR_MINUTE.matcher(text).takeIf { it.matches() } ?: return null
+            val hour = matcher.group(1)!!.toInt()
+            val minute = matcher.group(2)!!.toInt()
+            if (hour > 23 || minute > 59) return null
+            var time = now.toLocalDate().atTime(hour, minute)
+            if (time.isAfter(now.plusMinutes(CROSS_DAY_TOLERANCE_MINUTES))) {
+                time = time.minusDays(1)
+            }
+            return time.atZone(zone).toInstant().toEpochMilli()
+        }
+
+        internal fun isValidMonthDay(year: Int, month: Int, day: Int): Boolean = try {
+            LocalDate.of(year, month, day)
+            true
+        } catch (_: java.time.DateTimeException) {
+            false
+        }
+
         /** 支付包名 → 展示用渠道名（通知文案与账单 platform 字段共用）。 */
         fun channelLabel(sourcePackage: String?): String = when (sourcePackage) {
             "com.eg.android.AlipayGphone" -> "支付宝"
@@ -452,5 +504,14 @@ class AutoBookkeeper(
             orderId = orderId?.takeIf { existing.orderId.isNullOrBlank() },
             categoryId = categoryId?.takeIf { existing.categoryId.isNullOrBlank() }
         )
+
+        /**
+         * 订单号判别：任一方缺订单号视为「无法排除同笔」（保守吸收）；
+         * 双方都有且不同 ⇒ 明确是两笔真实交易，不得吸收。
+         */
+        internal fun isSameTransaction(existingOrderId: String?, newOrderId: String?): Boolean {
+            if (existingOrderId.isNullOrBlank() || newOrderId.isNullOrBlank()) return true
+            return existingOrderId == newOrderId
+        }
     }
 }

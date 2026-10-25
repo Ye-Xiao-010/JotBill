@@ -251,6 +251,27 @@ class AutoBookkeepingEngineTest {
         assertEquals(0, h.scheduler.pending.size)
     }
 
+    @Test
+    fun `换窗后重扫预算复位`() {
+        val h = Harness()
+        // 窗口 A：宽 key（MMWebViewUI 类比）空页烧光全部预算
+        h.engine.onEvent(h.windowEvent("com.alipay.android.msp.ui.views.MspContainerActivity", windowId = 1)) {
+            FakePageNode(null, null)
+        }
+        repeat(20) { h.scheduler.runNext() }
+        assertEquals(0, h.scheduler.pending.size)
+        // 窗口 B：新 32 事件建立新跟踪 —— 预算必须复位（审查 P2-1），
+        // 静止页迟到渲染场景的重扫兜底不能被上一窗口的消耗连累
+        var page: FakePageNode = FakePageNode(null, null)
+        h.engine.onEvent(h.windowEvent("com.alipay.android.msp.ui.views.MspContainerActivity", windowId = 2)) {
+            page
+        }
+        assertEquals("换窗后应重新排重扫", 1, h.scheduler.pending.size)
+        page = alipayResultPage()
+        h.scheduler.runNext()
+        assertEquals(1, h.sink.records.size)
+    }
+
     companion object {
         /** 支付宝结果页 / 淘宝收银台（带确认锚点）/ 支付宝通知 三条规则的最小集。 */
         private val TEST_REGISTRY_TEXT = """

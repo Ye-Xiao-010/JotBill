@@ -70,6 +70,13 @@ object PageNodeDumper {
         if (builder.isNotEmpty()) {
             builder.deleteCharAt(builder.length - 1)
         }
+        if (state.capped) {
+            com.jotbill.app.utils.JotBillLog.w(
+                "PageNodeDumper",
+                "dump 触发节点熔断截断: MAX=$MAX_DUMP_NODES, located=${state.located} —— " +
+                    "页面异常深或规则预算配置失当，抽取可能不完整"
+            )
+        }
         return DumpResult(
             dump = builder.toString(),
             located = state.located,
@@ -81,6 +88,7 @@ object PageNodeDumper {
     private class State {
         var located = false
         var count = 0
+        var capped = false
     }
 
     private fun appendNode(
@@ -98,6 +106,7 @@ object PageNodeDumper {
         // 安全熔断（不足#7）：异常深的脏树（超出任何规则的预算语义）直接停，
         // 防主线程被一次 dump 拖死。资产规则预算最大 1000，此上限对正常规则零影响。
         if (state.count > MAX_DUMP_NODES) {
+            state.capped = true
             return
         }
         if (locateAttribute == -1) {

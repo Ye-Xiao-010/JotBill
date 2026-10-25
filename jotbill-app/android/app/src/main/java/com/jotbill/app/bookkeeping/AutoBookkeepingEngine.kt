@@ -192,6 +192,13 @@ class AutoBookkeepingEngine(
         val className = snapshot.className
         val matchedKey = registryRef.get()?.matchKey(packageName, className)
         if (matchedKey != null) {
+            // 换窗即重置重扫预算：上一窗口（可能是 MMWebViewUI 这类宽 key 匹配的
+            // 普通文章页）烧掉的预算不能连累本窗口 —— 静止页迟到渲染恰是最需要
+            // 重扫兜底的场景（审查 P2-1）。
+            if (trackedRuleKey != matchedKey || trackedWindowId != snapshot.windowId) {
+                rescanScheduler.cancelAll()
+                rescanCount = 0
+            }
             trackedWindowId = snapshot.windowId
             trackedActivityName = className
             trackedRuleKey = matchedKey
@@ -288,6 +295,13 @@ class AutoBookkeepingEngine(
         var sampleDump = ""
         for (rule in rules) {
             val dump = PageNodeDumper.dump(root, rule)
+            if (dump.elapsedMs > SLOW_DUMP_WARN_MILLIS) {
+                JotBillLog.w(
+                    TAG,
+                    "页面 dump 耗时异常: ${dump.elapsedMs}ms, nodes=${dump.nodeCount}, " +
+                        "ruleId=${rule.ruleId}, pkg=$sourcePackage"
+                )
+            }
             sampleDump = dump.dump
             if (!dump.located) {
                 continue
@@ -320,6 +334,16 @@ class AutoBookkeepingEngine(
                 trackedRuleKey = null
             }
             if (rule.locateConfirm != null) {
+                if (pendingConfirms.containsKey(sourcePackage)) {
+                    // 同包第二笔挂起确认会覆盖第一笔（mipay 同款按包名键控语义），
+                    // 留日志让真机上「5 分钟内连付两笔丢首笔挂起」可归因。
+                    JotBillLog.w(
+                        TAG,
+                        "同包挂起确认被覆盖: pkg=$sourcePackage, 旧ruleId=" +
+                            "${pendingConfirms[sourcePackage]?.rule?.ruleId}, " +
+                            "新ruleId=${rule.ruleId}"
+                    )
+                }
                 pendingConfirms[sourcePackage] = PendingConfirm(
                     record = record,
                     rule = rule,
@@ -345,7 +369,12 @@ class AutoBookkeepingEngine(
         return false
     }
 
-    /** 诊断日志（3s 节流/键）：dump 样本压缩为单行、截断 [DIAG_DUMP_LIMIT]。 */
+    /**
+     * 诊断日志（3s 节流/键）。
+     * ⚠️ 落盘政策：JotBillLog 自 2026-10-25 起所有构建一律落盘（真机排查需要），
+     * dump 样本因此按构建类型门控 —— debug 全量样本，release 只保留判定结论，
+     * 不在用户手机上持久化支付页面文本片段。
+     */
     private fun logAnalyzeDiag(packageName: String, ruleKey: String, headline: String, dump: String) {
         val throttleKey = "$packageName|$ruleKey"
         val now = clock()
@@ -353,7 +382,11 @@ class AutoBookkeepingEngine(
             return
         }
         lastAnalyzeDiagAt[throttleKey] = now
-        val sample = dump.replace('\n', '│').take(DIAG_DUMP_LIMIT)
+        val sample = if (com.jotbill.app.BuildConfig.DEBUG) {
+            dump.replace('\n', '│').take(DIAG_DUMP_LIMIT)
+        } else {
+            "(release 构建隐藏 dump 样本)"
+        }
         JotBillLog.i(TAG, "[ABK诊断] $headline, pkg=$packageName, key=$ruleKey, dump样本=$sample")
     }
 
@@ -511,10 +544,13 @@ class AutoBookkeepingEngine(
 
         const val RESCAN_MAX_COUNT = 8
 
-        /** 诊断日志节流与 dump 样本上限（只进内存日志，防刷屏防泄漏整页）。 */
+        /** 诊断日志节流与 dump 样本上限（防刷屏；样本内容按构建类型门控）。 */
         const val DIAG_LOG_INTERVAL_MILLIS = 3_000L
 
         const val DIAG_DUMP_LIMIT = 800
+
+        /** 单次 dump 超此耗时输出告警（慢页面/脏树的可观测出口）。 */
+        const val SLOW_DUMP_WARN_MILLIS = 50L
 
         /** 与 PaymentTiming.SAME_TXN_WINDOW_MILLIS 同值（15s，同额合并裁定）。 */
         const val CLAIM_WINDOW_MILLIS = 15_000L

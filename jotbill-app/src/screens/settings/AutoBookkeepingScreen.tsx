@@ -161,8 +161,9 @@ export default function AutoBookkeepingScreen() {
             ) : (
               <Text style={styles.privacyText}>
                 内置 {statsQuery.data?.rules ?? '—'} 条页面规则
-                （{statsQuery.data?.keys ?? '—'} 类页面）。只读取白名单应用的
-                支付结果页文字，不截图、不读短信内容；识别在本地完成。
+                （{statsQuery.data?.keys ?? '—'} 类页面）。只读取白名单应用
+                的支付相关页面文字（银行短信通道只读系统通知里的银行短信），
+                不上传原文，识别在本地完成。
               </Text>
             )}
           </View>

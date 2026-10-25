@@ -69,7 +69,19 @@ class PageRuleRegistry private constructor(
                 for (i in 0 until array.length()) {
                     val obj = array.optJSONObject(i) ?: continue
                     try {
-                        rules += PageRule.fromJson(ruleIdFallback = -1, json = obj)
+                        val rule = PageRule.fromJson(ruleIdFallback = -1, json = obj)
+                        // M3 云端规则防御：-1（页面即命中）+ 单正则抽取的组合在
+                        // dump 语义下无内容可抽（-1 定位短路不产出 dump），会静默空转。
+                        if (rule.locateAttribute == -1 && rule.ruleType != "singleField" &&
+                            obj.optString("extractPattern").isNotEmpty()
+                        ) {
+                            JotBillLog.w(
+                                TAG,
+                                "规则组合存疑: ruleId=${rule.ruleId}, " +
+                                    "locateAttribute=-1 且带 extractPattern —— 页面事件形态下无 dump 可抽"
+                            )
+                        }
+                        rules += rule
                         parsed++
                     } catch (error: RuntimeException) {
                         dropped++
