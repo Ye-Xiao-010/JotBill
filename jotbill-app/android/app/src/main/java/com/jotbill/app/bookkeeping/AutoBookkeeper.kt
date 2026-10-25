@@ -84,7 +84,9 @@ class AutoBookkeeper(
                     amountMinor = amountMinor,
                     platform = channelLabel(record.sourcePackage),
                     merchant = merchant,
-                    description = record.ruleNote,
+                    // 用户规则按「描述包含 X」匹配 —— 传商户这种真实交易语义，
+                    // 不传规则备注等工程字样（会误触发渠道名规则）。
+                    description = merchant,
                     sourceType = BILL_SOURCE_TYPE
                 )
             )
@@ -211,7 +213,13 @@ class AutoBookkeeper(
         }
     }
 
-    /** 用户规则指定的账户优先（引用失效则弃用），否则按支付包名取种子账户。 */
+    /**
+     * 用户规则指定的账户优先（引用失效则弃用），否则按支付包名取种子账户：
+     * 微信支付→微信零钱、支付宝→支付宝；其余渠道（云闪付/京东/美团/拼多多/
+     * 抖音）的无障碍事件**读不到实际扣款账户**，兜底落「现金」保证自动入账
+     * 闭环 —— 用户可用分类规则 set_account 精确覆盖，或在账单里改。
+     * 兜底账户也不存在/停用时返回 null 转待确认。
+     */
     private suspend fun resolveAccountId(
         sourcePackage: String,
         patch: RuleEngine.FieldPatch
@@ -223,7 +231,7 @@ class AutoBookkeeper(
         val accountId = when (sourcePackage) {
             "com.tencent.mm" -> WECHAT_PAY_ACCOUNT_ID
             "com.eg.android.AlipayGphone" -> ALIPAY_ACCOUNT_ID
-            else -> return null
+            else -> CASH_FALLBACK_ACCOUNT_ID
         }
         val account = database.accountDao().getById(accountId) ?: return null
         return if (account.isActive) accountId else null
@@ -395,6 +403,9 @@ class AutoBookkeeper(
         private const val WECHAT_PAY_ACCOUNT_ID = "default-account-wechat"
 
         private const val ALIPAY_ACCOUNT_ID = "default-account-alipay"
+
+        /** 非微信/支付宝渠道的入账兜底账户（现金）。 */
+        private const val CASH_FALLBACK_ACCOUNT_ID = "default-account-cash"
 
         private val FULL_TIME_PATTERN = Pattern.compile(
             "(\\d{4})年(\\d{1,2})月(\\d{1,2})日\\s*(\\d{1,2}):(\\d{2})(?::(\\d{2}))?"
