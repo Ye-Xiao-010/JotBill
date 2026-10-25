@@ -2,9 +2,10 @@
 <!--
     这里只声明需要观察的无障碍窗口和节点事件；包名在代码中做资格判断，
     以便收到离开购物应用的事件并清理待稳定状态。
+    typeNotificationStateChanged 供规则式自动记账（通知锚点 / 二次确认 / M6 短信通道）。
 -->
 <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
-    android:accessibilityEventTypes="typeWindowStateChanged|typeWindowContentChanged|typeViewTextChanged|typeViewScrolled"
+    android:accessibilityEventTypes="typeWindowStateChanged|typeWindowContentChanged|typeViewTextChanged|typeViewScrolled|typeNotificationStateChanged"
     android:accessibilityFeedbackType="feedbackSpoken|feedbackHaptic|feedbackAudible|feedbackVisual|feedbackGeneric"
     android:accessibilityFlags="flagReportViewIds|flagRetrieveInteractiveWindows|flagIncludeNotImportantViews"
     android:canRetrieveWindowContent="true"

@@ -85,6 +85,11 @@
               android:resource="@xml/checkout_accessibility_service" />
       </service>
       
+      <!-- 自动记账通知撤销动作 -->
+      <receiver
+          android:name=".bookkeeping.AutoBookkeepingUndoReceiver"
+          android:exported="false" />
+      
       <!-- 开机启动接收器（可选） -->
       <receiver
           android:name=".notification.BootCompletedReceiver"

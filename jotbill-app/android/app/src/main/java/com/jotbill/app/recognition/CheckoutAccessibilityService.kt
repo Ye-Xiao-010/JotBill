@@ -13,6 +13,12 @@ import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
 import com.jotbill.app.data.JotBillDatabaseProvider
+import com.jotbill.app.bookkeeping.AccessibilityPageNode
+import com.jotbill.app.bookkeeping.AutoBookkeeper
+import com.jotbill.app.bookkeeping.AutoBookkeepingEngine
+import com.jotbill.app.bookkeeping.BookkeepingChannels
+import com.jotbill.app.bookkeeping.PageNode
+import com.jotbill.app.bookkeeping.PageRuleRegistry
 import com.jotbill.app.overlay.PendingConfirmOverlayManager
 import java.time.Instant
 import java.util.concurrent.atomic.AtomicBoolean
@@ -291,6 +297,16 @@ class CheckoutAccessibilityService : AccessibilityService() {
     private var matchingScope: CoroutineScope? = null
     private val evidenceFallbackScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
+    // ── 规则式自动记账（mipay 移植管线，与上方截图 AI 管线并存互斥）────────
+    // 引擎只做「页面定位 + 正则抽字段」，主线程同步执行（dump+正则，毫秒级）；
+    // 规则资产在 IO 作用域异步加载，未就绪前引擎空转。认领注册表供
+    // scanPaymentResultCore 查询让路（弹窗兜底 vs 自动入账互斥，拍板项①）。
+    private val bookkeepingRules =
+        java.util.concurrent.atomic.AtomicReference<PageRuleRegistry?>(null)
+
+    @Volatile
+    private var bookkeepingEngine: AutoBookkeepingEngine? = null
+
     override fun onServiceConnected() {
         super.onServiceConnected()
 
@@ -305,7 +321,8 @@ class CheckoutAccessibilityService : AccessibilityService() {
                 AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED or
                 AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED or
                 AccessibilityEvent.TYPE_VIEW_SCROLLED or
-                AccessibilityEvent.TYPE_VIEW_CLICKED
+                AccessibilityEvent.TYPE_VIEW_CLICKED or
+                AccessibilityEvent.TYPE_NOTIFICATION_STATE_CHANGED
         configuredInfo.feedbackType = AccessibilityServiceInfo.FEEDBACK_SPOKEN or
             AccessibilityServiceInfo.FEEDBACK_HAPTIC or
             AccessibilityServiceInfo.FEEDBACK_AUDIBLE or
@@ -323,6 +340,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
         AccessibilityPageSummaryCollector.resetVolatileTracker()
         activeService = this
         initializePaymentMatcher()
+        initializeAutoBookkeeping()
         serviceConnected = true
         JotBillLog.i(TAG, "结算页无障碍观察服务已连接")
     }
@@ -476,6 +494,17 @@ class CheckoutAccessibilityService : AccessibilityService() {
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (!serviceConnected || event == null) {
+            return
+        }
+
+        // 规则式自动记账管线先行（mipay 移植）：同步抽取成功即在引擎内登记
+        // 认领指纹，下方弹窗管线据此让路。引擎内部吞异常，不影响本服务。
+        bookkeepingEngine?.onEvent(buildEventSnapshot(event), bookkeepingRootProvider())
+
+        // 通知事件（typeNotificationStateChanged 为自动记账新增）只属于规则
+        // 引擎（通知锚点 + 二次确认 + M6 短信通道）；此前事件流里没有这类事件，
+        // 此处早退 = 既有管线零行为变化。
+        if (event.eventType == AccessibilityEvent.TYPE_NOTIFICATION_STATE_CHANGED) {
             return
         }
 
@@ -727,6 +756,73 @@ class CheckoutAccessibilityService : AccessibilityService() {
         scope?.cancel()
     }
 
+    /**
+     * 规则式自动记账引擎初始化（mipay 移植管线）。
+     *
+     * - 引擎在主线程无障碍回调里同步执行（dump + 正则，毫秒级），落账经
+     *   [AutoBookkeeper] 走 [evidenceFallbackScope]（IO）；
+     * - 规则资产首次从 assets 异步加载，进程内单例缓存；
+     * - 通道开关（总开关 + 支付宝/微信/云闪付白名单）见 [BookkeepingChannels]。
+     */
+    private fun initializeAutoBookkeeping() {
+        if (bookkeepingEngine != null) {
+            return
+        }
+        val appContext = applicationContext
+        val engine = AutoBookkeepingEngine(
+            registryRef = bookkeepingRules,
+            channels = { packageName ->
+                BookkeepingChannels.shouldProcess(appContext, packageName)
+            },
+            sink = AutoBookkeeper(appContext, evidenceFallbackScope)
+        )
+        bookkeepingEngine = engine
+        evidenceFallbackScope.launch {
+            try {
+                bookkeepingRules.set(PageRuleRegistry.get(appContext))
+            } catch (error: RuntimeException) {
+                JotBillLog.w(TAG, "自动记账规则资产加载失败", error)
+            }
+        }
+        JotBillLog.i(TAG, "自动记账引擎已挂载")
+    }
+
+    /** 把无障碍事件投影成引擎快照（引擎不触碰框架类，保证可 JVM 单测）。 */
+    private fun buildEventSnapshot(event: AccessibilityEvent): AutoBookkeepingEngine.EventSnapshot {
+        val texts = try {
+            event.text
+        } catch (_: RuntimeException) {
+            null
+        }
+        val notificationText = when {
+            texts == null || texts.isEmpty() -> null
+            texts.size == 1 -> texts[0]?.toString()
+            else -> texts.joinToString("\n") { it?.toString().orEmpty() }
+        }
+        return AutoBookkeepingEngine.EventSnapshot(
+            eventType = event.eventType,
+            packageName = event.packageName?.toString(),
+            className = event.className?.toString(),
+            windowId = event.windowId,
+            eventTime = event.eventTime,
+            notificationText = notificationText,
+            notificationContentDesc = try {
+                event.contentDescription?.toString()
+            } catch (_: RuntimeException) {
+                null
+            }
+        )
+    }
+
+    /** 引擎取活动窗口根节点的通道；与既有管线各持引用，互不 recycle。 */
+    private fun bookkeepingRootProvider(): () -> PageNode? = {
+        try {
+            rootInActiveWindow?.let(::AccessibilityPageNode)
+        } catch (_: RuntimeException) {
+            null
+        }
+    }
+
     private fun findPaymentResultRoots(
         event: AccessibilityEvent,
         paymentPackage: String,
@@ -960,6 +1056,22 @@ class CheckoutAccessibilityService : AccessibilityService() {
 
                     if (!markPaymentResultEvent(evidence.sourceEventKey, observation.observedAt)) {
                         JotBillLog.d(TAG, "支付结果页同一事件已处理，跳过重复解析: ${evidence.sourceEventKey.take(12)}")
+                        return
+                    }
+
+                    // 自动记账互斥（拍板项①）：规则引擎已在认领窗内认领同包名同金额
+                    // ⇒ 本帧让路，弹窗/待确认留给规则路径的兜底分支。金额感知避免
+                    // 误伤并发第二笔不同金额的支付。
+                    if (bookkeepingEngine?.shouldSuppressPopup(
+                            paymentPackage,
+                            evidence.amountMinor
+                        ) == true
+                    ) {
+                        JotBillLog.i(
+                            TAG,
+                            "规则自动记账已认领同额支付，弹窗管线让路: " +
+                                "pkg=$paymentPackage, amount=${evidence.amountMinor}分"
+                        )
                         return
                     }
                     JotBillLog.i(
