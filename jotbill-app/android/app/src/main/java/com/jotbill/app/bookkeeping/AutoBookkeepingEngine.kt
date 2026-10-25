@@ -151,7 +151,8 @@ class AutoBookkeepingEngine(
                     }
                 }
             }
-            return
+            // 规则在但未命中 ≠ 结束：mipay 语义 `!g0 && W` —— 仍要检查
+            // 二次确认的通知锚点（落空直接返回）。
         }
         if (isConfirmNotification(snapshot)) {
             tryPendingConfirmByNotification(snapshot)
@@ -321,16 +322,32 @@ class AutoBookkeepingEngine(
     // ── 交付与认领（JotBill 扩展：与弹窗管线的互斥协议）────────────────────
 
     private fun deliver(record: ExtractedRecord) {
-        val claimed = sink.onRecordReady(record)
-        if (claimed) {
-            val amountMinor = parseAmountMinor(record.fields["amount"])
-            if (amountMinor != null && amountMinor > 0) {
-                claims += Claim(record.sourcePackage, amountMinor, record.ruleId, clock())
+        val amountMinor = parseAmountMinor(record.fields["amount"])
+        if (amountMinor != null && amountMinor > 0) {
+            pruneClaims()
+            // 引擎级指纹去重（对齐小米服务端 status==2 的本地形态）：
+            // 同包名+同金额在认领窗内的第二条记录（如「结果页规则入账后几秒
+            // 支付宝又发支出通知命中通知规则」）直接丢弃 —— 同额 15s 合并
+            // 与用户既有裁定同一口径。
+            val duplicated = claims.any {
+                it.packageName == record.sourcePackage && it.amountMinor == amountMinor
             }
+            if (duplicated) {
+                JotBillLog.i(
+                    TAG,
+                    "同包名同金额认领窗内重复，按指纹丢弃: ruleId=${record.ruleId}, " +
+                        "amount=$amountMinor, pkg=${record.sourcePackage}"
+                )
+                return
+            }
+        }
+        val claimed = sink.onRecordReady(record)
+        if (claimed && amountMinor != null && amountMinor > 0) {
+            claims += Claim(record.sourcePackage, amountMinor, record.ruleId, clock())
             JotBillLog.i(
                 TAG,
                 "规则记录已交付: ruleId=${record.ruleId}, note=${record.ruleNote}, " +
-                    "amount=$amountMinor, claimed=$claimed"
+                    "amount=$amountMinor"
             )
         } else {
             JotBillLog.i(
@@ -341,15 +358,33 @@ class AutoBookkeepingEngine(
         }
     }
 
+    private fun pruneClaims() {
+        val now = clock()
+        claims.removeAll { now - it.at > CLAIM_WINDOW_MILLIS }
+    }
+
+    /**
+     * 服务解绑/重绑后的状态复位：窗口 id 与页面跟踪是易变的会话态，跨绑定周期
+     * 保留只会让新周期的事件错配旧跟踪；认领指纹带时间窗可安全保留。
+     * 由宿主服务在 onServiceConnected（引擎已存在的重连场景）调用。
+     */
+    fun resetTracking() {
+        trackedWindowId = 0
+        trackedActivityName = null
+        trackedRuleKey = null
+        reportedWindowId = 0
+        lastContentChangeAt = 0L
+        pendingConfirms.clear()
+    }
+
     /**
      * 既有弹窗管线在证据解析成功后调用：同包名+同金额在认领窗内 → 弹窗让路。
      */
     fun shouldSuppressPopup(packageName: String, amountMinor: Long): Boolean {
-        val now = clock()
-        claims.removeAll { now - it.at > CLAIM_WINDOW_MILLIS }
+        pruneClaims()
         return claims.any {
             it.packageName == packageName && it.amountMinor == amountMinor &&
-                now - it.at <= CLAIM_WINDOW_MILLIS
+                clock() - it.at <= CLAIM_WINDOW_MILLIS
         }
     }
 

@@ -103,8 +103,16 @@ class PageRule private constructor(
                 matcher.group(group)
             } catch (_: RuntimeException) {
                 null
-            } ?: continue
-            fields[field] = extractFieldsMapperRaw[field]?.apply(raw) ?: raw
+            }
+            val mapper = extractFieldsMapperRaw[field]
+            if (raw == null) {
+                // mipay R()：捕获组为空时仍应用 mapper 的 defaultValue
+                // （微信账单详情无「支出/收入」字样时按 defaultValue=1 判收入），
+                // 没有 mapper/defaultValue 才落空。
+                mapper?.defaultValue?.let { fields[field] = it }
+                continue
+            }
+            fields[field] = mapper?.apply(raw) ?: raw
         }
         return fields
     }

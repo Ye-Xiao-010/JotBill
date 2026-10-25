@@ -498,8 +498,13 @@ class CheckoutAccessibilityService : AccessibilityService() {
         }
 
         // 规则式自动记账管线先行（mipay 移植）：同步抽取成功即在引擎内登记
-        // 认领指纹，下方弹窗管线据此让路。引擎内部吞异常，不影响本服务。
-        bookkeepingEngine?.onEvent(buildEventSnapshot(event), bookkeepingRootProvider())
+        // 认领指纹，下方弹窗管线据此让路。引擎内部吞异常，不影响本服务；
+        // 快照构建在引擎 try 之外，这里再包一层保底。
+        try {
+            bookkeepingEngine?.onEvent(buildEventSnapshot(event), bookkeepingRootProvider())
+        } catch (error: RuntimeException) {
+            JotBillLog.w(TAG, "自动记账引擎入口异常", error)
+        }
 
         // 通知事件（typeNotificationStateChanged 为自动记账新增）只属于规则
         // 引擎（通知锚点 + 二次确认 + M6 短信通道）；此前事件流里没有这类事件，
@@ -765,7 +770,11 @@ class CheckoutAccessibilityService : AccessibilityService() {
      * - 通道开关（总开关 + 支付宝/微信/云闪付白名单）见 [BookkeepingChannels]。
      */
     private fun initializeAutoBookkeeping() {
-        if (bookkeepingEngine != null) {
+        val existing = bookkeepingEngine
+        if (existing != null) {
+            // 服务解绑→重绑的复用场景：窗口跟踪是易变会话态，跨周期保留只会
+            // 让新事件错配旧跟踪（MIUI 只发 onInterrupt 不重连的场景同理）。
+            existing.resetTracking()
             return
         }
         val appContext = applicationContext

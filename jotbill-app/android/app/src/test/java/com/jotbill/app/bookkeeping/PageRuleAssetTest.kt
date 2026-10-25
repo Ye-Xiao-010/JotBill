@@ -120,6 +120,33 @@ class PageRuleAssetTest {
         assertEquals("12.00", fields["amount"])
     }
 
+    @Test
+    fun `可选类型组缺失时 mapper 的 defaultValue 仍生效`() {
+        // mipay R() 语义：捕获组为空时仍应用 defaultValue —— 微信账单详情
+        // 无「支出/收入」字样时按 defaultValue=1 判收入。回归钉子。
+        val registry = loadRegistry()
+        val rule = registry.rulesFor("com.tencent.mm.plugin.webview.ui.tools.MMWebViewUI")!!
+            .first { it.ruleId == 2000108 }
+        val dump = PageNodeDumper.dump(
+            FakePageNode(
+                text = null,
+                contentDescription = null,
+                children = listOf(
+                    FakePageNode("某某退款,12.00元 >", null),
+                    FakePageNode("当前状态", null),
+                    FakePageNode("支付成功", null),
+                    FakePageNode("时间", null),
+                    FakePageNode("2026年10月25日 14:30:01 />", null)
+                )
+            ),
+            rule
+        )
+        assertTrue(dump.located)
+        val fields = rule.extractFrom(dump.dump)
+        assertNotNull("缺类型字样的账单详情也应抽取成功: dump=${dump.dump}", fields)
+        assertEquals("捕获组缺失时 detailType 应取 defaultValue=1", "1", fields!!["detailType"])
+    }
+
     companion object {
         /**
          * mocked_rule.json 原始 18 个 key，其中抖音团购一个逗号 key 拆成 4 → 展开 21。

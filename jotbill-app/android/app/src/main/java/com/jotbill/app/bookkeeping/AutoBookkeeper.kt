@@ -140,6 +140,18 @@ class AutoBookkeeper(
             null
         }
         if (similar != null && similar.isNotEmpty()) {
+            // 自源相似命中 = 规则管线自己刚入账的同一笔被另一条规则（如结果页
+            // 规则入账后几秒支付宝「支出」通知再命中通知规则）二次抽取 —— 静默
+            // 丢弃即可（引擎 15s 指纹窗之外的第二道防线，对齐小米 status==2）。
+            // 命中的若是用户手工/导入账单，保持 SUSPECTED_DUPLICATE → 待确认。
+            if (similar.any { it.bill.sourceType == BILL_SOURCE_TYPE }) {
+                JotBillLog.i(
+                    TAG,
+                    "规则记录命中本管线既有账单，按重复丢弃: rule=${record.ruleId}, " +
+                        "amount=$amountMinor, hits=${similar.size}"
+                )
+                return
+            }
             fallbackToPending(
                 record, amountMinor, merchant, orderId, occurredAt,
                 DuplicateGuard.CONFLICT_SUSPECTED_DUPLICATE

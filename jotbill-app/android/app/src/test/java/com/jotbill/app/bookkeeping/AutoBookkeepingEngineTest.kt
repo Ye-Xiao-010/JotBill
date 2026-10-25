@@ -152,6 +152,23 @@ class AutoBookkeepingEngineTest {
     }
 
     @Test
+    fun `同包名同金额认领窗内的第二条记录按指纹丢弃`() {
+        val h = Harness()
+        // 第一条：结果页规则入账（认领登记）
+        h.engine.onEvent(h.windowEvent("com.alipay.android.msp.ui.views.MspContainerActivity")) {
+            alipayResultPage()
+        }
+        assertEquals(1, h.sink.records.size)
+        // 第二条：几秒后支付宝「支出」通知命中通知规则（同金额 12.34）
+        // —— 页面+通知双路径同一笔支付，引擎级指纹去重必须丢弃
+        h.engine.onEvent(h.notificationEvent(text = "消费12.34元，已支出")) { null }
+        assertEquals("同额同包名 15s 内不得二次交付", 1, h.sink.records.size)
+        // 不同金额的通知不受影响
+        h.engine.onEvent(h.notificationEvent(text = "消费56.78元，已支出")) { null }
+        assertEquals(2, h.sink.records.size)
+    }
+
+    @Test
     fun `带确认锚点的规则先挂起确认页到达才交付`() {
         val h = Harness()
         val confirmClass =
