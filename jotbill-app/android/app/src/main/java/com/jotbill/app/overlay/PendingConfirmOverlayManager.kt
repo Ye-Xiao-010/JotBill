@@ -1146,7 +1146,15 @@ internal object PendingConfirmOverlayManager {
                 val density = app.resources.displayMetrics.density
                 accounts.forEach { account ->
                     val chip = TextView(app).apply {
-                        text = "${account.icon ?: "💳"} ${account.name}"
+                        // 品牌图标（微信/支付宝，固定品牌色）/ subtype 线性 lucide 优先；
+                        // emoji（自定义账户）维持原文字渲染。同 createCategoryView 的双模设计。
+                        val iconRes = PopupIconAssets.forAccount(account.id, account.name, account.subtype)
+                        if (iconRes != null) {
+                            text = account.name
+                            tag = iconRes
+                        } else {
+                            text = "${account.icon ?: "💳"} ${account.name}"
+                        }
                         textSize = 14f
                         setTextColor(0xFF1A1A1A.toInt())
                         setBackgroundResource(R.drawable.btn_category_unselected)
@@ -1163,6 +1171,10 @@ internal object PendingConfirmOverlayManager {
                         gravity = Gravity.CENTER
                         setOnClickListener {
                             selectAccount(this, account)
+                        }
+                        // 图标放最后：此时文字色已定；品牌图标内部保持品牌色不着色
+                        if (iconRes != null) {
+                            PopupIconAssets.apply(this, iconRes, currentTextColor)
                         }
                     }
                     container.addView(chip)
@@ -1182,7 +1194,15 @@ internal object PendingConfirmOverlayManager {
         confirmButton: Button
     ): TextView {
         return TextView(context).apply {
-            text = "${category.icon ?: "📦"} ${category.name}"
+            // lucide 图标（后端种子的分类）走 compound drawable，文字只留名称；
+            // emoji（本地首启种子/自定义分类）维持原文字渲染，数据同步后自动升级。
+            val iconRes = PopupIconAssets.forCategory(category.icon)
+            if (iconRes != null) {
+                text = category.name
+                tag = iconRes
+            } else {
+                text = "${category.icon ?: "📦"} ${category.name}"
+            }
             textSize = 14f
             setTextColor(0xFF1A1A1A.toInt())
             setBackgroundResource(R.drawable.btn_category_unselected)
@@ -1203,6 +1223,10 @@ internal object PendingConfirmOverlayManager {
             setOnClickListener {
                 selectCategory(this, category)
             }
+            // 图标放最后：此时文字色已定，lucide 按文字色着色
+            if (iconRes != null) {
+                PopupIconAssets.apply(this, iconRes, currentTextColor)
+            }
         }
     }
 
@@ -1216,6 +1240,8 @@ internal object PendingConfirmOverlayManager {
                 view.setBackgroundResource(R.drawable.btn_category_unselected)
                 view.setTextColor(0xFF1A1A1A.toInt())
             }
+            // lucide 图标随文字色重着色（emoji 文字 chip 无 tag，自然跳过）
+            (view.tag as? Int)?.let { PopupIconAssets.apply(view, it, view.currentTextColor) }
         }
         updateConfirmEnabled(currentConfirmButton)
     }
@@ -1230,6 +1256,8 @@ internal object PendingConfirmOverlayManager {
                 view.setBackgroundResource(R.drawable.btn_category_unselected)
                 view.setTextColor(0xFF1A1A1A.toInt())
             }
+            // lucide 图标随文字色重着色（品牌图标内部保持品牌色；emoji 文字 chip 无 tag 跳过）
+            (view.tag as? Int)?.let { PopupIconAssets.apply(view, it, view.currentTextColor) }
         }
         updateConfirmEnabled(currentConfirmButton)
     }
