@@ -177,56 +177,56 @@ export class CategoriesService {
       {
         name: '餐饮',
         type: 'expense',
-        icon: '🍔',
+        icon: 'utensils',
         color: '#FF6B6B',
         sortOrder: 1,
       },
       {
         name: '交通',
         type: 'expense',
-        icon: '🚗',
+        icon: 'bus',
         color: '#4ECDC4',
         sortOrder: 2,
       },
       {
         name: '购物',
         type: 'expense',
-        icon: '🛍️',
+        icon: 'shopping-bag',
         color: '#45B7D1',
         sortOrder: 3,
       },
       {
         name: '娱乐',
         type: 'expense',
-        icon: '🎮',
+        icon: 'gamepad-2',
         color: '#96CEB4',
         sortOrder: 4,
       },
       {
         name: '医疗',
         type: 'expense',
-        icon: '🏥',
+        icon: 'pill',
         color: '#FFEAA7',
         sortOrder: 5,
       },
       {
         name: '教育',
         type: 'expense',
-        icon: '📚',
+        icon: 'book-open',
         color: '#DDA0DD',
         sortOrder: 6,
       },
       {
         name: '住房',
         type: 'expense',
-        icon: '🏠',
+        icon: 'house',
         color: '#98D8C8',
         sortOrder: 7,
       },
       {
         name: '其他',
         type: 'expense',
-        icon: '📝',
+        icon: 'circle-ellipsis',
         color: '#F7DC6F',
         sortOrder: 8,
       },
@@ -235,54 +235,70 @@ export class CategoriesService {
       {
         name: '工资',
         type: 'income',
-        icon: '💰',
+        icon: 'banknote',
         color: '#58D68D',
         sortOrder: 1,
       },
       {
         name: '奖金',
         type: 'income',
-        icon: '🎁',
+        icon: 'trophy',
         color: '#85C1E9',
         sortOrder: 2,
       },
       {
         name: '投资',
         type: 'income',
-        icon: '📈',
+        icon: 'chart-line',
         color: '#F8C471',
         sortOrder: 3,
       },
       {
         name: '兼职',
         type: 'income',
-        icon: '💼',
+        icon: 'laptop',
         color: '#BB8FCE',
         sortOrder: 4,
       },
       {
         name: '其他',
         type: 'income',
-        icon: '💸',
+        icon: 'circle-dollar-sign',
         color: '#82E0AA',
         sortOrder: 5,
       },
     ];
 
     for (const category of defaultCategories) {
-      await this.prisma.category.upsert({
-        where: {
-          // 使用复合唯一索引来避免重复创建
-          // 这里我们用name和type的组合来判断
-          id: -1, // 临时ID，实际不会匹配到
-        },
-        update: {}, // 如果存在则不更新
-        create: {
-          ...category,
-          isDefault: true,
-          userId: null, // 系统默认分类不属于任何用户
-        },
+      // name+type 没有唯一索引，不能用 upsert 定位；先查再写避免重复创建，
+      // 已存在的系统默认分类同步种子字段 —— 老库只需重跑本接口即可拿到新图标
+      const existing = await this.prisma.category.findFirst({
+        where: { name: category.name, type: category.type, isDefault: true, userId: null },
       });
+      if (existing) {
+        if (
+          existing.icon !== category.icon ||
+          existing.color !== category.color ||
+          existing.sortOrder !== category.sortOrder
+        ) {
+          await this.prisma.category.update({
+            where: { id: existing.id },
+            data: {
+              icon: category.icon,
+              color: category.color,
+              sortOrder: category.sortOrder,
+            },
+          });
+        }
+      } else {
+        await this.prisma.category.create({
+          data: {
+            ...category,
+            isDefault: true,
+            userId: null, // 系统默认分类不属于任何用户
+          },
+        });
+      }
     }
   }
 }

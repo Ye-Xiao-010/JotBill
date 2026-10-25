@@ -19,6 +19,7 @@ import { ChevronLeft, Plus, Trash2, Pencil } from 'lucide-react-native';
 import { ThemeColors } from '../theme/colors';
 import { spacing, borderRadius, borderWidth, shadow } from '../theme/spacing';
 import { ProgressBar, BrutalPressable } from '../components/ui';
+import CategoryIcon from '../components/business/CategoryIcon';
 import { useStyles, useToast } from '../hooks';
 import { useAlert } from '../providers';
 import { nativeData, type BudgetInput, type BudgetProgress, type Category } from '../native';
@@ -238,7 +239,7 @@ export default function BudgetScreen() {
               <View style={styles.budgetHeader}>
                 <View style={styles.budgetTitleRow}>
                   <View style={styles.budgetIconBox}>
-                    <Text style={styles.budgetIconText}>{getCategoryIcon(budget)}</Text>
+                    <CategoryIcon icon={getCategoryIcon(budget)} size={22} emojiStyle={styles.budgetIconText} />
                   </View>
                   <View style={styles.budgetTitleGroup}>
                     <Text style={styles.budgetName} numberOfLines={1}>{budget.name}</Text>
@@ -397,7 +398,7 @@ export default function BudgetScreen() {
                     style={[styles.categoryChip, formCategoryId === cat.id && styles.categoryChipSelected]}
                     onPress={() => setFormCategoryId(cat.id)}
                   >
-                    <Text style={styles.categoryChipIcon}>{cat.icon || '📁'}</Text>
+                    <CategoryIcon icon={cat.icon} fallback="📁" size={16} emojiStyle={styles.categoryChipIcon} />
                     <Text style={[
                       styles.categoryChipText,
                       formCategoryId === cat.id && styles.categoryChipTextSelected,

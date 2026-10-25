@@ -18,6 +18,7 @@ import { nativeData, type Bill, type Category } from '../../native';
 import { invalidateCache } from '../../lib/queryClient';
 import { formatPlatform } from '../../utils/platform';
 import { useStyles } from '../../hooks';
+import CategoryIcon from '../../components/business/CategoryIcon';
 import { useAlert } from '../../providers';
 
 export default function BillDetailScreen() {
@@ -142,7 +143,7 @@ export default function BillDetailScreen() {
         {/* 金额区域 */}
         <View style={styles.amountSection}>
           <View style={styles.categoryIconBlock}>
-            <Text style={styles.categoryEmoji}>{category?.icon || '📝'}</Text>
+            <CategoryIcon icon={category?.icon} size={32} emojiStyle={styles.categoryEmoji} />
           </View>
           <Text style={[styles.typeBadge, { backgroundColor: isPositive ? styles._colors.income + '20' : styles._colors.expense + '20', color: amountColor }]}>
             {typeLabel}
@@ -158,7 +159,7 @@ export default function BillDetailScreen() {
           <View style={styles.detailRow}>
             <Text style={styles.detailLabel}>分类</Text>
             <View style={styles.detailValueContainer}>
-              {category?.icon && <Text style={styles.detailIcon}>{category.icon}</Text>}
+              {category?.icon && <CategoryIcon icon={category.icon} size={16} emojiStyle={styles.detailIcon} />}
               <Text style={styles.detailValue}>{category?.name || '未分类'}</Text>
             </View>
           </View>

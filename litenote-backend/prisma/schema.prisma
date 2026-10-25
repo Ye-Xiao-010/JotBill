@@ -62,7 +62,7 @@ model Category {
   id          Int      @id @default(autoincrement())                            // 分类ID，自增主键
   name        String   @db.VarChar(100)                                         // 分类名称，如"餐饮"、"交通"等
   type        String   @db.VarChar(10)                                          // 分类类型：'income'(收入) 或 'expense'(支出)
-  icon        String?  @db.VarChar(10)                                          // 分类图标，emoji表情，可选
+  icon        String?  @db.VarChar(50)                                          // 分类图标：lucide 图标名（默认分类）或 emoji，可选
   color       String?  @db.VarChar(20)                                          // 分类颜色，十六进制色值，可选
   isDefault   Boolean  @default(false) @map("is_default")                       // 是否为系统默认分类
   sortOrder   Int      @default(0) @map("sort_order")                           // 排序序号，用于分类显示顺序

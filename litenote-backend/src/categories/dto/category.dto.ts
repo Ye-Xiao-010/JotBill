@@ -35,13 +35,13 @@ export class CreateCategoryDto {
 
   @ApiProperty({
     description: '分类图标',
-    example: '🍽️',
+    example: 'utensils',
     required: false,
-    maxLength: 10,
+    maxLength: 50,
   })
   @IsOptional()
   @IsString({ message: '图标必须是字符串' })
-  @MaxLength(10, { message: '图标不能超过10个字符' })
+  @MaxLength(50, { message: '图标不能超过50个字符' })
   icon?: string;
 
   @ApiProperty({
@@ -91,13 +91,13 @@ export class UpdateCategoryDto {
 
   @ApiProperty({
     description: '分类图标',
-    example: '🍽️',
+    example: 'utensils',
     required: false,
-    maxLength: 10,
+    maxLength: 50,
   })
   @IsOptional()
   @IsString({ message: '图标必须是字符串' })
-  @MaxLength(10, { message: '图标不能超过10个字符' })
+  @MaxLength(50, { message: '图标不能超过50个字符' })
   icon?: string;
 
   @ApiProperty({

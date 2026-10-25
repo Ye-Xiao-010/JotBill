@@ -12,6 +12,7 @@ import {
 import { ThemeColors } from '../../theme/colors';
 import { spacing, borderRadius, borderWidth } from '../../theme';
 import { useToast, useStyles } from '../../hooks';
+import CategoryIcon from '../business/CategoryIcon';
 import { nativeData, type Category } from '../../native';
 import type { BillType } from '../../types/bill';
 
@@ -63,7 +64,7 @@ export const CategorySelector: React.FC<CategorySelectorProps> = ({
               onPress={() => onCategorySelect(category)}
               activeOpacity={0.7}
             >
-              <Text style={styles.categoryIcon}>{category.icon}</Text>
+              <CategoryIcon icon={category.icon} size={24} emojiStyle={styles.categoryIcon} />
               <Text style={[
                 styles.categoryName,
                 isSelected && styles.categoryNameSelected,

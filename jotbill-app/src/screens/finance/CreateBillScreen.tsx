@@ -13,6 +13,7 @@ import {
 import { Text } from 'react-native';
 import { Toast } from '../../components';
 import { AddCategoryModal, ConfirmModal } from '../../components/modals';
+import CategoryIcon from '../../components/business/CategoryIcon';
 import { useToast, useCategories, useStyles } from '../../hooks';
 import { nativeData, type Account, type Bill, type Category } from '../../native';
 import { invalidateCache } from '../../lib/queryClient';
@@ -465,7 +466,7 @@ const CreateBillScreen: React.FC<CreateBillScreenProps> = ({ navigation, route }
                         onLongPress={() => handleCategoryLongPress(category)}
                         delayLongPress={500}
                       >
-                        <Text style={styles.categoryIcon}>{category.icon}</Text>
+                        <CategoryIcon icon={category.icon} size={24} emojiStyle={styles.categoryIcon} />
                         <Text
                           style={[styles.categoryName, topLevelSelected && styles.categoryNameSelected]}
                         >

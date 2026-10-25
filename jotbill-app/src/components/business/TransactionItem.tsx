@@ -7,6 +7,7 @@ import { View, Text, StyleSheet } from 'react-native';
 import { ThemeColors } from '../../theme/colors';
 import { borderRadius, borderWidth, spacing, shadow } from '../../theme/spacing';
 import { useStyles } from '../../hooks';
+import CategoryIcon from './CategoryIcon';
 import BrutalPressable from '../ui/BrutalPressable';
 
 export interface TransactionItemProps {
@@ -40,7 +41,12 @@ export default function TransactionItem({
         styles.iconContainer,
         { backgroundColor: isIncome ? styles._colors.success : styles._colors.accent },
       ]}>
-        <Text style={styles.icon}>{categoryIcon || (isIncome ? '💰' : '💸')}</Text>
+        <CategoryIcon
+          icon={categoryIcon}
+          fallback={isIncome ? '💰' : '💸'}
+          size={22}
+          emojiStyle={styles.icon}
+        />
       </View>
 
       <View style={styles.content}>

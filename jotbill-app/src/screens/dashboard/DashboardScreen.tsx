@@ -32,6 +32,7 @@ import {
 } from '../../theme/spacing';
 import { ProgressBar, BrutalPressable } from '../../components/ui';
 import { DashboardSkeleton } from '../../components/skeleton';
+import CategoryIcon from '../../components/business/CategoryIcon';
 import { useDashboard, useStyles } from '../../hooks';
 import { nativeData } from '../../native';
 import { formatPlatform } from '../../utils/platform';
@@ -562,9 +563,11 @@ export default function DashboardScreen() {
                           },
                         ]}
                       >
-                        <Text style={styles.transactionIconText}>
-                          {categoryIcon}
-                        </Text>
+                        <CategoryIcon
+                          icon={categoryIcon}
+                          size={22}
+                          emojiStyle={styles.transactionIconText}
+                        />
                       </View>
                       <View style={styles.transactionInfo}>
                         <Text style={styles.transactionTitle}>

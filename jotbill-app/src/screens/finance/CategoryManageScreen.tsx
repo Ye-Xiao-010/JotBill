@@ -14,6 +14,7 @@ import {
 import { useFocusEffect } from '@react-navigation/native';
 import { useQueryClient } from '@tanstack/react-query';
 import { AddCategoryModal } from '../../components/modals/AddCategoryModal';
+import CategoryIcon from '../../components/business/CategoryIcon';
 import { useToast, useStyles } from '../../hooks';
 import { useAlert } from '../../providers';
 import { nativeData, type Category } from '../../native';
@@ -187,9 +188,7 @@ const CategoryManageScreen: React.FC = () => {
                           activeOpacity={0.8}
                         >
                           <View style={styles.categoryIconBlock}>
-                            <Text style={styles.categoryEmoji}>
-                              {category.icon || '📝'}
-                            </Text>
+                            <CategoryIcon icon={category.icon} size={22} emojiStyle={styles.categoryEmoji} />
                           </View>
                           <Text style={styles.categoryName}>{category.name}</Text>
                           <Text style={styles.categoryMeta}>
@@ -214,13 +213,15 @@ const CategoryManageScreen: React.FC = () => {
                         );
                         return (
                           <View style={styles.expandPanel}>
-                            <Text style={styles.panelTitle}>
-                              {expandedCategory.icon || '📝'} {expandedCategory.name} · 子分类
-                            </Text>
+                            <View style={styles.panelTitleRow}>
+                              <CategoryIcon icon={expandedCategory.icon} size={16} emojiStyle={styles.panelTitleIcon} />
+                              <Text style={styles.panelTitle}>{expandedCategory.name} · 子分类</Text>
+                            </View>
                             {sortChildren(children).map((child) => (
                               <View key={child.id} style={styles.childRow}>
+                                <CategoryIcon icon={child.icon} size={14} emojiStyle={styles.childIcon} />
                                 <Text style={styles.childText}>
-                                  {child.icon || '📝'} {child.name}
+                                  {child.name}
                                 </Text>
                                 <View style={styles.categoryRowActions}>
                                   <TouchableOpacity
@@ -440,11 +441,19 @@ const createStyles = (colors: ThemeColors) => ({
       borderRadius: borderRadius.small,
       backgroundColor: colors.background,
     },
+    panelTitleRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: spacing.xs,
+      marginBottom: spacing.sm,
+    },
     panelTitle: {
       fontSize: 14,
       fontWeight: '800',
       color: colors.textPrimary,
-      marginBottom: spacing.sm,
+    },
+    panelTitleIcon: {
+      fontSize: 16,
     },
     panelEmptyText: {
       fontSize: 13,
@@ -459,6 +468,10 @@ const createStyles = (colors: ThemeColors) => ({
       paddingVertical: spacing.sm,
       borderBottomWidth: borderWidth.thin,
       borderBottomColor: colors.divider,
+    },
+    childIcon: {
+      fontSize: 14,
+      marginRight: spacing.xs,
     },
     childText: {
       fontSize: 14,

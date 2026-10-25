@@ -25,6 +25,7 @@ import {
   Plus,
   Trash2,
 } from 'lucide-react-native';
+import CategoryIcon from '../../components/business/CategoryIcon';
 import { nativeData, type Account, type Rule } from '../../native';
 import { borderRadius, borderWidth, spacing } from '../../theme/spacing';
 import { ThemeColors } from '../../theme/colors';
@@ -364,10 +365,10 @@ function RuleFormModal({ visible, rule, onClose, onSaved }: RuleFormModalProps) 
               style={[styles.pickerItem, actionValue === category.id && styles.pickerItemSelected]}
               onPress={() => setActionValue(category.id)}
             >
-              <Text style={styles.pickerItemText}>
-                {category.icon ? `${category.icon} ` : ''}
-                {category.name}
-              </Text>
+              <View style={styles.pickerItemRow}>
+                {category.icon && <CategoryIcon icon={category.icon} size={12} emojiStyle={styles.pickerItemIcon} />}
+                <Text style={styles.pickerItemText}>{category.name}</Text>
+              </View>
             </TouchableOpacity>
           ))}
         </View>
@@ -526,6 +527,8 @@ const createStyles = (colors: ThemeColors) => ({
     pickerItem: { paddingHorizontal: spacing.sm, paddingVertical: spacing.xs, borderRadius: borderRadius.small, borderWidth: borderWidth.thin, borderColor: colors.stroke, backgroundColor: colors.surface },
     pickerItemSelected: { backgroundColor: colors.accent, borderWidth: borderWidth.medium },
     pickerItemText: { fontSize: 12, fontWeight: '700', color: colors.textPrimary },
+    pickerItemRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs },
+    pickerItemIcon: { fontSize: 12 },
     modalActions: { flexDirection: 'row', gap: spacing.md, paddingTop: spacing.sm, borderTopWidth: borderWidth.thin, borderTopColor: colors.stroke },
     modalCancelButton: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingVertical: spacing.sm, borderRadius: borderRadius.button, borderWidth: borderWidth.thin, borderColor: colors.stroke, backgroundColor: colors.surface },
     modalCancelButtonText: { fontSize: 14, fontWeight: '700', color: colors.textPrimary },

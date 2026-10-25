@@ -40,6 +40,7 @@ import { nativeData, type Account, type Category } from '../../native';
 import { Skeleton, SkeletonCircle } from '../../components/skeleton/Skeleton';
 import type { ParsedBill, AIModelConfig, ChatSession } from '../../types/ai';
 import { ProviderIcon } from '../../components/icons';
+import CategoryIcon from '../../components/business/CategoryIcon';
 import storage from '../../utils/storage';
 import { invalidateCache } from '../../lib/queryClient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -266,7 +267,7 @@ function EditBillModal({
                     ]}
                     onPress={() => setSelectedCategoryId(category.id)}
                   >
-                    <Text style={modalStyles.categoryIcon}>{category.icon}</Text>
+                    <CategoryIcon icon={category.icon} size={24} emojiStyle={modalStyles.categoryIcon} />
                     <Text
                       style={[
                         modalStyles.categoryName,
