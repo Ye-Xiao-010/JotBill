@@ -43,7 +43,12 @@ object BookkeepingChannels {
             packages = listOf("com.eg.android.AlipayGphone")
         ),
         ChannelInfo(
-            "wechat", "微信支付", "扫码 / 转账 / 红包 / 账单详情",
+            // ⚠️ 微信通道的现实（2026-10-25 用户裁定）：小米的微信自动记账在真机上
+            // 就是不工作的（基类 key 打不中子类页面 + 组合正则脆弱 + 平台侧对抗，
+            // 见设计文档 §2.6/§7.4）。我们移植的是同一份带伤资产 —— 引擎大概率
+            // 同样打不中；微信的实际保障是既有弹窗/待确认管线（真机验证过）。
+            // M4 要让微信走自动入账，需真机 dump 补实际页面类名 + 拆字段正则。
+            "wechat", "微信支付", "实验性：微信对抗页面自动化，规则可能打不中；打不中时走待确认弹窗兜底（已真机验证）",
             defaultEnabled = true,
             packages = listOf("com.tencent.mm")
         ),
