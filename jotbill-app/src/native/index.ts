@@ -7,3 +7,4 @@ export * from './installApk';
 export * from './overlay';
 export * from './recognition';
 export * from './budgetReminder';
+export * from './autoBookkeeping';

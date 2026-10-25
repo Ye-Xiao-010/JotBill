@@ -21,6 +21,7 @@ import com.jotbill.app.ai.AiPackage
 import com.jotbill.app.runtime.RuntimePackage
 import com.jotbill.app.backup.BackupPackage
 import com.jotbill.app.overlay.OverlayPackage
+import com.jotbill.app.bridge.AutoBookkeepingPackage
 import com.jotbill.app.bridge.RecognitionPackage
 import com.jotbill.app.pending.PendingReminderNotifier
 import com.jotbill.app.pending.RecentPaymentCooldown
@@ -103,6 +104,7 @@ class MainApplication : Application(), ReactApplication {
               add(BackupPackage())
               add(OverlayPackage())
               add(RecognitionPackage())
+              add(AutoBookkeepingPackage())
             }
 
         override fun getJSMainModuleName(): String = "index"

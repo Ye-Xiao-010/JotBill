@@ -83,6 +83,11 @@ export const QUERY_KEYS = {
     /** 按会话查询支付证据；key 追加 sessionId。 */
     evidence: ['recognition', 'evidence'] as const,
   },
+  // 规则式自动记账
+  bookkeeping: {
+    settings: ['bookkeeping', 'settings'] as const,
+    stats: ['bookkeeping', 'stats'] as const,
+  },
 };
 
 /**

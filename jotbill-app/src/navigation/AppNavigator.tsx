@@ -32,6 +32,7 @@ import ImportScreen from '../screens/settings/ImportScreen';
 import RulesScreen from '../screens/settings/RulesScreen';
 import AccessibilityPermissionScreen from '../screens/settings/AccessibilityPermissionScreen';
 import NotificationPermissionScreen from '../screens/settings/NotificationPermissionScreen';
+import AutoBookkeepingScreen from '../screens/settings/AutoBookkeepingScreen';
 import ReviewScreen from '../screens/review/ReviewScreen';
 
 import { useTheme } from '../providers';
@@ -410,6 +411,11 @@ export default function AppNavigator() {
         <Stack.Screen
           name="NotificationPermission"
           component={NotificationPermissionScreen}
+          options={{ headerShown: false }}
+        />
+        <Stack.Screen
+          name="AutoBookkeeping"
+          component={AutoBookkeepingScreen}
           options={{ headerShown: false }}
         />
         <Stack.Screen
