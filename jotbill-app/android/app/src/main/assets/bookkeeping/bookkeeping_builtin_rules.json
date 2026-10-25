@@ -1,0 +1,640 @@
+{
+ "rules": {
+  "com.tencent.mm.plugin.luckymoney.ui.LuckyMoneyNewPrepareUI": [
+   {
+    "note": "微信-发红包",
+    "matchMode": 1,
+    "locateAttribute": 0,
+    "locateToken": "发红包",
+    "locateMaxTraverseCount": 50,
+    "extractPattern": "text=[¥￥](\\d+(\\.\\d{1,2})?).+?text=塞钱进红包",
+    "extractFields": {
+     "amount": 1
+    },
+    "locateConfirm": {
+     "notification": "com.tencent.mm/android.widget.Toast",
+     "locateAttribute": 0,
+     "locateToken": "已发送"
+    },
+    "ruleId": 2000802,
+    "rulePkgId": 2000016
+   }
+  ],
+  "com.tencent.mm.framework.app.UIPageFragmentActivity": [
+   {
+    "note": "微信-主扫+被扫+电商平台支付结果页",
+    "locateAttribute": 1,
+    "locateToken": "支付成功",
+    "locateMaxTraverseCount": 50,
+    "extractPattern": "contentDesc=支付成功.+?text=(.+?) />.+?text=[¥￥](\\d+(\\.\\d{1,2})?)",
+    "extractFields": {
+     "merchant": 1,
+     "amount": 2
+    },
+    "ruleId": 2000102,
+    "rulePkgId": 2000016
+   },
+   {
+    "note": "微信-转账结果页（支出）",
+    "locateAttribute": 1,
+    "locateToken": "支付成功",
+    "locateMaxTraverseCount": 60,
+    "fromApp": 2,
+    "extractPattern": "text=待(.+)确认收款.+[￥|¥](\\d+\\.\\d{2})",
+    "extractFields": {
+     "amount": 2,
+     "counterparty": 1
+    },
+    "ruleId": 1000024,
+    "rulePkgId": 2000016
+   }
+  ],
+  "com.alipay.android.msp.ui.views.MspContainerActivity": [
+   {
+    "note": "支付宝-主扫+被扫+电商平台支付结果页",
+    "locateAttribute": 1,
+    "locateToken": "支付成功",
+    "locateMaxTraverseCount": 20,
+    "extractPattern": "contentDesc=支付成功[¥￥](\\d+(\\.\\d{1,2})?)",
+    "extractFields": {
+     "amount": 1
+    },
+    "ruleId": 2000100,
+    "rulePkgId": 2000016
+   },
+   {
+    "note": "支付宝-贴纸碰一碰支付结果页",
+    "locateAttribute": 0,
+    "locateToken": "支付成功",
+    "locateMaxTraverseCount": 20,
+    "extractPattern": "text=支付成功.+?[¥￥].+?text=(\\d+(\\.\\d{1,2})?).+?text=(.+?) />",
+    "extractFields": {
+     "amount": 1,
+     "merchant": 3
+    },
+    "ruleId": 2000077,
+    "rulePkgId": 2000016
+   },
+   {
+    "note": "支付宝-转账结果页（支出）",
+    "locateAttribute": 1,
+    "locateToken": "转账成功",
+    "locateMaxTraverseCount": 5,
+    "fromApp": 3,
+    "extractPattern": "contentDesc=转账成功[￥|¥](\\d\\.\\d{2}).+text=收款方.+?text=(.+?) />",
+    "extractFields": {
+     "amount": 1,
+     "counterparty": 2
+    },
+    "ruleId": 1000032,
+    "rulePkgId": 2000016
+   },
+   {
+    "note": "淘宝-收银台",
+    "locateAttribute": 0,
+    "locatePattern": "(使用密码|请输入支付密码)",
+    "locateMaxTraverseCount": 20,
+    "locateConfirm": {
+     "activity": "com.alibaba.android.ultron.vfw.weex2.highPerformance.widget.UltronTradeHybridActivity",
+     "locateAttribute": -1
+    },
+    "extractPattern": "contentDesc=支付金额(\\d+(\\.\\d{1,2})?)元",
+    "extractFields": {
+     "amount": 1
+    },
+    "ruleId": 2000098,
+    "rulePkgId": 2000016
+   }
+  ],
+  "com.unionpay.activity.react.UPActivityReactNative": [
+   {
+    "note": "云闪付-支付结果页",
+    "locateAttribute": 0,
+    "locateToken": "支付成功",
+    "locateMaxTraverseCount": 30,
+    "extractPattern": "text=[¥￥](\\d+(\\.\\d{1,2})?).+?订单信息.+?text=(.+?) />",
+    "extractFields": {
+     "amount": 1,
+     "merchant": 3
+    },
+    "ruleId": 2000066,
+    "rulePkgId": 2000016
+   }
+  ],
+  "com.jingdong.app.mall.bundle.marketing_sdk.drainage.JDDrainageDialogActivity": [
+   {
+    "note": "京东-支付结果弹框",
+    "locateAttribute": 0,
+    "locateToken": "支付成功",
+    "locateMaxTraverseCount": 20,
+    "extractPattern": "text=支付成功.+?[¥￥](\\d+(\\.\\d{1,2})?)",
+    "extractFields": {
+     "amount": 1
+    },
+    "ruleId": 2000086,
+    "rulePkgId": 2000016
+   }
+  ],
+  "com.alipay.android.phone.businesscommon.ucdp.nfc.activity.NResPageActivity": [
+   {
+    "note": "支付宝-设备碰一碰支付结果页",
+    "locateAttribute": 0,
+    "locateToken": "支付成功",
+    "locateMaxTraverseCount": 20,
+    "extractPattern": "text=支付成功.+?[¥￥].+?text=(\\d+(\\.\\d{1,2})?).+?text=(.+?) />",
+    "extractFields": {
+     "amount": 1,
+     "merchant": 3
+    },
+    "ruleId": 2000088,
+    "rulePkgId": 2000016
+   }
+  ],
+  "com.tencent.mm.plugin.luckymoney.ui.LuckyMoneyDetailUI": [
+   {
+    "note": "微信-确认收红包结果页（收入）",
+    "locateAttribute": 0,
+    "locateToken": "的红包",
+    "locateMaxTraverseCount": 100,
+    "fromApp": 2,
+    "extractPattern": "text=([^/<>&]+?)(?:发出)?的红包[\\s\\S]*?text=(\\d+\\.\\d{2})(?:元|[\\s\\S]*?text=元)[\\s\\S]*?text=已存入零钱[\\s\\S]*?text=(\\d{1,2}:\\d{2}|\\d{1,2}-\\d{1,2}\\s*\\d{1,2}:\\d{2}|\\d{1,2}月\\d{1,2}日\\s*\\d{1,2}:\\d{2})",
+    "extractFields": {
+     "amount": 2,
+     "counterparty": 1,
+     "businessTime": 3
+    },
+    "ruleId": 1000026,
+    "rulePkgId": 2000016,
+    "jotbillType": "income"
+   }
+  ],
+  "com.meituan.android.hybridcashier.HybridCashierActivity": [
+   {
+    "note": "美团-支付结果页",
+    "locateAttribute": 0,
+    "locateToken": "支付成功",
+    "locateMaxTraverseCount": 10,
+    "extractPattern": "text=支付成功.*?[¥￥](\\d+(\\.\\d{1,2})?)",
+    "extractFields": {
+     "amount": 1
+    },
+    "ruleId": 2000065,
+    "rulePkgId": 2000016
+   }
+  ],
+  "com.tencent.mm.plugin.webview.ui.tools.MMWebViewUI": [
+   {
+    "note": "微信-账单详情页",
+    "locateAttribute": 0,
+    "locateToken": "支付成功",
+    "locateMaxTraverseCount": 60,
+    "extractPattern": "text=(.+?)[,，](支出|收入)?(\\d+(\\.\\d{1,2})?)元 >.+?text=当前状态.+?text=(支付成功|已存入零钱|对方已收钱).+?时间.+?text=(.+?) />(.+?text=商户全称.+?text=(.+?) />)?",
+    "extractFields": {
+     "counterparty": 1,
+     "detailType": 2,
+     "amount": 3,
+     "businessTime": 6,
+     "merchant": 8
+    },
+    "extractFieldsMapper": {
+     "detailType": {
+      "defaultValue": "1",
+      "mapping": {
+       "支出": "2",
+       "收入": "1"
+      }
+     }
+    },
+    "ruleId": 2000108,
+    "rulePkgId": 2000016
+   }
+  ],
+  "com.tencent.mm.plugin.remittance.ui.RemittanceDetailUI": [
+   {
+    "note": "微信-确认收转账结果页（收入-金额在后）",
+    "locateAttribute": 0,
+    "locateToken": "你已收款",
+    "locateMaxTraverseCount": 30,
+    "fromApp": 2,
+    "extractPattern": "text=你已收款.+[¥|￥](\\d+\\.\\d{2}).*收款时间[\\s\\S]*?text=(\\d{4}年\\d{2}月\\d{2}日\\s\\d{2}:\\d{2}:\\d{2})",
+    "extractFields": {
+     "amount": 1,
+     "businessTime": 2
+    },
+    "ruleId": 1000027,
+    "rulePkgId": 2000016,
+    "jotbillType": "income"
+   },
+   {
+    "note": "微信-确认收转账结果页（收入-金额在前）",
+    "locateAttribute": 0,
+    "locateToken": "你已收款",
+    "locateMaxTraverseCount": 30,
+    "fromApp": 2,
+    "extractPattern": "text=[¥|￥](\\d+\\.\\d{2}).*?text=你已收款.*收款时间[\\s\\S]*?text=(\\d{4}年\\d{2}月\\d{2}日\\s\\d{2}:\\d{2}:\\d{2})",
+    "extractFields": {
+     "amount": 1,
+     "businessTime": 2
+    },
+    "ruleId": 1000027,
+    "rulePkgId": 2000016,
+    "jotbillType": "income"
+   }
+  ],
+  "com.xunmeng.pinduoduo/*": [
+   {
+    "note": "拼多多-多多支付收银台",
+    "locateAttribute": 0,
+    "locateToken": "请输入多多钱包密码",
+    "locateMaxTraverseCount": 20,
+    "locateConfirm": {
+     "activity": "com.xunmeng.pinduoduo/*",
+     "locateAttribute": 0,
+     "locatePattern": "(支付成功|已支付)",
+     "locateMaxTraverseCount": 20
+    },
+    "extractPattern": "text=请输入多多钱包密码.+?text=(\\d+(\\.\\d{1,2})?)",
+    "extractFields": {
+     "amount": 1
+    },
+    "ruleId": 2000090,
+    "rulePkgId": 2000016
+   }
+  ],
+  "com.eg.android.AlipayGphone/android.app.Notification": [
+   {
+    "note": "支付宝-通知",
+    "locateAttribute": 0,
+    "locateToken": "支出",
+    "locateMaxTraverseCount": 1,
+    "extractPattern": "(\\d+(\\.\\d{1,2})?)元.+?支出",
+    "extractFields": {
+     "amount": 1
+    },
+    "ruleId": 2000079,
+    "rulePkgId": 2000016
+   }
+  ],
+  "com.android.mms/android.app.Notification": [
+   {
+    "note": "招商银行-支出",
+    "locateAttribute": 0,
+    "locateToken": "招商银行",
+    "locateMaxTraverseCount": 32,
+    "fromApp": 4,
+    "extractPattern": "(?s)[\\[【]\\s*(.+?)\\s*[\\]】]\\s*您账户\\s*(\\d+)于\\s*(\\d+月\\d+日\\d+:\\d+)在[\\[【]\\s*(.+?)\\s*[\\]】]\\s*发生快捷支付扣款，人民币\\s*(\\d+\\.\\d+)",
+    "extractFields": {
+     "bank": 1,
+     "card": 2,
+     "businessTime": 3,
+     "method": 4,
+     "amount": 5
+    },
+    "ruleId": 1000033,
+    "rulePkgId": 2000016
+   },
+   {
+    "ruleType": "singleField",
+    "note": "银行短信字段提取",
+    "necessaryFields": [
+     "detailType",
+     "amount"
+    ],
+    "locateAttribute": 0,
+    "locatePattern": "(?s)[\\[【]\\s*(.+?)(?:银行)?\\s*[\\]】]",
+    "locateMaxTraverseCount": 5,
+    "singleFieldExtractPattern": {
+     "orgName": [
+      {
+       "pattern": "(?s)[\\[【]\\s*(.+?银行)\\s*[\\]】]"
+      },
+      {
+       "pattern": "(?s).*?[\\[【]\\s*(.+?银行)\\s*[\\]】]$"
+      },
+      {
+       "pattern": "(?s)[\\[【]\\s*(.+?)\\s*[\\]】]"
+      },
+      {
+       "pattern": "(?s).*?[\\[【]\\s*(.+?)\\s*[\\]】]$"
+      }
+     ],
+     "card": [
+      {
+       "pattern": "(?s)(?:您|贵)(?:账户|卡号)\\s*(\\d+)"
+      },
+      {
+       "pattern": "(?s)(?:您|贵)?尾号(\\d+)(?:的)?(?:储蓄)?卡"
+      },
+      {
+       "pattern": "(?s)卡号(\\d+)(?:日|$)"
+      },
+      {
+       "pattern": "(?s)向您尾号(\\d+)的账户"
+      }
+     ],
+     "businessTime": [
+      {
+       "pattern": "(?s)(?:于)?\\s*((\\d{2}|\\d{4})年\\d{1,2}月\\d{1,2}日\\d{1,2}:\\d{1,2}:\\d{1,2})"
+      },
+      {
+       "pattern": "(?s)(?:于)?\\s*((\\d{2}|\\d{4})年\\d{1,2}月\\d{1,2}日\\d{1,2}:\\d{1,2})"
+      },
+      {
+       "pattern": "(?s)(?:于)?\\s*(\\d{1,2}月\\d{1,2}日\\d{1,2}[时:]\\d{1,2}[分:]\\d{1,2}[秒]?)"
+      },
+      {
+       "pattern": "(?s)(?:于)?\\s*(\\d{1,2}月\\d{1,2}日\\d{1,2}[时:]\\d{1,2}[分]?)"
+      },
+      {
+       "pattern": "(?s)(?:于)?\\s*(\\d{1,2}月\\d{1,2}日\\d{1,2}:\\d{1,2})"
+      },
+      {
+       "pattern": "(?s)(?:于)?\\s*(\\d{1,2}月\\d{1,2}日)"
+      }
+     ],
+     "detailType": [
+      {
+       "pattern": "(?s)(?:他行实时转入|入账工资|入账住房公积金|入账综合代发|入账报销款|入贷款项|转入|存入|收入|收到汇款|财付通快捷支付存入|代发工资存入|转入已到帐|跨行代付收入|银联入账|增加人民币)",
+       "staticValue": "1"
+      },
+      {
+       "pattern": "(?s)(?:发生快捷支付扣款|完成.*?交易人民币\\s*-|支取|支付|支出|取出|扣款|柜台取款|取现|减少人民币|ATM取款|转账|汇款转出|对外汇款支出|消费|快捷支付支出|自动还款)",
+       "staticValue": "2"
+      },
+      {
+       "pattern": "(?s)成功退货",
+       "staticValue": "1"
+      },
+      {
+       "pattern": "(?s)有?\\s*\\d+(?:[,，]\\d+)*(?:\\.\\d+)?(?:元)?的(.+?)交易",
+       "staticValue": "2"
+      }
+     ],
+     "amount": [
+      {
+       "pattern": "(?s)(?:人民币|RMB)\\s*(-?\\d+(?:[,，]\\d+)*(?:\\.\\d+)?)(?:元|$|，|,|。|\\s|[^0-9.,，])"
+      },
+      {
+       "pattern": "(?s)(?:金额|交易金额)\\s*(\\d+(?:[,，]\\d+)*(?:\\.\\d+)?)(?:元|$|，|,|\\s)"
+      },
+      {
+       "pattern": "(?s)(?:支出|收入|消费|支付|取出|扣款|柜台取款|取现|转账|汇款转出|存入)(?:\\([^)）]*\\)|（[^)）]*）)?\\s*(\\d+(?:[,，]\\d+)*(?:\\.\\d+)?)(?:元|$|，|,|\\s)"
+      },
+      {
+       "pattern": "(?s)完成.*?交易人民币\\s*(-?\\d+(?:[,，]\\d+)*(?:\\.\\d+)?)"
+      },
+      {
+       "pattern": "(?s)有(?:人民币|美元)?\\s*(\\d+(?:[,，]\\d+)*(?:\\.\\d+)?)(?:元)?的"
+      }
+     ],
+     "counterparty": [
+      {
+       "pattern": "(?s)，付方(.+?)\\s"
+      },
+      {
+       "pattern": "(?s)支出\\(消费(.+?)\\)"
+      },
+      {
+       "pattern": "(?s)支出（消费(.+?)）"
+      },
+      {
+       "pattern": "(?s)对方户名:(.+?)对方账户尾号"
+      },
+      {
+       "pattern": "(?s)附言:(.+?)(?:。)?[\\[【]"
+      },
+      {
+       "pattern": "(?s)向(.+?)转账"
+      },
+      {
+       "pattern": "(?s)给尾号为\\d+的账户转账(.+?)元"
+      },
+      {
+       "pattern": "(?s)(.+?)(\\d+月\\d+日\\d+:\\d+)向您尾号"
+      }
+     ],
+     "counterpartyCard": [
+      {
+       "pattern": "(?s)对方账户尾号:\\s*(\\d+)"
+      },
+      {
+       "pattern": "(?s)转出方卡号(\\d+)"
+      },
+      {
+       "pattern": "(?s)给尾号为(\\d+)的账户转账"
+      }
+     ],
+     "method": [
+      {
+       "pattern": "(?s)在[\\[【]\\s*(.+?)\\s*[\\]】]\\s*发生快捷支付扣款"
+      },
+      {
+       "pattern": "(?s)完成(财付通)交易"
+      },
+      {
+       "pattern": "(?s)完成(支付宝)交易"
+      },
+      {
+       "pattern": "(?s)完成(银联)交易"
+      },
+      {
+       "pattern": "(?s)完成(网银在线)交易"
+      },
+      {
+       "pattern": "(?s)完成(抖音支付)交易"
+      },
+      {
+       "pattern": "(?s)(手机银行)支取"
+      },
+      {
+       "pattern": "(?s)(快捷支付)支出"
+      },
+      {
+       "pattern": "(?s)(POS)支取"
+      },
+      {
+       "pattern": "(?s)(ATM)取款"
+      },
+      {
+       "pattern": "(?s)(柜台)取款"
+      },
+      {
+       "pattern": "(?s)(财付通快捷支付)存入"
+      },
+      {
+       "pattern": "(?s)(银联)入账"
+      },
+      {
+       "pattern": "(?s)(银联)扣款"
+      },
+      {
+       "pattern": "(?s)有?\\s*\\d+(?:[,，]\\d+)*(?:\\.\\d+)?(?:元)?的(.+?)交易"
+      }
+     ],
+     "currency": [
+      {
+       "pattern": "(?s)有(USD)\\d+(?:\\.\\d+)?元"
+      },
+      {
+       "pattern": "(?s)有(美元)\\d+(?:\\.\\d+)?元",
+       "staticValue": "USD"
+      },
+      {
+       "pattern": "(?s)(?:人民币|RMB)",
+       "staticValue": "CNY"
+      }
+     ],
+     "balance": [
+      {
+       "pattern": "(?s)(?:余额|当前余额|可用余额)(?:为)?(?:人民币)?\\s*(\\d+(?:[,，]\\d+)*(?:\\.\\d+)?)(?:元|$|，|,|\\s)"
+      },
+      {
+       "pattern": "(?s)余额(?:为)?(?:人民币)?\\s*(\\d+(?:[,，]\\d+)*(?:\\.\\d+)?)"
+      }
+     ]
+    },
+    "ruleId": 2000106,
+    "rulePkgId": 2000016
+   },
+   {
+    "note": "招商银行-收入",
+    "locateAttribute": 0,
+    "locateToken": "招商银行",
+    "locateMaxTraverseCount": 32,
+    "fromApp": 4,
+    "extractPattern": "(?s)[\\[【](.+?)[\\]】]您账户(\\d+)于(\\d+月\\d+日)他行实时转入人民币(\\d+\\.\\d+)，付方(.+?)\\s",
+    "extractFields": {
+     "bank": 1,
+     "card": 2,
+     "businessTime": 3,
+     "amount": 4,
+     "counterparty": 5
+    },
+    "ruleId": 1000031,
+    "rulePkgId": 2000016,
+    "jotbillType": "income"
+   }
+  ],
+  "com.alipay.mobile.nebulax.xriver.activity.XRiverActivity": [
+   {
+    "note": "支付宝-账单详情页",
+    "locateAttribute": 0,
+    "locateToken": "交易成功",
+    "locateMaxTraverseCount": 50,
+    "extractPattern": "text=(.+?) />.+?text=(支出)?(\\d+(\\.\\d{1,2})?)元.+?text=交易成功",
+    "extractFields": {
+     "merchant": 1,
+     "detailType": 2,
+     "amount": 3
+    },
+    "extractFieldsMapper": {
+     "detailType": {
+      "defaultValue": "1",
+      "mapping": {
+       "支出": "2"
+      }
+     }
+    },
+    "ruleId": 2000107,
+    "rulePkgId": 2000016
+   },
+   {
+    "note": "支付宝-确认收红包结果页（收入）",
+    "locateAttribute": 0,
+    "locateToken": "发的红包",
+    "locateMaxTraverseCount": 32,
+    "fromApp": 3,
+    "extractPattern": "text=头像.+text=(.+?) />.+text=发的红包.+text=(\\d\\.\\d{2})元 />[\\s\\S]*?text=领取成功",
+    "extractFields": {
+     "amount": 2,
+     "counterparty": 1
+    },
+    "ruleId": 1000029,
+    "rulePkgId": 2000016,
+    "jotbillType": "income"
+   },
+   {
+    "note": "支付宝-确认收红包结果页（支出）",
+    "locateAttribute": 0,
+    "locateToken": "发的红包",
+    "locateMaxTraverseCount": 32,
+    "fromApp": 3,
+    "extractPattern": "text=头像.+text=(.+?) />.+text=发的红包.+text=(\\d\\.\\d{2})元 />[\\s\\S]*?text=(红包)编号[:：]([^/<>&]+)",
+    "extractFields": {
+     "amount": 2,
+     "counterparty": 1,
+     "category": 3,
+     "orderNo": 4
+    },
+    "ruleId": 1000029,
+    "rulePkgId": 2000016
+   }
+  ],
+  "com.unionpay.UPPayWapActivity": [
+   {
+    "note": "京东-支付结果页-银联",
+    "locateAttribute": 0,
+    "locateToken": "支付成功",
+    "locateMaxTraverseCount": 20,
+    "extractPattern": "text=支付成功.+?[¥￥](\\d+(\\.\\d{1,2})?)",
+    "extractFields": {
+     "amount": 1
+    },
+    "ruleId": 2000087,
+    "rulePkgId": 2000016
+   }
+  ],
+  "com.jingdong.app.mall.bundle.cashierfinish.view.CashierUserContentCompleteActivity": [
+   {
+    "note": "京东-支付结果页",
+    "locateAttribute": 0,
+    "locateToken": "支付成功",
+    "locateMaxTraverseCount": 20,
+    "extractPattern": "text=支付成功.+?[¥￥](\\d+(\\.\\d{1,2})?)",
+    "extractFields": {
+     "amount": 1
+    },
+    "ruleId": 2000085,
+    "rulePkgId": 2000016
+   }
+  ],
+  "com.bytedance.android.shopping.buynow.container.BuyNowFullscreenDialog": [
+   {
+    "note": "抖音-商城下单页",
+    "matchMode": 1,
+    "locateAttribute": 0,
+    "locatePattern": "(立即支付|极速付|开通并支付)",
+    "locateMaxTraverseCount": 1000,
+    "extractPattern": "(立即支付|极速付|开通并支付)[¥￥](\\d+(\\.\\d{1,2})?)",
+    "extractFields": {
+     "amount": 2
+    },
+    "locateConfirm": {
+     "activity": "com.ss.android.ugc.aweme.bullet.ui.BulletContainerActivity,com.ss.android.ugc.aweme.live.LiveDummyActivity,com.bytedance.android.anniex.container.popup.SheetBaseDialog",
+     "locateAttribute": 0,
+     "locatePattern": "(支付成功|购买成功)",
+     "locateMaxTraverseCount": 20
+    }
+   }
+  ],
+  "com.bytedance.locallife.page.poi.LifePoiActivity,com.bytedance.locallife.page.pdp.LifePdpActivity,com.ss.android.ugc.aweme/androidx.appcompat.app.AppCompatDialog,com.bytedance.ies.bullet.service.popup.ui.primary.PrimaryDialog": [
+   {
+    "note": "抖音-团购下单页",
+    "matchMode": 1,
+    "locateAttribute": 0,
+    "locatePattern": "(提交订单|立即支付)",
+    "locateMaxTraverseCount": 1000,
+    "extractPattern": "text=(实付|立即支付)[¥￥](\\d+(\\.\\d{1,2})?)",
+    "extractFields": {
+     "amount": 2
+    },
+    "locateConfirm": {
+     "activity": "com.ss.android.ugc.aweme.bullet.ui.BulletContainerActivity,com.ss.android.ugc.aweme.live.LiveDummyActivity,com.bytedance.android.anniex.container.popup.SheetBaseDialog",
+     "locateAttribute": 0,
+     "locatePattern": "(购买成功|支付成功)",
+     "locateMaxTraverseCount": 20
+    }
+   }
+  ]
+ }
+}
