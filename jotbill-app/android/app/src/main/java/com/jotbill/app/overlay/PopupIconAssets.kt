@@ -21,7 +21,8 @@ import com.jotbill.app.R
  */
 internal object PopupIconAssets {
 
-    /** 与后端种子（0a80e72 categories.service.ts）的 lucide 图标名一一对应。 */
+    /** 与默认分类种子的 lucide 图标名一一对应（前 13 个来自后端种子 0a80e72，
+     *  其余为本地特有分类新增，2026-10-27 随种子 lucide 化一并接入）。 */
     private val categoryIcons = mapOf(
         "utensils" to R.drawable.ic_lucide_utensils,
         "bus" to R.drawable.ic_lucide_bus,
@@ -35,7 +36,19 @@ internal object PopupIconAssets {
         "trophy" to R.drawable.ic_lucide_trophy,
         "chart-line" to R.drawable.ic_lucide_chart_line,
         "laptop" to R.drawable.ic_lucide_laptop,
-        "circle-dollar-sign" to R.drawable.ic_lucide_circle_dollar_sign
+        "circle-dollar-sign" to R.drawable.ic_lucide_circle_dollar_sign,
+        "smartphone" to R.drawable.ic_lucide_smartphone,
+        "shopping-basket" to R.drawable.ic_lucide_shopping_basket,
+        "party-popper" to R.drawable.ic_lucide_party_popper,
+        "plane" to R.drawable.ic_lucide_plane,
+        "paw-print" to R.drawable.ic_lucide_paw_print,
+        "package" to R.drawable.ic_lucide_package,
+        "briefcase" to R.drawable.ic_lucide_briefcase,
+        "trending-up" to R.drawable.ic_lucide_trending_up,
+        "gift" to R.drawable.ic_lucide_gift,
+        "hand-coins" to R.drawable.ic_lucide_hand_coins,
+        "rotate-ccw" to R.drawable.ic_lucide_rotate_ccw,
+        "receipt" to R.drawable.ic_lucide_receipt
     )
 
     /** 无品牌覆盖的账户按 subtype 给线性图标（与 DefaultDataInitializer 的 subtype 值一致）。 */
