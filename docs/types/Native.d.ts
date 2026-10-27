@@ -1236,6 +1236,13 @@ export interface RuntimeModule {
   getRuntimeHealth(): Promise<RuntimeHealth>;
   /** 通知权限契约变更：打开通知监听专用系统设置页。 */
   openNotificationListenerSettings(): Promise<void>;
+  /**
+   * 打包诊断日志（jotbill-diag.log 与轮转文件 + 设备 meta）并拉起系统分享面板。
+   * @returns zip 文件名。
+   * @throws DIAG_EXPORT_EMPTY 无可导出日志；DIAG_EXPORT_NO_ACTIVITY 无前台 Activity；
+   *   DIAG_EXPORT_SHARE_ERROR / DIAG_EXPORT_ERROR 打包或分享失败。
+   */
+  exportDiagLog(): Promise<string>;
 }
 
 /**

@@ -15,6 +15,7 @@ import com.jotbill.app.data.JotBillDatabase
 import com.jotbill.app.data.JotBillDatabaseProvider
 import com.jotbill.app.notification.PaymentNotificationService
 import com.jotbill.app.recognition.CheckoutAccessibilityService
+import com.jotbill.app.utils.DiagLogExporter
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -58,6 +59,49 @@ class RuntimeModule(
             promise.resolve(null)
         } catch (error: Exception) {
             promise.reject("OPEN_SETTINGS_ERROR", error.message, error)
+        }
+    }
+
+    /**
+     * 打包诊断日志并拉起系统分享面板（应用内一键导出，2026-10-27）。
+     *
+     * 背景：`JotBillLog` 落盘目录 Android 11+ 文件管理器进不去，远程用户
+     * （无法 adb）遇到"弹窗不出现"类问题时无证据可交。打包内容与隐私边界见
+     * [DiagLogExporter] KDoc；无日志时 reject `DIAG_EXPORT_EMPTY`，
+     * 无前台 Activity（分享面板必须由 Activity 发起）时 reject
+     * `DIAG_EXPORT_NO_ACTIVITY`。
+     *
+     * @return zip 文件名（RN 侧 toast 用）。
+     */
+    @ReactMethod
+    fun exportDiagLog(promise: Promise) {
+        scope.launch {
+            try {
+                val zip = DiagLogExporter.buildExportZip(reactContext)
+                    ?: run {
+                        withContext(Dispatchers.Main) {
+                            promise.reject("DIAG_EXPORT_EMPTY", "没有可导出的诊断日志")
+                        }
+                        return@launch
+                    }
+                withContext(Dispatchers.Main) {
+                    val activity = reactContext.currentActivity
+                    if (activity == null) {
+                        promise.reject("DIAG_EXPORT_NO_ACTIVITY", "分享面板需要前台界面")
+                        return@withContext
+                    }
+                    try {
+                        DiagLogExporter.shareZip(reactContext, zip)
+                        promise.resolve(zip.name)
+                    } catch (error: Exception) {
+                        promise.reject("DIAG_EXPORT_SHARE_ERROR", error.message, error)
+                    }
+                }
+            } catch (error: Exception) {
+                withContext(Dispatchers.Main) {
+                    promise.reject("DIAG_EXPORT_ERROR", error.message, error)
+                }
+            }
         }
     }
 

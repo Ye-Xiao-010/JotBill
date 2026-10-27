@@ -21,6 +21,7 @@ export type RuntimeStatus = RuntimeHealth;
 interface RawRuntimeModule {
   getRuntimeHealth(): Promise<string>;
   openNotificationListenerSettings(): Promise<null>;
+  exportDiagLog(): Promise<string>;
 }
 
 function getRawRuntimeModule(): RawRuntimeModule {
@@ -42,6 +43,16 @@ export const nativeRuntime = {
    */
   async openNotificationListenerSettings(): Promise<void> {
     await getRawRuntimeModule().openNotificationListenerSettings();
+  },
+
+  /**
+   * 打包诊断日志并拉起系统分享面板（用户在微信/QQ 直接转发给开发者）。
+   * @returns zip 文件名，供成功 toast 展示。
+   * @throws DIAG_EXPORT_EMPTY 没有可导出的日志；DIAG_EXPORT_NO_ACTIVITY 无前台界面；
+   *   DIAG_EXPORT_SHARE_ERROR / DIAG_EXPORT_ERROR 打包或分享失败。
+   */
+  async exportDiagLog(): Promise<string> {
+    return await getRawRuntimeModule().exportDiagLog();
   },
 };
 
