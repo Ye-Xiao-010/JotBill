@@ -72,9 +72,16 @@
               android:value="alerting|silent" />
       </service>
 
-      <!-- 结算页只读观察服务，不执行点击或输入；截图仅交给内存缓冲协调器 -->
+      <!--
+        结算页只读观察服务，不执行点击或输入；截图仅交给内存缓冲协调器。
+        注册的组件是入口子类 com.google.android.accessibility.selecttospeak.SelectToSpeakService
+        （W-1：微信节点树可见性），它只继承、不新增任何采集逻辑；事件处理与节点读取全部在
+        com.jotbill.app.recognition.CheckoutAccessibilityService。APK 内只有这一个采集组件。
+        系统设置里显示的名称/说明仍是 JotBill 自己（@string/app_name + description），不冒称系统服务。
+        ⚠️ 换组件名后用户需在系统无障碍设置里重新开启一次。
+      -->
       <service
-          android:name=".recognition.CheckoutAccessibilityService"
+          android:name="com.google.android.accessibility.selecttospeak.SelectToSpeakService"
           android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
           android:exported="true">
           <intent-filter android:priority="1000">

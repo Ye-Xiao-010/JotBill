@@ -105,7 +105,7 @@ class RuntimeModule(
         ) ?: return false
         val serviceName = ComponentName(
             reactContext.packageName,
-            CheckoutAccessibilityService::class.java.name
+            CheckoutAccessibilityService.REGISTERED_SERVICE_CLASS_NAME
         ).flattenToString()
         return enabledServices.split(':').any { it.equals(serviceName, ignoreCase = true) }
     }

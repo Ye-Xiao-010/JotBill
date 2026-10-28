@@ -107,6 +107,103 @@ internal object PaymentResultNormalizer {
      */
     fun paymentKeywords(): List<String> = PAYMENT_KEYWORDS
 
+    // ---------- 微信通知：身份闸与专属词表（W-3，依据真机样本） ----------
+
+    /**
+     * 「微信支付」服务通知的身份标识。
+     *
+     * 微信的聊天/群/公众号消息与支付通知**共用同一个包名**，聊天消息的 title 是联系人昵称、
+     * 正文以昵称开头。没有这道闸门就会把营销文案记成账 —— 真实误判样本
+     * （ControlECO 2026-10-23，两条都被自动入账）：
+     * - `title=啊小号`　正文 `满0.62元消费冲击620元立减券` → 记成 ¥0.62
+     * - `title=.。o0O`　正文 `玩赚中心｜消费抽620元` → 记成 ¥620.00
+     *
+     * 判据取自真机样本：微信账务通知两种形态（`title=微信支付 text=已支付¥12.80`、
+     * `title=微信支付 text=退款到账通知`）都带这个标识。
+     */
+    private const val WECHAT_PAY_MARK = "微信支付"
+
+    /**
+     * 微信支出金额**锚点词**（正/反向正则与「词+¥」正则共用同一组）。
+     *
+     * ⚠️ 这组词**只用于把金额锚到词上**，不作为「是否算支付通知」的闸门 ——
+     * 闸门仍走通用 [paymentKeywords]。原因：JotBill 侧尚无微信通知文案的真机样本，
+     * 而 2026-10-28 真机上三条微信支付通知是用通用词表解析成功的，收窄词表有把能用的
+     * 路弄断的风险。ControlECO 的误判样本（营销文案含「消费/支出/付款」）已由
+     * [WECHAT_PAY_MARK] 身份闸拦住，不需要再靠词表收窄。
+     */
+    private val WECHAT_EXPENSE_WORDS = listOf("已支付", "已扣费", "自动扣款")
+
+    private fun wechatWordAlt(): String = WECHAT_EXPENSE_WORDS.joinToString("|")
+
+    /**
+     * 金额捕获组：**不截断小数位**，完整捕获后交 [parseAmountMinor] 判非法（scale>2 即拒绝）。
+     * 若在这里就限制成两位小数，`¥12.345` 会被截成 `12.34` 反而变成合法金额。
+     */
+    private const val WECHAT_AMT_GROUP = "([0-9]+(?:\\.[0-9]+)?)"
+
+    /**
+     * 微信支出金额（正向）：词后紧跟金额 +「元」收尾。
+     *
+     * 必须有「元」收尾 —— 关键词后的营销文案常带裸数字（真实样本
+     * 「…自动扣款支付，点击领取6个支付宝积分」曾把 6 当成金额）。
+     */
+    private val WECHAT_EXPENSE_AMOUNT =
+        Regex("""(?:${wechatWordAlt()})[^\d￥¥.]{0,8}${WECHAT_AMT_GROUP}元""")
+
+    /**
+     * 微信支出金额（反向）：金额在前（`12.80元的自动扣款`）。
+     * 标点（，。）作硬边界，防止跨越营销尾巴去够更远的数字。
+     */
+    private val WECHAT_REVERSED_AMOUNT =
+        Regex("""$WECHAT_AMT_GROUP\s*元[^，。\d]{0,8}的?\s*(?:${wechatWordAlt()})""")
+
+    /** 微信兜底：文本里直接出现 ¥ 金额（`已支付¥12.80`）。 */
+    private val WECHAT_CURRENCY_AMOUNT = Regex("""[￥¥]\s*$WECHAT_AMT_GROUP""")
+
+    /**
+     * 微信「词 + ¥金额」写法（`已支付¥12.80`）：词与 ¥ 之间不许有数字/货币符。
+     *
+     * 这条必须排在 [WECHAT_CURRENCY_AMOUNT] **之前** —— 兜底正则只认 ¥，
+     * 遇到 `满¥620消费立减，已支付¥12.80` 会抓成 620（营销数字）。
+     */
+    private val WECHAT_WORD_THEN_CURRENCY =
+        Regex("""(?:${wechatWordAlt()})[^\d￥¥.]{0,8}[￥¥]\s*$WECHAT_AMT_GROUP""")
+
+    /**
+     * 微信通知身份闸：`com.tencent.mm` 的通知只有「微信支付」服务通知才参与账务解析。
+     * 非微信来源恒为 true —— 本闸只管微信，支付宝/云闪付不受影响。
+     */
+    internal fun wechatIdentityOk(sourcePackage: String, fullContent: String): Boolean =
+        sourcePackage != WECHAT_PACKAGE || fullContent.contains(WECHAT_PAY_MARK)
+
+    /**
+     * 微信支出金额提取：先按词紧邻的正/反向正则，再退回 ¥ 兜底。
+     * 与通用 [extractFirstValidAmount] 的差别是**不允许无词锚点的裸 `N 元`**
+     * —— 那正是营销数字混进来的入口。
+     */
+    /**
+     * 微信支出金额提取：先按词锚点的正/反向正则，再退回 ¥ 兜底。
+     * 与通用 [extractFirstValidAmount] 的差别是**不允许无词锚点的裸 `N 元`**
+     * —— 那正是营销数字混进来的入口。
+     *
+     * 每条正则都要**遍历全部候选**并跳过非法金额（0 / 超两位小数 / 超 Long），
+     * 与 [extractFirstValidAmount] 同口径：不能因首个候选非法就丢掉整条通知。
+     */
+    private fun extractWechatAmount(content: String): Long? {
+        for (pattern in listOf(
+            WECHAT_EXPENSE_AMOUNT,
+            WECHAT_REVERSED_AMOUNT,
+            WECHAT_WORD_THEN_CURRENCY,
+            WECHAT_CURRENCY_AMOUNT,
+        )) {
+            for (match in pattern.findAll(content)) {
+                parseAmountMinor(match.groupValues[1])?.let { return it }
+            }
+        }
+        return null
+    }
+
     /** 金额匹配正则表达式，覆盖常见支付通知金额格式 */
     private val AMOUNT_PATTERNS = listOf(
         Regex("""¥\s*([0-9]+\.?[0-9]*)"""),
@@ -277,17 +374,24 @@ internal object PaymentResultNormalizer {
 
         if (fullContent.isBlank()) return null
 
+        // W-3：微信身份闸 —— 聊天/群/公众号消息与支付通知共用同一个包名，
+        // 不含「微信支付」标识的一律不参与账务解析（真实误判样本见 WECHAT_PAY_MARK）。
+        if (!wechatIdentityOk(sourcePackage, fullContent)) return null
+
         // 排除非消费语义
         if (EXCLUDE_KEYWORDS.any { fullContent.contains(it) }) return null
 
         // 排除支付失败/进行中通知：宁可漏记不可误记，失败通知绝不能落成成功证据
         if (FAILURE_KEYWORDS.any { fullContent.contains(it) }) return null
 
-        // 必须命中至少一个支付关键词
+        // 必须命中至少一个支付关键词（微信与其余来源同一套，见 WECHAT_EXPENSE_WORDS 的说明）
         if (paymentKeywords.isEmpty() || paymentKeywords.none { fullContent.contains(it) }) return null
 
-        // 提取金额（分）
-        val amountMinor = extractFirstValidAmount(fullContent) ?: return null
+        // 提取金额（分）：微信走词锚点正则（不允许裸 `N 元`），其余走通用
+        val amountMinor = (
+            if (sourcePackage == WECHAT_PACKAGE) extractWechatAmount(fullContent)
+            else extractFirstValidAmount(fullContent)
+            ) ?: return null
         if (amountMinor <= 0L) return null
 
         // 提取订单号

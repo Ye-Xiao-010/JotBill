@@ -35,10 +35,25 @@ import kotlinx.coroutines.launch
  *
  * 服务不点击、不输入、不处理支付确认，也不根据包名伪造平台或商户；稳定结算页只在门禁通过后
  * 交给本地截图和购买意图协调器。
+ *
+ * ⚠️ **本类必须保持 `open`**：注册到 Manifest 的是入口子类
+ * `com.google.android.accessibility.selecttospeak.SelectToSpeakService`（见 W-1），
+ * 采集逻辑全部在本类。原因见该子类的注释与 `docs/` 微信节点可见性记录。
  */
-class CheckoutAccessibilityService : AccessibilityService() {
+open class CheckoutAccessibilityService : AccessibilityService() {
     companion object {
         private const val TAG = "CheckoutAccessibilityService"
+
+        /**
+         * **注册到 Manifest 的**无障碍组件类名（W-1）。
+         *
+         * 实际注册的是入口子类 `…selecttospeak.SelectToSpeakService`（为微信节点树可见性），
+         * 不是本类 —— 用 `CheckoutAccessibilityService::class.java.name` 拼组件名去和
+         * `Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES` 比对会永远不相等，
+         * 导致服务明明开着却被判为「未开启」。全部生成点统一取本常量。
+         */
+        const val REGISTERED_SERVICE_CLASS_NAME: String =
+            "com.google.android.accessibility.selecttospeak.SelectToSpeakService"
 
         /** 结果页文本提取时的敏感字段关键词：命中节点整体丢弃，不进入解析与哈希。 */
         private val SENSITIVE_TEXT_KEYWORDS = listOf(

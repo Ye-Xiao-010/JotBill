@@ -152,6 +152,20 @@ class PaymentNotificationService : NotificationListenerService() {
         val bigText = extras.getCharSequence(Notification.EXTRA_BIG_TEXT)?.toString() ?: ""
         val tickerText = notification.tickerText?.toString() ?: ""
 
+        // W-3：微信身份闸在分发入口统一过一次，覆盖退款/手续费/转账/支付全部四条路径。
+        // 聊天/群/公众号消息与支付通知共用同一个包名，正文里出现「退款」「转账」等词
+        // 会走错分支；`normalize` 内另有同源判据作为解析层不变式。
+        val fullContent = listOf(title, titleBig, text, bigText, subText, summaryText, tickerText)
+            .filter { it.isNotBlank() }
+            .joinToString(" ")
+        if (!PaymentResultNormalizer.wechatIdentityOk(packageName, fullContent)) {
+            JotBillLog.d(
+                TAG,
+                "微信通知缺少「微信支付」身份标识，不参与账务解析: title=${title.take(30)}"
+            )
+            return
+        }
+
         // 阶段五 T2：退款语义优先识别（此前退款被非消费排除丢弃，现路由到退款链路）
         val refundInput = PaymentResultNormalizer.normalizeRefund(
             sourcePackage = packageName,

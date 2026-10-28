@@ -115,9 +115,8 @@ class LedgerRepository(private val database: JotBillDatabase) {
             // update / delete 路径已有 requireMutableBill，本路径此前是缺口 ——
             // 漏了它就等于"能创建、不能改、不能删"的幽灵账单。口径统一在此。
             requireMutableBill(bill)
-            // ---- 去重第 1 级：(sourceType, orderId) 精确查重（退款豁免）----
+            // ---- 去重第 1 级：orderId 精确查重（跨来源互认，退款豁免）----
             val duplicate = DuplicateGuard(database).checkLevel1(
-                sourceType = bill.sourceType,
                 orderId = bill.orderId,
                 type = bill.type,
                 excludeId = bill.id
@@ -406,10 +405,9 @@ class LedgerRepository(private val database: JotBillDatabase) {
                 throw LedgerValidationException("Checkout session has already been committed")
             }
 
-            // ---- 阶段五 T6 去重第 1 级：确认入账前查重（退款豁免）----
+            // ---- 去重第 1 级：确认入账前查重（orderId 跨来源互认，退款豁免）----
             val guard = DuplicateGuard(database)
             val duplicate = guard.checkLevel1(
-                sourceType = effectiveBill.sourceType,
                 orderId = effectiveBill.orderId,
                 type = effectiveBill.type,
                 excludeId = effectiveBill.id

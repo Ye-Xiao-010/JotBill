@@ -179,42 +179,42 @@ class AutoBookkeeper(
             null
         }
         if (similar != null && similar.isNotEmpty()) {
-            val selfHits = similar.filter { it.bill.sourceType == BILL_SOURCE_TYPE }
-            // orderId 判别收窄（对齐「真实第二笔不再被吞」裁定方向）：双方都有
-            // 订单号且不同 ⇒ 是同商户同金额的两笔真实支付，不得吸收进既有账单。
-            val absorbable = selfHits.filter { hit ->
-                isSameTransaction(hit.bill.orderId, orderId)
-            }
-            when {
-                absorbable.isNotEmpty() -> {
-                    // 本管线二次抽取命中自己刚入账的账单（典型：支付宝/微信主结果页
-                    // 先只有金额，用户随后打开账单详情页，2000107/2000108 抽出商户/
-                    // 收支类型）—— 对齐小米服务端「指纹合并+字段补全」的本地形态：
-                    // 只补既有账单的空缺字段，金额/账户/类型绝不改动。
-                    enrichExistingBill(
-                        existing = absorbable.maxByOrNull { it.bill.createdAt }!!.bill,
-                        merchant = merchant,
-                        orderId = orderId,
-                        categoryId = categoryId
-                    )
-                    return
-                }
-                selfHits.isNotEmpty() -> {
-                    // 同额但订单号不同的自源账单：疑似真实第二笔，转待确认由用户判断
-                    fallbackToPending(
-                        record, amountMinor, merchant, orderId, occurredAt,
-                        DuplicateGuard.CONFLICT_SUSPECTED_DUPLICATE
-                    )
-                    return
-                }
-                else -> {
-                    fallbackToPending(
-                        record, amountMinor, merchant, orderId, occurredAt,
-                        DuplicateGuard.CONFLICT_SUSPECTED_DUPLICATE
-                    )
-                    return
+            // 跨通道互认（不再只认同 sourceType 的账单）：同一笔被页面规则 / 通知监听 /
+            // 账单导入任一通道先入账后，本通道的二次抽取同样应归并进既有账单，
+            // 而不是落一张 SUSPECTED_DUPLICATE 待确认。
+            //
+            // 吸收判据按通道分两档：
+            // - **同通道**：沿用 [isSameTransaction]，任一方缺订单号仍可吸收 ——
+            //   这是「主结果页先只有金额、账单详情页二次抽出商户/分类」的补全场景；
+            // - **跨通道**：必须双方都有订单号且相同。订单号是唯一能客观证明同一笔的键，
+            //   任一方缺失时只提示不吸收，否则同额同商户的两笔真实支付会被误合并。
+            val absorbable = similar.filter { hit ->
+                if (hit.bill.sourceType == BILL_SOURCE_TYPE) {
+                    isSameTransaction(hit.bill.orderId, orderId)
+                } else {
+                    !hit.bill.orderId.isNullOrBlank() && !orderId.isNullOrBlank() &&
+                        hit.bill.orderId == orderId
                 }
             }
+            if (absorbable.isNotEmpty()) {
+                // 二次抽取命中既有账单：只补既有账单的空缺字段，金额/账户/类型绝不改动。
+                // 对齐小米服务端「指纹合并+字段补全」的本地形态（合并与补全在小米是
+                // 服务端能力，客户端只上报；本地版由 [FieldPriorityResolver] 承担裁决）。
+                enrichExistingBill(
+                    existing = absorbable.maxByOrNull { it.bill.createdAt }!!.bill,
+                    merchant = merchant,
+                    orderId = orderId,
+                    categoryId = categoryId
+                )
+                return
+            }
+            // 有相似命中但不可吸收（订单号不一致 / 跨通道缺订单号）：
+            // 疑似真实第二笔，转待确认由用户判断，不得擅自合并
+            fallbackToPending(
+                record, amountMinor, merchant, orderId, occurredAt,
+                DuplicateGuard.CONFLICT_SUSPECTED_DUPLICATE
+            )
+            return
         }
 
         try {

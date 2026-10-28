@@ -34,23 +34,29 @@ internal class DuplicateGuard(
     )
 
     /**
-     * 第 1 级：按 (sourceType, orderId) 精确查重。
+     * 第 1 级：按 **orderId** 精确查重（跨来源互认）。
      *
-     * @param sourceType 账单来源类型
+     * 同一笔被页面规则 / 通知监听 / 账单导入任一通道先入账后，其余通道都归并到同一条 ——
+     * 订单号是「同一笔交易」的唯一客观键，与它是被哪个通道看到的无关。
+     * 历史实现按 `(sourceType, orderId)` 查，跨通道同笔无法归并；而 [BillDao.findByOrderIdForImportMerge]
+     * 一直只看 orderId，同仓两种口径。现统一为后者。
+     *
+     * **例外：`manual` 来源不参与互认**（由 DAO 层排除）—— 用户手写的账可能带刻意调整，
+     * 不得被自动链路擅自吸收。
+     *
      * @param orderId 来源订单号；空值视为无订单号，直接未命中
      * @param type 交易类型；refund 豁免（多次部分退款不按订单号合并）
      * @param excludeId 排除的账单 ID（更新场景排除自身）
      * @return 命中的既有账单；未命中返回 null
      */
     suspend fun checkLevel1(
-        sourceType: String,
         orderId: String?,
         type: String,
         excludeId: String? = null
     ): BillEntity? {
         if (orderId.isNullOrBlank()) return null
         if (type == "refund") return null
-        return database.billDao().findBySourceAndOrderId(sourceType, orderId, excludeId)
+        return database.billDao().findByOrderIdForAutoMerge(orderId, excludeId)
     }
 
     /**

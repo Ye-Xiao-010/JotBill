@@ -74,21 +74,31 @@ interface BillDao {
     suspend fun getById(id: String): BillEntity?
 
     /**
-     * 阶段五 T6 去重第 1 级：按 (sourceType, orderId) 精确查重。
-     * 命中说明同一来源订单已入账，新证据应复用/更新原账单而非产生第二笔。
+     * 去重第 1 级：按 **orderId** 精确查重（跨来源互认）。
+     *
+     * 命中说明同一笔交易已入账，新证据应复用/更新原账单而非产生第二笔。
+     *
+     * ⚠️ **不按 source_type 区分**：同一笔被页面规则、通知监听、账单导入任一通道
+     * 先入账后，其余通道到达时都应归并到同一条 —— 这是「多信号合成一条正确账」的
+     * 唯一客观判据。历史上按 `(sourceType, orderId)` 查导致跨通道同笔无法归并
+     * （只能落 SUSPECTED_DUPLICATE 待确认）；而同仓的
+     * [findByOrderIdForImportMerge] 一直只看 orderId，两条口径不一致。
+     *
+     * **例外：`source_type = 'manual'` 不参与互认** —— 用户手写的账可能带刻意调整
+     * 的金额/备注，不得被自动链路擅自吸收或改写。
      *
      * @param excludeId 排除的账单 ID（更新场景排除自身），传 null 表示不排除
      */
     @Query(
         """
         SELECT * FROM bills
-        WHERE source_type = :sourceType AND order_id = :orderId
+        WHERE order_id = :orderId
+          AND source_type != 'manual'
           AND (:excludeId IS NULL OR id != :excludeId)
         LIMIT 1
         """
     )
-    suspend fun findBySourceAndOrderId(
-        sourceType: String,
+    suspend fun findByOrderIdForAutoMerge(
         orderId: String,
         excludeId: String? = null
     ): BillEntity?

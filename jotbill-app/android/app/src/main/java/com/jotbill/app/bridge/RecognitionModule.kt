@@ -269,7 +269,7 @@ class RecognitionModule(
         ) ?: return false
         val serviceName = context.packageName +
             "/" +
-            CheckoutAccessibilityService::class.java.name
+            CheckoutAccessibilityService.REGISTERED_SERVICE_CLASS_NAME
         return enabledServices.split(':').any { it.equals(serviceName, ignoreCase = true) }
     }
 
