@@ -277,6 +277,57 @@ internal sealed class PaymentSessionResolution {
 }
 
 /**
+ * [CheckoutPaymentMatcher.recordOrphanPaymentSignal] 的落库结果（N-0a）。
+ *
+ * 该函数内部有多条早退路径（D-3 闸、冷却、幂等、规则忽略…），此前一律返回 Unit，
+ * 调用方无法区分「已落卡」与「被静默丢弃」—— `PaymentNotificationService` 因此
+ * 无条件打「已转纯通知待确认」，而实际可能被 D-3 拦下。改为返回真实结果，由调用方
+ * 如实记录；既有调用方可忽略返回值，无需同步改动。
+ */
+internal data class OrphanOutcome(
+    val kind: Kind,
+    /** 相关待确认卡的 ID（未必是本次新建的）；被拦截且无既有卡时为 null。 */
+    val pendingId: String? = null,
+) {
+    enum class Kind {
+        /** 已新建待确认卡。 */
+        STORED,
+
+        /** 同键待确认已存在（幂等跳过），冲突码可能已合并。 */
+        ALREADY_STORED,
+
+        /** 同一笔的重复观测（文本哈希一致），未新建。 */
+        SUPPRESSED_SAME_OBSERVATION,
+
+        /** 同包同额窗口内已有 pending，判为重复观测。 */
+        SUPPRESSED_DUPLICATE_WINDOW,
+
+        /** 该笔刚被确认/忽略，冷却期内的重复观测。 */
+        SUPPRESSED_COOLDOWN,
+
+        /** 规则引擎命中 ignore。 */
+        RULE_IGNORED,
+
+        /** 信号字段非法。 */
+        SIGNAL_INVALID,
+
+        /** 来源类型非法。 */
+        SOURCE_TYPE_INVALID,
+
+        /** 已直接入账（N-2：强证据自动记账），不是落待确认。 */
+        AUTO_COMMITTED,
+    }
+
+    val isStored: Boolean get() = kind == Kind.STORED
+
+    /** 是否已直接入账（N-2），而非落待确认。 */
+    val isAutoCommitted: Boolean get() = kind == Kind.AUTO_COMMITTED
+}
+
+/** 通知强证据自动入账的审计操作者标记，供审计日志区分入账来源。 */
+internal const val NOTIFICATION_AUTO_COMMIT_OPERATOR = "notification_auto_commit"
+
+/**
  * 将支付证据和视觉候选限制在同一个 sessionId 内关联，并在匹配成功时自动入账。
  *
  * 阶段四 T5 起：matched 且 conflictReason == null 的候选通过 [LedgerRepository]
@@ -573,12 +624,21 @@ internal class CheckoutPaymentMatcher(
      *    窗内已有 pending 时不新建第二张卡。只哈希缺失（通知回退）或页面动态漂移时生效。
      *    （第 1 道挡不住：结果页事件键含 15 秒时间桶，跨桶即换键。）
      */
+    /**
+     * [recordOrphanPaymentSignal] 的落库结果（N-0a）。
+     *
+     * 该函数内部有多条早退路径（D-3 闸、冷却、幂等、规则忽略…），此前一律返回 Unit，
+     * 调用方无法区分「已落卡」与「被静默丢弃」—— `PaymentNotificationService` 因此
+     * 无条件打「已转纯通知待确认」，而实际可能被 D-3 拦下。改为返回真实结果，由调用方
+     * 如实记录；既有调用方可忽略返回值，无需同步改动。
+     */
     suspend fun recordOrphanPaymentSignal(
         signal: PaymentNotificationFallbackSignal,
         sourceType: String = "NOTIFICATION",
         conflictReason: String = "NO_ACTIVE_SESSION",
         sessionIds: List<String> = emptyList()
-    ) {
+    ): OrphanOutcome {
+        var outcome: OrphanOutcome = OrphanOutcome(OrphanOutcome.Kind.SIGNAL_INVALID)
         val now = nowMillis()
         database.withTransaction {
             if (!signal.isValid()) {
@@ -587,6 +647,7 @@ internal class CheckoutPaymentMatcher(
                     "孤立支付证据未落待确认(信号非法): pkg=${signal.paymentPackage}, " +
                         "amount=${signal.amountMinor}, reason=$conflictReason"
                 )
+                outcome = OrphanOutcome(OrphanOutcome.Kind.SIGNAL_INVALID)
                 return@withTransaction
             }
             val normalizedSourceType = normalizePaymentEvidenceSourceType(sourceType)
@@ -596,19 +657,13 @@ internal class CheckoutPaymentMatcher(
                         "孤立支付证据未落待确认(来源类型非法): sourceType=$sourceType, " +
                             "amount=${signal.amountMinor}"
                     )
+                    outcome = OrphanOutcome(OrphanOutcome.Kind.SOURCE_TYPE_INVALID)
                     return@withTransaction
                 }
-            // D-3 / G3.1：v1 通知链路停用 —— 通知来源的孤儿待确认同样不落。
-            // 与 recordPaymentEvidence 的出口开关成对，否则通知仍会经孤儿路径
-            // 产生纯通知待确认（这正是 D-3 要消除的形态）。
-            if (isNotificationSourceDisabledInV1(normalizedSourceType)) {
-                JotBillLog.i(
-                    "CheckoutPaymentMatcher",
-                    "孤立支付证据来源在 v1 已停用(D-3)，未落待确认: pkg=${signal.paymentPackage}, " +
-                        "amount=${signal.amountMinor}, reason=$conflictReason"
-                )
-                return@withTransaction
-            }
+            // N-1：通知来源的孤儿待确认**放行**（D-3 的整体停用闸已删，见
+            // [isNotificationAutoCommitAllowed] 的风险切分说明）。证据只落待确认、
+            // 不自动入账，误判的代价是用户多点一次丢弃；而继续拦会让证据静默丢失
+            // —— 2026-10-28 三笔微信内嵌支付就是这么没的。
             // 同额支付刚被处理过（确认入账/忽略）⇒ 用户多半还停在同一个结果页，
             // 本帧是同一笔的重复观测。不建卡、不 emit（见 [RecentPaymentCooldown]
             // 的完整失效分析）。必须早于下面三道既有去重：它们分别依赖
@@ -625,6 +680,7 @@ internal class CheckoutPaymentMatcher(
                     "支付结果页重复观测已抑制(该笔刚被处理): pkg=${signal.paymentPackage}, " +
                         "amount=${signal.amountMinor}, 剩余冷却=${cooldownRemaining}ms"
                 )
+                outcome = OrphanOutcome(OrphanOutcome.Kind.SUPPRESSED_COOLDOWN)
                 return@withTransaction
             }
             val sourceEventKey = sourceEventKey(signal)
@@ -656,6 +712,7 @@ internal class CheckoutPaymentMatcher(
                             "amount=${signal.amountMinor}, reason=$conflictReason"
                     )
                 }
+                outcome = OrphanOutcome(OrphanOutcome.Kind.ALREADY_STORED, pendingId)
                 return@withTransaction
             }
             // ---- 2026-10-24：同一笔的重复观测按"页面文本哈希"识别（主判据）----
@@ -687,6 +744,10 @@ internal class CheckoutPaymentMatcher(
                         "孤立支付证据判为同一笔重复观测(文本哈希一致)，未新建待确认: " +
                             "pending=${sameObservation.id.take(16)}, incoming=${pendingId.take(16)}, " +
                             "amount=${signal.amountMinor}, reason=$conflictReason"
+                    )
+                    outcome = OrphanOutcome(
+                        OrphanOutcome.Kind.SUPPRESSED_SAME_OBSERVATION,
+                        sameObservation.id
                     )
                     return@withTransaction
                 }
@@ -723,6 +784,10 @@ internal class CheckoutPaymentMatcher(
                             "pending=${duplicate.id.take(16)}, incoming=${pendingId.take(16)}, " +
                             "amount=${signal.amountMinor}, reason=$conflictReason"
                     )
+                    outcome = OrphanOutcome(
+                        OrphanOutcome.Kind.SUPPRESSED_DUPLICATE_WINDOW,
+                        duplicate.id
+                    )
                     return@withTransaction
                 }
             }
@@ -745,6 +810,7 @@ internal class CheckoutPaymentMatcher(
                     "孤立支付证据被规则忽略: pending=${pendingId.take(16)}, " +
                         "amount=${signal.amountMinor}, hits=${ruleDecision.hits.size}"
                 )
+                outcome = OrphanOutcome(OrphanOutcome.Kind.RULE_IGNORED, pendingId)
                 return@withTransaction
             }
             val rulePatch = ruleEngine.sanitizePatch(
@@ -775,6 +841,72 @@ internal class CheckoutPaymentMatcher(
                 }
             } catch (_: RuntimeException) {
                 // 相似检查失败：不阻塞待确认创建，保守不标记
+            }
+
+            // ---- N-2：强证据直接入账（自动记账）----
+            // 只对通知来源放行，且必须同时满足三条：
+            //   ① **带交易单号** —— 订单号是天然的防重键：`createBillWithDedup` 第 1 级
+            //      按 (sourceType, orderId) 精确合并，同一笔的多条通知（微信支付服务号
+            //      + 商家服务号）不会记成两笔。这正对应 D-3「同一支付多条通知」的难点。
+            //      没有订单号 = 弱证据，宁可让用户点一次确认，也不冒错账风险。
+            //   ② **能解析出支付账户**（包名映射 default-account-wechat/alipay）
+            //   ③ **第 4 级相似度未命中疑似重复** —— 命中说明库里已有相近账单，
+            //      自动入账会直接变成错账，交由用户判断。
+            // 退款/转账/手续费仍走各分类器，其自动入账由 isNotificationAutoCommitAllowed 扣住。
+            val strongEvidence = normalizedSourceType == "notification" &&
+                !signal.orderId.isNullOrBlank() &&
+                resolvedAccountId != null &&
+                effectiveConflictReason != DuplicateGuard.CONFLICT_SUSPECTED_DUPLICATE
+            if (strongEvidence) {
+                val bill = BillEntity(
+                    id = stableId("bill-notification", sourceEventKey),
+                    amountMinor = signal.amountMinor,
+                    type = "expense",
+                    occurredAt = signal.occurredAt,
+                    description = resolvedMerchant ?: "支付通知",
+                    categoryId = rulePatch.categoryId,
+                    accountId = resolvedAccountId,
+                    targetAccountId = null,
+                    platform = signal.paymentPackage,
+                    merchant = resolvedMerchant,
+                    productDescription = null,
+                    sourceType = normalizedSourceType,
+                    originalTransactionId = null,
+                    orderId = signal.orderId,
+                    createdAt = now,
+                    updatedAt = now,
+                    version = 1
+                )
+                val commit = ledger.createBillWithDedup(
+                    bill, operator = NOTIFICATION_AUTO_COMMIT_OPERATOR
+                )
+                val settledBillId = when (commit) {
+                    is CreateBillOutcome.Committed -> commit.bill.id
+                    is CreateBillOutcome.MergedInto -> commit.bill.id
+                }
+                // 同额冷却登记必须在返回之前：下一条同额通知据此判为重复观测，
+                // 不会因为"没有 pending 行"而绕过三道既有去重。
+                RecentPaymentCooldown.rememberCard(
+                    pendingId = settledBillId,
+                    paymentPackage = signal.paymentPackage,
+                    amountMinor = signal.amountMinor
+                )
+                RecentResultObservation.remember(
+                    pendingId = settledBillId,
+                    paymentPackage = signal.paymentPackage,
+                    amountMinor = signal.amountMinor,
+                    rawTextHash = signal.rawTextHash,
+                    now = now
+                )
+                JotBillLog.i(
+                    "CheckoutPaymentMatcher",
+                    "通知强证据自动入账: bill=${settledBillId.take(16)}, " +
+                        "amount=${signal.amountMinor}, merchant=${resolvedMerchant ?: "null"}, " +
+                        "account=$resolvedAccountId, orderId=${signal.orderId?.take(12)}, " +
+                        "merged=${commit is CreateBillOutcome.MergedInto}"
+                )
+                outcome = OrphanOutcome(OrphanOutcome.Kind.AUTO_COMMITTED, settledBillId)
+                return@withTransaction
             }
 
             val pending = PendingTransactionEntity(
@@ -865,6 +997,10 @@ internal class CheckoutPaymentMatcher(
                             )
                         )
                     }
+                    outcome = OrphanOutcome(
+                        OrphanOutcome.Kind.STORED,
+                        firstInsertedId ?: pendingId
+                    )
                     return@withTransaction
                 }
             val inserted = dao.insertIfAbsent(pending)
@@ -875,6 +1011,11 @@ internal class CheckoutPaymentMatcher(
                     "account=${resolvedAccountId ?: "null"}, reason=$effectiveConflictReason, " +
                     "inserted=${inserted != -1L}"
             )
+            outcome = if (inserted != -1L) {
+                OrphanOutcome(OrphanOutcome.Kind.STORED, pendingId)
+            } else {
+                OrphanOutcome(OrphanOutcome.Kind.ALREADY_STORED, pendingId)
+            }
             if (inserted != -1L) {
                 // 必须在 emit 之前登记：emit 是同步的，监听方可能在同一栈上立刻
                 // 走到"确认入账"，那时若还没登记就查不到冷却键（见 [RecentPaymentCooldown]）。
@@ -904,6 +1045,7 @@ internal class CheckoutPaymentMatcher(
                 )
             }
         }
+        return outcome
     }
 
     /**
@@ -930,20 +1072,8 @@ internal class CheckoutPaymentMatcher(
                 reference.sessionId,
                 "PAYMENT_SOURCE_TYPE_INVALID"
             )
-        // D-3 / G3.1：v1 通知链路停用 —— 通知证据不参与匹配与入账。
-        // 采集与解析代码保留，新版本删除此闸即恢复。
-        if (isNotificationSourceDisabledInV1(normalizedSourceType)) {
-            JotBillLog.i(
-                "CheckoutPaymentMatcher",
-                "支付证据来源在 v1 已停用(D-3)，本次通知证据不参与匹配: pkg=${signal.paymentPackage}, " +
-                    "amount=${signal.amountMinor}"
-            )
-            return CheckoutPaymentMatchResult.Rejected(
-                reference.sessionId,
-                "PAYMENT_NOTIFICATION_DISABLED_V1"
-            )
-        }
-
+        // N-1：通知证据放行参与匹配（D-3 整体停用闸已删）。匹配成功后是否自动入账
+        // 由 [isNotificationAutoCommitAllowed] 决定，当前仍扣住。
         return database.withTransaction {
             val now = nowMillis()
             val sourceEventKey = sourceEventKey(signal)

@@ -77,18 +77,11 @@ internal class TransferClassifier(
     suspend fun processTransfer(input: PaymentEvidenceInput): TransferOutcome = database.withTransaction {
         // D-3：通知派生链路在 v1 整体停用。
         //
-        // 本分类器是三条绕过链路里后果最重的一条：它会直写 Bill、自动入账、
-        // 联动双账户余额；且收款人命中时把 pending 定型为 `type="expense"`，
-        // 而 PendingPromptPolicy 只按 `type == "expense"` 放行 ⇒ 一条纯通知来源的
-        // "转账给他人"会命中付款确认弹窗，用户点"确认入账"即写成**支出**。
-        // 精简版下弹窗是唯一的自动记账入口，这条路径必须彻底关掉。
-        if (isNotificationPipelineDisabledInV1()) {
-            JotBillLog.i(
-                "TransferClassifier",
-                "转账来源在 v1 已停用(D-3)，未落账: amount=${input.amountMinor}"
-            )
-            return@withTransaction TransferOutcome.Duplicate
-        }
+        // N-1：通知来源放行（D-3 整体停用闸已删）。本分类器是三条绕过链路里后果最重的
+        // 一条：直写 Bill、自动入账、联动双账户余额；且收款人命中时把 pending 定型为
+        // `type="expense"`，而 PendingPromptPolicy 只按 `type == "expense"` 放行 ⇒
+        // 一条通知来源的"转账给他人"会命中付款确认弹窗，用户点确认即写成**支出**。
+        // 故自动入账仍由 [isNotificationAutoCommitAllowed] 扣住，证据先落待确认。
         val now = nowMillis()
         if (input.amountMinor !in 1L..MAX_SAFE_MINOR_UNIT || input.occurredAt <= 0L) {
             return@withTransaction TransferOutcome.Duplicate
@@ -161,6 +154,8 @@ internal class TransferClassifier(
             sourceAccount.id == targetAccount.id -> "ACCOUNT_UNRESOLVED"
             // 还款目标必须是负债账户（欠款减少），否则语义不成立
             isRepayment && targetAccount.kind != ACCOUNT_KIND_LIABILITY -> "ACCOUNT_UNRESOLVED"
+            // N-1：放在各分类器自己的冲突码**之后** —— 有更具体原因时优先展示具体原因。
+            !isNotificationAutoCommitAllowed() -> CONFLICT_AUTO_COMMIT_DEFERRED
             else -> null
         }
 

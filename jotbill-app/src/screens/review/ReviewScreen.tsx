@@ -1143,6 +1143,8 @@ const CONFLICT_LABELS: Record<string, string> = {
   AI_UNVERIFIED_PAYMENT: '支付结果由截图识别推断，未获得支付凭证，请确认是否已实际支付',
   USER_ASSERTED: '手动截图识别，请核对金额与商户后确认',
   USER_ASSERTED_AMOUNT_MISSING: '手动截图未识别到金额，请补填后确认',
+  // N-1：通知来源的证据已解析成功，但这一版不替用户自动入账（自动入账等 N-2 放开）。
+  AUTO_COMMIT_DEFERRED: '支付通知已识别，请核对后确认入账',
 };
 
 /** 冲突原因可能为逗号拼接的多个代码，逐个翻译后合并展示。 */

@@ -209,6 +209,8 @@ class PaymentNotificationModule(
             editor.putString("filter_keywords", keywordsJson.toString())
 
             editor.apply()
+            // N-0c：写入后使采集路径的配置缓存立即失效，否则新配置要等进程重启才生效。
+            PaymentNotificationConfig.invalidate()
             promise.resolve(true)
             Log.i(TAG, "配置已保存: ${appsJson.length()} 个应用, ${keywordsJson.length()} 个关键词")
         } catch (e: Exception) {

@@ -81,15 +81,9 @@ internal class RefundLinker(
      * 全程在单个 Room 事务内，任一写入失败整体回滚。
      */
     suspend fun processRefund(input: PaymentEvidenceInput): RefundOutcome = database.withTransaction {
-        // D-3：通知派生链路在 v1 整体停用。本分类器会直接写 Bill、自动入账并
-        // 联动余额，完全绕过 Matcher 的 isNotificationSourceDisabledInV1 闸。
-        if (isNotificationPipelineDisabledInV1()) {
-            JotBillLog.i(
-                "RefundLinker",
-                "退款关联来源在 v1 已停用(D-3)，未落账: amount=${input.amountMinor}"
-            )
-            return@withTransaction RefundOutcome.Duplicate
-        }
+        // N-1：通知来源放行（D-3 整体停用闸已删）。本分类器会直接写 Bill 并联动余额，
+        // 故是否自动入账由 [isNotificationAutoCommitAllowed] 决定，当前仍扣住 ——
+        // 证据落待确认由用户核对，见下方 conflictReason 的 AUTO_COMMIT_DEFERRED 分支。
         val now = nowMillis()
         if (input.amountMinor !in 1L..MAX_SAFE_MINOR_UNIT || input.occurredAt <= 0L) {
             return@withTransaction RefundOutcome.Duplicate
@@ -181,6 +175,8 @@ internal class RefundLinker(
             original == null -> "ORIGINAL_MISSING"
             exceeded -> "REFUND_EXCEEDED"
             accountId == null -> "ACCOUNT_UNAVAILABLE"
+            // N-1：放在各分类器自己的冲突码**之后** —— 有更具体原因时优先展示具体原因。
+            !isNotificationAutoCommitAllowed() -> CONFLICT_AUTO_COMMIT_DEFERRED
             else -> null
         }
 

@@ -67,17 +67,9 @@ internal class FeeExtractor(
         input: PaymentEvidenceInput,
         mainPart: PaymentEvidenceInput?
     ): FeeOutcome = database.withTransaction {
-        // D-3：通知派生链路在 v1 整体停用。本分类器直写 PendingTransaction 并
-        // emit 到 PendingChangeHub，完全绕过 Matcher 的
-        // isNotificationSourceDisabledInV1 闸 ⇒ 必须在入口自查，
-        // 否则"v1 只做支付结果页"的收敛形同虚设。
-        if (isNotificationPipelineDisabledInV1()) {
-            JotBillLog.i(
-                "FeeExtractor",
-                "手续费来源在 v1 已停用(D-3)，未落待确认: amount=${input.amountMinor}"
-            )
-            return@withTransaction FeeOutcome.Duplicate
-        }
+        // N-1：通知来源放行（D-3 整体停用闸已删）。本分类器只写 PendingTransaction
+        // 并 emit 到 PendingChangeHub，**从不自动入账**，故无需
+        // [isNotificationAutoCommitAllowed] 闸 —— 误判的代价是用户多点一次丢弃。
         val now = nowMillis()
         if (input.occurredAt <= 0L || input.amountMinor < 0L ||
             input.amountMinor > MAX_SAFE_MINOR_UNIT

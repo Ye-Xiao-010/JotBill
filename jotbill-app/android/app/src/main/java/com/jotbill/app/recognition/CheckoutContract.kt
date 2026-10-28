@@ -113,39 +113,40 @@ data class PaymentNotificationFallbackSignal(
 }
 
 /**
- * D-3 / G3.1：v1 信号源收敛为「支付结果页」单一来源，支付通知整体推迟到版本更新。
+ * N-1：通知来源是否允许**自动入账**（直接写 Bill 并联动账户余额）。
  *
- * 依据：`CONFLICT_REVIEW_SESSION` G3.1「v1 只做支付结果页，通知整体推迟到版本更新；
- * 通知代码全部保留，仅摘除证据作用」，处置方式为**出口开关**——
- * 按已归一化的 sourceType 短路，采集与解析代码全部保留，新版本打开此闸即恢复。
+ * ## 为什么从 D-3 的"整体停用"改为只扣自动入账
  *
- * ⚠️ 必须比对**归一化后**的值：调用方传的是 `"NOTIFICATION"` 等大写形式。
- * ⚠️ 只约束**通知来源**；`accessibility`（结果页主路径 / 截图兜底）与
- * `manual`（用户断言通道）不受影响。
+ * D-3 / G3.1 曾按「v1 只做支付结果页」把通知来源整体停用
+ * （`isNotificationSourceDisabledInV1`，已删）。真机后果：2026-10-28 三笔微信内嵌支付
+ * **零痕迹丢失** —— 通知解析成功、金额全对，却被出口闸静默丢弃，待确认一张都没有。
  *
- * ⚠️ **本闸必须覆盖全部 notification 出口，不能只挂在 Matcher 上**。
- * 此前只有 `recordPaymentEvidence` / `recordOrphanPaymentSignal` 两处调用它，
- * 而 `FeeExtractor` / `RefundLinker` / `TransferClassifier` 三条通知链路
- * 各自直写 Bill/PendingTransaction 并直接 emit 到 `PendingChangeHub`，
- * 完全绕过 Matcher ⇒ 门禁形同虚设：它们照样自动入账、改账户余额、进待确认、
- * 发系统通知。尤以 TransferClassifier 为甚：收款人命中时把 pending 定型为
- * `type="expense"`，而 `PendingPromptPolicy` 只按 `type == "expense"` 放行
- * ⇒ 一条纯通知来源的"转账给他人"会命中付款确认弹窗，用户点确认即写成**支出**。
+ * N-1 重新切分 D-3 的风险面，两者代价完全不同：
+ * - **落待确认**：只是把证据摆到用户面前，误判的代价是用户多点一次「丢弃」；
+ * - **自动入账**：直接改账本与账户余额，误判的代价是错账。
  *
- * 因此另设 [isNotificationPipelineDisabledInV1] 供三个分类器在入口自查，
- * 语义与本闸一致但用于"整条链路早退"，避免各自重复实现判定。
+ * D-3 记载的两个难点（扣款账户归属、同一支付多条通知）决定的是**自动入账**的正确性，
+ * 与"要不要把证据给用户看"无关 ⇒ N-1 放开前者、继续扣住后者。
+ *
+ * ## 触点要求
+ *
+ * - 本闸只约束**通知来源**；`accessibility`（结果页主路径）与 `manual`（用户断言）不受影响。
+ * - **必须覆盖全部 notification 自动入账出口**：`RefundLinker` / `TransferClassifier`
+ *   各自直写 Bill 并联动余额、绕过 Matcher，需在入口自查；`FeeExtractor` 只落待确认，
+ *   无需本闸。
+ * - N-2 在补齐「扣款账户归属」与「多条通知防重」后打开本闸。
  */
-internal fun isNotificationSourceDisabledInV1(normalizedSourceType: String): Boolean =
-    normalizedSourceType == "notification"
+internal fun isNotificationAutoCommitAllowed(): Boolean = false
 
 /**
- * 通知派生链路（手续费 / 退款关联 / 转账分类）的 v1 总闸。
+ * N-1：通知来源暂不自动入账时的冲突码。
  *
- * 与 [isNotificationSourceDisabledInV1] 同源同值，单独命名只为表达"整条链路早退"
- * 的用途，使三个分类器的入口判读意图明确、且不会与 Matcher 的证据级判据混淆。
+ * 出现在 `RefundLinker` / `TransferClassifier` 的待确认上，表示"证据没问题，
+ * 只是这一版不替你入账"。放在各分类器自己的冲突码（`ORIGINAL_MISSING` 等）
+ * **之后**判定：有更具体的原因时优先展示具体原因。
+ * N-2 打开 [isNotificationAutoCommitAllowed] 后本码不再产生。
  */
-internal fun isNotificationPipelineDisabledInV1(): Boolean =
-    isNotificationSourceDisabledInV1("notification")
+internal const val CONFLICT_AUTO_COMMIT_DEFERRED = "AUTO_COMMIT_DEFERRED"
 
 /** 将支付证据来源收敛为 Native.d.ts 允许的三个小写值。 */
 internal fun normalizePaymentEvidenceSourceType(value: String?): String? =

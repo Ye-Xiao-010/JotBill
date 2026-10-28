@@ -101,6 +101,12 @@ internal object PaymentResultNormalizer {
         "花呗", "余额宝", "已支付", "已扣款"
     )
 
+    /**
+     * 内置支付关键词表（N-0c）：供采集路径在用户配置为空时回退，
+     * 与 [normalize] 的 `paymentKeywords` 默认值同源同值。
+     */
+    fun paymentKeywords(): List<String> = PAYMENT_KEYWORDS
+
     /** 金额匹配正则表达式，覆盖常见支付通知金额格式 */
     private val AMOUNT_PATTERNS = listOf(
         Regex("""¥\s*([0-9]+\.?[0-9]*)"""),
@@ -253,7 +259,15 @@ internal object PaymentResultNormalizer {
         postTime: Long,
         notificationKey: String?,
         notificationId: Int,
-        titleBig: String = ""
+        titleBig: String = "",
+        /**
+         * 支付关键词（N-0c）：至少命中一个才视为消费支付。默认内置表；
+         * 由 `PaymentNotificationConfig.filterKeywords` 传入用户配置。
+         * **仅作用于本支付路径** —— 手续费/转账/退款各自的关键词仍是内置表
+         * （设置页文案写的是"识别支付通知的关键词"，与此边界一致）。
+         * 调用方传入空列表时应自行回退内置表，本函数不放大匹配面。
+         */
+        paymentKeywords: List<String> = PAYMENT_KEYWORDS
     ): PaymentEvidenceInput? {
         if (sourcePackage !in SUPPORTED_PACKAGES) return null
 
@@ -270,7 +284,7 @@ internal object PaymentResultNormalizer {
         if (FAILURE_KEYWORDS.any { fullContent.contains(it) }) return null
 
         // 必须命中至少一个支付关键词
-        if (PAYMENT_KEYWORDS.none { fullContent.contains(it) }) return null
+        if (paymentKeywords.isEmpty() || paymentKeywords.none { fullContent.contains(it) }) return null
 
         // 提取金额（分）
         val amountMinor = extractFirstValidAmount(fullContent) ?: return null

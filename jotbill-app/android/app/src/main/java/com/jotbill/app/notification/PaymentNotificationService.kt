@@ -44,6 +44,9 @@ class PaymentNotificationService : NotificationListenerService() {
     /** 协程作用域，用于异步落库证据和触发匹配 */
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
+    /** N-0b：未命中语义的通知的限流记录（key = 包名|标题），见 [logUnmatchedNotification]。 */
+    private val unmatchedLogAt = mutableMapOf<String, Long>()
+
     /**
      * 服务创建时调用。
      */
@@ -121,7 +124,21 @@ class PaymentNotificationService : NotificationListenerService() {
      */
     private fun processNotification(sbn: StatusBarNotification) {
         val packageName = sbn.packageName
-        if (packageName !in PaymentResultNormalizer.SUPPORTED_PACKAGES) return
+        // N-0c：先过内置解析器白名单，再过用户配置（设置页「监听应用」）。
+        // 只做收窄：配置里没有解析规则的包永远不会放行，添加即无效需给用户提示。
+        if (packageName !in PaymentResultNormalizer.SUPPORTED_PACKAGES) {
+            if (PaymentNotificationConfig.isUnsupportedButConfigured(this, packageName)) {
+                JotBillLog.w(
+                    TAG,
+                    "该应用已在设置页开启监听，但暂无解析规则，不会产生记录: pkg=$packageName"
+                )
+            }
+            return
+        }
+        if (!PaymentNotificationConfig.isAppMonitored(this, packageName)) {
+            JotBillLog.i(TAG, "该应用已在设置页关闭监听，跳过: pkg=$packageName")
+            return
+        }
 
         val notification = sbn.notification ?: return
         val extras = notification.extras ?: return
@@ -207,6 +224,13 @@ class PaymentNotificationService : NotificationListenerService() {
         }
 
         // 解析为结构化证据输入
+        // N-0c：支付关键词取用户配置，未配置/配置为空时回退内置表（不放大匹配面）。
+        val configuredKeywords = PaymentNotificationConfig.filterKeywords(this)
+        val paymentKeywords = if (configuredKeywords.isNotEmpty()) {
+            configuredKeywords
+        } else {
+            PaymentResultNormalizer.paymentKeywords()
+        }
         val evidenceInput = PaymentResultNormalizer.normalize(
             sourcePackage = packageName,
             title = title,
@@ -218,7 +242,8 @@ class PaymentNotificationService : NotificationListenerService() {
             tickerText = tickerText,
             postTime = sbn.postTime,
             notificationKey = sbn.key,
-            notificationId = sbn.id
+            notificationId = sbn.id,
+            paymentKeywords = paymentKeywords
         ) ?: run {
             // 非消费通知或金额无效，只记录非敏感的过滤结果（title 一般为
             // "微信支付"等平台名，不含金额与订单号，可安全用于诊断格式变化）。
@@ -232,14 +257,68 @@ class PaymentNotificationService : NotificationListenerService() {
                 ),
                 category = "notification_filter"
             )
+            logUnmatchedNotification(packageName, title, text, bigText)
             return
         }
 
-        JotBillLog.i(TAG, "解析到支付证据: 包名=${evidenceInput.sourcePackage}")
+        // N-2 证据留样：解析成功也要记标题与结构化字段摘要，否则真机上只看得到
+        // 「解析到支付证据: 包名=…」，永远拿不到标题样本 —— 标题身份闸因此无法落地。
+        // 隐私：只记标题截断与字段有无/摘要，不记通知正文原文。
+        JotBillLog.i(
+            TAG,
+            "解析到支付证据: 包名=${evidenceInput.sourcePackage}, " +
+                "title=${title.take(30)}, " +
+                "orderId=${evidenceInput.orderId?.take(16) ?: "(无)"}, " +
+                "merchant=${evidenceInput.merchant?.take(20) ?: "(无)"}, " +
+                "amount=${evidenceInput.amountMinor}, " +
+                "occurredAt=${evidenceInput.occurredAt}"
+        )
 
         // 异步落库证据并触发匹配
         scope.launch {
             handlePaymentEvidence(evidenceInput)
+        }
+    }
+
+    /**
+     * N-0b：未命中任何语义路径的通知留痕，打开「通知到了但没规则」这个盲区。
+     *
+     * 此前这里只有 Sentry 面包屑，JotBillLog 里完全没有痕迹 —— 真机上微信支付通知
+     * 到底到没到、文本长什么样，全靠推测。现在补一条可检索的日志。
+     *
+     * 隐私（沿用 [com.jotbill.app.bookkeeping.AutoBookkeepingEngine.logAnalyzeDiag]
+     * 的既有约定）：日志正文含金额/订单号，故文本样本**只在 debug 构建**落盘，
+     * release 只留判定结论；两种构建都记文本哈希前缀，便于关联重复通知。
+     *
+     * 限流：同 (包名, 标题) 30 秒内只记一条，避免微信聊天等高频通知刷屏。
+     */
+    private fun logUnmatchedNotification(
+        packageName: String,
+        title: String,
+        text: String,
+        bigText: String
+    ) {
+        val body = if (bigText.isNotBlank()) bigText else text
+        val throttleKey = "$packageName|${title.take(30)}"
+        val now = System.currentTimeMillis()
+        val last = unmatchedLogAt[throttleKey] ?: 0L
+        if (now - last < UNMATCHED_LOG_INTERVAL_MILLIS) return
+        unmatchedLogAt[throttleKey] = now
+
+        val sample = if (com.jotbill.app.BuildConfig.DEBUG) {
+            body.replace('\n', '│').take(UNMATCHED_LOG_SAMPLE_LIMIT)
+        } else {
+            "(release 构建隐藏通知文本样本)"
+        }
+        val bodyHash = Integer.toHexString(body.hashCode())
+        JotBillLog.i(
+            TAG,
+            "通知未命中任何语义路径: pkg=$packageName, title=${title.take(30)}, " +
+                "len=${body.length}, hash=$bodyHash, 样本=$sample"
+        )
+        if (unmatchedLogAt.size > UNMATCHED_LOG_KEY_LIMIT) {
+            // 有界：长期运行不会无限增长（标题种类有限，超限后清空即可）
+            unmatchedLogAt.clear()
         }
     }
 
@@ -268,29 +347,40 @@ class PaymentNotificationService : NotificationListenerService() {
         val acceptedByAccessibility = result is PurchaseIntentCoordinationResult.Accepted ||
             result is PurchaseIntentCoordinationResult.AiDispatched
 
-        // 回退未被接受（服务不可用/超时/门禁拒绝）：证据不丢弃，落纯通知待确认
-        if (!acceptedByAccessibility) {
-            try {
-                val database = JotBillDatabaseProvider.get(applicationContext)
-                if (result == null) {
-                    // 超时可能是无障碍链路仍在异步落库；短暂等待后按 sourceEventKey 复查，
-                    // 避免同一次支付既落会话证据又落孤儿待确认。
-                    delay(EVIDENCE_GRACE_MILLIS)
+            // 回退未被接受（服务不可用/超时/门禁拒绝）：证据不丢弃，落纯通知待确认
+            if (!acceptedByAccessibility) {
+                try {
+                    val database = JotBillDatabaseProvider.get(applicationContext)
+                    if (result == null) {
+                        // 超时可能是无障碍链路仍在异步落库；短暂等待后按 sourceEventKey 复查，
+                        // 避免同一次支付既落会话证据又落孤儿待确认。
+                        delay(EVIDENCE_GRACE_MILLIS)
+                    }
+                    val evidenceAlreadyStored = database.paymentEvidenceDao()
+                        .getBySourceEventKey(input.sourceEventKey) != null
+                    if (evidenceAlreadyStored) {
+                        JotBillLog.i(TAG, "支付证据已由无障碍链路落库，跳过纯通知兜底")
+                        return
+                    }
+                    // N-0a：按真实落库结果记录。此前此处无条件打「已转纯通知待确认」，
+                    // 而 D-3 闸门在 matcher 内部静默丢弃 ⇒ 日志与实际不符，真机排查会
+                    // 照着它去找一条根本不存在的待确认。
+                    val outcome = CheckoutPaymentMatcher(database).recordOrphanPaymentSignal(
+                        signal, sourceType = "NOTIFICATION"
+                    )
+                    val summary = "通知证据落库结果=${outcome.kind}" +
+                        (outcome.pendingId?.let { ", id=${it.take(16)}" } ?: "")
+                    if (outcome.isAutoCommitted) {
+                        JotBillLog.i(TAG, "支付通知回退不可用($result)，$summary（已自动入账）")
+                    } else if (outcome.isStored) {
+                        JotBillLog.i(TAG, "支付通知回退不可用($result)，$summary")
+                    } else {
+                        JotBillLog.w(TAG, "支付通知回退不可用($result)，$summary（未产生新待确认）")
+                    }
+                } catch (error: RuntimeException) {
+                    JotBillLog.w(TAG, "纯通知待确认写入失败", error)
                 }
-                val evidenceAlreadyStored = database.paymentEvidenceDao()
-                    .getBySourceEventKey(input.sourceEventKey) != null
-                if (evidenceAlreadyStored) {
-                    JotBillLog.i(TAG, "支付证据已由无障碍链路落库，跳过纯通知兜底")
-                    return
-                }
-                CheckoutPaymentMatcher(database).recordOrphanPaymentSignal(
-                    signal, sourceType = "NOTIFICATION"
-                )
-                JotBillLog.i(TAG, "支付通知回退不可用($result)，已转纯通知待确认")
-            } catch (error: RuntimeException) {
-                JotBillLog.w(TAG, "纯通知待确认写入失败", error)
             }
-        }
 
         // 记录处理结果
         val resultInfo = mapOf(
@@ -455,6 +545,15 @@ class PaymentNotificationService : NotificationListenerService() {
         private const val TAG = "PaymentNotificationService"
         private const val FALLBACK_TIMEOUT_MILLIS = 5_000L
         private const val EVIDENCE_GRACE_MILLIS = 1_000L
+
+        /** N-0b：同 (包名, 标题) 的未命中通知的最小日志间隔。 */
+        private const val UNMATCHED_LOG_INTERVAL_MILLIS = 30_000L
+
+        /** N-0b：debug 构建落盘的通知文本样本长度上限。 */
+        private const val UNMATCHED_LOG_SAMPLE_LIMIT = 300
+
+        /** N-0b：限流表容量上限，超出后整表清空（标题种类有限，无需 LRU）。 */
+        private const val UNMATCHED_LOG_KEY_LIMIT = 200
 
         /** Accepted 或 AiDispatched 表示无障碍链路已接收证据，其余情况才进入纯通知待确认。 */
 
