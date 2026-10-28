@@ -103,7 +103,17 @@ class AutoBookkeepingEngine(
 
     private var reportedWindowId = 0
 
-    private val pendingConfirms = mutableMapOf<String, PendingConfirm>()
+    /**
+     * 二次确认挂起队列：`包名 → 待确认记录队列`。
+     *
+     * ⚠️ **按包名排队而非单值覆盖**（与 mipay 的 `Map<包名, 单条>` 不同）：
+     * 二次确认的锚点只到「包名/类名」粒度，无法分辨锚点属于哪一笔，但**确认页
+     * 会出现两次**（用户连付两笔就看到两次）。单值覆盖会：
+     * ① 静默丢弃第一笔；② 让第一次确认页交付**第二笔**的记录（金额/商户是
+     * 第二笔的，确认的却是第一笔）—— 比丢数据更糟。
+     * 改为队列后按序消费，与「一次确认页确认一笔」一一对应。
+     */
+    private val pendingConfirms = mutableMapOf<String, ArrayDeque<PendingConfirm>>()
 
     // ── 静止页重扫兜底（仅主线程访问）─────────────────────────────────────
     private var rescanCount = 0
@@ -334,20 +344,21 @@ class AutoBookkeepingEngine(
                 trackedRuleKey = null
             }
             if (rule.locateConfirm != null) {
-                if (pendingConfirms.containsKey(sourcePackage)) {
-                    // 同包第二笔挂起确认会覆盖第一笔（mipay 同款按包名键控语义），
-                    // 留日志让真机上「5 分钟内连付两笔丢首笔挂起」可归因。
-                    JotBillLog.w(
+                val queue = pendingConfirms.getOrPut(sourcePackage) { ArrayDeque() }
+                if (queue.isNotEmpty()) {
+                    // 同包连付：排在队首之后，不再覆盖。队首会由它自己的确认页按序消费。
+                    JotBillLog.i(
                         TAG,
-                        "同包挂起确认被覆盖: pkg=$sourcePackage, 旧ruleId=" +
-                            "${pendingConfirms[sourcePackage]?.rule?.ruleId}, " +
-                            "新ruleId=${rule.ruleId}"
+                        "同包已有挂起确认，本笔排队: pkg=$sourcePackage, 队列=${queue.size + 1}, " +
+                            "队首ruleId=${queue.first().rule.ruleId}, 新ruleId=${rule.ruleId}"
                     )
                 }
-                pendingConfirms[sourcePackage] = PendingConfirm(
-                    record = record,
-                    rule = rule,
-                    expireAt = clock() + CONFIRM_WINDOW_MILLIS
+                queue.addLast(
+                    PendingConfirm(
+                        record = record,
+                        rule = rule,
+                        expireAt = clock() + CONFIRM_WINDOW_MILLIS
+                    )
                 )
                 JotBillLog.i(
                     TAG,
@@ -392,14 +403,28 @@ class AutoBookkeepingEngine(
 
     // ── 二次确认（W/X/j0/k0）───────────────────────────────────────────────
 
+    /**
+     * 取该包名**队首**的待确认记录（不消费）。队首过期则顺次丢弃，直到拿到未过期的或队列空。
+     */
     private fun pendingFor(packageName: String): PendingConfirm? {
-        val pending = pendingConfirms[packageName] ?: return null
-        if (clock() > pending.expireAt) {
+        val queue = pendingConfirms[packageName] ?: return null
+        while (queue.isNotEmpty() && clock() > queue.first().expireAt) {
+            val dropped = queue.removeFirst()
+            JotBillLog.i(TAG, "二次确认超时丢弃: ruleId=${dropped.rule.ruleId}")
+        }
+        if (queue.isEmpty()) {
             pendingConfirms.remove(packageName)
-            JotBillLog.i(TAG, "二次确认超时丢弃: ruleId=${pending.rule.ruleId}")
             return null
         }
-        return pending
+        return queue.first()
+    }
+
+    /** 消费（取出并移除）该包名的队首待确认记录；确认锚点命中时调用。 */
+    private fun consumePending(packageName: String): PendingConfirm? {
+        val queue = pendingConfirms[packageName] ?: return null
+        val head = queue.removeFirstOrNull()
+        if (queue.isEmpty()) pendingConfirms.remove(packageName)
+        return head
     }
 
     private fun isConfirmNotification(snapshot: EventSnapshot): Boolean {
@@ -435,7 +460,8 @@ class AutoBookkeepingEngine(
                     anchor.locatePattern?.matcher(locateValue)?.find() == true
                 )
         if (located) {
-            pendingConfirms.remove(packageName)
+            // 消费队首（而非整表清空）：同包连付时后续记录仍在队列中，由它自己的确认页消费
+            consumePending(packageName)
             JotBillLog.i(TAG, "二次确认(通知锚点)命中: ruleId=${pending.rule.ruleId}")
             deliver(pending.record)
         }
@@ -451,7 +477,8 @@ class AutoBookkeepingEngine(
             trackedWindowId = 0
             trackedActivityName = null
             trackedRuleKey = null
-            pendingConfirms.remove(packageName)
+            // 消费队首（而非整表清空）：同包连付时后续记录仍在队列中
+            consumePending(packageName)
             JotBillLog.i(TAG, "二次确认(页面锚点)命中: ruleId=${pending.rule.ruleId}")
             deliver(pending.record)
         }

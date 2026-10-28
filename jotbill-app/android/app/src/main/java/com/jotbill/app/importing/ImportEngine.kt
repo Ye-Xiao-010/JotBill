@@ -777,7 +777,15 @@ internal class ImportEngine(
         val current = FieldPriorityResolver.LOCKABLE_FIELDS.associateWith { field ->
             FieldPriorityResolver.Resolved(
                 value = FieldPriorityResolver.billFieldValue(existing, field),
-                source = null
+                // 手写账单的既有字段按**用户级**保护：导入可以补空缺，但不得改写用户已填的值。
+                // 否则「先手写一笔、再导入同订单号账单」会被 IMPORT(3) 整段覆盖 ——
+                // resolve 对 source=null 按 EVIDENCE(4) 处理，低于 IMPORT 必被覆盖。
+                // 与 L1 的「手写账不被自动吸收」同源原则：**手写数据完整性优先于去重**。
+                source = if (existing.sourceType == "manual") {
+                    FieldPriorityResolver.Source.USER_LOCK
+                } else {
+                    null
+                }
             )
         }
         val assignments = mutableListOf<FieldPriorityResolver.Assignment>()
