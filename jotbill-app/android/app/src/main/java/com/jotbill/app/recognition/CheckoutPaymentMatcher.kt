@@ -599,15 +599,25 @@ internal class CheckoutPaymentMatcher(
                     return@withTransaction
                 }
             // D-3 / G3.1：v1 通知链路停用 —— 通知来源的孤儿待确认同样不落。
-            // 与 recordPaymentEvidence 的出口开关成对，否则通知仍会经孤儿路径
-            // 产生纯通知待确认（这正是 D-3 要消除的形态）。
-            if (isNotificationSourceDisabledInV1(normalizedSourceType)) {
+            // 2026-10-28 修订：通知服务在等待 NOTIFICATION_FALLBACK_GRACE_MILLIS
+            // 且无障碍未产出后，以 NOTIFICATION_FALLBACK 标记兜底落卡（HyperOS 2
+            // 三层隔离下通知是唯一 100% 命中的通道）。三分类器派生链路仍全禁。
+            val notificationFallback = isNotificationSourceDisabledInV1(normalizedSourceType) &&
+                conflictReason == NOTIFICATION_FALLBACK_CONFLICT_REASON
+            if (isNotificationSourceDisabledInV1(normalizedSourceType) && !notificationFallback) {
                 JotBillLog.i(
                     "CheckoutPaymentMatcher",
                     "孤立支付证据来源在 v1 已停用(D-3)，未落待确认: pkg=${signal.paymentPackage}, " +
                         "amount=${signal.amountMinor}, reason=$conflictReason"
                 )
                 return@withTransaction
+            }
+            if (notificationFallback) {
+                JotBillLog.i(
+                    "CheckoutPaymentMatcher",
+                    "通知兜底落卡(D-3 修订): pkg=${signal.paymentPackage}, " +
+                        "amount=${signal.amountMinor}, 无障碍宽限窗内未产出"
+                )
             }
             // 同额支付刚被处理过（确认入账/忽略）⇒ 用户多半还停在同一个结果页，
             // 本帧是同一笔的重复观测。不建卡、不 emit（见 [RecentPaymentCooldown]

@@ -7,6 +7,8 @@ import android.service.notification.StatusBarNotification
 import com.jotbill.app.data.JotBillDatabaseProvider
 import com.jotbill.app.recognition.CheckoutAccessibilityService
 import com.jotbill.app.recognition.CheckoutPaymentMatcher
+import com.jotbill.app.recognition.NOTIFICATION_FALLBACK_CONFLICT_REASON
+import com.jotbill.app.recognition.NOTIFICATION_FALLBACK_GRACE_MILLIS
 import com.jotbill.app.recognition.FeeExtractor
 import com.jotbill.app.recognition.PaymentNotificationFallbackSignal
 import com.jotbill.app.recognition.RefundLinker
@@ -284,9 +286,15 @@ class PaymentNotificationService : NotificationListenerService() {
                     return
                 }
                 CheckoutPaymentMatcher(database).recordOrphanPaymentSignal(
-                    signal, sourceType = "NOTIFICATION"
+                    signal,
+                    sourceType = "NOTIFICATION",
+                    conflictReason = NOTIFICATION_FALLBACK_CONFLICT_REASON
                 )
-                JotBillLog.i(TAG, "支付通知回退不可用($result)，已转纯通知待确认")
+                JotBillLog.i(
+                    TAG,
+                    "支付通知兜底落卡(D-3 修订): 无障碍宽限${EVIDENCE_GRACE_MILLIS}ms内未产出, " +
+                        "fallbackResult=${result?.javaClass?.simpleName ?: "TIMEOUT_OR_UNAVAILABLE"}"
+                )
             } catch (error: RuntimeException) {
                 JotBillLog.w(TAG, "纯通知待确认写入失败", error)
             }
@@ -454,7 +462,15 @@ class PaymentNotificationService : NotificationListenerService() {
     companion object {
         private const val TAG = "PaymentNotificationService"
         private const val FALLBACK_TIMEOUT_MILLIS = 5_000L
-        private const val EVIDENCE_GRACE_MILLIS = 1_000L
+
+        /**
+         * 证据落库复查等待：从 1s 提到 [NOTIFICATION_FALLBACK_GRACE_MILLIS](8s)
+         * （2026-10-28 修订 D-3）。HyperOS 2 支付期无障碍死区可达 155s，通知
+         * 通常比无障碍证据早到 —— 这里等 8s 给主动扫描/漏点事件一个先落库的
+         * 机会；超窗仍查无该 sourceEventKey ⇒ 判定无障碍通道本次失守，
+         * 以 NOTIFICATION_FALLBACK 标记兜底落卡（闸侧豁免，见 CheckoutContract）。
+         */
+        private val EVIDENCE_GRACE_MILLIS = NOTIFICATION_FALLBACK_GRACE_MILLIS
 
         /** Accepted 或 AiDispatched 表示无障碍链路已接收证据，其余情况才进入纯通知待确认。 */
 

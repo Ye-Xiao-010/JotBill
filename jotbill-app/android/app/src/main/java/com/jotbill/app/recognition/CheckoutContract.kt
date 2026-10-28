@@ -139,6 +139,29 @@ internal fun isNotificationSourceDisabledInV1(normalizedSourceType: String): Boo
     normalizedSourceType == "notification"
 
 /**
+ * 通知兜底落卡的 conflictReason 标记（2026-10-28 修订 D-3）。
+ *
+ * 背景：HyperOS 2 支付期把无障碍通道三层隔离（事件抑制 + rootInActiveWindow
+ * 不可见 + 窗口文本掏空，见 docs/qa/device/2026-10-27-remote-user1 与
+ * 2026-10-28-remote-user1），而通知通道在远程用户设备上四笔支付 100% 解析成功。
+ * D-3 当年拒的是「通知实时落卡」的误报风险；本修订允许**迟到的**通知证据
+ * 兜底落卡 —— 前提是通知服务已等待 [NOTIFICATION_FALLBACK_GRACE_MILLIS] 且
+ * 无障碍通道仍未产出（evidence 表查无该 sourceEventKey）。
+ *
+ * 与原 D-3 的差异边界（务必看清）：
+ * - FeeExtractor / RefundLinker / TransferClassifier 三条通知**派生**链路
+ *   （[isNotificationPipelineDisabledInV1] 闸）**仍然全禁** —— 它们直写
+ *   Bill/余额且无金额对账能力，是 D-3 真正要防的误报面；
+ * - 本豁免只覆盖「通知监听直接解析出的支付证据」这一条路，且待确认行的
+ *   conflictReason 必须带本标记 —— 用户在待确认中心可见"通知兜底"来源，
+ *   AI 派发路径的 USER_ASSERTED 前缀判定不受影响。
+ */
+internal const val NOTIFICATION_FALLBACK_CONFLICT_REASON = "NOTIFICATION_FALLBACK"
+
+/** 通知兜底的无障碍宽限期：等无障碍通道先产出的最长时间。 */
+internal const val NOTIFICATION_FALLBACK_GRACE_MILLIS = 8_000L
+
+/**
  * 通知派生链路（手续费 / 退款关联 / 转账分类）的 v1 总闸。
  *
  * 与 [isNotificationSourceDisabledInV1] 同源同值，单独命名只为表达"整条链路早退"
