@@ -95,8 +95,8 @@ android {
         applicationId "com.jotbill.app"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 98
-        versionName "0.0.102"
+        versionCode 99
+        versionName "0.0.103"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
     }
     signingConfigs {
