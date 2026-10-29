@@ -2,13 +2,18 @@ package com.jotbill.app.recognition
 
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.AccessibilityServiceInfo
+import android.content.Context
 import android.content.Intent
+import android.graphics.PixelFormat
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import com.jotbill.app.utils.JotBillLog
 import com.jotbill.app.utils.PaymentTiming
 import android.view.Display
+import android.view.Gravity
+import android.view.View
+import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
@@ -58,6 +63,17 @@ class CheckoutAccessibilityService : AccessibilityService() {
         /** 支付结果页重扫兜底（P2-5）：重扫间隔与单次会话上限。 */
         private const val PAYMENT_RESCAN_INTERVAL_MILLIS = 1_000L
         private const val PAYMENT_RESCAN_MAX_COUNT = 8
+
+        /**
+         * 1×1 保活窗边长（像素）。
+         *
+         * HyperOS 3 的 `GreezeManager` 会冻结"只有启用的无障碍服务、没有可见窗口"
+         * 的后台进程：冻结期间既收不到无障碍事件也收不到通知回调（2026-10-29
+         * 远程用户 2 全机日志实测，本应用被冻结 2 分 33 秒，弹窗错过支付成功页）。
+         * 钱迹 / GKD / 小米钱包均以 1×1 无障碍悬浮窗让系统判定 VISIBLE_APP 而免于
+         * 冻结 —— 见 [installKeepAliveWindow]。
+         */
+        private const val KEEP_ALIVE_WINDOW_SIZE_PX = 1
 
         // ── 钱迹借鉴（2026-10-28）试探路径常量 ──────────────────────────────
         /** 窗口切换试探的去重窗：同一窗口的 STATE_CHANGED 可能连发多次。 */
@@ -320,6 +336,10 @@ class CheckoutAccessibilityService : AccessibilityService() {
     private val suppressedScreenshotFallbackBlockCount = mutableMapOf<String, Int>()
     @Volatile
     private var serviceConnected = false
+
+    /** 1×1 保活窗（见 [installKeepAliveWindow]）。null = 未安装。 */
+    private var keepAliveView: View? = null
+    private var keepAliveWindowManager: WindowManager? = null
     private val aiLifecycleLock = Any()
     private val mainHandler = Handler(Looper.getMainLooper())
     private var paymentMatcher: CheckoutPaymentMatcher? = null
@@ -359,6 +379,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
         activeService = this
         initializePaymentMatcher()
         serviceConnected = true
+        installKeepAliveWindow()
         JotBillLog.i(TAG, "结算页无障碍观察服务已连接")
     }
 
@@ -678,6 +699,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
     /** 真正解除绑定时才断开静态桥接；重新绑定由 onServiceConnected 完整重建。 */
     override fun onUnbind(intent: Intent?): Boolean {
         serviceConnected = false
+        removeKeepAliveWindow()
         lastWindowPackage = null
         lastWindowClass = null
         // 重扫兜底的 Handler 挂在主 looper 上，比服务实例活得长：解绑即摘，
@@ -695,6 +717,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
     override fun onDestroy() {
         JotBillLog.i(TAG, "结算页无障碍观察服务开始销毁: previouslyConnected=$serviceConnected")
         serviceConnected = false
+        removeKeepAliveWindow()
         lastWindowPackage = null
         lastWindowClass = null
         paymentRescanHandler.removeCallbacks(paymentRescanRunnable)
@@ -707,6 +730,83 @@ class CheckoutAccessibilityService : AccessibilityService() {
         }
         JotBillLog.i(TAG, "结算页无障碍观察服务已销毁")
         super.onDestroy()
+    }
+
+    /**
+     * 安装 1×1 常驻保活窗（2026-10-29，HyperOS GreezeManager 防冻结）。
+     *
+     * **问题**：HyperOS 3 只凭"存在启用的无障碍服务"**不**给进程免冻结 —— 远程
+     * 用户 2 的全机日志（`docs/qa/device/2026-10-29-remote-user2/ANALYSIS.md`）里，
+     * 系统策略对本应用的判定是 `reason=accessibility`，支付交接事件投递后 0.5 秒
+     * 即被 `GreezeManager` 冻结（扫描刚跑到 130ms），此后 2 分 33 秒收不到任何
+     * 无障碍事件与通知回调，付款确认弹窗错过支付成功页。
+     *
+     * **对策**：对齐钱迹 / GKD / 小米钱包的实测做法 —— 服务连接期间常驻一个
+     * 1×1 的 `TYPE_ACCESSIBILITY_OVERLAY` 窗口。窗口只要在屏，系统策略即判
+     * `VISIBLE_APP`（`GreezeManager: Uid ... was show on screen, skip it`），
+     * 进程不再被冻结。窗口为空视图：不可见、不可触摸、不参与无障碍语义。
+     *
+     * 用无障碍悬浮窗而非 `TYPE_APPLICATION_OVERLAY`：后者需要
+     * `SYSTEM_ALERT_WINDOW` 且受"后台弹出界面"限制；前者的 appop 是
+     * `CREATE_ACCESSIBILITY_OVERLAY`，随无障碍服务启用自动授予。
+     *
+     * 幂等：重复调用直接返回。安装失败只记日志，**不得**影响服务主链路
+     * （宁可回到"可能被冻结"，也不能让无障碍服务连不上）。
+     */
+    private fun installKeepAliveWindow() {
+        if (keepAliveView != null) {
+            return
+        }
+        val windowManager = getSystemService(Context.WINDOW_SERVICE) as? WindowManager
+        if (windowManager == null) {
+            JotBillLog.w(TAG, "保活窗放弃: WindowManager 不可用")
+            return
+        }
+        val view = View(this).apply {
+            // 空视图不产生无障碍语义，避免自身事件驱动采集。
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+        }
+        val params = WindowManager.LayoutParams(
+            KEEP_ALIVE_WINDOW_SIZE_PX,
+            KEEP_ALIVE_WINDOW_SIZE_PX,
+            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
+            PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = Gravity.TOP or Gravity.START
+            // 落在状态栏下方第一像素：与钱迹实测帧 [0,169][1,170] 同位。
+            // 不设 FLAG_LAYOUT_IN_SCREEN —— 坐标相对内容区，y=0 即状态栏下沿。
+            x = 0
+            y = 0
+        }
+        try {
+            windowManager.addView(view, params)
+            keepAliveView = view
+            keepAliveWindowManager = windowManager
+            JotBillLog.i(TAG, "保活窗已安装: 1x1 TYPE_ACCESSIBILITY_OVERLAY")
+        } catch (error: RuntimeException) {
+            JotBillLog.w(TAG, "保活窗安装失败", error)
+        }
+    }
+
+    /**
+     * 移除 [installKeepAliveWindow] 安装的保活窗。
+     *
+     * `removeView` 对已 detach 的 view 会抛异常（服务解绑与销毁可能先后各调一次），
+     * 因此引用先置空再移除，并对异常容错 —— 移除失败不能影响服务生命周期。
+     */
+    private fun removeKeepAliveWindow() {
+        val view = keepAliveView ?: return
+        keepAliveView = null
+        val windowManager = keepAliveWindowManager
+        keepAliveWindowManager = null
+        try {
+            windowManager?.removeView(view)
+            JotBillLog.i(TAG, "保活窗已移除")
+        } catch (error: RuntimeException) {
+            JotBillLog.w(TAG, "保活窗移除失败", error)
+        }
     }
 
     /**
