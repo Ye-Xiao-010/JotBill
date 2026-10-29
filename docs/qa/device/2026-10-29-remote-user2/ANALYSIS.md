@@ -305,3 +305,106 @@ grep -a "AutoBillFloatingView" bugreport-xuanyuan-*.txt
    它让“延迟弹窗”的现场得以保留，但也意味着**实际用户场景下可能永远不弹**。
 4. 本机同时启用了钱包AI记账（capabilities=243、TYPES_ALL_MASK）——
    它是否也有保活窗、是否同样未被冻结，可作为第三条对照，本次未展开。
+
+---
+
+## 8. 钱迹 dex 反编译取证（2026-10-29 补充）
+
+> **取证对象**：`D:\tools\rea\targets\qianji\com.mutangtech.qianji\base.apk`
+> （工具链标注 **v4.5.3**；设备实跑 **v4.5.4** —— 规则可能随版本变化，
+> 本节结论按 v4.5.3 标注）。
+> **方法**：`unzip classes*.dex` → `dexdump -d` → 按方法名 / 字符串常量定位。
+> 本节全部为**静态证据**；凡推断均显式标注「推断」。
+
+### 8.1 包名白名单（8 个）
+
+`Laa/a` … `Laa/h` 各实现的 `getPackageName()` 返回常量：
+
+| 实现类 | 包名 |
+|---|---|
+| `Laa/a` | `com.eg.android.AlipayGphone` |
+| `Laa/b` | `com.ss.android.ugc.aweme` |
+| `Laa/c` | `com.jingdong.app.mall` |
+| `Laa/d` | `com.sankuai.meituan` |
+| `Laa/e` | `com.xunmeng.pinduoduo` |
+| `Laa/g` | `com.unionpay` |
+| `Laa/h` | `com.tencent.mm` |
+| （另 1 个） | 本次未展开 |
+
+`s9.b.a(String)` 的实现是 `Map.containsKey(packageName)` —— 事件先过**包名白名单**，
+映射到对应的 `Laa/*` 页面策略。
+
+### 8.2 事件入口：只用 `event.getSource()`
+
+`onAccessibilityEvent`（dex 偏移 `0x2ce5xx`）的控制流：
+
+1. `event.getPackageName()` → `s9.b.a()` 过白名单；
+2. `event.getSource()` 取节点（**dex 中 `getRootInActiveWindow` 出现 0 次**）；
+3. `s9.b.c(event, sourceNode)` → 页面级 `shouldMatch`；
+4. 命中后 `s9.b.b(packageName, rootNode, allNodes)` → `extractLines/extractText`
+   → 规则引擎填字段。
+
+### 8.3 本次 12.80 命中的规则
+
+- 拼多多策略（`Laa/e`）只有**两条**规则：
+  - `PddPayFirstDialog`（先用后付）
+  - `PddWalletBillDetail`（词：账单详情 / 当前状态 / 支付成功 / 商品详情 /
+    支付时间 / 支付方式 / 交易单号 / 商户单号）
+- `WeChatPaySuccess` 是**微信策略**（`Laa/h`）里的规则名（`Lz9/*.k()` 返回）。
+- 钱迹账单 `BillInfo(sourceApp=WeChat, from=WeChatPaySuccess)` ⇒
+  **事件包名 = `com.tencent.mm`**，那 3 个 `View + ContentDesc` 节点在**微信窗口内**。
+
+### 8.4 对本应用的含义
+
+- 我们的路由（事件包 = 微信 → 支付管线）与钱迹的包名白名单口径**一致**；
+- 钱迹**只靠 `event.getSource()`** 就能读到那 3 个节点；我们的
+  `findPaymentResultRoots` 同时取 `rootInActiveWindow` + `event.source` +
+  活动窗口 root，是它的**超集** ⇒ 冻结修好后没有理由读不到；
+- 我们与钱迹的**真实差异**不在"读节点"，而在"进程活着"（§2）。
+
+### 8.5 存疑
+
+1. 设备 v4.5.4 vs 反编译 v4.5.3，规则可能已变化；
+2. dex 中 `getWindows` 出现 2 次、但 `AccessibilityWindowInfo` 类型描述符出现
+   0 次 —— 判定为无关方法，**没有**据此得出"钱迹枚举全部窗口"的结论；
+3. `getSource` 的调用点只定位到 `AccessibilityRecord.getSource()` 一处，
+   **推断**其节点来源就是事件源子树，未做运行时验证。
+
+---
+
+## 9. 代码级复核：保活修复后能否弹窗（2026-10-29）
+
+> 结论：**对这笔 12.80 高置信可弹（约 8–9 成）**；前提是保活窗在本机真实生效。
+> 以下逐环核对的是**修复后的代码**（提交 `355a336`）。
+
+| # | 环节 | 代码位置 | 结论 |
+|---|---|---|---|
+| 1 | 进程存活 | `installKeepAliveWindow` | ✅（待真机复验） |
+| 2 | 事件到达 | 服务配置：5 种事件 / timeout=100 | ✅ 与钱迹同口径 |
+| 3 | 事件归属 | `resolveEffectiveShoppingPackage` | ✅ 本笔事件包=微信 |
+| 4 | 根节点 | `findPaymentResultRoots` | ✅ 含 `event.source`（钱迹同源） |
+| 5 | 文本采集 | `collectNodeText` / `AccessibilityPageSummaryCollector` | ✅ 读 `contentDescription` |
+| 6 | 角色判定 | `paymentResultTerms` / `classifyPageRole` | ✅ “支付成功”命中 |
+| 7 | 解析 | `PaymentResultParser` | ✅ 金额 1280 / 商户“拼多多” / 时间回落 |
+| 8 | 落库 | `recordPaymentResultEvidence` → 孤儿待确认 | ✅ `isNew=true` |
+| 9 | 弹窗门禁 | `evaluateGate` | ✅ 观察帧新鲜 / 非敏感 / 非本应用 / 有权限 |
+| 10 | 去重 | 通知兜底 8s 宽限 + `sourceEventKey` | ✅ 不双卡 |
+
+### 9.1 残余风险
+
+| 概率 | 风险 | 说明 |
+|---|---|---|
+| 中低 | 保活窗是否真免冻结 | 同机 3 个 App 同款机制 + 系统日志强证，仍需真机复验 |
+| ~10% | 成功页那帧 `rootInActiveWindow` 指向拼多多 | 会走 `eventIsPayment && rootIsShopping → 返回购物包` 分支，支付扫描不启动。钱迹不读 rootInActiveWindow，故不受影响 |
+| 已知 | 站内原生成功页（包名=购物包） | 钱迹有独立拼多多规则覆盖，我们无对应管线 |
+
+### 9.2 可选加固（未实施，待裁定）
+
+当 `eventPackage` 是支付包、但 `shoppingPackage` 被归到购物包时，**额外**触发一次
+`observePaymentResultIfApplicable(event, eventPackage)`（对齐钱迹“只看事件包名”）。
+代价：2026-09 修复过的“后台残留旧成功页误报”可能回归；收窄方案是仅在
+`event.source` 子树含结果页关键词时触发。
+
+### 9.3 原始证据
+
+用户提供的两条钱迹内部日志原文见同目录 `qianji-bill-logs.txt`（只增不改）。
