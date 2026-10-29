@@ -268,82 +268,67 @@ class PaymentResultParserTest {
         return (result as PaymentResultParseResult.Success).evidence.sourceEventKey
     }
 
-    // ── parseProbe 用例（2026-10-28 钱迹借鉴，独立审查 P2-1 补）──────────────
-    // 每条都是特性承诺：破一条即失效。
+    // ── 非结果页负向回归（2026-10-29 独立审查 P0/P3）────────────────────────
+    // 背景：f39f046 的"跳词表试探"因误把任意含金额页面当结果页而回退（误弹窗）。
+    // 以下用例钉死边界：这些页面在 parseResult（主路径唯一解析器）下必须不产证据。
+    // 成功页样本取自钱迹真机日志（docs/qa/device/2026-10-29-remote-user2/
+    // qianji-bill-logs.txt："支付成功 / 拼多多 / ￥12.80"）。
 
     @Test
-    fun probeHitsAmountWithoutSuccessKeyword() {
-        // 特性存在理由：无"支付成功"词但金额/时间合法 ⇒ 试探命中
-        // （HyperOS 2 掏空标题时主路径词表会饿死）。
-        val evidence = PaymentResultParser.parseProbe(
-            pageText = "实付 ¥27.13 微信支付",
+    fun rejectsWechatChatListWithAmount() {
+        val result = PaymentResultParser.parseResult(
+            pageText = "微信支付 10月28日 20:31 实付 ¥27.13 微信支付凭证",
             sourcePackage = "com.tencent.mm",
-            pageFingerprint = "p".repeat(64),
+            pageFingerprint = "f".repeat(64),
             observedAt = observedAt
         )
-        assertNotEquals("试探应跳过词表门槛命中金额", null, evidence)
-        assertEquals(2713L, evidence!!.amountMinor)
+        assertTrue("聊天列表不应产证据，实际为 $result", result is PaymentResultParseResult.NotPaymentResult)
     }
 
     @Test
-    fun probeRejectsFailureKeywords() {
-        // 红线：失败页不得伪装成功证据，与 parseResult 同序。
-        val evidence = PaymentResultParser.parseProbe(
-            pageText = "支付失败 实付 ¥27.13 订单号 ABC",
-            sourcePackage = "com.tencent.mm",
-            pageFingerprint = "p".repeat(64),
+    fun rejectsAlipayHomeBalance() {
+        val result = PaymentResultParser.parseResult(
+            pageText = "总资产 ¥12345.67 余额宝 昨日收益 ¥0.52",
+            sourcePackage = "com.eg.android.AlipayGphone",
+            pageFingerprint = "f".repeat(64),
             observedAt = observedAt
         )
-        assertEquals("失败词必须优先于试探命中", null, evidence)
+        assertTrue("支付宝首页余额不应产证据，实际为 $result", result is PaymentResultParseResult.NotPaymentResult)
     }
 
     @Test
-    fun probeRejectsHistoricalTimestamp() {
-        // 时效闸：页面时间距观察时刻超 30 分钟（历史账单详情/聊天凭证误报面）。
-        val evidence = PaymentResultParser.parseProbe(
-            pageText = "实付 ¥27.13 2026-10-01 08:00:00",
+    fun rejectsRedPacketPage() {
+        val result = PaymentResultParser.parseResult(
+            pageText = "恭喜发财 ¥5.00 已存入零钱",
             sourcePackage = "com.tencent.mm",
-            pageFingerprint = "p".repeat(64),
+            pageFingerprint = "f".repeat(64),
             observedAt = observedAt
         )
-        assertEquals("历史时间必须被时效闸拦下", null, evidence)
+        assertTrue("红包页不应产证据，实际为 $result", result is PaymentResultParseResult.NotPaymentResult)
     }
 
     @Test
-    fun probeRejectsPersonalTransfer() {
-        // 转账语义静默拒绝（窄口设计宁可漏不可错）。
-        val evidence = PaymentResultParser.parseProbe(
-            pageText = "转账给张三 ¥29.75 转账成功",
+    fun rejectsCashierPageBeforeSuccess() {
+        val result = PaymentResultParser.parseResult(
+            pageText = "微信支付 订单金额 ¥30.00 实付 ¥27.13 确认支付",
             sourcePackage = "com.tencent.mm",
-            pageFingerprint = "p".repeat(64),
+            pageFingerprint = "f".repeat(64),
             observedAt = observedAt
         )
-        assertEquals("个人转账不落试探消费证据", null, evidence)
+        assertTrue("收银台页不应产证据，实际为 $result", result is PaymentResultParseResult.NotPaymentResult)
     }
 
     @Test
-    fun probeEventKeyIsIsolatedFromMainPath() {
-        // 跨键合并的根基：同一输入 probe 键 ≠ result 键，且除域外同构 ——
-        // 同一笔两路径必然跨键，靠 rawTextHash + D-25 合并不双卡。
-        val probeEvidence = PaymentResultParser.parseProbe(
-            pageText = "支付成功 实付 ¥19.90 订单号: ORDER1000001",
+    fun acceptsActualSuccessPageWithKeyword() {
+        // 钱迹真机成功页原文：20 字符左右、含"支付成功"——主路径词表可命中，
+        // 不需要任何"跳词表"的试探解析器（审查 P0-5 的核心事实）。
+        val result = PaymentResultParser.parseResult(
+            pageText = "支付成功 拼多多 ￥12.80",
             sourcePackage = "com.tencent.mm",
-            pageFingerprint = "x",
+            pageFingerprint = "f".repeat(64),
             observedAt = observedAt
         )
-        val mainEvidence = PaymentResultParser.parse(
-            pageText = "支付成功 实付 ¥19.90 订单号: ORDER1000001",
-            sourcePackage = "com.tencent.mm",
-            pageFingerprint = "y",
-            observedAt = observedAt
-        )
-        assertNotEquals("试探键必须与主路径键隔离", probeEvidence?.sourceEventKey, mainEvidence?.sourceEventKey)
-        // 哈希同源：两路径 rawTextHash 输入同构（sanitizeForHash + orderIdDigest），
-        // fingerprint 不参与计算 —— 跨键合并靠它成立。
-        assertEquals(
-            "两路径 rawTextHash 必须一致（合并判据的根基）",
-            probeEvidence?.rawTextHash,
-            mainEvidence?.rawTextHash
-        )
+        assertTrue("真实成功页应命中，实际为 $result", result is PaymentResultParseResult.Success)
+        assertEquals(1280L, (result as PaymentResultParseResult.Success).evidence.amountMinor)
     }
 }

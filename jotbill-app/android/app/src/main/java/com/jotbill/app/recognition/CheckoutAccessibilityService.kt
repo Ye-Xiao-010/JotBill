@@ -85,13 +85,6 @@ class CheckoutAccessibilityService : AccessibilityService() {
         /** 正常存活日志的低频输出间隔 —— 心跳本身 60s 一跳，只在低频时落盘。 */
         private const val SERVICE_ALIVE_LOG_INTERVAL_MILLIS = 600_000L
 
-        // ── 钱迹借鉴（2026-10-28）试探路径常量 ──────────────────────────────
-        /** 窗口切换试探的去重窗：同一窗口的 STATE_CHANGED 可能连发多次。 */
-        private const val PROBE_WINDOW_DEDUP_MILLIS = 3_000L
-
-        /** 试探的整页文本下限：低于此长度的窗口不可能承载结果页语义（噪声/按钮）。 */
-        private const val PROBE_MIN_PAGE_TEXT_LENGTH = 12
-
         // ── 支付环境主动扫描（2026-10-27，四份远程日志定案 v5）──────────────────
         // HyperOS 2（Android 16）在支付全程（密码键盘→成功页首帧）抑制无障碍
         // 事件：实测 75~155 秒"事件死区"（docs/qa/device/2026-10-27-remote-user1/）。
@@ -1012,11 +1005,6 @@ class CheckoutAccessibilityService : AccessibilityService() {
     /**
      * 真实无障碍事件入口：重置重扫兜底预算并撤销待执行的重扫，本帧立即全量扫描。
      * 重扫兜底（[runPaymentResultRescan]）复用同一扫描核心 [scanPaymentResultCore]。
-     *
-     * 2026-10-28 增补：TYPE_WINDOW_STATE_CHANGED 时先走[试探快速路径]
-     * [tryWindowSwitchProbe]（钱迹机制借鉴）—— 窗口切换事件是"页面出现在
-     * 屏幕上"的最强信号，且 HyperOS 2 的支付期事件抑制实测不覆盖它
-     * （remote-user 日志 log3/log4 的两次成功都是窗口级事件触发）。
      */
     private fun observePaymentResultIfApplicable(
         event: AccessibilityEvent,
@@ -1027,142 +1015,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
         // v5：进入支付环境即启动主动扫描时钟 —— 事件活跃时它只是低频旁路
         // （管线幂等兜住重复），事件静默期它就是唯一的扫描来源。
         startProactivePaymentScan(paymentPackage)
-        if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
-            // 钱迹借鉴：窗口切换瞬间直接全树试探，不等内容事件管线。
-            tryWindowSwitchProbe(event, paymentPackage)
-        }
         scanPaymentResultCore(event, paymentPackage)
-    }
-
-    // ── 钱迹机制借鉴（2026-10-28）：试探路径 ────────────────────────────────
-    // 背景：HyperOS 2 支付期三层隔离（事件抑制 + rootInActiveWindow 不指收银台
-    // + 窗口文本掏空），词表门禁（"支付成功"）在远程用户设备上把 397/551 字符
-    // 大文本帧全部挡成 UNKNOWN → 证据链饿死。钱迹（D:/tools/rea/targets/qianji/
-    // auto-record-algorithm.md）只靠 TYPE_WINDOW_STATE_CHANGED 一种事件 +
-    // 无词表的金额正则就完成全部工作。
-
-    private var lastProbeWindowKey: String? = null
-    private var lastProbeWindowAt = 0L
-
-    /**
-     * 窗口切换快速路径（钱迹借鉴）：STATE_CHANGED 到达时直接全树快照 +
-     * [PaymentResultParser.parseProbe] 试探，不走内容事件管线的角色分类门禁。
-     *
-     * **敏感门禁保留**：root 摘要先判敏感（密码键盘页是敏感页），敏感帧
-     * 零提取、零试探 —— 硬不变式不因快速路径放宽。试探命中也不直接弹窗，
-     * 走与主路径相同的落库链（孤儿待确认 → 门禁 → 弹窗），误报代价是
-     * 用户多点一次丢弃。
-     *
-     * 与 [scanPaymentResultCore] 的关系：本方法只做试探（词表跳过），随后
-     * scanPaymentResultCore 照常跑全管线（含角色分类）——两路互补，窗口
-     * 含"支付成功"词时主路径先命中，试探幂等键隔离不双卡。
-     */
-    private fun tryWindowSwitchProbe(
-        event: AccessibilityEvent,
-        paymentPackage: String
-    ) {
-        val observedAt = System.currentTimeMillis()
-        val windowKey = "${event.packageName}|${event.className}"
-        // 防抖（钱迹 DEBOUNCE_MS=1200 的同款问题）：同一窗口 STATE_CHANGED 连发。
-        if (windowKey == lastProbeWindowKey && observedAt - lastProbeWindowAt < PROBE_WINDOW_DEDUP_MILLIS) {
-            return
-        }
-        val root = try {
-            rootInActiveWindow
-        } catch (_: RuntimeException) {
-            null
-        } ?: return
-        val rootPackage = try {
-            root.packageName?.toString()?.trim().orEmpty()
-        } catch (_: RuntimeException) {
-            ""
-        }
-        // 活动根必须是支付包：试探的环境约束 —— 桌面/购物 App 的窗口切换
-        // 不试探（那些窗口含金额的机会面太大，误报防护）。
-        if (rootPackage != paymentPackage) {
-            try {
-                root.recycle()
-            } catch (_: RuntimeException) {
-            }
-            // 远程诊断锚点：快速路径被非支付包根拦下 —— HyperOS 2 三层隔离的
-            // "root 不指收银台"现场（与 logProactiveScanTick 的 A/B 判据同源）。
-            JotBillLog.i(TAG, "窗口试探跳过: root=$rootPackage ≠ 支付包$paymentPackage")
-            return
-        }
-        // 页面级敏感门禁（与 tryProactiveProbe 同构，审查 P1-1 修复）：密码键盘页
-        // 的非敏感兄弟节点（金额/商户名）不含敏感词，collectPageText 的节点级
-        // 过滤拦不住"密码页提取出金额"——这是硬不变式"敏感页零提取"的语义边界，
-        // 必须收页面摘要判敏感。根节点先收摘要素再回收（摘要遍历在根回收前完成）。
-        val sensitive = try {
-            AccessibilityPageSummaryCollector.collect(
-                shoppingPackage = paymentPackage,
-                windowClass = null,
-                root = root,
-                observedAt = observedAt,
-                includeHiddenText = true
-            ).isSensitivePage
-        } catch (_: RuntimeException) {
-            // 摘要采集失败按敏感对待：宁可不试探（漏）不可误试探（错）。
-            true
-        }
-        val pageText = try {
-            collectPageText(root)
-        } catch (_: RuntimeException) {
-            ""
-        } finally {
-            try {
-                root.recycle()
-            } catch (_: RuntimeException) {
-                // 系统节点已回收时无需再次处理。
-            }
-        }
-        lastProbeWindowKey = windowKey
-        lastProbeWindowAt = observedAt
-        if (sensitive || pageText.length < PROBE_MIN_PAGE_TEXT_LENGTH) {
-            return
-        }
-        val evidence = PaymentResultParser.parseProbe(
-            pageText = pageText,
-            sourcePackage = paymentPackage,
-            pageFingerprint = windowKey,
-            observedAt = observedAt
-        ) ?: return
-        JotBillLog.i(
-            TAG,
-            "窗口切换试探命中: 金额=${evidence.amountMinor}分, textLength=${pageText.length}, " +
-                "merchant=${evidence.merchant ?: "null"}, orderId=${evidence.orderId?.take(12) ?: "null"}"
-        )
-        dispatchProbeEvidence(evidence, paymentPackage)
-    }
-
-    /**
-     * 试探证据落库（与主路径同链：孤儿待确认 → 门禁 → 弹窗）。
-     *
-     * 匹配器为 null 时**新建兜底**（与主路径 scanPaymentResultCore 同构）——
-     * 试探路径的用途恰恰是主路径失效的场景（HyperOS 2 死区、冷启动），
-     * 此时静默丢弃会让远程排查看到"试探命中却没卡"的假阳性现场。
-     */
-    private fun dispatchProbeEvidence(
-        evidence: PaymentResultEvidence,
-        paymentPackage: String
-    ) {
-        val matcher = synchronized(aiLifecycleLock) { paymentMatcher }
-            ?: run {
-                val database = try {
-                    JotBillDatabaseProvider.get(applicationContext)
-                } catch (error: RuntimeException) {
-                    JotBillLog.w(TAG, "试探证据无法初始化证据数据库", error)
-                    return
-                }
-                CheckoutPaymentMatcher(database)
-            }
-        evidenceFallbackScope.launch {
-            try {
-                recordPaymentResultEvidence(matcher, paymentPackage, evidence)
-            } catch (error: Exception) {
-                JotBillLog.w(TAG, "试探证据落库失败", error)
-            }
-        }
     }
 
     /**
@@ -1532,11 +1385,6 @@ class CheckoutAccessibilityService : AccessibilityService() {
                 // 每轮打节流现场（8s 窗），下一份日志 A/B 立判。
                 logProactiveScanTick(paymentPackage, rootPackage, hasText)
                 if (hasText) {
-                    // 改动 2（钱迹借鉴）：试探与全管线双路 —— 全管线走角色分类
-                    // 门禁（词表命中即主路径），试探跳词表（死区内 HyperOS 2 掏空
-                    // 成功页标题时 397/551 字符帧不被词表挡）。幂等键带 probe 域
-                    // 隔离，跨键后走"同一笔"合并，不双卡。
-                    tryProactiveProbe(activeRoot!!, paymentPackage, now)
                     val scanEvent = AccessibilityEvent.obtain(AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED)
                     try {
                         scanEvent.packageName = paymentPackage
@@ -1590,52 +1438,6 @@ class CheckoutAccessibilityService : AccessibilityService() {
                 PAYMENT_PROACTIVE_SCAN_INTERVAL_MILLIS
             )
         }
-    }
-
-    /**
-     * 主动扫描的试探（钱迹借鉴）：对当前 root 整页文本直接
-     * [PaymentResultParser.parseProbe]（跳词表），命中走与主路径相同的落库链。
-     *
-     * 敏感门禁保留：root 摘要先判敏感 —— 密码键盘页是敏感页，零提取、零试探
-     * （硬不变式不因试探放宽）。文本长度下限同快速路径
-     * （[PROBE_MIN_PAGE_TEXT_LENGTH]），噪声窗口不试探。
-     */
-    private fun tryProactiveProbe(
-        root: AccessibilityNodeInfo,
-        paymentPackage: String,
-        observedAt: Long
-    ) {
-        val observation = try {
-            AccessibilityPageSummaryCollector.collect(
-                shoppingPackage = paymentPackage,
-                windowClass = null,
-                root = root,
-                observedAt = observedAt,
-                includeHiddenText = true
-            )
-        } catch (_: RuntimeException) {
-            return
-        }
-        // 敏感页零试探（硬不变式）：密码键盘页无论词表还是试探都不读。
-        if (observation.isSensitivePage) return
-        val pageText = try {
-            collectPageText(root)
-        } catch (_: RuntimeException) {
-            return
-        }
-        if (pageText.length < PROBE_MIN_PAGE_TEXT_LENGTH) return
-        val evidence = PaymentResultParser.parseProbe(
-            pageText = pageText,
-            sourcePackage = paymentPackage,
-            pageFingerprint = observation.pageFingerprint,
-            observedAt = observedAt
-        ) ?: return
-        JotBillLog.i(
-            TAG,
-            "主动扫描试探命中: 金额=${evidence.amountMinor}分, textLength=${pageText.length}, " +
-                "merchant=${evidence.merchant ?: "null"}, orderId=${evidence.orderId?.take(12) ?: "null"}"
-        )
-        dispatchProbeEvidence(evidence, paymentPackage)
     }
 
     // 主动扫描 tick 观测日志：8s 节流 + 状态变化（rootPkg 或空窗标志）即刻打。
