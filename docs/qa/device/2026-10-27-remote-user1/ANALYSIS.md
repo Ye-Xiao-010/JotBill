@@ -1,5 +1,17 @@
 # 远程用户 1 · 支付弹窗 —— 四份日志 + 双机对比定案（2026-10-27 · v5 终版）
 
+> ⚠️ **2026-10-29 修正（加注不覆盖，原文保留）**：本文中「HyperOS 2」的机型结论
+> **错误**。全机 bugreport 实测（`docs/qa/qianji-popup-forensics-2026-10-29.md`
+> E1/E1a）：`phoneModel=25019PNF3C, phoneDevice=xuanyuan, hyperOsVersion=3,
+> ro.build.version.release=16, sdk=36, HyperOS 3.0.314.0.WOACNXM`
+> ⇒ 远程用户设备 = **Xiaomi 15 Ultra / HyperOS 3 / Android 16**，与开发者本机
+> 同属 HyperOS 3 大版本。**v5「支付宝差异 = 系统版本（HyperOS 2 vs 3）」的结论作废**：
+> 同机钱迹取证证明支付成功页文本可读（微信「支付成功/拼多多/￥12.80」、
+> 支付宝「支付成功￥2.60」）。真实差异是：① 进程被 GreezeManager 冻结；
+> ② 钱迹读 `event.getSource()` 子树而非 `rootInActiveWindow`；③ 上屏机制
+> （FGS + 2038 双窗 + 输入焦点）。详见取证文档 §2–§5。
+> 本文其余日志时间线与证据行号仍然有效。
+
 > 证据（本目录，只增不改）：log1–log4（远程用户 25019PNF3C / HyperOS 2 / sdk36）
 > + 对照组：`docs/qa/device/2026-10-12/jotbill-diag-4payments.log`
 > （开发者本机 25128PNA1C / **sdk37**，支付宝窗口文本可读、支付成功）。
