@@ -137,6 +137,19 @@ class PaymentNotificationService : NotificationListenerService() {
         val bigText = extras.getCharSequence(Notification.EXTRA_BIG_TEXT)?.toString() ?: ""
         val tickerText = notification.tickerText?.toString() ?: ""
 
+        // 2026-10-29 观测补强（纯诊断）：支付宝通知"到没到、长什么样"此前完全不可见
+        // —— 解析失败只写 Sentry、不落 diag，导致 0.0.103 的"支付宝零痕迹"无法
+        // 区分"没通知/解析失败/黑窗内"。只记长度与 title 摘要，不记正文。
+        val isAlipay = packageName == PaymentResultNormalizer.ALIPAY_PACKAGE
+        if (isAlipay) {
+            JotBillLog.i(
+                TAG,
+                "支付宝通知到达: title=${title.take(30)}, textLen=${text.length}, " +
+                    "bigTextLen=${bigText.length}, subTextLen=${subText.length}, " +
+                    "summaryLen=${summaryText.length}, tickerLen=${tickerText.length}"
+            )
+        }
+
         // 阶段五 T2：退款语义优先识别（此前退款被非消费排除丢弃，现路由到退款链路）
         val refundInput = PaymentResultNormalizer.normalizeRefund(
             sourcePackage = packageName,
@@ -222,8 +235,15 @@ class PaymentNotificationService : NotificationListenerService() {
             notificationKey = sbn.key,
             notificationId = sbn.id
         ) ?: run {
-            // 非消费通知或金额无效，只记录非敏感的过滤结果（title 一般为
-            // "微信支付"等平台名，不含金额与订单号，可安全用于诊断格式变化）。
+            // 非消费通知或金额无效：Sentry 之外落一条 diag（支付宝尤为关键 ——
+            // 此前失败零痕迹，无法与"通知没到"区分）。
+            if (isAlipay) {
+                JotBillLog.i(
+                    TAG,
+                    "支付宝通知未通过解析(非消费或金额无效): title=${title.take(30)}, " +
+                        "textLen=${text.length}, bigTextLen=${bigText.length}"
+                )
+            }
             SentryLogger.addBreadcrumb(
                 "通知未通过解析（非消费或金额无效）",
                 data = mapOf(
@@ -238,6 +258,12 @@ class PaymentNotificationService : NotificationListenerService() {
         }
 
         JotBillLog.i(TAG, "解析到支付证据: 包名=${evidenceInput.sourcePackage}")
+        if (isAlipay) {
+            JotBillLog.i(
+                TAG,
+                "支付宝通知解析成功: amount=${evidenceInput.amountMinor}分, title=${title.take(30)}"
+            )
+        }
 
         // 异步落库证据并触发匹配
         scope.launch {

@@ -1181,10 +1181,27 @@ class CheckoutAccessibilityService : AccessibilityService() {
                         JotBillLog.d(TAG, "支付结果页同一事件已处理，跳过重复解析: ${evidence.sourceEventKey.take(12)}")
                         return
                     }
+                    // 2026-10-29 观测补强（纯诊断，零行为变更）：记录证据来自哪个 root。
+                    // 远程支付宝 19.90 事故里成功日志只有金额/长度，无法判定 51 字符
+                    // 证据来自商户页、SystemUI 还是支付宝结果页（v5 的 systemui 结论
+                    // 因此被推翻）。rootPkg/rootClass/rootIndex 让下一份日志可直接归因。
+                    val successRootPkg = try {
+                        root.packageName?.toString().orEmpty()
+                    } catch (_: RuntimeException) {
+                        ""
+                    }
+                    val successRootClass = try {
+                        root.className?.toString()?.substringAfterLast('.') ?: ""
+                    } catch (_: RuntimeException) {
+                        ""
+                    }
                     JotBillLog.i(
                         TAG,
                         "支付结果页解析到证据: 金额=${evidence.amountMinor}分, 状态=${evidence.paymentStatus}, " +
-                            "textLength=${pageText.length}"
+                            "textLength=${pageText.length}, root=${rootIndex + 1}/${roots.size}, " +
+                            "rootPkg=${successRootPkg.ifBlank { "null" }}, " +
+                            "rootClass=${successRootClass.ifBlank { "null" }}, " +
+                            "windowClass=${observation.windowClass.ifBlank { "null" }}"
                     )
                     // v5：证据已产出，主动扫描时钟使命完成（漏点事件与本时钟扫的是
                     // 同一棵树，三道去重兜重复；停钟省电防重复触发）。
