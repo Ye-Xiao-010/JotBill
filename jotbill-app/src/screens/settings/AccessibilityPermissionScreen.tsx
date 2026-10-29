@@ -148,7 +148,7 @@ export default function AccessibilityPermissionScreen() {
               <Text style={styles.stepBadgeText}>2</Text>
             </View>
             <Text style={styles.stepText}>
-              找到 JotBill 的"结算页观察服务"，打开开关
+              找到猫猫招财的"结算页观察服务"，打开开关
             </Text>
           </View>
           <View style={styles.stepRow}>
