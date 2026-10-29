@@ -635,23 +635,8 @@ internal object PendingConfirmOverlayManager {
             )
         }
         waitingCandidate = candidate
-        val deadlineAt = System.currentTimeMillis() + PendingPromptPolicy.CANDIDATE_TTL_MILLIS
         candidateExpiryRunnable?.let(mainHandler::removeCallbacks)
-        candidateExpiryRunnable = Runnable {
-            if (waitingCandidate === candidate) {
-                waitingCandidate = null
-                stopCandidateHeartbeat()
-                // D7：TTL 计时器按 due 时刻对表 —— 差值 >1s 标记主线程/进程
-                // 被冻结推迟（Doze/厂商省电），这本身就是死因之一。
-                val dueDelta = System.currentTimeMillis() - deadlineAt
-                val freezeMark = if (dueDelta > 1_000L) ", SUSPECT_FREEZE(overDue=${dueDelta}ms)" else ""
-                JotBillLog.i(TAG, "弹窗候选超时放弃(敏感页未结束), 通知兜底: id=${candidate.pendingId.take(16)}$freezeMark")
-                // 槽位已释放，补播队列（2026-10-24 复审补）。这是挂起超时的**主执行
-                // 路径**：runnable 按 due 时间排在后续观察帧之前， Handler 先执行它 ——
-                // maybeShowPendingCandidate 的超时分支只在墙钟前跳时可达。
-                drainQueuedPrompts()
-            }
-        }
+        candidateExpiryRunnable = Runnable { handleCandidateExpiry(candidate) }
         mainHandler.postDelayed(candidateExpiryRunnable!!, PendingPromptPolicy.CANDIDATE_TTL_MILLIS)
         startCandidateHeartbeat(candidate)
         // 时间型门禁（权限稳定期）不能只等观察帧：支付页事件可能断供，到点自唤醒一次。
@@ -718,6 +703,10 @@ internal object PendingConfirmOverlayManager {
     private var lastGateBlockedLogAt = 0L
     private var lastGateBlockedLogReason: String? = null
 
+    /** 冻结恢复"仍被挡"日志节流：观察帧每秒触发一次，不能逐帧落盘。 */
+    private var lastExpiryExtendLogAt = 0L
+    private var lastExpiryExtendLogReason: String? = null
+
     /** 挂起期间被挡的判定打节流日志（maybeShowPendingCandidate 失败分支原本纯静默）。 */
     private fun logGateBlockedThrottled(reason: String) {
         val now = System.currentTimeMillis()
@@ -750,12 +739,8 @@ internal object PendingConfirmOverlayManager {
     private fun maybeShowPendingCandidate() {
         val candidate = waitingCandidate ?: return
         if (System.currentTimeMillis() - candidate.createdAt > PendingPromptPolicy.CANDIDATE_TTL_MILLIS) {
-            waitingCandidate = null
-            candidateExpiryRunnable?.let(mainHandler::removeCallbacks)
-            candidateExpiryRunnable = null
-            stopCandidateHeartbeat()
-            // 挂起候选超时放弃，槽位随之空闲：队列里的候选获得补播机会。
-            drainQueuedPrompts()
+            // 墙钟越过 TTL：语义与定时器到期同一出处（含冻结恢复重评）。
+            handleCandidateExpiry(candidate)
             return
         }
         val gate = evaluateGate()
@@ -778,6 +763,88 @@ internal object PendingConfirmOverlayManager {
             logGateBlockedThrottled(gate.reason)
             if (gate.retryAfterMs > 0L) {
                 schedulePermissionSettleRecheck(gate.retryAfterMs)
+            }
+        }
+    }
+
+    /**
+     * 挂起候选的过期处理（2026-10-29 P0）：冻结恢复时先做最后一次门禁重评，
+     * 避免"解冻瞬间 TTL 先跑、权限已恢复却丢弃候选"（支付宝 19.90 事故）。
+     *
+     * 判定收敛在 [CandidateExpiryPolicy]（纯对象，双向用例钉死）：
+     * - 正常到期 ⇒ 放弃 + 通知兜底（30s 注意力窗口语义不变）；
+     * - 疑似冻结恢复且未到硬上限 ⇒ 重评：放行补弹；仍挡则延长到
+     *   [CandidateExpiryPolicy.HARD_DEADLINE_MILLIS]；
+     * - 已达硬上限 ⇒ 无条件放弃（防无限续期占用槽位）。
+     *
+     * 仅主线程调用。
+     */
+    private fun handleCandidateExpiry(candidate: PromptCandidate) {
+        if (waitingCandidate !== candidate) return
+        val now = System.currentTimeMillis()
+        val age = now - candidate.createdAt
+        val overDue = age - PendingPromptPolicy.CANDIDATE_TTL_MILLIS
+        when (CandidateExpiryPolicy.verdict(age, PendingPromptPolicy.CANDIDATE_TTL_MILLIS)) {
+            CandidateExpiryPolicy.Verdict.EXPIRE,
+            CandidateExpiryPolicy.Verdict.EXPIRE_HARD_LIMIT -> {
+                waitingCandidate = null
+                candidateExpiryRunnable?.let(mainHandler::removeCallbacks)
+                candidateExpiryRunnable = null
+                stopCandidateHeartbeat()
+                val mark = if (overDue > CandidateExpiryPolicy.FREEZE_DETECT_MILLIS) {
+                    ", SUSPECT_FREEZE(overDue=${overDue}ms${if (age >= CandidateExpiryPolicy.HARD_DEADLINE_MILLIS) ", HARD_DEADLINE" else ""})"
+                } else {
+                    ""
+                }
+                JotBillLog.i(
+                    TAG,
+                    "弹窗候选超时放弃(敏感页未结束), 通知兜底: id=${candidate.pendingId.take(16)}$mark"
+                )
+                // 槽位已释放，补播队列（2026-10-24 复审补）。
+                drainQueuedPrompts()
+            }
+
+            CandidateExpiryPolicy.Verdict.FREEZE_RECOVERED -> {
+                // 冻结恢复：权限可能在冻结期间已恢复，先做最后一次重评。
+                val gate = evaluateGate()
+                if (gate.allowed) {
+                    waitingCandidate = null
+                    candidateExpiryRunnable?.let(mainHandler::removeCallbacks)
+                    candidateExpiryRunnable = null
+                    stopCandidateHeartbeat()
+                    JotBillLog.i(
+                        TAG,
+                        "冻结恢复补弹: id=${candidate.pendingId.take(16)}, age=${age}ms, " +
+                            "overDue=${overDue}ms, reason=${gate.reason}"
+                    )
+                    inFlightCandidate = candidate
+                    showCandidate(candidate)
+                    return
+                }
+                // 仍被挡：延长到硬上限，保留最后一次机会。
+                val remaining = (CandidateExpiryPolicy.HARD_DEADLINE_MILLIS - age).coerceAtLeast(50L)
+                candidateExpiryRunnable?.let(mainHandler::removeCallbacks)
+                val next = Runnable { handleCandidateExpiry(candidate) }
+                candidateExpiryRunnable = next
+                mainHandler.postDelayed(next, remaining)
+                // 节流（5s 窗 + reason 变化即刻）：本方法会被观察帧每秒唤醒一次，
+                // 逐帧落盘会重演"日志淹没关键链路"的旧账。
+                val extendLogReason = gate.reason
+                if (extendLogReason != lastExpiryExtendLogReason ||
+                    now - lastExpiryExtendLogAt >= 5_000L
+                ) {
+                    lastExpiryExtendLogAt = now
+                    lastExpiryExtendLogReason = extendLogReason
+                    JotBillLog.i(
+                        TAG,
+                        "冻结恢复仍被挡, 延长至硬上限: id=${candidate.pendingId.take(16)}, " +
+                            "age=${age}ms, overDue=${overDue}ms, remaining=${remaining}ms, reason=${gate.reason}"
+                    )
+                }
+                logGateBlockedThrottled(gate.reason)
+                if (gate.retryAfterMs > 0L) {
+                    schedulePermissionSettleRecheck(gate.retryAfterMs)
+                }
             }
         }
     }
