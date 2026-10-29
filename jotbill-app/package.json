@@ -1,6 +1,6 @@
 {
   "name": "jotbill-app",
-  "version": "0.0.98",
+  "version": "0.0.104",
   "private": true,
   "scripts": {
     "android": "react-native run-android",
