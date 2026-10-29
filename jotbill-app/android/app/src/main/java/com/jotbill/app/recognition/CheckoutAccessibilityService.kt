@@ -8,6 +8,7 @@ import android.graphics.PixelFormat
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import com.jotbill.app.utils.JotBillLog
 import com.jotbill.app.utils.PaymentTiming
 import android.view.Display
@@ -74,6 +75,15 @@ class CheckoutAccessibilityService : AccessibilityService() {
          * 冻结 —— 见 [installKeepAliveWindow]。
          */
         private const val KEEP_ALIVE_WINDOW_SIZE_PX = 1
+
+        /** 服务存活心跳周期：冻结自证的时间分辨率。 */
+        private const val SERVICE_HEARTBEAT_INTERVAL_MILLIS = 60_000L
+
+        /** 心跳间隔达到该值即判定进程被挂起/冻结（3 个周期，容忍调度抖动）。 */
+        private const val SERVICE_HEARTBEAT_SUSPECT_FREEZE_MILLIS = 90_000L
+
+        /** 正常存活日志的低频输出间隔 —— 心跳本身 60s 一跳，只在低频时落盘。 */
+        private const val SERVICE_ALIVE_LOG_INTERVAL_MILLIS = 600_000L
 
         // ── 钱迹借鉴（2026-10-28）试探路径常量 ──────────────────────────────
         /** 窗口切换试探的去重窗：同一窗口的 STATE_CHANGED 可能连发多次。 */
@@ -340,8 +350,63 @@ class CheckoutAccessibilityService : AccessibilityService() {
     /** 1×1 保活窗（见 [installKeepAliveWindow]）。null = 未安装。 */
     private var keepAliveView: View? = null
     private var keepAliveWindowManager: WindowManager? = null
+
+    /** 最近一次心跳的 uptime（见 [serviceHeartbeatRunnable]）。 */
+    private var lastHeartbeatUptime = 0L
+
+    /** 最近一次"服务存活"日志的墙钟时刻；0 = 尚未打过。 */
+    private var lastAliveLogAt = 0L
     private val aiLifecycleLock = Any()
     private val mainHandler = Handler(Looper.getMainLooper())
+
+    /**
+     * 服务存活心跳（2026-10-29，冻结自证）。
+     *
+     * **为什么需要**：进程被 `GreezeManager` 冻结时，本应用一行日志都写不出来
+     * —— 事后只能看到一段空白，无法区分"被冻结 / 没有事件 / 服务已死"。
+     * 远程用户 2 的那份全机日志里，本应用 23:29:38.612 → 23:32:18.005 完全静默，
+     * 是外部 `GreezeManager` 日志才证明了冻结。
+     *
+     * **判据**：每 60s 跑一跳；用 `SystemClock.uptimeMillis()` 的间隔差判断。
+     * 深度睡眠时 uptime 不走（不会把正常息屏误判成冻结）；进程被冻结时内核
+     * uptime 照走 ⇒ 恢复后第一跳的 gap 就是挂起时长。
+     *
+     * 正常心跳只在每 10 分钟落一行 I 级，避免日志膨胀；异常才打 W。
+     */
+    private val serviceHeartbeatRunnable = object : Runnable {
+        override fun run() {
+            val nowUptime = SystemClock.uptimeMillis()
+            val nowWall = System.currentTimeMillis()
+            val gap = nowUptime - lastHeartbeatUptime
+            lastHeartbeatUptime = nowUptime
+            if (lastAliveLogAt != 0L && gap >= SERVICE_HEARTBEAT_SUSPECT_FREEZE_MILLIS) {
+                JotBillLog.w(
+                    TAG,
+                    "服务心跳异常: gap=${gap}ms（阈值=${SERVICE_HEARTBEAT_SUSPECT_FREEZE_MILLIS}ms）" +
+                        " —— 进程疑似被挂起/冻结, wall=$nowWall"
+                )
+                lastAliveLogAt = nowWall
+            } else if (nowWall - lastAliveLogAt >= SERVICE_ALIVE_LOG_INTERVAL_MILLIS) {
+                lastAliveLogAt = nowWall
+                JotBillLog.i(TAG, "服务存活心跳: uptime=$nowUptime, wall=$nowWall")
+            }
+            mainHandler.removeCallbacks(this)
+            mainHandler.postDelayed(this, SERVICE_HEARTBEAT_INTERVAL_MILLIS)
+        }
+    }
+
+    /** 启动/重置心跳：服务连接时调用，先打一行存活锚点。 */
+    private fun startServiceHeartbeat() {
+        mainHandler.removeCallbacks(serviceHeartbeatRunnable)
+        lastHeartbeatUptime = SystemClock.uptimeMillis()
+        lastAliveLogAt = 0L
+        mainHandler.post(serviceHeartbeatRunnable)
+    }
+
+    /** 停止心跳：解绑/销毁时调用，避免 runnable 触碰已销毁的实例。 */
+    private fun stopServiceHeartbeat() {
+        mainHandler.removeCallbacks(serviceHeartbeatRunnable)
+    }
     private var paymentMatcher: CheckoutPaymentMatcher? = null
     private var matchingScope: CoroutineScope? = null
     private val evidenceFallbackScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -380,6 +445,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
         initializePaymentMatcher()
         serviceConnected = true
         installKeepAliveWindow()
+        startServiceHeartbeat()
         JotBillLog.i(TAG, "结算页无障碍观察服务已连接")
     }
 
@@ -700,6 +766,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
     override fun onUnbind(intent: Intent?): Boolean {
         serviceConnected = false
         removeKeepAliveWindow()
+        stopServiceHeartbeat()
         lastWindowPackage = null
         lastWindowClass = null
         // 重扫兜底的 Handler 挂在主 looper 上，比服务实例活得长：解绑即摘，
@@ -718,6 +785,7 @@ class CheckoutAccessibilityService : AccessibilityService() {
         JotBillLog.i(TAG, "结算页无障碍观察服务开始销毁: previouslyConnected=$serviceConnected")
         serviceConnected = false
         removeKeepAliveWindow()
+        stopServiceHeartbeat()
         lastWindowPackage = null
         lastWindowClass = null
         paymentRescanHandler.removeCallbacks(paymentRescanRunnable)
@@ -780,6 +848,20 @@ class CheckoutAccessibilityService : AccessibilityService() {
             x = 0
             y = 0
         }
+        // 保活窗被系统摘掉时告警：窗口在屏是免冻结的唯一依据，一旦 detach，
+        // 后续支付又会回到"冻结且零日志"的状态。主动移除时 [keepAliveView]
+        // 已先置空，因此不会误报。
+        view.addOnAttachStateChangeListener(object : View.OnAttachStateChangeListener {
+            override fun onViewAttachedToWindow(v: View) {
+                JotBillLog.i(TAG, "保活窗已附着到窗口")
+            }
+
+            override fun onViewDetachedFromWindow(v: View) {
+                if (keepAliveView === v) {
+                    JotBillLog.w(TAG, "保活窗已脱离窗口(防冻结可能失效)")
+                }
+            }
+        })
         try {
             windowManager.addView(view, params)
             keepAliveView = view

@@ -496,8 +496,24 @@ internal object PendingConfirmOverlayManager {
 
     /** 读行 + 策略评估 + 尝试上屏的完整管线；主线程调用，槽位必须空闲。 */
     private fun processPendingChange(info: PendingChangeInfo) {
-        val context = appContext ?: return
-        val db = database ?: return
+        // 2026-10-29 补盲：入口与读行后各留一行。此前只有"读空/门禁/关闭"有日志，
+        // 若协程没跑或读行卡住，日志里是纯空白（remote-user1 分析里的 16 秒疑点
+        // 就是缺这两个锚点）。D 级：正常路径高频，只进落盘文件不刷 logcat 存在感。
+        val context = appContext
+        val db = database
+        if (context == null || db == null) {
+            JotBillLog.w(
+                TAG,
+                "弹窗变更放弃: appContext=${context != null}, database=${db != null}, " +
+                    "id=${info.pendingId.take(16)}"
+            )
+            return
+        }
+        JotBillLog.d(
+            TAG,
+            "弹窗变更处理开始: id=${info.pendingId.take(16)}, type=${info.type}, " +
+                "amount=${info.amountMinor}, source=${info.sourceType}, conflict=${info.conflictReason}"
+        )
         scope.launch {
             val pendingRow = readPendingRow(db, info.pendingId)
             if (pendingRow == null) {
@@ -508,6 +524,12 @@ internal object PendingConfirmOverlayManager {
                 mainHandler.post { drainQueuedPrompts() }
                 return@launch
             }
+            JotBillLog.d(
+                TAG,
+                "弹窗变更已读行: id=${pendingRow.id.take(16)}, type=${pendingRow.type}, " +
+                    "amount=${pendingRow.amountMinor}, merchant=${pendingRow.merchant}, " +
+                    "source=${pendingRow.sourceType}, conflict=${pendingRow.conflictReason}"
+            )
             // evaluate 是纯函数（2026-10-12 起不依赖任何历史状态），主线程调用无代价。
             // 保留 mainHandler.post 是因为 [maybeShowCandidate] 的下游
             // （waitingCandidate / inFlightCandidate / overlayView）均为主线程状态。
