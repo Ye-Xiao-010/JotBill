@@ -113,6 +113,20 @@ internal object PendingConfirmOverlayManager {
     /** addView 之后的上屏自检延迟（见 [scheduleVisibilityCheck]）。 */
     private const val VISIBILITY_CHECK_DELAY = 500L
 
+    /** 上屏自检失败后的重建延迟；只重建一次，避免每帧重试风暴。 */
+    private const val VISIBILITY_RETRY_DELAY = 300L
+
+    /**
+     * 悬浮窗权限恢复后的稳定期（2026-10-29，支付宝弹窗不可见事故）。
+     *
+     * HyperOS 3 在支付宝前台会把本应用 `SYSTEM_ALERT_WINDOW` 临时置为 `IGNORED`；
+     * 恢复瞬间 AppOps 已返回 `ALLOWED`，但窗口层尚未恢复 —— 此时 `addView`
+     * 会 attach 成功却压在支付应用之下（远程用户 3：10:31:46 加窗，30 秒内
+     * 无障碍活动窗口一直是支付宝；10:32:16 同样的窗口才正常上屏）。
+     * 要求 `canDraw=true` 连续稳定本时长后才放行，把 addView 推离恢复瞬间。
+     */
+    private const val OVERLAY_PERMISSION_SETTLE_MILLIS = 500L
+
     @Volatile
     private var appContext: Context? = null
 
@@ -138,6 +152,20 @@ internal object PendingConfirmOverlayManager {
 
     @Volatile
     private var lastForegroundPackage: String? = null
+
+    /**
+     * 悬浮窗权限连续 `ALLOWED` 的起点（0 = 当前不处于稳定 ALLOWED）。
+     *
+     * 由 [evaluateGate] 维护：任一次读到 `canDraw=false` 立即清零；
+     * 稳定满 [OVERLAY_PERMISSION_SETTLE_MILLIS] 才放行。仅主线程访问。
+     */
+    private var overlayPermissionAllowedSince = 0L
+
+    /** 权限稳定期的到点自唤醒（时间型门禁，不依赖新观察帧）。仅主线程访问。 */
+    private var permissionSettleRecheckRunnable: Runnable? = null
+
+    /** 本张弹窗是否已因"未获得活动窗口"重建过一次（见 [scheduleVisibilityCheck]）。 */
+    private var visibilityRetried = false
 
     /**
      * 等待非敏感帧的弹窗候选；null 表示无挂起候选。
@@ -626,6 +654,10 @@ internal object PendingConfirmOverlayManager {
         }
         mainHandler.postDelayed(candidateExpiryRunnable!!, PendingPromptPolicy.CANDIDATE_TTL_MILLIS)
         startCandidateHeartbeat(candidate)
+        // 时间型门禁（权限稳定期）不能只等观察帧：支付页事件可能断供，到点自唤醒一次。
+        if (gate.retryAfterMs > 0L) {
+            schedulePermissionSettleRecheck(gate.retryAfterMs)
+        }
     }
 
     // ── D6 挂起候选心跳（2026-10-27 诊断轮，只取证不放行）────────────────────
@@ -744,7 +776,26 @@ internal object PendingConfirmOverlayManager {
             // D5：此前这里是纯静默 —— 挂起期间"在重评但没放行"与"根本没被
             // 唤醒"无法区分（log4 支付宝 53s 黑箱的直接原因）。节流补痕。
             logGateBlockedThrottled(gate.reason)
+            if (gate.retryAfterMs > 0L) {
+                schedulePermissionSettleRecheck(gate.retryAfterMs)
+            }
         }
+    }
+
+    /**
+     * 权限稳定期的到点自唤醒（2026-10-29）。
+     *
+     * 只排一个任务：反复重排会把同一时刻的多次重评叠在一起。任务执行时若挂起
+     * 候选已被放行/超时/关闭，[maybeShowPendingCandidate] 自身会直接返回。
+     */
+    private fun schedulePermissionSettleRecheck(delayMs: Long) {
+        permissionSettleRecheckRunnable?.let(mainHandler::removeCallbacks)
+        val runnable = Runnable {
+            permissionSettleRecheckRunnable = null
+            maybeShowPendingCandidate()
+        }
+        permissionSettleRecheckRunnable = runnable
+        mainHandler.postDelayed(runnable, delayMs.coerceAtLeast(50L))
     }
 
     /**
@@ -813,7 +864,15 @@ internal object PendingConfirmOverlayManager {
      * @param allowed 是否放行。
      * @param reason 放行原因，或**被挡住的门禁代号 + 现场值**（诊断日志锚点）。
      */
-    private data class GateVerdict(val allowed: Boolean, val reason: String)
+    private data class GateVerdict(
+        val allowed: Boolean,
+        val reason: String,
+        /**
+         * >0 表示被**时间型**门禁挡住（目前只有权限稳定期），到点后应自唤醒重评，
+         * 不必等下一帧观察事件（支付死区里事件可能断供）。
+         */
+        val retryAfterMs: Long = 0L
+    )
 
     /**
      * 帧级门禁：最近观察帧非敏感且新鲜，且前台不是本应用，且有悬浮窗权限。
@@ -828,7 +887,8 @@ internal object PendingConfirmOverlayManager {
     private fun evaluateGate(): GateVerdict {
         val context = appContext
             ?: return GateVerdict(false, "APP_CONTEXT_NULL")
-        val observationAge = System.currentTimeMillis() - lastObservationAt
+        val now = System.currentTimeMillis()
+        val observationAge = now - lastObservationAt
         if (observationAge > OBSERVATION_FRESH_MILLIS) {
             return GateVerdict(
                 false,
@@ -848,21 +908,38 @@ internal object PendingConfirmOverlayManager {
                 "FOREGROUND_IS_SELF(foreground=$lastForegroundPackage, age=${observationAge}ms)"
             )
         }
-        if (!hasOverlayPermission(context)) {
-            // D3：追加 AppOps 原始 mode 与快照缓存龄 —— 区分「真禁用(IGNORED)」
-            // 与「接口误报(ALLOWED)」（2026-10-27 诊断轮，判据本身未动）。
-            val snapshot = readOverlayPermSnapshot(context)
+        // D3：追加 AppOps 原始 mode 与快照缓存龄 —— 区分「真禁用(IGNORED)」
+        // 与「接口误报(ALLOWED)」（2026-10-27 诊断轮）。
+        val snapshot = readOverlayPermSnapshot(context)
+        if (!snapshot.canDraw) {
+            overlayPermissionAllowedSince = 0L
             return GateVerdict(
                 false,
                 "NO_OVERLAY_PERMISSION(foreground=$lastForegroundPackage, " +
                     "age=${observationAge}ms, device=${Build.MANUFACTURER} ${Build.MODEL} " +
                     "sdk=${Build.VERSION.SDK_INT}, opMode=${snapshot.opModeName}, " +
-                    "cacheAge=${System.currentTimeMillis() - snapshot.readAt}ms)"
+                    "cacheAge=${now - snapshot.readAt}ms)"
+            )
+        }
+        // 2026-10-29 支付宝 15.50 事故：权限刚恢复就 addView 会 attach 成功但被压在
+        // 支付应用之下。要求连续 ALLOWED 满稳定期再放行（详见常量 KDoc）。
+        if (overlayPermissionAllowedSince == 0L) {
+            overlayPermissionAllowedSince = now
+        }
+        val settledFor = now - overlayPermissionAllowedSince
+        if (settledFor < OVERLAY_PERMISSION_SETTLE_MILLIS) {
+            val remaining = OVERLAY_PERMISSION_SETTLE_MILLIS - settledFor
+            return GateVerdict(
+                false,
+                "OVERLAY_PERMISSION_SETTLING(settledFor=${settledFor}ms < " +
+                    "${OVERLAY_PERMISSION_SETTLE_MILLIS}ms, opMode=${snapshot.opModeName})",
+                retryAfterMs = remaining
             )
         }
         return GateVerdict(
             true,
-            "PASS(age=${observationAge}ms, foreground=$lastForegroundPackage)"
+            "PASS(age=${observationAge}ms, foreground=$lastForegroundPackage, " +
+                "permissionStableFor=${settledFor}ms)"
         )
     }
 
@@ -1042,6 +1119,12 @@ internal object PendingConfirmOverlayManager {
                 onConfirmClicked(view, pendingRow, confirmButton)
             }
 
+            // 2026-10-29：addView 前拉起短时 specialUse 前台服务（对齐钱迹
+            // AutoBillFloatingService）。HyperOS 在支付宝前台会把没有前台服务的
+            // 应用悬浮窗压到支付应用之下；FGS 让本应用保持 UID_VISIBLE。
+            // 启动失败只记日志，不阻断弹窗（退回 0.0.104 的无 FGS 路径）。
+            PendingOverlayService.start(context)
+            visibilityRetried = false
             val windowManager = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
             windowManager.addView(view, createLayoutParams())
             this.windowManager = windowManager
@@ -1069,6 +1152,8 @@ internal object PendingConfirmOverlayManager {
                 }
             }
             overlayView = null
+            // addView 失败 ⇒ 不再需要保活 FGS。
+            PendingOverlayService.stop(context)
             // addView 失败 ⇒ 槽位空闲，补播队列（2026-10-24 复审补）。
             drainQueuedPrompts()
         }
@@ -1092,6 +1177,12 @@ internal object PendingConfirmOverlayManager {
      * 会把"我们自己关掉的"误报成"被系统移除"。这里比对 `overlayView === view`，
      * 不是当前弹窗则静默跳过。
      *
+     * **2026-10-29 升级**：判据从 `isAttachedToWindow` 扩为
+     * `attached && isShown && hasWindowFocus`。原因是支付宝 15.50 事故里
+     * 第一张卡 attached 通过、却 30 秒都没成为活动窗口（被压在支付宝之下，
+     * 用户"什么都没看到"）。未通过时先重建一次（remove + addView），
+     * 二次仍失败只告警不误关（详见方法内注释）。
+     *
      * 仅主线程调用（由 [displayOverlay] 在主线程调用）。
      */
     private fun scheduleVisibilityCheck(view: View) {
@@ -1102,26 +1193,75 @@ internal object PendingConfirmOverlayManager {
                 // 500ms 内已被关闭（dismissInternal 会取消本任务，此处是兜底）。
                 return@Runnable
             }
-            if (view.isAttachedToWindow) {
+            val attached = view.isAttachedToWindow
+            val shown = view.isShown
+            val focused = view.hasWindowFocus()
+            if (attached && shown && focused) {
                 JotBillLog.i(
                     TAG,
-                    "付款确认弹窗已上屏确认: id=${displayedPendingId?.take(16)}, attached=true"
+                    "付款确认弹窗已上屏确认: id=${displayedPendingId?.take(16)}, " +
+                        "attached=true, shown=true, focus=true"
                 )
                 return@Runnable
             }
-            // 失败时把能拿到的现场一并打出来：区分"被摘除"与"布局成 0 尺寸/不可见"。
+            // 2026-10-29（支付宝 15.50 事故）：attached=true **不等于**用户看得见。
+            // 第一张卡 attached 通过，但 30 秒内无障碍活动窗口一直是支付宝 ——
+            // 窗口被压在支付应用之下；第二张 30 秒后同样的窗口才正常。
+            // `hasWindowFocus` 是"真的上到活动层"的可用判据（本窗口可获焦）。
+            if (!visibilityRetried) {
+                visibilityRetried = true
+                JotBillLog.w(
+                    TAG,
+                    "付款确认弹窗未获得活动窗口,重建一次: id=${displayedPendingId?.take(16)}, " +
+                        "attached=$attached, shown=$shown, focus=$focused, " +
+                        "size=${view.width}x${view.height}, windowToken=${view.windowToken != null}"
+                )
+                try {
+                    windowManager?.removeView(view)
+                } catch (error: RuntimeException) {
+                    JotBillLog.w(TAG, "弹窗重建前移除失败", error)
+                }
+                mainHandler.postDelayed({
+                    if (overlayView !== view) {
+                        return@postDelayed
+                    }
+                    try {
+                        windowManager?.addView(view, createLayoutParams())
+                        JotBillLog.i(TAG, "弹窗已重建上屏: id=${displayedPendingId?.take(16)}")
+                    } catch (error: RuntimeException) {
+                        JotBillLog.w(TAG, "弹窗重建失败(通知兜底)", error)
+                        dismissInternal("NOT_ATTACHED")
+                        return@postDelayed
+                    }
+                    scheduleVisibilityCheck(view)
+                }, VISIBILITY_RETRY_DELAY)
+                return@Runnable
+            }
+            if (!attached || !shown) {
+                // 失败时把能拿到的现场一并打出来：区分"被摘除"与"布局成 0 尺寸/不可见"。
+                JotBillLog.w(
+                    TAG,
+                    "付款确认弹窗 addView 成功但未上屏(疑被系统/ROM 移除): " +
+                        "id=${displayedPendingId?.take(16)}, attached=$attached, shown=$shown, " +
+                        "visibility=${view.visibility}, size=${view.width}x${view.height}, " +
+                        "windowToken=${view.windowToken != null}"
+                )
+                // 必须清理：否则 overlayView 仍非空，30 秒内所有新候选都会被
+                // maybeShowCandidate 的 `overlayView != null` 挡掉，表现为连续漏弹。
+                // 走 dismissInternal 保证窗口/计时器/状态一起收口；reason 不是
+                // AUTO_DISMISS，不会补发"这笔还没记上"的通知。
+                dismissInternal("NOT_ATTACHED")
+                return@Runnable
+            }
+            // attached + shown 但拿不到焦点：可能仍被 ROM 压住，也可能该 ROM 不允许
+            // 应用悬浮窗获焦。**不主动关闭** —— 误关一张本来可见的卡更糟；
+            // 留告警，由 30s 自动关闭收口。
             JotBillLog.w(
                 TAG,
-                "付款确认弹窗 addView 成功但未上屏(疑被系统/ROM 移除): " +
-                    "id=${displayedPendingId?.take(16)}, attached=false, shown=${view.isShown}, " +
-                    "visibility=${view.visibility}, size=${view.width}x${view.height}, " +
-                    "windowToken=${view.windowToken != null}"
+                "付款确认弹窗已上屏但未获得活动窗口(可能被ROM压制): " +
+                    "id=${displayedPendingId?.take(16)}, attached=$attached, shown=$shown, " +
+                    "size=${view.width}x${view.height}"
             )
-            // 必须清理：否则 overlayView 仍非空，30 秒内所有新候选都会被
-            // maybeShowCandidate 的 `overlayView != null` 挡掉，表现为连续漏弹。
-            // 走 dismissInternal 保证窗口/计时器/状态一起收口；reason 不是
-            // AUTO_DISMISS，不会补发"这笔还没记上"的通知。
-            dismissInternal("NOT_ATTACHED")
         }
         visibilityCheckRunnable = runnable
         mainHandler.postDelayed(runnable, VISIBILITY_CHECK_DELAY)
@@ -1613,6 +1753,10 @@ internal object PendingConfirmOverlayManager {
             // ⚠️ 必须在下面清空 displayedPendingId / displayedAutoDismissInfo **之前**调用：
             // 它读的就是这两个字段。放在清空之后会永远拿到 null ⇒ 通知永不发出。
             notifyAutoDismissIfNeeded(reason)
+            // 弹窗结束即撤掉保活 FGS（秒级存在，不常驻）。
+            appContext?.let { PendingOverlayService.stop(it) }
+            permissionSettleRecheckRunnable?.let(mainHandler::removeCallbacks)
+            permissionSettleRecheckRunnable = null
             overlayView = null
             selectedCategory = null
             selectedAccount = null
