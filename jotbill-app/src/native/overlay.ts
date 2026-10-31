@@ -19,7 +19,8 @@ function getRawOverlayModule(): RawOverlayModule {
  * 删除的（连同原生侧实现，见 PendingConfirmOverlayManager 同分支提交）：
  *   · `getOverlayPermissionStatus` / `requestOverlayPermission` —— 手动截图悬浮按钮的
  *     权限读写。**注意别与 PaymentNotificationModule 的同名方法混淆**：后者服务的是
- *     通知悬浮窗，仍在 `PaymentNotificationSettings.tsx` 使用，保留未动。
+ *     通知悬浮窗，2026-10-31 起由权限与提醒页（GeneralSettingsScreen）经
+ *     `paymentNotificationService` 调用，保留未动。
  *   · `setManualCaptureButtonEnabled` / `setManualCaptureButtonMode` /
  *     `getManualCaptureButtonMode` / `getManualCaptureButtonState` —— 悬浮按钮三件套。
  *   · `requestManualCapture` —— 手动触发结算页截图。

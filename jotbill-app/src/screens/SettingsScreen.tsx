@@ -1,6 +1,7 @@
 /**
  * 设置屏幕 - Neo-Brutalism 风格
  * 描边用户卡片 + 糖果色图标块 + 描边设置分组
+ * 仅保留入口标题；权限相关统一收进「权限与提醒」页。
  */
 import React from 'react';
 import {
@@ -13,20 +14,17 @@ import {
 } from 'react-native';
 import {
   Activity,
+  Bell,
   Bot,
   CreditCard,
   Database,
   Wallet,
   Flag,
   ListFilter,
-  Settings,
   Moon,
-  Info,
-  ChevronRight,
-  Bell,
-  BellRing,
   ShieldCheck,
   Tags,
+  ChevronRight,
 } from 'lucide-react-native';
 import { ThemeColors } from '../theme/colors';
 import { spacing, borderRadius, borderWidth, shadow } from '../theme';
@@ -65,20 +63,17 @@ interface SettingGroup {
 // 糖果色图标背景映射
 const ICON_CANDY_COLORS: Record<string, string> = {
   accounts: '#A5D8FF',
-  ai: '#D0BFFF',
-  runtime: '#B2F2BB',
-  data: '#FFD8A8',
-  netWorth: '#96F2D7',
-  rules: '#D3F9D8',
+  category: '#FFE8CC',
   wallet: '#FFD93D',
   flag: '#FF90B3',
-  settings: '#7EB6FF',
-  moon: '#C5A3FF',
-  info: '#7DCEA0',
+  netWorth: '#96F2D7',
   review: '#FFC9DE',
-  accessibility: '#B5E8DC',
-  notification: '#FFD6A5',
-  category: '#FFE8CC',
+  runtime: '#B2F2BB',
+  permissions: '#B5E8DC',
+  ai: '#D0BFFF',
+  data: '#FFD8A8',
+  rules: '#D3F9D8',
+  moon: '#C5A3FF',
 };
 
 export default function SettingsScreen({ navigation }: SettingsScreenProps) {
@@ -87,25 +82,22 @@ export default function SettingsScreen({ navigation }: SettingsScreenProps) {
 
   const iconMap: Record<string, React.FC<{ size: number; color: string }>> = {
     accounts: CreditCard,
-    ai: Bot,
-    runtime: Activity,
-    data: Database,
-    netWorth: Wallet,
-    rules: ListFilter,
+    category: Tags,
     wallet: Wallet,
     flag: Flag,
-    settings: Settings,
-    moon: Moon,
-    info: Info,
+    netWorth: Wallet,
     review: Bell,
-    accessibility: ShieldCheck,
-    notification: BellRing,
-    category: Tags,
+    runtime: Activity,
+    permissions: ShieldCheck,
+    ai: Bot,
+    data: Database,
+    rules: ListFilter,
+    moon: Moon,
   };
 
   const settingGroups: SettingGroup[] = [
     {
-      title: '💰 财务',
+      title: '💰 财务管理',
       items: [
         { id: 'accounts', label: '账户管理', icon: 'accounts', onPress: () => navigation?.navigate('Accounts') },
         { id: 'category-manage', label: '分类管理', icon: 'category', onPress: () => navigation?.navigate('Categories') },
@@ -115,26 +107,29 @@ export default function SettingsScreen({ navigation }: SettingsScreenProps) {
       ],
     },
     {
-      title: '🧩 本地能力',
+      title: '🧩 识别与自动化',
       items: [
         { id: 'review', label: '待确认中心', icon: 'review', onPress: () => navigation?.navigate('Review') },
-        { id: 'accessibility', label: '无障碍权限', icon: 'accessibility', onPress: () => navigation?.navigate('AccessibilityPermission') },
-        { id: 'notification', label: '通知权限', icon: 'notification', onPress: () => navigation?.navigate('NotificationPermission') },
-        { id: 'ai-providers', label: 'AI 服务商', icon: 'ai', onPress: () => navigation?.navigate('AiProviders') },
         { id: 'runtime-status', label: '运行状态', icon: 'runtime', onPress: () => navigation?.navigate('RuntimeStatus') },
-        { id: 'data-management', label: '数据管理', icon: 'data', onPress: () => navigation?.navigate('DataManagement') },
-        { id: 'rules', label: '规则', icon: 'rules', onPress: () => navigation?.navigate('Rules') },
       ],
     },
     {
-      title: '⚙️ 应用',
+      title: '🔔 权限与提醒',
       items: [
         {
           id: 'general-settings',
-          label: '通用配置',
-          icon: 'settings',
+          label: '权限与提醒',
+          icon: 'permissions',
           onPress: () => navigation?.navigate('GeneralSettings'),
         },
+      ],
+    },
+    {
+      title: '🤖 AI 与数据',
+      items: [
+        { id: 'ai-providers', label: 'AI 服务商', icon: 'ai', onPress: () => navigation?.navigate('AiProviders') },
+        { id: 'data-management', label: '数据管理', icon: 'data', onPress: () => navigation?.navigate('DataManagement') },
+        { id: 'rules', label: '规则', icon: 'rules', onPress: () => navigation?.navigate('Rules') },
       ],
     },
     {
@@ -148,12 +143,6 @@ export default function SettingsScreen({ navigation }: SettingsScreenProps) {
           value: isDark,
           onValueChange: toggleTheme,
         },
-      ],
-    },
-    {
-      title: 'ℹ️ 关于',
-      items: [
-        { id: 'about', label: '关于应用', icon: 'info', onPress: () => {} },
       ],
     },
   ];
