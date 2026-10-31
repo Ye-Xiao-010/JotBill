@@ -85,6 +85,26 @@ class CheckoutAccessibilityService : AccessibilityService() {
         /** 正常存活日志的低频输出间隔 —— 心跳本身 60s 一跳，只在低频时落盘。 */
         private const val SERVICE_ALIVE_LOG_INTERVAL_MILLIS = 600_000L
 
+        /** pageTextLength 整树遍历的采样间隔（纯诊断字段，不参与判定）。 */
+        private const val PAGE_TEXT_LENGTH_SAMPLE_MILLIS = 5_000L
+
+        /**
+         * 无障碍事件白名单（2026-10-31 节电）：只投递购物/支付包事件，
+         * 非白名单事件在系统层过滤、进程零唤醒（省电最大的一条）。
+         *
+         * 单一事实源是 [CheckoutPageDetector] 的
+         * [DEFAULT_SUPPORTED_SHOPPING_PACKAGES] + [DEFAULT_SUPPORTED_PAYMENT_PACKAGES]，
+         * 此处派生 —— 改包名只改那一处。XML 里同步声明作系统层兜底 + 文档。
+         *
+         * 对识别精度零影响：非白名单事件本来就被
+         * [resolveEffectiveShoppingPackage] 归属推断后丢弃；
+         * "离开事件清理"旧约束已随截图链路删除而失效（lastWindowPackage 的
+         * fallback 路径在白名单下不可达，清理仅影响日志）。
+         */
+        private val EVENT_PACKAGE_WHITELIST: Array<String> =
+            (DEFAULT_SUPPORTED_SHOPPING_PACKAGES + DEFAULT_SUPPORTED_PAYMENT_PACKAGES)
+                .toTypedArray()
+
         // ── 支付环境主动扫描（2026-10-27，四份远程日志定案 v5）──────────────────
         // HyperOS 2（Android 16）在支付全程（密码键盘→成功页首帧）抑制无障碍
         // 事件：实测 75~155 秒"事件死区"（docs/qa/device/2026-10-27-remote-user1/）。
@@ -263,6 +283,14 @@ class CheckoutAccessibilityService : AccessibilityService() {
     private var lastWindowPackage: String? = null
     private var lastWindowClass: String? = null
     private var lastObservedEventLogAt = 0L
+
+    /**
+     * 未分类帧的 pageTextLength 采样间隔（2026-10-31 节电）。
+     * 该值只进诊断日志字符串、不参与任何判定 —— 但它是远程排障的主力锚点
+     * （log2 的 397/551 字符帧、log3 的 20 字符成功页全靠它定性），
+     * 不删、只降频：每 [PAGE_TEXT_LENGTH_SAMPLE_MILLIS] 才算一次整树遍历。
+     */
+    private var lastPageTextLengthSampleAt = 0L
     private var lastPaymentWindowScanAt = 0L
 
     // ── 支付结果页重扫兜底（P2-5，2026-10-24 场景审查）──────────────────────
@@ -430,8 +458,9 @@ class CheckoutAccessibilityService : AccessibilityService() {
             AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS or
             AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS or
             AccessibilityServiceInfo.FLAG_INCLUDE_NOT_IMPORTANT_VIEWS
-        // 不在 XML 中限定包名，才能观察离开购物应用的事件并清理旧页面状态；代码仍会先做白名单资格判断。
-        configuredInfo.packageNames = null
+        // 2026-10-31 节电：事件白名单（系统层过滤非白名单事件，进程零唤醒）。
+        // 旧注释"不限定包名才能观察离开事件"的约束已随截图链路删除而失效。
+        configuredInfo.packageNames = EVENT_PACKAGE_WHITELIST
         serviceInfo = configuredInfo
         AccessibilityPageSummaryCollector.resetVolatileTracker()
         activeService = this
@@ -586,7 +615,8 @@ class CheckoutAccessibilityService : AccessibilityService() {
         if (eventPackage != packageName && eventPackage !in SYSTEM_UI_PACKAGES) {
             return false
         }
-        return false
+        // 自身悬浮层 / 系统 UI 事件，不是真实购物页变化 —— 跳过整树采集。
+        return true
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
@@ -645,6 +675,19 @@ class CheckoutAccessibilityService : AccessibilityService() {
             eventWindowClass.isNotBlank()
         ) {
             lastWindowClass = eventWindowClass
+        }
+
+        // 节电：自身悬浮层 / 系统 UI 的误归属事件不驱动整树采集
+        // （2026-10-31 接上原死代码，KDoc 承诺的语义）。
+        // activeRoot 已在上方获取，跳过时必须回收 —— 不回收会每次泄漏一个
+        // AccessibilityNodeInfo（系统节点对象，GC 不回收原生侧）。
+        if (shouldSkipForeignEventCollection(eventPackage, shoppingPackage)) {
+            try {
+                activeRoot?.recycle()
+            } catch (_: RuntimeException) {
+                // 系统节点已回收时无需再次处理。
+            }
+            return
         }
 
         val eventSource = try {
@@ -1100,10 +1143,17 @@ class CheckoutAccessibilityService : AccessibilityService() {
                         } catch (_: RuntimeException) {
                             ""
                         }
-                        val pageTextLength = try {
-                            collectPageText(root).length
-                        } catch (_: RuntimeException) {
-                            -1
+                        // 节电：pageTextLength 只进日志不参与判定，每 5s 才算一次
+                        // 整树遍历（高频帧跳过并打 -2 标记，保诊断锚点不丢）。
+                        val pageTextLength = if (observedAt - lastPageTextLengthSampleAt >= PAGE_TEXT_LENGTH_SAMPLE_MILLIS) {
+                            lastPageTextLengthSampleAt = observedAt
+                            try {
+                                collectPageText(root).length
+                            } catch (_: RuntimeException) {
+                                -1
+                            }
+                        } else {
+                            -2 // 采样跳过标记
                         }
                         JotBillLog.i(
                             TAG,
