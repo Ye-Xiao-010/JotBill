@@ -405,11 +405,104 @@ const sunsetDark: ThemePalette = {
   gradientPrimaryEnd: '#FDBA74',
 };
 
+/* ================================================================
+ * ink 墨黑（极简高对比；白字/#1A1A1A = 17.40:1 AA）
+ * ============================================================== */
+const inkLight: ThemePalette = {
+  primary: '#1A1A1A',
+  primaryLight: '#E5E5E5',
+  primaryDark: '#000000',
+
+  secondary: '#525252',
+  accent: '#2563EB',
+  success: '#22C55E',
+  successLight: '#DEF7EC',
+  warning: '#FB923C',
+  error: '#DC2626',
+
+  pink: '#EC4899',
+  lime: '#84CC16',
+  cyan: '#06B6D4',
+  orange: '#F97316',
+
+  stroke: '#1A1A1A',
+  strokeLight: '#404040',
+
+  ...sharedLightText,
+  divider: '#E5E5E5',
+  background: '#FAFAFA',
+  surface: '#FFFFFF',
+  surfaceMuted: '#F0F0F0',
+
+  ...sharedLightAmount,
+
+  onPrimary: '#FFFFFF',
+  onPrimaryMuted: 'rgba(255, 255, 255, 0.82)',
+  onPrimarySubtle: 'rgba(255, 255, 255, 0.72)',
+  onPrimaryDivider: 'rgba(255, 255, 255, 0.24)',
+
+  cardBackground: '#FFFFFF',
+  cardBorder: '#1A1A1A',
+
+  shadow: '#1A1A1A',
+  shadowDark: '#000000',
+  overlay: 'rgba(0, 0, 0, 0.6)',
+  overlayLight: 'rgba(0, 0, 0, 0.3)',
+
+  gradientPrimaryStart: '#1A1A1A',
+  gradientPrimaryEnd: '#404040',
+};
+
+const inkDark: ThemePalette = {
+  primary: '#FAFAFA',
+  primaryLight: '#3A3A3C',
+  primaryDark: '#D4D4D4',
+
+  secondary: '#A3A3A3',
+  accent: '#93C5FD',
+  success: '#4ADE80',
+  successLight: '#1A3328',
+  warning: '#FDBA74',
+  error: '#F87171',
+
+  pink: '#F472B6',
+  lime: '#A3E635',
+  cyan: '#22D3EE',
+  orange: '#FB923C',
+
+  ...sharedDarkText,
+  divider: sharedDarkSurface.divider,
+  background: '#111111',
+  surface: '#1C1C1E',
+  surfaceMuted: '#1F1F22',
+
+  ...sharedDarkAmount,
+
+  onPrimary: '#1A1A1A',
+  onPrimaryMuted: 'rgba(0, 0, 0, 0.75)',
+  onPrimarySubtle: 'rgba(0, 0, 0, 0.6)',
+  onPrimaryDivider: 'rgba(0, 0, 0, 0.24)',
+
+  cardBackground: '#1C1C1E',
+  cardBorder: sharedDarkSurface.cardBorder,
+  stroke: sharedDarkSurface.stroke,
+  strokeLight: sharedDarkSurface.strokeLight,
+
+  shadow: sharedDarkSurface.shadow,
+  shadowDark: sharedDarkSurface.shadowDark,
+  overlay: sharedDarkSurface.overlay,
+  overlayLight: sharedDarkSurface.overlayLight,
+
+  gradientPrimaryStart: '#FAFAFA',
+  gradientPrimaryEnd: '#D4D4D4',
+};
+
 /** 主题注册表：satisfies 保证每套色板字段完整，缺 token 编译期报错 */
 export const themes = {
   blocks: { light: blocksLight, dark: blocksDark },
   mint: { light: mintLight, dark: mintDark },
   sunset: { light: sunsetLight, dark: sunsetDark },
+  ink: { light: inkLight, dark: inkDark },
 } satisfies Record<string, { light: ThemePalette; dark: ThemePalette }>;
 
 export type ThemeName = keyof typeof themes;
@@ -419,6 +512,7 @@ export const THEME_LABELS: Record<ThemeName, string> = {
   blocks: '积木蓝',
   mint: '薄荷账本',
   sunset: '落日橙',
+  ink: '墨黑',
 };
 
 // 兼容旧导入：默认 blocks 浅色
