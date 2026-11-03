@@ -209,6 +209,9 @@ const createStyles = (colors: ThemeColors) => ({
       padding: spacing.lg,
       maxHeight: screenHeight * 0.6,
     },
+    bottomSheetContent: {
+      flex: 1,
+    },
   }),
   _colors: colors,
 });
