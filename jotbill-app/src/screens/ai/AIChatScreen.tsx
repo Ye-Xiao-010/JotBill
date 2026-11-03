@@ -37,6 +37,7 @@ import { aiService } from '../../services/ai';
 import { audioRecorderService } from '../../services/audio/audioRecorderService';
 import type { RecordingProgress } from '../../services/audio/audioRecorderService';
 import { nativeData, type Account, type Category } from '../../native';
+import { getCategoryIcon as getDefaultCategoryIcon } from '../../constants/app';
 import { Skeleton, SkeletonCircle } from '../../components/skeleton/Skeleton';
 import type { ParsedBill, AIModelConfig, ChatSession } from '../../types/ai';
 import { ProviderIcon } from '../../components/icons';
@@ -1834,21 +1835,9 @@ export default function AIChatScreen() {
     }
   };
 
-  const getCategoryIcon = (categoryName: string): string => {
-    const iconMap: Record<string, string> = {
-      餐饮: '🍽️',
-      交通: '🚗',
-      购物: '🛍️',
-      居住: '🏠',
-      娱乐: '🎮',
-      医疗: '💊',
-      教育: '📚',
-      工资: '💵',
-      理财: '📈',
-      其他: '📦',
-    };
-    return iconMap[categoryName] || '📦';
-  };
+  /** 分类名 → 图标：统一走 constants/app.ts 的 DEFAULT_CATEGORIES 查找 */
+  const getCategoryIcon = (categoryName: string): string =>
+    getDefaultCategoryIcon(categoryName, '📦');
 
   /**
    * 把 LLM 给的分类名映射到本地分类 ID。

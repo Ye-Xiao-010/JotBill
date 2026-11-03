@@ -27,6 +27,7 @@ import CategoryIcon from '../../components/business/CategoryIcon';
 import { useDashboard, useStyles } from '../../hooks';
 import { nativeData } from '../../native';
 import { formatPlatform } from '../../utils/platform';
+import { getCategoryIcon, getCategoryColor } from '../../constants/app';
 import { CACHE_TIME, GC_TIME, QUERY_KEYS } from '../../lib/queryClient';
 import type {
   Bill,
@@ -298,34 +299,6 @@ export default function DashboardScreen() {
     } as never);
   };
 
-  const getCategoryIcon = (categoryName?: string): string => {
-    const iconMap: { [key: string]: string } = {
-      餐饮: '☕',
-      交通: '🚗',
-      购物: '🛍️',
-      收入: '💰',
-      工资: '💼',
-      娱乐: '🎮',
-      医疗: '🏥',
-      教育: '📚',
-    };
-    return iconMap[categoryName || ''] || '📝';
-  };
-
-  const getCategoryBlockColor = (categoryName?: string): string => {
-    const colorMap: { [key: string]: string } = {
-      餐饮: '#FACC15',
-      交通: '#3B82F6',
-      购物: '#EC4899',
-      收入: '#22C55E',
-      工资: '#22C55E',
-      娱乐: '#A855F7',
-      医疗: '#EF4444',
-      教育: '#F97316',
-    };
-    return colorMap[categoryName || ''] || '#E5E5E5';
-  };
-
   if (isLoading) {
     return <DashboardSkeleton />;
   }
@@ -472,7 +445,7 @@ export default function DashboardScreen() {
                       style={[
                         styles.transactionIcon,
                         {
-                          backgroundColor: getCategoryBlockColor(
+                          backgroundColor: getCategoryColor(
                             category?.name,
                           ),
                         },
