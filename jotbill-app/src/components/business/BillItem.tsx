@@ -48,7 +48,7 @@ const BillItem: React.FC<BillItemProps> = ({ bill, onPress }) => {
       <View style={styles.leftSection}>
         <View style={[
           styles.iconContainer,
-          { backgroundColor: isIncome ? styles._colors.success : styles._colors.accent },
+          { backgroundColor: isIncome ? styles._colors.income : styles._colors.expense },
         ]}>
           <Text style={styles.icon}>{bill.icon}</Text>
         </View>
