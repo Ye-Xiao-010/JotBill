@@ -28,7 +28,7 @@ import {
   ShieldCheck,
   Tags,
 } from 'lucide-react-native';
-import { ThemeColors } from '../theme/colors';
+import { ThemeColors, themes, THEME_LABELS, type ThemeName } from '../theme/colors';
 import { spacing, borderRadius, borderWidth, shadow, typography } from '../theme';
 import { useStyles } from '../hooks';
 import { useTheme } from '../providers';
@@ -83,7 +83,7 @@ const ICON_CANDY_COLORS: Record<string, string> = {
 };
 
 export default function SettingsScreen({ navigation }: SettingsScreenProps) {
-  const { isDark, toggleTheme, colors } = useTheme();
+  const { isDark, toggleTheme, colors, themeName, setThemeName } = useTheme();
   const styles = useStyles(createStyles);
 
   const iconMap: Record<string, React.FC<{ size: number; color: string }>> = {
@@ -222,6 +222,43 @@ export default function SettingsScreen({ navigation }: SettingsScreenProps) {
           </View>
         ))}
 
+        {/* 主题选择：色块预览 + 名称，切换即时生效并持久化 */}
+        <View style={styles.settingGroup}>
+          <Text style={styles.groupTitle}>🎨 主题风格</Text>
+          <View style={styles.themeGrid}>
+            {(Object.keys(themes) as ThemeName[]).map(name => {
+              const preview = themes[name].light;
+              const active = name === themeName;
+              return (
+                <TouchableOpacity
+                  key={name}
+                  style={[styles.themeCard, active && styles.themeCardActive]}
+                  onPress={() => setThemeName(name)}
+                  activeOpacity={0.8}
+                  accessibilityLabel={`主题 ${THEME_LABELS[name]}${active ? '，当前使用中' : ''}`}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: active }}
+                >
+                  <View style={styles.themeSwatches}>
+                    <View style={[styles.themeSwatch, { backgroundColor: preview.primary }]} />
+                    <View style={[styles.themeSwatch, { backgroundColor: preview.accent }]} />
+                    <View
+                      style={[
+                        styles.themeSwatch,
+                        { backgroundColor: preview.background },
+                        styles.themeSwatchBordered,
+                      ]}
+                    />
+                  </View>
+                  <Text style={styles.themeName}>
+                    {THEME_LABELS[name]}{active ? ' ✓' : ''}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        </View>
+
         <View style={styles.versionInfo}>
           <Text style={styles.versionText}>JotBill</Text>
           <Text style={styles.copyrightText}>© 2026 JotBill</Text>
@@ -301,6 +338,44 @@ const createStyles = (colors: ThemeColors) => ({
     },
     groupItems: {
       gap: spacing.sm,
+    },
+    themeGrid: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      gap: spacing.sm,
+    },
+    themeCard: {
+      flexBasis: '48%',
+      backgroundColor: colors.surface,
+      borderRadius: borderRadius.card,
+      borderWidth: borderWidth.thin,
+      borderColor: colors.stroke,
+      padding: spacing.md,
+      minHeight: 44,
+    },
+    themeCardActive: {
+      borderWidth: borderWidth.medium,
+      borderColor: colors.primary,
+      ...shadow.small,
+    },
+    themeSwatches: {
+      flexDirection: 'row',
+      gap: spacing.xs,
+      marginBottom: spacing.sm,
+    },
+    themeSwatch: {
+      width: 24,
+      height: 24,
+      borderRadius: borderRadius.small,
+    },
+    themeSwatchBordered: {
+      borderWidth: borderWidth.hairline,
+      borderColor: colors.divider,
+    },
+    themeName: {
+      fontSize: 14,
+      fontWeight: '700',
+      color: colors.textPrimary,
     },
     settingItem: {
       flexDirection: 'row',

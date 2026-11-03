@@ -379,7 +379,7 @@ const createStyles = (colors: ThemeColors) => ({
       color: colors.textSecondary,
       fontWeight: '700',
     },
-    filterTextActive: { color: '#FFFFFF', fontWeight: '800' },
+    filterTextActive: { color: colors.onPrimary, fontWeight: '800' },
     scrollView: { flex: 1 },
     monthSection: { marginBottom: spacing.md },
     monthHeader: {

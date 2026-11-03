@@ -137,10 +137,10 @@ const createStyles = (colors: ThemeColors) => ({
       paddingVertical: spacing.xs,
     },
     incomeBadge: {
-      backgroundColor: '#DCFCE7',
+      backgroundColor: colors.incomeLight,
     },
     expenseBadge: {
-      backgroundColor: '#FEE2E2',
+      backgroundColor: colors.expenseLight,
     },
     amount: {
       fontSize: 15,
@@ -148,10 +148,10 @@ const createStyles = (colors: ThemeColors) => ({
       fontFamily: typography.fontFamily.mono,
     },
     incomeAmount: {
-      color: '#16A34A',
+      color: colors.incomeStrong,
     },
     expenseAmount: {
-      color: '#DC2626',
+      color: colors.expenseStrong,
     },
   }),
   _colors: colors,

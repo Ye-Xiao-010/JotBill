@@ -649,7 +649,7 @@ function PendingCard({
           disabled={isConfirming || isIgnoring || isAiFailedPlaceholder}
           activeOpacity={0.85}
         >
-          <Check size={16} color="#FFFFFF" />
+          <Check size={16} color={colors.onPrimary} />
           <Text style={styles.confirmButtonText}>
             {isAiFailedPlaceholder
               ? '识别失败，请重试'
@@ -1544,7 +1544,7 @@ const createStyles = (colors: ThemeColors) => ({
     confirmButtonText: {
       fontSize: 13,
       fontWeight: '800',
-      color: '#FFFFFF',
+      color: colors.onPrimary,
     },
     retryButton: {
       flex: 1,
@@ -1721,7 +1721,7 @@ const createStyles = (colors: ThemeColors) => ({
     editConfirmButtonText: {
       fontSize: 13,
       fontWeight: '800',
-      color: '#FFFFFF',
+      color: colors.onPrimary,
     },
   }),
   _colors: colors,

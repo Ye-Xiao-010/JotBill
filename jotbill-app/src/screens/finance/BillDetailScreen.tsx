@@ -128,7 +128,7 @@ export default function BillDetailScreen() {
             error={loadError}
             title="账单详情加载失败"
             hint="这不代表这条账单不存在"
-            onRetry={() => void fetchBill()}
+            onRetry={fetchBill}
             style={styles.errorBanner}
           />
         </View>
@@ -387,7 +387,7 @@ const createStyles = (colors: ThemeColors) => ({
     editButtonText: {
       fontSize: 16,
       fontWeight: '800',
-      color: '#FFFFFF',
+      color: colors.onPrimary,
     },
     deleteButton: {
       flex: 1,
