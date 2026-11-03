@@ -221,9 +221,102 @@ const blocksDark: ThemePalette = {
   gradientPrimaryEnd: '#93C5FD',
 };
 
+/* ================================================================
+ * mint 薄荷账本（深绿主色，财务心智；白字/#047857 = 5.48:1 AA）
+ * ============================================================== */
+const mintLight: ThemePalette = {
+  primary: '#047857',
+  primaryLight: '#D1FAE5',
+  primaryDark: '#065F46',
+
+  secondary: '#A855F7',
+  accent: '#FBBF24',
+  success: '#22C55E',
+  successLight: '#DEF7EC',
+  warning: '#FB923C',
+  error: '#DC2626',
+
+  pink: '#EC4899',
+  lime: '#84CC16',
+  cyan: '#06B6D4',
+  orange: '#F97316',
+
+  stroke: '#1A1A1A',
+  strokeLight: '#404040',
+
+  ...sharedLightText,
+  divider: '#E5E5E5',
+  background: '#F4F7F5',
+  surface: '#FFFFFF',
+  surfaceMuted: '#E8EEEA',
+
+  ...sharedLightAmount,
+
+  onPrimary: '#FFFFFF',
+  onPrimaryMuted: 'rgba(255, 255, 255, 0.82)',
+  onPrimarySubtle: 'rgba(255, 255, 255, 0.72)',
+  onPrimaryDivider: 'rgba(255, 255, 255, 0.24)',
+
+  cardBackground: '#FFFFFF',
+  cardBorder: '#1A1A1A',
+
+  shadow: '#1A1A1A',
+  shadowDark: '#000000',
+  overlay: 'rgba(0, 0, 0, 0.6)',
+  overlayLight: 'rgba(0, 0, 0, 0.3)',
+
+  gradientPrimaryStart: '#047857',
+  gradientPrimaryEnd: '#059669',
+};
+
+const mintDark: ThemePalette = {
+  primary: '#34D399',
+  primaryLight: '#064E3B',
+  primaryDark: '#059669',
+
+  secondary: '#C084FC',
+  accent: '#FBBF24',
+  success: '#4ADE80',
+  successLight: '#1A3328',
+  warning: '#FDBA74',
+  error: '#F87171',
+
+  pink: '#F472B6',
+  lime: '#A3E635',
+  cyan: '#22D3EE',
+  orange: '#FB923C',
+
+  ...sharedDarkText,
+  divider: sharedDarkSurface.divider,
+  background: '#18181B',
+  surface: sharedDarkSurface.surface,
+  surfaceMuted: '#202024',
+
+  ...sharedDarkAmount,
+
+  onPrimary: '#1A1A1A',
+  onPrimaryMuted: 'rgba(0, 0, 0, 0.75)',
+  onPrimarySubtle: 'rgba(0, 0, 0, 0.6)',
+  onPrimaryDivider: 'rgba(0, 0, 0, 0.24)',
+
+  cardBackground: sharedDarkSurface.cardBackground,
+  cardBorder: sharedDarkSurface.cardBorder,
+  stroke: sharedDarkSurface.stroke,
+  strokeLight: sharedDarkSurface.strokeLight,
+
+  shadow: sharedDarkSurface.shadow,
+  shadowDark: sharedDarkSurface.shadowDark,
+  overlay: sharedDarkSurface.overlay,
+  overlayLight: sharedDarkSurface.overlayLight,
+
+  gradientPrimaryStart: '#34D399',
+  gradientPrimaryEnd: '#6EE7B7',
+};
+
 /** 主题注册表：satisfies 保证每套色板字段完整，缺 token 编译期报错 */
 export const themes = {
   blocks: { light: blocksLight, dark: blocksDark },
+  mint: { light: mintLight, dark: mintDark },
 } satisfies Record<string, { light: ThemePalette; dark: ThemePalette }>;
 
 export type ThemeName = keyof typeof themes;
@@ -231,6 +324,7 @@ export type ThemeName = keyof typeof themes;
 /** 主题展示名（设置页选择器等 UI 使用） */
 export const THEME_LABELS: Record<ThemeName, string> = {
   blocks: '积木蓝',
+  mint: '薄荷账本',
 };
 
 // 兼容旧导入：默认 blocks 浅色
