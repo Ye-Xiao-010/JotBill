@@ -76,11 +76,11 @@ export interface ThemePalette {
   gradientPrimaryEnd: string;
 }
 
-/** 各主题共用的中性文字阶梯（浅色模式） */
+/** 各主题共用的中性文字阶梯（浅色模式；textTertiary #666666 在四个浅底上均 ≥5:1） */
 const sharedLightText = {
   textPrimary: '#1A1A1A',
   textSecondary: '#404040',
-  textTertiary: '#737373',
+  textTertiary: '#666666',
   textQuaternary: '#A3A3A3',
 } as const;
 
@@ -92,14 +92,15 @@ const sharedDarkText = {
   textQuaternary: '#737373',
 } as const;
 
-/** 收支语义色（浅色模式，AA 修正后：income 5.02:1 / expense 4.83:1 于白表面） */
+/** 收支语义色（浅色模式，AA 修正后：income 5.02:1 / expense 4.83:1 于白表面；
+ *  expenseStrong 深至 #B91C1C：在 expenseLight 浅底上 5.30:1） */
 const sharedLightAmount = {
   income: '#15803D',
   expense: '#DC2626',
   incomeLight: '#DCFCE7',
   expenseLight: '#FEE2E2',
   incomeStrong: '#15803D',
-  expenseStrong: '#DC2626',
+  expenseStrong: '#B91C1C',
 } as const;
 
 /** 收支语义色（深色模式） */
