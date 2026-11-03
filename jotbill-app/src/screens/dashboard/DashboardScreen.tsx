@@ -25,6 +25,7 @@ import { ProgressBar, QueryErrorBanner } from '../../components/ui';
 import { DashboardSkeleton } from '../../components/skeleton';
 import CategoryIcon from '../../components/business/CategoryIcon';
 import { useDashboard, useStyles } from '../../hooks';
+import { useTheme } from '../../providers';
 import { nativeData } from '../../native';
 import { formatPlatform } from '../../utils/platform';
 import { formatCurrency, formatSignedCurrency } from '../../utils/format';
@@ -167,6 +168,7 @@ function ProgressCardCarousel({
 export default function DashboardScreen() {
   const navigation = useNavigation();
   const styles = useStyles(createStyles);
+  const { colors } = useTheme();
   const {
     recentBills,
     monthIncome,
@@ -240,7 +242,7 @@ export default function DashboardScreen() {
         progress: b.progress * 100,
         currentAmount: b.spentMinor / 100,
         totalAmount: b.amountMinor / 100,
-        color: styles._colors.primary,
+        color: colors.primary,
         labelLeft: `已用 ¥${(b.spentMinor / 100).toLocaleString()}`,
         labelRight: `剩余 ¥${Math.max(
           0,
@@ -260,14 +262,14 @@ export default function DashboardScreen() {
           progress: g.progress,
           currentAmount: g.currentAmountMinor / 100,
           totalAmount: g.targetAmountMinor / 100,
-          color: styles._colors.success,
+          color: colors.success,
           labelLeft: `已存 ¥${(g.currentAmountMinor / 100).toLocaleString()}`,
           labelRight: `目标 ¥${(g.targetAmountMinor / 100).toLocaleString()}`,
         });
       });
 
     return cards;
-  }, [budgetProgressData, goalProgressData, styles._colors]);
+  }, [budgetProgressData, goalProgressData, colors]);
 
   const currentDate = new Date();
   const monthName = `${currentDate.getMonth() + 1}月账本`;
@@ -382,7 +384,7 @@ export default function DashboardScreen() {
         <ProgressCardCarousel
           cards={progressCards}
           styles={styles}
-          colors={styles._colors}
+          colors={colors}
         />
       ) : isBudgetsError || isGoalsError ? (
         <QueryErrorBanner
@@ -888,5 +890,4 @@ const createStyles = (colors: ThemeColors) => ({
       color: colors.textPrimary,
     },
   }),
-  _colors: colors,
 });

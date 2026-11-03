@@ -21,7 +21,7 @@ import { spacing, borderRadius, borderWidth, shadow } from '../theme/spacing';
 import { ProgressBar, BrutalPressable } from '../components/ui';
 import CategoryIcon from '../components/business/CategoryIcon';
 import { useStyles, useToast } from '../hooks';
-import { useAlert } from '../providers';
+import { useAlert, useTheme } from '../providers';
 import { nativeData, type BudgetInput, type BudgetProgress, type Category } from '../native';
 import { QUERY_KEYS, invalidateCache } from '../lib/queryClient';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -39,6 +39,7 @@ function formatAmount(amountMinor: number): string {
 export default function BudgetScreen() {
   const navigation = useNavigation();
   const styles = useStyles(createStyles);
+  const { colors } = useTheme();
   const { confirm } = useAlert();
   const { showError } = useToast();
 
@@ -170,9 +171,9 @@ export default function BudgetScreen() {
   }, [refetch]);
 
   const getProgressColor = (budget: BudgetProgress) => {
-    if (budget.isOverBudget) { return styles._colors.error; }
+    if (budget.isOverBudget) { return colors.error; }
     if (budget.needsAlert) { return '#F59E0B'; }
-    return styles._colors.success;
+    return colors.success;
   };
 
   const getCategoryIcon = (budget: BudgetProgress) => {
@@ -184,11 +185,11 @@ export default function BudgetScreen() {
       {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
-          <ChevronLeft size={24} color={styles._colors.textPrimary} strokeWidth={2.5} />
+          <ChevronLeft size={24} color={colors.textPrimary} strokeWidth={2.5} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>预算管理</Text>
         <TouchableOpacity onPress={openCreateModal} style={styles.addButton}>
-          <Plus size={20} color={styles._colors.textPrimary} strokeWidth={3} />
+          <Plus size={20} color={colors.textPrimary} strokeWidth={3} />
         </TouchableOpacity>
       </View>
 
@@ -205,7 +206,7 @@ export default function BudgetScreen() {
         </View>
         <View style={styles.summaryDivider} />
         <View style={styles.summaryItem}>
-          <Text style={[styles.summaryNumber, overBudgets > 0 && { color: styles._colors.error }]}>
+          <Text style={[styles.summaryNumber, overBudgets > 0 && { color: colors.error }]}>
             {overBudgets}
           </Text>
           <Text style={styles.summaryLabel}>已超支</Text>
@@ -276,7 +277,7 @@ export default function BudgetScreen() {
                 <ProgressBar
                   progress={Math.min(budget.progress * 100, 100)}
                   color={getProgressColor(budget)}
-                  backgroundColor={styles._colors.divider}
+                  backgroundColor={colors.divider}
                   height={14}
                 />
               </View>
@@ -305,17 +306,17 @@ export default function BudgetScreen() {
                 <BrutalPressable
                   style={styles.editButton}
                   shadowOffset={2}
-                  shadowColor={styles._colors.stroke}
+                  shadowColor={colors.stroke}
                   onPress={() => openEditModal(budget)}
                 >
-                  <Pencil size={16} color={styles._colors.textPrimary} strokeWidth={2.5} />
+                  <Pencil size={16} color={colors.textPrimary} strokeWidth={2.5} />
                   <Text style={styles.editButtonText}>编辑</Text>
                 </BrutalPressable>
                 <TouchableOpacity
                   style={styles.deleteButton}
                   onPress={() => handleDelete(budget)}
                 >
-                  <Trash2 size={16} color={styles._colors.error} strokeWidth={2.5} />
+                  <Trash2 size={16} color={colors.error} strokeWidth={2.5} />
                 </TouchableOpacity>
               </View>
             </View>
@@ -341,7 +342,7 @@ export default function BudgetScreen() {
                 value={formName}
                 onChangeText={setFormName}
                 placeholder="如：每月餐饮、年度旅行"
-                placeholderTextColor={styles._colors.textTertiary}
+                placeholderTextColor={colors.textTertiary}
                 maxLength={50}
               />
 
@@ -351,7 +352,7 @@ export default function BudgetScreen() {
                 value={formAmount}
                 onChangeText={setFormAmount}
                 placeholder="0.00"
-                placeholderTextColor={styles._colors.textTertiary}
+                placeholderTextColor={colors.textTertiary}
                 keyboardType="decimal-pad"
               />
 
@@ -414,7 +415,7 @@ export default function BudgetScreen() {
                 value={formAlertAt}
                 onChangeText={setFormAlertAt}
                 placeholder="80"
-                placeholderTextColor={styles._colors.textTertiary}
+                placeholderTextColor={colors.textTertiary}
                 keyboardType="number-pad"
                 maxLength={3}
               />
@@ -878,5 +879,4 @@ const createStyles = (colors: ThemeColors) => ({
       color: '#FFFFFF',
     },
   }),
-  _colors: colors,
 });

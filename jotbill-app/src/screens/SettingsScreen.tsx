@@ -83,7 +83,7 @@ const ICON_CANDY_COLORS: Record<string, string> = {
 };
 
 export default function SettingsScreen({ navigation }: SettingsScreenProps) {
-  const { isDark, toggleTheme } = useTheme();
+  const { isDark, toggleTheme, colors } = useTheme();
   const styles = useStyles(createStyles);
 
   const iconMap: Record<string, React.FC<{ size: number; color: string }>> = {
@@ -166,7 +166,7 @@ export default function SettingsScreen({ navigation }: SettingsScreenProps) {
         <View style={styles.userInfo}>
           <View style={styles.avatarContainer}>
             <View style={styles.avatarPlaceholder}>
-              <Wallet size={32} color={styles._colors.primary} />
+              <Wallet size={32} color={colors.primary} />
             </View>
           </View>
           <View style={styles.userDetails}>
@@ -183,21 +183,21 @@ export default function SettingsScreen({ navigation }: SettingsScreenProps) {
             <View style={styles.groupItems}>
               {group.items.map((item) => {
                 const IconComponent = iconMap[item.icon];
-                const candyColor = ICON_CANDY_COLORS[item.icon] || styles._colors.accent;
+                const candyColor = ICON_CANDY_COLORS[item.icon] || colors.accent;
                 return (
                 <View key={item.id}>
                   {item.isSwitch ? (
                     <View style={styles.settingItem}>
                       <View style={styles.settingLeft}>
                         <View style={[styles.iconContainer, { backgroundColor: candyColor }]}>
-                          {IconComponent && <IconComponent size={20} color={styles._colors.stroke} />}
+                          {IconComponent && <IconComponent size={20} color={colors.stroke} />}
                         </View>
                         <Text style={styles.settingLabel}>{item.label}</Text>
                       </View>
                       <Switch
                         value={item.value}
                         onValueChange={item.onValueChange}
-                        trackColor={{ false: styles._colors.divider, true: styles._colors.primary }}
+                        trackColor={{ false: colors.divider, true: colors.primary }}
                         thumbColor="#FFFFFF"
                       />
                     </View>
@@ -209,11 +209,11 @@ export default function SettingsScreen({ navigation }: SettingsScreenProps) {
                     >
                       <View style={styles.settingLeft}>
                         <View style={[styles.iconContainer, { backgroundColor: candyColor }]}>
-                          {IconComponent && <IconComponent size={20} color={styles._colors.stroke} />}
+                          {IconComponent && <IconComponent size={20} color={colors.stroke} />}
                         </View>
                         <Text style={styles.settingLabel}>{item.label}</Text>
                       </View>
-                      <ChevronRight size={20} color={styles._colors.textTertiary} strokeWidth={2.5} />
+                      <ChevronRight size={20} color={colors.textTertiary} strokeWidth={2.5} />
                     </TouchableOpacity>
                   )}
                 </View>
@@ -353,5 +353,4 @@ const createStyles = (colors: ThemeColors) => ({
       marginTop: 4,
     },
   }),
-  _colors: colors,
 });
