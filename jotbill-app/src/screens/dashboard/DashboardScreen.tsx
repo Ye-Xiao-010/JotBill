@@ -21,7 +21,7 @@ import {
   spacing,
   shadow,
 } from '../../theme/spacing';
-import { ProgressBar } from '../../components/ui';
+import { ProgressBar, QueryErrorBanner } from '../../components/ui';
 import { DashboardSkeleton } from '../../components/skeleton';
 import CategoryIcon from '../../components/business/CategoryIcon';
 import { useDashboard, useStyles } from '../../hooks';
@@ -172,6 +172,8 @@ export default function DashboardScreen() {
     monthBalance,
     isLoading,
     isFetching,
+    isError: isDashboardError,
+    error: dashboardError,
     refetch,
   } = useDashboard();
 
@@ -189,12 +191,24 @@ export default function DashboardScreen() {
     [categories],
   );
 
-  const { data: budgetProgressData, refetch: refetchBudgets } = useQuery({
+  const {
+    data: budgetProgressData,
+    isLoading: isBudgetsLoading,
+    isError: isBudgetsError,
+    error: budgetsError,
+    refetch: refetchBudgets,
+  } = useQuery({
     queryKey: QUERY_KEYS.budgetProgress,
     queryFn: () => nativeData.getBudgetProgress(),
   });
 
-  const { data: goalProgressData, refetch: refetchGoals } = useQuery({
+  const {
+    data: goalProgressData,
+    isLoading: isGoalsLoading,
+    isError: isGoalsError,
+    error: goalsError,
+    refetch: refetchGoals,
+  } = useQuery({
     queryKey: QUERY_KEYS.financialGoals,
     queryFn: async (): Promise<GoalProgress[]> => {
       const goals = await nativeData.getFinancialGoals();
@@ -332,6 +346,16 @@ export default function DashboardScreen() {
         </View>
       </View>
 
+      {/* 主查询失败：顶部警示条 + 重试；失败时不再渲染「暂无交易」空态，
+          避免把故障伪装成"没记账" */}
+      <QueryErrorBanner
+        error={isDashboardError ? dashboardError : null}
+        title="首页数据加载失败"
+        hint="这不代表你没有账目记录"
+        onRetry={onRefresh}
+        style={styles.errorBanner}
+      />
+
       <View style={styles.overviewCard}>
         <View style={styles.overviewContent}>
           <View style={styles.overviewLabelRow}>
@@ -370,6 +394,19 @@ export default function DashboardScreen() {
           styles={styles}
           colors={styles._colors}
         />
+      ) : isBudgetsError || isGoalsError ? (
+        <QueryErrorBanner
+          error={budgetsError ?? goalsError}
+          title="预算与目标加载失败"
+          onRetry={() => {
+            refetchBudgets();
+            refetchGoals();
+          }}
+          style={styles.errorBanner}
+        />
+      ) : isBudgetsLoading || isGoalsLoading ? (
+        // 加载中占位：固定高度，避免数据到达后整段下移跳动
+        <View style={styles.progressLoadingPlaceholder} />
       ) : (
         <TouchableOpacity
           style={styles.progressEmptyCard}
@@ -478,6 +515,9 @@ export default function DashboardScreen() {
               );
             })}
           </View>
+        ) : isDashboardError ? (
+          // 主查询失败时顶部已有警示条，这里不再显示「暂无交易记录」空态
+          null
         ) : (
           <View style={styles.emptyState}>
             <Text style={styles.emptyIcon}>📝</Text>
@@ -712,6 +752,18 @@ const createStyles = (colors: ThemeColors) => ({
       marginTop: spacing.sm,
     },
     section: {},
+    errorBanner: {
+      margin: 0,
+      marginBottom: spacing.xxl,
+    },
+    progressLoadingPlaceholder: {
+      height: 148,
+      marginBottom: spacing.xxl,
+      backgroundColor: colors.surface,
+      borderRadius: borderRadius.card,
+      borderWidth: borderWidth.hairline,
+      borderColor: colors.divider,
+    },
     sectionHeader: {
       flexDirection: 'row',
       justifyContent: 'space-between',

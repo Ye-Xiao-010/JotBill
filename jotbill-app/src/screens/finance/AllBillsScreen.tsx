@@ -19,6 +19,7 @@ import {
 } from '@react-navigation/native';
 import { useQuery } from '@tanstack/react-query';
 import { BillItem } from '../../components';
+import QueryErrorBanner from '../../components/ui/QueryErrorBanner';
 import { useToast, useStyles } from '../../hooks';
 import { nativeData, type Category } from '../../native';
 import { CACHE_TIME, GC_TIME, QUERY_KEYS } from '../../lib/queryClient';
@@ -47,6 +48,8 @@ const AllBillsScreen: React.FC = () => {
   );
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  /** 加载失败信息；非空时渲染失败态而非"暂无账单"空态 */
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [filter, setFilter] = useState<'all' | 'income' | 'expense'>(
     routeParams?.initialFilter || 'all',
   );
@@ -106,7 +109,9 @@ const AllBillsScreen: React.FC = () => {
           page += 1;
         }
         groupBillsByMonth(bills);
+        setLoadError(null);
       } catch (error: any) {
+        setLoadError(error?.message || '加载账单失败');
         showError(error.message || '加载账单失败');
       } finally {
         setLoading(false);
@@ -257,6 +262,14 @@ const AllBillsScreen: React.FC = () => {
             <ActivityIndicator size="large" color={styles._colors.primary} />
             <Text style={styles.loadingText}>加载中...</Text>
           </View>
+        ) : loadError ? (
+          // 失败态与空态分离：加载失败不能渲染成"暂无账单记录"
+          <QueryErrorBanner
+            error={loadError}
+            title="账单加载失败"
+            hint="这不代表你没有账单记录"
+            onRetry={() => fetchBills(true)}
+          />
         ) : Object.keys(groupedBills).length === 0 ? (
           <View style={styles.emptyContainer}>
             <Text style={styles.emptyIcon}>📋</Text>
