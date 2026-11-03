@@ -5,6 +5,7 @@
 import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import { PieChart } from 'react-native-gifted-charts';
+import { formatCurrency } from '../../utils/format';
 import { ThemeColors } from '../../theme/colors';
 import { borderRadius, borderWidth, spacing, shadow } from '../../theme/spacing';
 import { useStyles } from '../../hooks';
@@ -93,7 +94,7 @@ export default function AssetPieChart({ data }: AssetPieChartProps) {
               <View style={[styles.legendDot, { backgroundColor: getColor(g.type) }]} />
               <Text style={styles.legendLabel}>{ACCOUNT_TYPE_LABELS[g.type]}</Text>
               <Text style={styles.legendValue}>
-                ¥{g.value.toFixed(2)}
+                {formatCurrency(g.value)}
               </Text>
             </View>
           ))}

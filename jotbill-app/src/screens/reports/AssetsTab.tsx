@@ -13,6 +13,7 @@ import AssetCompositionChart from '../../components/reports/AssetCompositionChar
 import QueryErrorBanner from '../../components/ui/QueryErrorBanner';
 import { AssetsTabSkeleton } from '../../components/skeleton/ReportSkeletons';
 import { typography } from '../../theme';
+import { formatCurrency as formatCurrencyBase } from '../../utils/format';
 
 export default function AssetsTab() {
   const styles = useStyles(createStyles);
@@ -37,7 +38,7 @@ export default function AssetsTab() {
     if (Math.abs(val) >= 10000) {
       return `¥${(val / 10000).toFixed(2)}万`;
     }
-    return `¥${val.toFixed(2)}`;
+    return formatCurrencyBase(val);
   };
 
   // ⚠️ 首屏加载期间**不能**渲染真实布局。兜底值是 0，直接渲染就是

@@ -27,6 +27,7 @@ import CategoryIcon from '../../components/business/CategoryIcon';
 import { useDashboard, useStyles } from '../../hooks';
 import { nativeData } from '../../native';
 import { formatPlatform } from '../../utils/platform';
+import { formatCurrency, formatSignedCurrency } from '../../utils/format';
 import { getCategoryIcon, getCategoryColor } from '../../constants/app';
 import { CACHE_TIME, GC_TIME, QUERY_KEYS } from '../../lib/queryClient';
 import type {
@@ -337,8 +338,13 @@ export default function DashboardScreen() {
               <Text style={styles.overviewLink}>支出明细 →</Text>
             </TouchableOpacity>
           </View>
-          <Text style={styles.overviewBalance}>
-            ¥ {monthExpense.toFixed(2)}
+          <Text
+            style={styles.overviewBalance}
+            numberOfLines={1}
+            adjustsFontSizeToFit
+            minimumFontScale={0.6}
+          >
+            {formatCurrency(monthExpense)}
           </Text>
 
           <View style={styles.overviewDivider} />
@@ -350,12 +356,16 @@ export default function DashboardScreen() {
               activeOpacity={0.75}
             >
               <Text style={styles.statLabel}>本月收入</Text>
-              <Text style={styles.statValue}>¥ {monthIncome.toFixed(2)}</Text>
+              <Text style={styles.statValue} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>
+                {formatCurrency(monthIncome)}
+              </Text>
             </TouchableOpacity>
             <View style={styles.statDivider} />
             <View style={styles.statBlock}>
               <Text style={styles.statLabel}>本月结余</Text>
-              <Text style={styles.statValue}>¥ {monthBalance.toFixed(2)}</Text>
+              <Text style={styles.statValue} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>
+                {formatCurrency(monthBalance)}
+              </Text>
             </View>
           </View>
         </View>
@@ -481,8 +491,10 @@ export default function DashboardScreen() {
                         : styles.expenseAmount,
                     ]}
                   >
-                    {bill.type === 'income' || bill.type === 'refund' ? '+' : '-'}¥
-                    {(bill.amountMinor / 100).toFixed(2)}
+                    {formatSignedCurrency(
+                      bill.amountMinor / 100,
+                      bill.type === 'income' || bill.type === 'refund',
+                    )}
                   </Text>
                 </TouchableOpacity>
               );

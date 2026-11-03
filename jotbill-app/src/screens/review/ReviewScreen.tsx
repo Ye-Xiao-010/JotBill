@@ -42,6 +42,7 @@ import {
 } from '../../native';
 import { invalidateCache, QUERY_KEYS } from '../../lib/queryClient';
 import { formatPlatform } from '../../utils/platform';
+import { formatCurrency } from '../../utils/format';
 import { useAlert } from '../../providers';
 import { borderRadius, borderWidth, spacing } from '../../theme/spacing';
 import { ThemeColors } from '../../theme/colors';
@@ -115,7 +116,7 @@ export default function ReviewScreen() {
       if (merged) {
         alert(
           '已并入既有账单',
-          `该笔支付此前已记过账（¥${((bill.amountMinor ?? 0) / 100).toFixed(2)}），本次修改未生效。如需调整，请到账单列表修改那条账单。`,
+          `该笔支付此前已记过账（${formatCurrency((bill.amountMinor ?? 0) / 100)}），本次修改未生效。如需调整，请到账单列表修改那条账单。`,
         );
       }
     },
@@ -944,7 +945,7 @@ function PendingEditPanel({ pending, submitting, onCancel, onSubmit }: PendingEd
               onPress={() => setOriginalBillId(bill.id)}
             >
               <Text style={styles.refundBillAmount}>
-                ¥{(bill.amountMinor / 100).toFixed(2)}
+                {formatCurrency(bill.amountMinor / 100)}
               </Text>
               <Text style={styles.refundBillText} numberOfLines={1}>
                 {bill.description ?? bill.merchant ?? bill.orderId ?? bill.id}

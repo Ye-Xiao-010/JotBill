@@ -17,6 +17,7 @@ import { borderRadius, borderWidth, spacing, shadow } from '../../theme/spacing'
 import { nativeData, type Bill, type Category } from '../../native';
 import { invalidateCache } from '../../lib/queryClient';
 import { formatPlatform } from '../../utils/platform';
+import { formatCurrency } from '../../utils/format';
 import { useStyles } from '../../hooks';
 import CategoryIcon from '../../components/business/CategoryIcon';
 import QueryErrorBanner from '../../components/ui/QueryErrorBanner';
@@ -168,8 +169,13 @@ export default function BillDetailScreen() {
           <Text style={[styles.typeBadge, { backgroundColor: isPositive ? styles._colors.income + '20' : styles._colors.expense + '20', color: amountColor }]}>
             {typeLabel}
           </Text>
-          <Text style={[styles.amount, { color: amountColor }]}>
-            ¥ {(bill.amountMinor / 100).toFixed(2)}
+          <Text
+            style={[styles.amount, { color: amountColor }]}
+            numberOfLines={1}
+            adjustsFontSizeToFit
+            minimumFontScale={0.6}
+          >
+            {formatCurrency(bill.amountMinor / 100)}
           </Text>
           <Text style={styles.categoryLabel}>{category?.name || '未分类'}</Text>
         </View>

@@ -7,6 +7,7 @@ import { View, Text, TouchableOpacity, FlatList, StyleSheet } from 'react-native
 import { ThemeColors } from '../../theme/colors';
 import { borderRadius, borderWidth, spacing, shadow } from '../../theme/spacing';
 import { useStyles } from '../../hooks';
+import { formatNumber } from '../../utils/format';
 import { typography } from '../../theme';
 
 interface DaySummary {
@@ -42,10 +43,10 @@ export default function DailySummaryList({ data, onDayPress }: DailySummaryListP
         <Text style={styles.dateText}>{formatDate(item.date)}</Text>
         <View style={styles.amounts}>
           {item.income > 0 && (
-            <Text style={styles.incomeText}>+{item.income.toFixed(2)}</Text>
+            <Text style={styles.incomeText}>+{formatNumber(item.income, 2)}</Text>
           )}
           {item.expense > 0 && (
-            <Text style={styles.expenseText}>-{item.expense.toFixed(2)}</Text>
+            <Text style={styles.expenseText}>-{formatNumber(item.expense, 2)}</Text>
           )}
           <Text
             style={[
@@ -53,7 +54,7 @@ export default function DailySummaryList({ data, onDayPress }: DailySummaryListP
               { color: net >= 0 ? styles._colors.income : styles._colors.expense },
             ]}
           >
-            {net >= 0 ? '+' : ''}{net.toFixed(2)}
+            {net >= 0 ? '+' : ''}{formatNumber(net, 2)}
           </Text>
         </View>
       </TouchableOpacity>

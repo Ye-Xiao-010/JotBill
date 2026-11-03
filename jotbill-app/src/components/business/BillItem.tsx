@@ -12,6 +12,7 @@ import {
 import { ThemeColors } from '../../theme/colors';
 import { spacing, borderRadius, borderWidth, typography } from '../../theme';
 import { useStyles } from '../../hooks';
+import { formatSignedCurrency } from '../../utils/format';
 
 
 export interface BillData {
@@ -67,7 +68,7 @@ const BillItem: React.FC<BillItemProps> = ({ bill, onPress }) => {
         isIncome ? styles.incomeBadge : styles.expenseBadge,
       ]}>
         <Text style={[styles.amount, isIncome ? styles.incomeAmount : styles.expenseAmount]}>
-          {isIncome ? '+' : '-'}¥{Math.abs(bill.amount).toFixed(2)}
+          {formatSignedCurrency(bill.amount, isIncome)}
         </Text>
       </View>
     </TouchableOpacity>

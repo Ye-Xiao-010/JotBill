@@ -7,6 +7,7 @@ import { View, Text, StyleSheet } from 'react-native';
 import { ThemeColors } from '../../theme/colors';
 import { borderRadius, borderWidth, spacing, shadow } from '../../theme/spacing';
 import { useStyles } from '../../hooks';
+import { formatSignedCurrency } from '../../utils/format';
 import CategoryIcon from './CategoryIcon';
 import BrutalPressable from '../ui/BrutalPressable';
 import { typography } from '../../theme';
@@ -60,7 +61,7 @@ export default function TransactionItem({
             isIncome ? styles.incomeBadge : styles.expenseBadge,
           ]}>
             <Text style={[styles.amount, isIncome ? styles.incomeAmount : styles.expenseAmount]}>
-              {isIncome ? '+' : '-'}¥{Math.abs(amount).toFixed(2)}
+              {formatSignedCurrency(amount, isIncome)}
             </Text>
           </View>
         </View>

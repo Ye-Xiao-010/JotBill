@@ -25,6 +25,7 @@ import { useToast, useStyles } from '../../hooks';
 import { nativeData, type Category } from '../../native';
 import { CACHE_TIME, GC_TIME, QUERY_KEYS } from '../../lib/queryClient';
 import { formatPlatform } from '../../utils/platform';
+import { formatCurrency } from '../../utils/format';
 import { ThemeColors } from '../../theme/colors';
 import { spacing, borderRadius, borderWidth, typography } from '../../theme';
 import {
@@ -292,7 +293,7 @@ const AllBillsScreen: React.FC = () => {
                   },
                 ]}
               >
-                ¥{Math.abs(section.total).toFixed(2)}
+                {formatCurrency(Math.abs(section.total))}
               </Text>
             </View>
           )}

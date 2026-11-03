@@ -38,6 +38,7 @@ import { audioRecorderService } from '../../services/audio/audioRecorderService'
 import type { RecordingProgress } from '../../services/audio/audioRecorderService';
 import { nativeData, type Account, type Category } from '../../native';
 import { getCategoryIcon as getDefaultCategoryIcon } from '../../constants/app';
+import { formatCurrency, formatSignedCurrency } from '../../utils/format';
 import { Skeleton, SkeletonCircle } from '../../components/skeleton/Skeleton';
 import type { ParsedBill, AIModelConfig, ChatSession } from '../../types/ai';
 import { ProviderIcon } from '../../components/icons';
@@ -516,7 +517,7 @@ function BillCard({ bill, onEdit, onDelete, colors }: BillCardProps) {
               isExpense ? billCardStyles.expenseAmount : billCardStyles.incomeAmount,
             ]}
           >
-            {isExpense ? '-' : '+'}¥{bill.amount.toFixed(2)}
+            {formatSignedCurrency(Number(bill.amount), !isExpense)}
           </Text>
         </View>
       </View>
@@ -2104,9 +2105,9 @@ export default function AIChatScreen() {
                       <Text style={toolCardStyles.billDesc} numberOfLines={1}>{bill.description || '-'}</Text>
                       <Text style={[
                         toolCardStyles.billAmount,
-                        { color: bill.type === 'expense' ? '#FF5722' : '#4CAF50' },
+                        { color: bill.type === 'expense' ? styles._colors.expense : styles._colors.income },
                       ]}>
-                        {bill.type === 'expense' ? '-' : '+'}¥{Number(bill.amount).toFixed(2)}
+                        {formatSignedCurrency(Number(bill.amount), bill.type !== 'expense')}
                       </Text>
                     </View>
                   ))}
@@ -2131,20 +2132,20 @@ export default function AIChatScreen() {
               <View style={toolCardStyles.statsContainer}>
                 <View style={toolCardStyles.statsRow}>
                   <Text style={toolCardStyles.statsLabel}>总支出</Text>
-                  <Text style={[toolCardStyles.statsValue, { color: '#FF5722' }]}>
-                    ¥{Number(stats.totalExpense || 0).toFixed(2)}
+                  <Text style={[toolCardStyles.statsValue, { color: styles._colors.expense }]}>
+                    {formatCurrency(Number(stats.totalExpense || 0))}
                   </Text>
                 </View>
                 <View style={toolCardStyles.statsRow}>
                   <Text style={toolCardStyles.statsLabel}>总收入</Text>
-                  <Text style={[toolCardStyles.statsValue, { color: '#4CAF50' }]}>
-                    ¥{Number(stats.totalIncome || 0).toFixed(2)}
+                  <Text style={[toolCardStyles.statsValue, { color: styles._colors.income }]}>
+                    {formatCurrency(Number(stats.totalIncome || 0))}
                   </Text>
                 </View>
                 <View style={[toolCardStyles.statsRow, { borderBottomWidth: 0 }]}>
                   <Text style={toolCardStyles.statsLabel}>结余</Text>
                   <Text style={[toolCardStyles.statsValue, { fontWeight: '700' }]}>
-                    ¥{(Number(stats.totalIncome || 0) - Number(stats.totalExpense || 0)).toFixed(2)}
+                    {formatCurrency(Number(stats.totalIncome || 0) - Number(stats.totalExpense || 0))}
                   </Text>
                 </View>
               </View>

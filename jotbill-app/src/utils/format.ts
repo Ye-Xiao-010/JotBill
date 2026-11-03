@@ -24,6 +24,16 @@ export const formatCurrency = (
 };
 
 /**
+ * 带正负号的货币格式化（展示用）：+¥1,234.56 / -¥1,234.56
+ * @param amount 金额（内部自动取绝对值）
+ * @param positive true 为收入/进账，false 为支出
+ */
+export const formatSignedCurrency = (
+  amount: number,
+  positive: boolean
+): string => `${positive ? '+' : '-'}${formatCurrency(Math.abs(amount))}`;
+
+/**
  * 日期格式化
  */
 export const formatDate = (

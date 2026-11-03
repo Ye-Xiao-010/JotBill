@@ -19,6 +19,7 @@ import { CalendarSkeleton } from '../../components/skeleton/ReportSkeletons';
 import BillItem from '../../components/business/BillItem';
 import type { BillData as BillItemData } from '../../components/business/BillItem';
 import { typography } from '../../theme';
+import { formatNumber } from '../../utils/format';
 
 interface DailyViewProps {
   initialYear?: number;
@@ -165,10 +166,10 @@ export default function DailyView({
             {selectedDayData && (
               <View style={styles.daySummary}>
                 {selectedDayData.income > 0 && (
-                  <Text style={styles.incomeText}>收 +{selectedDayData.income.toFixed(2)}</Text>
+                  <Text style={styles.incomeText}>收 +{formatNumber(selectedDayData.income, 2)}</Text>
                 )}
                 {selectedDayData.expense > 0 && (
-                  <Text style={styles.expenseText}>支 -{selectedDayData.expense.toFixed(2)}</Text>
+                  <Text style={styles.expenseText}>支 -{formatNumber(selectedDayData.expense, 2)}</Text>
                 )}
               </View>
             )}
