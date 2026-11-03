@@ -792,10 +792,10 @@ const createStyles = (colors: ThemeColors) => ({
       fontVariant: ['tabular-nums'],
     },
     incomeAmount: {
-      color: colors.amountIncome,
+      color: colors.income,
     },
     expenseAmount: {
-      color: colors.amountExpense,
+      color: colors.expense,
     },
     emptyState: {
       alignItems: 'center',

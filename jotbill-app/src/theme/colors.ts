@@ -37,16 +37,9 @@ export const lightColors = {
   background: '#FEF9EF',    // 暖白/米色背景 - 典型 Neo-Brutalism
   surface: '#FFFFFF',
 
-  // 功能色 - 收支（保留旧 token，避免影响既有页面与分类持久化颜色）
+  // 功能色 - 收支（收入=绿 / 支出=红，全 app 单一口径）
   income: '#22C55E',
   expense: '#EF4444',
-
-  // 新版金额语义色：收入/退款为红，支出为绿，并保留 +/- 符号辅助辨识
-  amountIncome: '#DC2626',
-  amountExpense: '#15803D',
-  amountIncomeLight: '#FEF2F2',
-  amountExpenseLight: '#F0FDF4',
-  surfaceMuted: '#F7F3EA',
 
   // 卡片和容器
   cardBackground: '#FFFFFF',
@@ -97,16 +90,9 @@ export const darkColors = {
   background: '#18181B',
   surface: '#27272A',
 
-  // 功能色 - 收支（保留旧 token，避免影响既有页面与分类持久化颜色）
+  // 功能色 - 收支（收入=绿 / 支出=红，全 app 单一口径）
   income: '#4ADE80',
   expense: '#F87171',
-
-  // 新版金额语义色
-  amountIncome: '#F87171',
-  amountExpense: '#4ADE80',
-  amountIncomeLight: '#3F1D24',
-  amountExpenseLight: '#173226',
-  surfaceMuted: '#202024',
 
   // 卡片和容器
   cardBackground: '#27272A',

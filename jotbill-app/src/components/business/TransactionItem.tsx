@@ -39,7 +39,7 @@ export default function TransactionItem({
     <View style={styles.inner}>
       <View style={[
         styles.iconContainer,
-        { backgroundColor: isIncome ? styles._colors.success : styles._colors.accent },
+        { backgroundColor: isIncome ? styles._colors.income : styles._colors.expense },
       ]}>
         <CategoryIcon
           icon={categoryIcon}
