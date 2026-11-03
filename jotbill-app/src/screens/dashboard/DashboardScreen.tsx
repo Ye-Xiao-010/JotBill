@@ -334,7 +334,12 @@ export default function DashboardScreen() {
         <View style={styles.overviewContent}>
           <View style={styles.overviewLabelRow}>
             <Text style={styles.overviewLabel}>本月支出</Text>
-            <TouchableOpacity onPress={handleViewExpense} activeOpacity={0.75}>
+            <TouchableOpacity
+              onPress={handleViewExpense}
+              activeOpacity={0.75}
+              accessibilityLabel="查看支出明细"
+              accessibilityRole="button"
+            >
               <Text style={styles.overviewLink}>支出明细 →</Text>
             </TouchableOpacity>
           </View>
@@ -354,6 +359,8 @@ export default function DashboardScreen() {
               style={styles.statBlock}
               onPress={handleViewIncome}
               activeOpacity={0.75}
+              accessibilityLabel={`本月收入 ${formatCurrency(monthIncome)}`}
+              accessibilityRole="button"
             >
               <Text style={styles.statLabel}>本月收入</Text>
               <Text style={styles.statValue} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>
@@ -411,6 +418,8 @@ export default function DashboardScreen() {
             onPress={handleViewAllBills}
             style={styles.viewAllButton}
             activeOpacity={0.75}
+            accessibilityLabel="查看全部交易"
+            accessibilityRole="button"
           >
             <Text style={styles.viewAllText}>查看全部 →</Text>
           </TouchableOpacity>
@@ -449,6 +458,11 @@ export default function DashboardScreen() {
                   ]}
                   onPress={() => handleViewBillDetail(bill)}
                   activeOpacity={0.72}
+                  accessibilityLabel={`${bill.description} ${formatSignedCurrency(
+                    bill.amountMinor / 100,
+                    bill.type === 'income' || bill.type === 'refund',
+                  )}`}
+                  accessibilityRole="button"
                 >
                   <View style={styles.transactionLeft}>
                     <View
@@ -511,6 +525,8 @@ export default function DashboardScreen() {
               style={styles.emptyButton}
               onPress={handleAddBill}
               activeOpacity={0.8}
+              accessibilityLabel="添加第一笔账单"
+              accessibilityRole="button"
             >
               <Text style={styles.emptyButtonText}>添加第一笔</Text>
             </TouchableOpacity>
@@ -574,7 +590,10 @@ const createStyles = (colors: ThemeColors) => ({
       fontSize: 12,
       fontWeight: '600',
       color: colors.onPrimary,
-      paddingVertical: spacing.xs,
+      paddingVertical: spacing.sm,
+      paddingHorizontal: spacing.xs,
+      minHeight: 44,
+      textAlignVertical: 'center',
     },
     overviewBalance: {
       fontSize: 40,
@@ -764,8 +783,10 @@ const createStyles = (colors: ThemeColors) => ({
       color: colors.textPrimary,
     },
     viewAllButton: {
-      paddingHorizontal: spacing.xs,
+      paddingHorizontal: spacing.md,
       paddingVertical: spacing.xs,
+      minHeight: 44,
+      justifyContent: 'center',
     },
     viewAllText: {
       fontSize: 13,

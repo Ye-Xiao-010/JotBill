@@ -191,8 +191,8 @@ const createStyles = (colors: ThemeColors) => ({
       color: colors.textPrimary,
     },
     closeButton: {
-      width: 36,
-      height: 36,
+      width: 44,
+      height: 44,
       borderRadius: borderRadius.small,
       borderWidth: borderWidth.thin,
       borderColor: colors.stroke,
