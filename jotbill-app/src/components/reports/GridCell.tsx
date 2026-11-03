@@ -8,6 +8,7 @@ import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import { ThemeColors } from '../../theme/colors';
 import { borderRadius, borderWidth, spacing } from '../../theme/spacing';
 import { useStyles } from '../../hooks';
+import { typography } from '../../theme';
 
 interface GridCellProps {
   label: string;
@@ -125,13 +126,13 @@ const createStyles = (colors: ThemeColors) => ({
     incomeText: {
       fontSize: 9,
       fontWeight: '700',
-      fontFamily: 'Courier',
+      fontFamily: typography.fontFamily.mono,
       color: colors.income,
     },
     expenseText: {
       fontSize: 9,
       fontWeight: '700',
-      fontFamily: 'Courier',
+      fontFamily: typography.fontFamily.mono,
       color: colors.expense,
     },
     zeroAmount: {

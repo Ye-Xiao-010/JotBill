@@ -9,6 +9,7 @@ import { borderRadius, borderWidth, spacing, shadow } from '../../theme/spacing'
 import { useStyles } from '../../hooks';
 import CategoryIcon from './CategoryIcon';
 import BrutalPressable from '../ui/BrutalPressable';
+import { typography } from '../../theme';
 
 export interface TransactionItemProps {
   id: number;
@@ -143,21 +144,21 @@ const createStyles = (colors: ThemeColors) => ({
       paddingVertical: 2,
     },
     incomeBadge: {
-      backgroundColor: '#DCFCE7',
+      backgroundColor: colors.incomeLight,
     },
     expenseBadge: {
-      backgroundColor: '#FEE2E2',
+      backgroundColor: colors.expenseLight,
     },
     amount: {
       fontSize: 15,
       fontWeight: '800',
-      fontFamily: 'Courier',
+      fontFamily: typography.fontFamily.mono,
     },
     incomeAmount: {
-      color: '#16A34A',
+      color: colors.incomeStrong,
     },
     expenseAmount: {
-      color: '#DC2626',
+      color: colors.expenseStrong,
     },
     subRow: {
       flexDirection: 'row',
@@ -175,7 +176,7 @@ const createStyles = (colors: ThemeColors) => ({
       fontSize: 12,
       fontWeight: '500',
       color: colors.textTertiary,
-      fontFamily: 'Courier',
+      fontFamily: typography.fontFamily.mono,
     },
   }),
   _colors: colors,

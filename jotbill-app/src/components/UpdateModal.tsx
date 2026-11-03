@@ -13,6 +13,7 @@ import { AppVersionInfo } from '../services/update/appVersion';
 import { ThemeColors } from '../theme/colors';
 import { borderRadius, borderWidth, spacing, shadow } from '../theme/spacing';
 import { useStyles } from '../hooks';
+import { typography } from '../theme';
 
 interface UpdateModalProps {
   visible: boolean;
@@ -125,7 +126,7 @@ const createStyles = (colors: ThemeColors) => ({
       marginTop: spacing.sm,
       fontSize: 14,
       fontWeight: '700',
-      fontFamily: 'Courier',
+      fontFamily: typography.fontFamily.mono,
       color: colors.textSecondary,
     },
     buttons: {

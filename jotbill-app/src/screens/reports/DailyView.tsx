@@ -18,6 +18,7 @@ import QueryErrorBanner from '../../components/ui/QueryErrorBanner';
 import { CalendarSkeleton } from '../../components/skeleton/ReportSkeletons';
 import BillItem from '../../components/business/BillItem';
 import type { BillData as BillItemData } from '../../components/business/BillItem';
+import { typography } from '../../theme';
 
 interface DailyViewProps {
   initialYear?: number;
@@ -254,13 +255,13 @@ const createStyles = (colors: ThemeColors) => ({
     incomeText: {
       fontSize: 12,
       fontWeight: '700',
-      fontFamily: 'Courier',
+      fontFamily: typography.fontFamily.mono,
       color: colors.income,
     },
     expenseText: {
       fontSize: 12,
       fontWeight: '700',
-      fontFamily: 'Courier',
+      fontFamily: typography.fontFamily.mono,
       color: colors.expense,
     },
     loading: {

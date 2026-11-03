@@ -10,8 +10,9 @@ import {
   StyleSheet,
 } from 'react-native';
 import { ThemeColors } from '../../theme/colors';
-import { spacing, borderRadius, borderWidth } from '../../theme';
+import { spacing, borderRadius, borderWidth, typography } from '../../theme';
 import { useStyles } from '../../hooks';
+
 
 export interface BillData {
   id: string;
@@ -119,7 +120,7 @@ const createStyles = (colors: ThemeColors) => ({
       fontSize: 12,
       fontWeight: '500',
       color: colors.textTertiary,
-      fontFamily: 'Courier',
+      fontFamily: typography.fontFamily.mono,
       marginBottom: 2,
     },
     description: {
@@ -143,7 +144,7 @@ const createStyles = (colors: ThemeColors) => ({
     amount: {
       fontSize: 15,
       fontWeight: '800',
-      fontFamily: 'Courier',
+      fontFamily: typography.fontFamily.mono,
     },
     incomeAmount: {
       color: '#16A34A',

@@ -8,6 +8,7 @@ import { ThemeColors } from '../../theme/colors';
 import { borderRadius, borderWidth, spacing, shadow } from '../../theme/spacing';
 import { useStyles } from '../../hooks';
 import BrutalPressable from '../ui/BrutalPressable';
+import { typography } from '../../theme';
 
 export type AccountType = 'bank_card' | 'e_wallet' | 'credit_card' | 'cash';
 
@@ -136,7 +137,7 @@ const createStyles = (colors: ThemeColors) => ({
       fontSize: 24,
       fontWeight: '900',
       color: '#FFFFFF',
-      fontFamily: 'Courier',
+      fontFamily: typography.fontFamily.mono,
     },
   }),
   _colors: colors,

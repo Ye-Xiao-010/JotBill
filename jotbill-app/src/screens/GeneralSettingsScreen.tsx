@@ -17,7 +17,7 @@ import {
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { ThemeColors } from '../theme/colors';
-import { spacing, borderRadius, borderWidth, shadow } from '../theme';
+import { spacing, borderRadius, borderWidth, shadow, typography } from '../theme';
 import { PaymentNotificationSettings } from '../components/business';
 import { paymentNotificationService } from '../services/paymentNotification';
 import { useStyles } from '../hooks';
@@ -35,6 +35,7 @@ import { AI_PROVIDERS } from '../types/ai';
 import { ProviderIcon } from '../components/icons';
 import { ChevronDown } from 'lucide-react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+
 
 const NATIVE_AI_PROVIDERS: AIProvider[] = ['qwen', 'glm', 'siliconflow', 'custom'];
 
@@ -1237,7 +1238,7 @@ const createStyles = (colors: ThemeColors) => ({
     aiConfigModel: {
       fontSize: 12,
       fontWeight: '600',
-      fontFamily: 'Courier',
+      fontFamily: typography.fontFamily.mono,
       color: colors.textSecondary,
       marginTop: 2,
     },
@@ -1310,7 +1311,7 @@ const createStyles = (colors: ThemeColors) => ({
     appPackage: {
       fontSize: 12,
       fontWeight: '600',
-      fontFamily: 'Courier',
+      fontFamily: typography.fontFamily.mono,
       color: colors.textSecondary,
       marginTop: 2,
     },
@@ -1585,7 +1586,7 @@ const createStyles = (colors: ThemeColors) => ({
     appPickerPackage: {
       fontSize: 12,
       fontWeight: '600',
-      fontFamily: 'Courier',
+      fontFamily: typography.fontFamily.mono,
       color: colors.textSecondary,
     },
   }),

@@ -29,6 +29,7 @@ import {
 } from '../native';
 import { QUERY_KEYS, invalidateCache } from '../lib/queryClient';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { typography } from '../theme';
 
 interface GoalView extends FinancialGoal {
   progress: number;
@@ -492,7 +493,7 @@ const createStyles = (colors: ThemeColors) => ({
       fontSize: 22,
       fontWeight: '900',
       color: colors.textPrimary,
-      fontFamily: 'Courier',
+      fontFamily: typography.fontFamily.mono,
     },
     summaryLabel: {
       fontSize: 12,
@@ -608,7 +609,7 @@ const createStyles = (colors: ThemeColors) => ({
       fontSize: 12,
       fontWeight: '600',
       color: colors.textTertiary,
-      fontFamily: 'Courier',
+      fontFamily: typography.fontFamily.mono,
       marginTop: 2,
     },
     percentBadge: {
@@ -627,7 +628,7 @@ const createStyles = (colors: ThemeColors) => ({
       fontSize: 13,
       fontWeight: '800',
       color: colors.textPrimary,
-      fontFamily: 'Courier',
+      fontFamily: typography.fontFamily.mono,
     },
     completedBadgeText: {
       color: '#FFFFFF',
@@ -653,13 +654,13 @@ const createStyles = (colors: ThemeColors) => ({
       fontSize: 18,
       fontWeight: '900',
       color: colors.textPrimary,
-      fontFamily: 'Courier',
+      fontFamily: typography.fontFamily.mono,
     },
     goalAmountTarget: {
       fontSize: 13,
       fontWeight: '600',
       color: colors.textTertiary,
-      fontFamily: 'Courier',
+      fontFamily: typography.fontFamily.mono,
       marginLeft: spacing.xs,
     },
 
@@ -748,7 +749,7 @@ const createStyles = (colors: ThemeColors) => ({
       fontWeight: '600',
       color: colors.textSecondary,
       textAlign: 'center',
-      fontFamily: 'Courier',
+      fontFamily: typography.fontFamily.mono,
       marginBottom: spacing.sm,
     },
     modalActions: {

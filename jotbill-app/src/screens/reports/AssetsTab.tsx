@@ -12,6 +12,7 @@ import { AssetTrendChart } from '../../components/reports';
 import AssetCompositionChart from '../../components/reports/AssetCompositionChart';
 import QueryErrorBanner from '../../components/ui/QueryErrorBanner';
 import { AssetsTabSkeleton } from '../../components/skeleton/ReportSkeletons';
+import { typography } from '../../theme';
 
 export default function AssetsTab() {
   const styles = useStyles(createStyles);
@@ -144,7 +145,7 @@ const createStyles = (colors: ThemeColors) => ({
     balanceAmount: {
       fontSize: 32,
       fontWeight: '900',
-      fontFamily: 'Courier',
+      fontFamily: typography.fontFamily.mono,
       color: '#FFFFFF',
       marginTop: spacing.sm,
       marginBottom: spacing.lg,
@@ -177,7 +178,7 @@ const createStyles = (colors: ThemeColors) => ({
     balanceItemValue: {
       fontSize: 16,
       fontWeight: '800',
-      fontFamily: 'Courier',
+      fontFamily: typography.fontFamily.mono,
     },
     assetValue: {
       color: '#4ADE80',

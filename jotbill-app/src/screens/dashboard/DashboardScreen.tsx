@@ -121,7 +121,7 @@ function ProgressCardCarousel({
                   style={[
                     styles.budgetPercentText,
                     card.progress >= 100 && card.type === 'goal'
-                      ? { color: '#FFFFFF' }
+                      ? { color: colors.onPrimary }
                       : undefined,
                   ]}
                 >
@@ -582,26 +582,26 @@ const createStyles = (colors: ThemeColors) => ({
     overviewLabel: {
       fontSize: 14,
       fontWeight: '600',
-      color: 'rgba(255, 255, 255, 0.82)',
+      color: colors.onPrimaryMuted,
       letterSpacing: 0.5,
     },
     overviewLink: {
       fontSize: 12,
       fontWeight: '600',
-      color: '#FFFFFF',
+      color: colors.onPrimary,
       paddingVertical: spacing.xs,
     },
     overviewBalance: {
       fontSize: 40,
       fontWeight: '800',
-      color: '#FFFFFF',
+      color: colors.onPrimary,
       marginTop: spacing.sm,
       letterSpacing: -1,
       fontVariant: ['tabular-nums'],
     },
     overviewDivider: {
       height: borderWidth.hairline,
-      backgroundColor: 'rgba(255, 255, 255, 0.24)',
+      backgroundColor: colors.onPrimaryDivider,
       marginVertical: spacing.lg,
     },
     overviewStats: {
@@ -615,18 +615,18 @@ const createStyles = (colors: ThemeColors) => ({
     statDivider: {
       width: borderWidth.hairline,
       height: 36,
-      backgroundColor: 'rgba(255, 255, 255, 0.24)',
+      backgroundColor: colors.onPrimaryDivider,
       marginHorizontal: spacing.lg,
     },
     statLabel: {
       fontSize: 12,
-      color: 'rgba(255, 255, 255, 0.72)',
+      color: colors.onPrimarySubtle,
       fontWeight: '500',
     },
     statValue: {
       fontSize: 17,
       fontWeight: '700',
-      color: '#FFFFFF',
+      color: colors.onPrimary,
       fontVariant: ['tabular-nums'],
     },
     progressSection: {

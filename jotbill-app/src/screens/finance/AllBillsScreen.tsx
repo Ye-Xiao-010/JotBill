@@ -26,13 +26,14 @@ import { nativeData, type Category } from '../../native';
 import { CACHE_TIME, GC_TIME, QUERY_KEYS } from '../../lib/queryClient';
 import { formatPlatform } from '../../utils/platform';
 import { ThemeColors } from '../../theme/colors';
-import { spacing, borderRadius, borderWidth } from '../../theme';
+import { spacing, borderRadius, borderWidth, typography } from '../../theme';
 import {
   getCurrentMonthRange,
   getLastMonthRange,
   formatMonthDisplay,
 } from '../../utils/date';
 import type { Bill, BillFilter } from '../../native';
+
 
 const AllBillsScreen: React.FC = () => {
   const navigation = useNavigation<any>();
@@ -398,7 +399,7 @@ const createStyles = (colors: ThemeColors) => ({
     monthTotal: {
       fontSize: 15,
       fontWeight: '800',
-      fontFamily: 'Courier',
+      fontFamily: typography.fontFamily.mono,
     },
     loadingContainer: {
       flex: 1,

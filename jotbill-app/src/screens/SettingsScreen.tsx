@@ -29,9 +29,10 @@ import {
   Tags,
 } from 'lucide-react-native';
 import { ThemeColors } from '../theme/colors';
-import { spacing, borderRadius, borderWidth, shadow } from '../theme';
+import { spacing, borderRadius, borderWidth, shadow, typography } from '../theme';
 import { useStyles } from '../hooks';
 import { useTheme } from '../providers';
+
 
 interface SettingsScreenProps {
   navigation?: any;
@@ -341,13 +342,13 @@ const createStyles = (colors: ThemeColors) => ({
     versionText: {
       fontSize: 12,
       fontWeight: '600',
-      fontFamily: 'Courier',
+      fontFamily: typography.fontFamily.mono,
       color: colors.textTertiary,
     },
     copyrightText: {
       fontSize: 12,
       fontWeight: '600',
-      fontFamily: 'Courier',
+      fontFamily: typography.fontFamily.mono,
       color: colors.textTertiary,
       marginTop: 4,
     },

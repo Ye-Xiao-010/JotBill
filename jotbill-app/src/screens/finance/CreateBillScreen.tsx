@@ -18,7 +18,8 @@ import { useToast, useCategories, useStyles } from '../../hooks';
 import { nativeData, type Account, type Bill, type Category } from '../../native';
 import { invalidateCache } from '../../lib/queryClient';
 import { ThemeColors } from '../../theme/colors';
-import { spacing, borderRadius, borderWidth, shadow } from '../../theme';
+import { spacing, borderRadius, borderWidth, shadow, typography } from '../../theme';
+
 
 // 固定分类列表
 const FIXED_CATEGORIES = [
@@ -631,7 +632,7 @@ const createStyles = (colors: ThemeColors) => ({
     currencySymbol: {
       fontSize: 28,
       fontWeight: '800',
-      fontFamily: 'Courier',
+      fontFamily: typography.fontFamily.mono,
       color: colors.textPrimary,
       marginRight: spacing.sm,
     },
@@ -639,7 +640,7 @@ const createStyles = (colors: ThemeColors) => ({
       flex: 1,
       fontSize: 28,
       fontWeight: '800',
-      fontFamily: 'Courier',
+      fontFamily: typography.fontFamily.mono,
       color: colors.textPrimary,
       padding: 0,
     },

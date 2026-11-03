@@ -21,6 +21,7 @@ import { useStyles } from '../../hooks';
 import CategoryIcon from '../../components/business/CategoryIcon';
 import QueryErrorBanner from '../../components/ui/QueryErrorBanner';
 import { useAlert } from '../../providers';
+import { typography } from '../../theme';
 
 export default function BillDetailScreen() {
   const navigation = useNavigation();
@@ -300,7 +301,7 @@ const createStyles = (colors: ThemeColors) => ({
     amount: {
       fontSize: 40,
       fontWeight: '800',
-      fontFamily: 'Courier',
+      fontFamily: typography.fontFamily.mono,
       letterSpacing: -1,
       marginBottom: spacing.sm,
     },
@@ -346,7 +347,7 @@ const createStyles = (colors: ThemeColors) => ({
     detailValueCourier: {
       fontSize: 14,
       fontWeight: '700',
-      fontFamily: 'Courier',
+      fontFamily: typography.fontFamily.mono,
       color: colors.textPrimary,
     },
     divider: {

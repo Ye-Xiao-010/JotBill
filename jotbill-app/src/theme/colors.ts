@@ -40,6 +40,17 @@ export const lightColors = {
   // 功能色 - 收支（收入=绿 / 支出=红，全 app 单一口径）
   income: '#22C55E',
   expense: '#EF4444',
+  // 收支行/徽章的浅底与深字变体
+  incomeLight: '#DCFCE7',
+  expenseLight: '#FEE2E2',
+  incomeStrong: '#16A34A',
+  expenseStrong: '#DC2626',
+
+  // 主色块之上的文字/分隔线（深色主题下主色仍为浅蓝，同一组值）
+  onPrimary: '#FFFFFF',
+  onPrimaryMuted: 'rgba(255, 255, 255, 0.82)',
+  onPrimarySubtle: 'rgba(255, 255, 255, 0.72)',
+  onPrimaryDivider: 'rgba(255, 255, 255, 0.24)',
 
   // 卡片和容器
   cardBackground: '#FFFFFF',
@@ -93,6 +104,17 @@ export const darkColors = {
   // 功能色 - 收支（收入=绿 / 支出=红，全 app 单一口径）
   income: '#4ADE80',
   expense: '#F87171',
+  // 收支行/徽章的浅底与深字变体（深色主题为深底浅字）
+  incomeLight: '#173226',
+  expenseLight: '#3F1D24',
+  incomeStrong: '#4ADE80',
+  expenseStrong: '#F87171',
+
+  // 主色块之上的文字/分隔线
+  onPrimary: '#FFFFFF',
+  onPrimaryMuted: 'rgba(255, 255, 255, 0.82)',
+  onPrimarySubtle: 'rgba(255, 255, 255, 0.72)',
+  onPrimaryDivider: 'rgba(255, 255, 255, 0.24)',
 
   // 卡片和容器
   cardBackground: '#27272A',

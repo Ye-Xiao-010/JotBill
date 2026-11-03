@@ -20,6 +20,7 @@ import { ThemeColors } from '../../theme/colors';
 import { useStyles } from '../../hooks';
 import { GLM_MODEL_OPTIONS } from '../../types/ai';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { typography } from '../../theme';
 
 interface ProviderOption {
   value: AiProvider;
@@ -357,7 +358,7 @@ const createStyles = (colors: ThemeColors) => ({
     providerNameRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
     providerName: { flexShrink: 1, fontSize: 16, fontWeight: '800', color: colors.textPrimary },
     providerMeta: { marginTop: 3, fontSize: 12, fontWeight: '600', color: colors.textSecondary },
-    providerKey: { marginTop: 3, fontSize: 12, color: colors.textTertiary, fontFamily: 'Courier' },
+    providerKey: { marginTop: 3, fontSize: 12, color: colors.textTertiary, fontFamily: typography.fontFamily.mono },
     defaultBadge: { paddingHorizontal: spacing.xs, paddingVertical: 2, backgroundColor: colors.accent, borderWidth: borderWidth.thin, borderColor: colors.stroke, borderRadius: borderRadius.small },
     defaultBadgeText: { fontSize: 10, fontWeight: '800', color: colors.textPrimary },
     providerActions: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: spacing.sm, marginTop: spacing.md },

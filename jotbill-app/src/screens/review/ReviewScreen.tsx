@@ -47,6 +47,7 @@ import { borderRadius, borderWidth, spacing } from '../../theme/spacing';
 import { ThemeColors } from '../../theme/colors';
 import { useStyles } from '../../hooks';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { typography } from '../../theme';
 
 const PENDING_QUERY_KEY = QUERY_KEYS.recognition.pending;
 const STATUS_QUERY_KEY = QUERY_KEYS.recognition.status;
@@ -1329,7 +1330,7 @@ const createStyles = (colors: ThemeColors) => ({
       fontSize: 22,
       fontWeight: '900',
       color: colors.textPrimary,
-      fontFamily: 'Courier',
+      fontFamily: typography.fontFamily.mono,
     },
     metricValueSmall: {
       fontSize: 15,
@@ -1391,7 +1392,7 @@ const createStyles = (colors: ThemeColors) => ({
       fontSize: 22,
       fontWeight: '900',
       color: colors.textPrimary,
-      fontFamily: 'Courier',
+      fontFamily: typography.fontFamily.mono,
     },
     pendingTime: {
       fontSize: 12,
@@ -1495,7 +1496,7 @@ const createStyles = (colors: ThemeColors) => ({
       fontSize: 12,
       fontWeight: '800',
       color: colors.textPrimary,
-      fontFamily: 'Courier',
+      fontFamily: typography.fontFamily.mono,
     },
     evidenceOrder: {
       flex: 1,
@@ -1655,7 +1656,7 @@ const createStyles = (colors: ThemeColors) => ({
       fontSize: 12,
       fontWeight: '800',
       color: colors.textPrimary,
-      fontFamily: 'Courier',
+      fontFamily: typography.fontFamily.mono,
     },
     refundBillText: {
       flex: 1,

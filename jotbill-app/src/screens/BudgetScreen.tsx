@@ -25,6 +25,7 @@ import { useAlert } from '../providers';
 import { nativeData, type BudgetInput, type BudgetProgress, type Category } from '../native';
 import { QUERY_KEYS, invalidateCache } from '../lib/queryClient';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { typography } from '../theme';
 
 type BudgetPeriod = 'monthly' | 'yearly';
 
@@ -502,7 +503,7 @@ const createStyles = (colors: ThemeColors) => ({
       fontSize: 22,
       fontWeight: '900',
       color: colors.textPrimary,
-      fontFamily: 'Courier',
+      fontFamily: typography.fontFamily.mono,
     },
     summaryLabel: {
       fontSize: 12,
@@ -651,7 +652,7 @@ const createStyles = (colors: ThemeColors) => ({
       fontSize: 13,
       fontWeight: '800',
       color: colors.textPrimary,
-      fontFamily: 'Courier',
+      fontFamily: typography.fontFamily.mono,
     },
     overBudgetBadgeText: {
       color: '#FFFFFF',
@@ -676,13 +677,13 @@ const createStyles = (colors: ThemeColors) => ({
       fontSize: 16,
       fontWeight: '900',
       color: colors.textPrimary,
-      fontFamily: 'Courier',
+      fontFamily: typography.fontFamily.mono,
     },
     budgetAmountTotal: {
       fontSize: 13,
       fontWeight: '600',
       color: colors.textTertiary,
-      fontFamily: 'Courier',
+      fontFamily: typography.fontFamily.mono,
       marginLeft: spacing.xs,
     },
 
@@ -700,7 +701,7 @@ const createStyles = (colors: ThemeColors) => ({
       fontSize: 13,
       fontWeight: '700',
       color: colors.error,
-      fontFamily: 'Courier',
+      fontFamily: typography.fontFamily.mono,
       textAlign: 'center',
     },
 

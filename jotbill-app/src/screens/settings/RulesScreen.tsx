@@ -32,6 +32,7 @@ import { ThemeColors } from '../../theme/colors';
 import { useStyles } from '../../hooks';
 import { useAlert } from '../../providers';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { typography } from '../../theme';
 
 /** 条件类型到中文标签的映射（与原生 RuleEngine 条件一致）。 */
 const CONDITION_LABELS: Record<string, string> = {
@@ -507,7 +508,7 @@ const createStyles = (colors: ThemeColors) => ({
     ruleHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
     ruleToggle: { flexDirection: 'row', alignItems: 'center', gap: 6 },
     ruleStatus: { fontSize: 12, fontWeight: '700', color: colors.textSecondary },
-    rulePriority: { fontSize: 12, fontWeight: '800', color: colors.primary, fontFamily: 'Courier' },
+    rulePriority: { fontSize: 12, fontWeight: '800', color: colors.primary, fontFamily: typography.fontFamily.mono },
     ruleName: { fontSize: 16, fontWeight: '800', color: colors.textPrimary },
     ruleText: { fontSize: 13, color: colors.textSecondary },
     ruleActions: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.xs },
