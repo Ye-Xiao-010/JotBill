@@ -11,6 +11,10 @@ import com.jotbill.app.utils.JotBillLog
  *
  * 渠道默认值：支付宝 / 微信 / 云闪付开启（拍板项③），短信通知通道 M6 再放开。
  * mipay 的 com.android.systemui 排除在引擎侧做，不进通道表。
+ *
+ * ⚠️ B2：本表是**规则引擎渠道**的唯一事实源；识别层包名白名单的唯一出处是
+ * `RecognitionPackages`（渠道表只覆盖有规则资产的包，是其真子集视图）。两者
+ * 通过 [ChannelInfo.kind] 对应，一致性由 `BookkeepingChannelsTest` 锁定。
  */
 object BookkeepingChannels {
     private const val TAG = "BookkeepingChannels"
@@ -21,6 +25,24 @@ object BookkeepingChannels {
 
     private const val KEY_CHANNEL_PREFIX = "channel_"
 
+    /**
+     * 渠道包在识别层的采集档位（B2）：与 `RecognitionPackages` 的集合一一对应。
+     * 新增渠道必须标注 kind，否则 `BookkeepingChannelsTest` 的一致性断言会红。
+     */
+    enum class ChannelKind {
+        /** 支付工具包：支付结果页文本解析腿（微信/支付宝另有通知解析规则）。 */
+        PAYMENT,
+
+        /** 购物应用（核心档）：结算页观察 + 站内结果页双腿。 */
+        SHOPPING_CORE,
+
+        /** 购物应用（降级档）：仅站内结果页扫描，不进结算页观察。 */
+        SHOPPING_RESULT_ONLY,
+
+        /** 仅规则引擎通知通道（银行短信经系统通知读取），不属识别白名单。 */
+        NOTIFICATION_RULES_ONLY
+    }
+
     /** 通道元信息：**渠道的唯一事实源** —— native 开关、RN 设置页列表、
      * 桥接层校验全部从这里派生，新增渠道只改这一处（不足#5 的修复）。 */
     class ChannelInfo(
@@ -28,7 +50,9 @@ object BookkeepingChannels {
         val label: String,
         val description: String,
         val defaultEnabled: Boolean,
-        val packages: List<String>
+        val packages: List<String>,
+        /** 识别层采集档位（B2），与 `RecognitionPackages` 集合对应。 */
+        val kind: ChannelKind
     )
 
     /**
@@ -40,7 +64,8 @@ object BookkeepingChannels {
         ChannelInfo(
             "alipay", "支付宝", "收银台 / 支付结果页 / 账单详情 / 通知",
             defaultEnabled = true,
-            packages = listOf("com.eg.android.AlipayGphone")
+            packages = listOf("com.eg.android.AlipayGphone"),
+            kind = ChannelKind.PAYMENT
         ),
         ChannelInfo(
             // ⚠️ 微信通道的现实（2026-10-25 用户裁定）：小米的微信自动记账在真机上
@@ -50,37 +75,47 @@ object BookkeepingChannels {
             // M4 要让微信走自动入账，需真机 dump 补实际页面类名 + 拆字段正则。
             "wechat", "微信支付", "实验性：微信对抗页面自动化，规则可能打不中；打不中时走待确认弹窗兜底（已真机验证）",
             defaultEnabled = true,
-            packages = listOf("com.tencent.mm")
+            packages = listOf("com.tencent.mm"),
+            kind = ChannelKind.PAYMENT
         ),
         ChannelInfo(
             "unionpay", "云闪付", "支付结果页 / 银联收银台",
             defaultEnabled = true,
-            packages = listOf("com.unionpay")
+            packages = listOf("com.unionpay"),
+            kind = ChannelKind.PAYMENT
         ),
         ChannelInfo(
             "jd", "京东", "支付结果页 / 支付结果弹框",
             defaultEnabled = true,
-            packages = listOf("com.jingdong.app.mall")
+            packages = listOf("com.jingdong.app.mall"),
+            kind = ChannelKind.SHOPPING_CORE
         ),
         ChannelInfo(
             "meituan", "美团", "支付结果页",
             defaultEnabled = true,
-            packages = listOf("com.sankuai.meituan")
+            packages = listOf("com.sankuai.meituan"),
+            kind = ChannelKind.SHOPPING_CORE
         ),
         ChannelInfo(
             "pdd", "拼多多", "多多支付收银台（确认后入账）",
             defaultEnabled = true,
-            packages = listOf("com.xunmeng.pinduoduo")
+            packages = listOf("com.xunmeng.pinduoduo"),
+            kind = ChannelKind.SHOPPING_CORE
         ),
         ChannelInfo(
             "douyin", "抖音", "商城 / 团购下单页（确认后入账）",
             defaultEnabled = true,
-            packages = listOf("com.ss.android.ugc.aweme")
+            packages = listOf("com.ss.android.ugc.aweme"),
+            kind = ChannelKind.SHOPPING_CORE
         ),
         ChannelInfo(
-            "mms", "银行短信", "扣款 / 入账短信（经系统通知，无需短信权限）",
+            "mms", "银行短信",
+            "扣款 / 入账短信（经系统通知，无需短信权限）。" +
+                "解析结果默认自动入账到现金账户；短信可能误报（验证码 / 理财 / 还款提醒），" +
+                "建议开启后核对；若为短信配置了账户规则，将转为待确认",
             defaultEnabled = false,
-            packages = listOf("com.android.mms")
+            packages = listOf("com.android.mms"),
+            kind = ChannelKind.NOTIFICATION_RULES_ONLY
         )
     )
 

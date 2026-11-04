@@ -1,21 +1,17 @@
 package com.jotbill.app.recognition
 
-internal val DEFAULT_SUPPORTED_SHOPPING_PACKAGES = setOf(
-    "com.taobao.taobao",
-    "com.tmall.wireless",
-    "com.jingdong.app.mall",
-    "com.sankuai.meituan",
-    "com.xunmeng.pinduoduo",
-    "com.sdu.didi.psnger",
-    "com.ss.android.ugc.aweme",
-    "com.xingin.xhs"
-)
+/**
+ * 全部购物包白名单（含 RESULT_ONLY 档）。B2 起为 [RecognitionPackages.SHOPPING_PACKAGES]
+ * 的别名 —— 包名的唯一出处在 [RecognitionPackages]，此处保留变量名与语义，
+ * 既有引用点（服务事件归属、[SensitivePageLatch]）零改动。
+ */
+internal val DEFAULT_SUPPORTED_SHOPPING_PACKAGES = RecognitionPackages.SHOPPING_PACKAGES
 
-/** 只有这些前台包名才可能代表从购物应用进入支付应用的交接。 */
-internal val DEFAULT_SUPPORTED_PAYMENT_PACKAGES = setOf(
-    "com.tencent.mm",
-    "com.eg.android.AlipayGphone"
-)
+/**
+ * 只有这些前台包名才可能代表从购物应用进入支付应用的交接。
+ * B2 起为 [RecognitionPackages.PAYMENT_PACKAGES] 的别名（云闪付已加入）。
+ */
+internal val DEFAULT_SUPPORTED_PAYMENT_PACKAGES = RecognitionPackages.PAYMENT_PACKAGES
 
 /**
  * 无障碍采集层提交给检测器的规范化页面摘要。
@@ -56,6 +52,8 @@ data class CheckoutPageObservation(
 
 enum class CheckoutDetectionRejection(val wireValue: String) {
     UNSUPPORTED_SHOPPING_PACKAGE("UNSUPPORTED_SHOPPING_PACKAGE"),
+    /** B2 降级分档：RESULT_ONLY 购物包只进站内结果页扫描腿，不进结算页观察腿。 */
+    RESULT_PAGE_ONLY_PACKAGE("RESULT_PAGE_ONLY_PACKAGE"),
     NOT_CHECKOUT_PAGE("NOT_CHECKOUT_PAGE"),
     MISSING_FINAL_AMOUNT("MISSING_FINAL_AMOUNT"),
     MISSING_CHECKOUT_ACTION("MISSING_CHECKOUT_ACTION"),
@@ -123,7 +121,8 @@ fun interface CheckoutObservationListener {
 
 /** 只判断是否满足创建内存快照的前置条件，不产生任何网络请求。 */
 class CheckoutPageDetector {
-    // 购物包名是阶段三固定边界，不能由调用方扩展。
+    // 包名边界不能由调用方扩展（约束保留，B2 语义不变）；边界定义已收敛到
+    // RecognitionPackages —— 改包名只改那里，本类不做任何包名推断。
     private val supportedPackages = DEFAULT_SUPPORTED_SHOPPING_PACKAGES
     private val paymentPackages = DEFAULT_SUPPORTED_PAYMENT_PACKAGES
 
@@ -137,6 +136,14 @@ class CheckoutPageDetector {
         if (!supportsShoppingPackage(observation.shoppingPackage)) {
             return CheckoutPageDetection.Rejected(
                 CheckoutDetectionRejection.UNSUPPORTED_SHOPPING_PACKAGE
+            )
+        }
+        // B2 降级分档：RESULT_ONLY 购物包（得物/唯品会/苏宁）只进站内结果页扫描腿
+        // （onAccessibilityEvent 的 PAYMENT_RESULT 分支），不进结算页观察腿 ——
+        // 其页面角色词表未经真机校准，放行会搅浑结算页门禁与会话语义。
+        if (observation.shoppingPackage !in RecognitionPackages.SHOPPING_PACKAGES_CORE) {
+            return CheckoutPageDetection.Rejected(
+                CheckoutDetectionRejection.RESULT_PAGE_ONLY_PACKAGE
             )
         }
         // 改造 A-2（批 V-4）：页面角色门禁改用可截角色集合（单一出处：CheckoutContract）。

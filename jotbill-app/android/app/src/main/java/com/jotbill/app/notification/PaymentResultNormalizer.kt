@@ -1,5 +1,6 @@
 package com.jotbill.app.notification
 
+import com.jotbill.app.recognition.RecognitionPackages
 import java.math.BigDecimal
 import java.security.MessageDigest
 import java.time.Instant
@@ -71,8 +72,12 @@ internal object PaymentResultNormalizer {
     /** 阶段五 T4：手续费证据状态标记。 */
     const val PAYMENT_STATUS_FEE = "FEE"
 
-    /** 支持的支付应用包名白名单 */
-    val SUPPORTED_PACKAGES: Set<String> = setOf(WECHAT_PACKAGE, ALIPAY_PACKAGE)
+    /**
+     * 支持的支付应用包名白名单（有通知解析规则的包）。
+     * B2 起为 `RecognitionPackages.NOTIFICATION_PACKAGES` 的别名 —— 包名的唯一
+     * 出处在 [com.jotbill.app.recognition.RecognitionPackages]，本行不得再写字面量。
+     */
+    val SUPPORTED_PACKAGES: Set<String> = RecognitionPackages.NOTIFICATION_PACKAGES
 
     /** 优先匹配最终支付栏，避免把原价或优惠金额当成实际支付金额。 */
     private val FINAL_AMOUNT_PATTERNS = listOf(

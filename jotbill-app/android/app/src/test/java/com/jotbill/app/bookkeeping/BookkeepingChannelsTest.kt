@@ -1,5 +1,6 @@
 package com.jotbill.app.bookkeeping
 
+import com.jotbill.app.recognition.RecognitionPackages
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -39,5 +40,44 @@ class BookkeepingChannelsTest {
             assertTrue(BookkeepingChannels.isValidChannelKey(info.key))
         }
         assertTrue(!BookkeepingChannels.isValidChannelKey("nonexistent"))
+    }
+
+    /**
+     * B2 一致性锁：每个渠道包必须落在 `RecognitionPackages` 中与其 kind 对应的
+     * 识别集合里（渠道表是识别白名单的真子集视图，两表不得漂移）。
+     */
+    @Test
+    fun `渠道 kind 与识别包名白名单一致`() {
+        BookkeepingChannels.CHANNELS.forEach { info ->
+            info.packages.forEach { pkg ->
+                when (info.kind) {
+                    BookkeepingChannels.ChannelKind.PAYMENT -> assertTrue(
+                        "渠道 ${info.key} 的 $pkg 应属于识别层支付包白名单",
+                        pkg in RecognitionPackages.PAYMENT_PACKAGES
+                    )
+                    BookkeepingChannels.ChannelKind.SHOPPING_CORE -> assertTrue(
+                        "渠道 ${info.key} 的 $pkg 应属于识别层核心购物包",
+                        pkg in RecognitionPackages.SHOPPING_PACKAGES_CORE
+                    )
+                    BookkeepingChannels.ChannelKind.SHOPPING_RESULT_ONLY -> assertTrue(
+                        "渠道 ${info.key} 的 $pkg 应属于识别层降级购物包",
+                        pkg in RecognitionPackages.SHOPPING_PACKAGES_RESULT_ONLY
+                    )
+                    BookkeepingChannels.ChannelKind.NOTIFICATION_RULES_ONLY -> assertTrue(
+                        "通知规则渠道的 $pkg 不得进识别白名单",
+                        pkg !in RecognitionPackages.SHOPPING_PACKAGES &&
+                            pkg !in RecognitionPackages.PAYMENT_PACKAGES
+                    )
+                }
+            }
+        }
+    }
+
+    /** B3 相关口径钉死：短信渠道为通知规则档且默认关（用户主动开启才生效）。 */
+    @Test
+    fun `银行短信渠道为通知规则档且默认关`() {
+        val mms = BookkeepingChannels.CHANNELS.first { it.key == "mms" }
+        assertEquals(BookkeepingChannels.ChannelKind.NOTIFICATION_RULES_ONLY, mms.kind)
+        assertTrue("短信渠道默认关（B3：用户主动开启才生效）", !mms.defaultEnabled)
     }
 }
