@@ -1,3 +1,4 @@
+> **状态头**：正典·必读 | 最后核实 2026-11-04 | 冲突时以 jotbill-app/android 代码为准（导航见 docs/README.md）
 # 决策日志 (DECISIONS.md)
 > **状态**：[正典] —— 裁定正典（按主题分节）。改代码只认本文件 + `NEW_PROJECT_KICKOFF_V2.md` + `IMPL_PLAN_VERSION_B_2026-09-13.md`
 > **⚠️ 已知缺陷**：**正典不全** —— D-10 / D-11 / D-20 无编号行，须查 `CONFLICT_REVIEW_SESSION_2026-09-11.md` 待议总表（2026-09-15 实测确认）

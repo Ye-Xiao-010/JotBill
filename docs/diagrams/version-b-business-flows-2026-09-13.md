@@ -1,3 +1,4 @@
+> **状态头**：过程记录（图） | 最后核实 2026-11-04 | 冲突时以 jotbill-app/android 代码为准（导航见 docs/README.md）
 # 版本 B 业务流程图（2026-09-13）
 
 > **依据**：`CONFLICT_REVIEW_SESSION_2026-09-11.md`（讨论记录，不确定信息的口径来源）+ `IMPL_PLAN_VERSION_B_2026-09-13.md`（含第二轮/第三轮修正）+ `NEW_PROJECT_KICKOFF_V2.md` 0.3.3。

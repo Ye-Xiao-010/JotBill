@@ -1,3 +1,4 @@
+> **状态头**：正典·参考 | 最后核实 2026-11-04 | 冲突时以 jotbill-app/android 代码为准（导航见 docs/README.md）
 # 落袋优先路线图(Fallback-First Roadmap)
 > **状态**：[参考] —— ⚠️ **批 2 / 批 3 / 批 4 / 批 5 已冻结**
 > - 批 4（journey）：2026-09-13 重新定位为 **暂缓实施**，分支 `roadmap/batch4-journey` 冻结（见本文第六节裁决注 / `IMPL_PLAN` §0.1）

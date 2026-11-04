@@ -1,115 +1,55 @@
-# docs 目录索引
+> **状态头**：索引 | 最后核实 2026-11-04 | 冲突时以 `jotbill-app/android` 代码为准（导航见 `docs/README.md`）
 
-> ## 👉 先读这一份：[`00-现状正本.md`](./00-现状正本.md)
->
-> 它包含：当前方向（4 个已定决策）· 进度 · v1 完成标准（15 条）· 现在该做什么 · 文档地图 · **编号消歧表** · 陈旧内容待回填清单。
->
-> **本文件只回答两个问题**：① 每份文档是死是活 ② 我要找的东西该翻哪份。
+# docs 文档导航（三层：必读 → 主题 → 历史）
 
----
+> **代码为准**：文档与代码冲突时，一律以 `jotbill-app/android` 实现为事实源。
+> 每份文档首部的「状态头」标注其分类与最后核实日期（2026-11-04 统一核实）。
+> **正典身份说明**：改代码的规格约束来自**必读清单 5 份的组合**，任何单一文档都不自称全量正典。
 
-## 一、状态标记图例
+## 一、必读（改自动记账代码前，5 份）
 
-每份文档头部都有一行 `> **状态**：[...]`，取值如下：
-
-| 标记 | 含义 | **你（和 AI）该怎么用** |
-|---|---|---|
-| `[正典]` | 唯一可依此改代码 | ✅ **改代码只认这三份** |
-| `[参考]` | 稳定的基础设施/流程文档 | 按需查，不影响设计判断 |
-| `[快照]` | 某个历史时点的现状，**已被后续取代** | ⛔ **勿据此改代码**；仅用于追溯"当初为什么这么定" |
-| `[快照·含未处置项]` | 快照，但**里面登记的问题还活着** | ⚠️ 查未修缺陷时读它 |
-| `[已失效]` | 对应任务已完成 | 🗑 **勿使用** |
-| `[归档]` | 已结束事件的记录 | 🗄 保留取证价值，一般不用读 |
-| `[冻结]` | 方向已定但暂缓实施 | ⏸ **勿开工**；重启需用户确认 |
-
-> **未标记的文档** = 尚未登记的新文档，**不要默认它是现行设计**。
-
----
-
-## 二、按层级索引
-
-### ✅ 正典（3 份）—— 改代码只认这三份
-
-| 文档 | 作用 | 什么时候读它 |
-|---|---|---|
-| [`DECISIONS.md`](./DECISIONS.md) | 裁定正典（按主题分节） | 查"某项产品/技术决策定了什么"<br>⚠️ 缺 D-10 / D-11 / D-20 编号行 |
-| [`NEW_PROJECT_KICKOFF_V2.md`](./NEW_PROJECT_KICKOFF_V2.md) | 主设计规格 **0.3.3** | 查完整设计；**§21 是 v1 完成标准** |
-| [`IMPL_PLAN_VERSION_B_2026-09-13.md`](./IMPL_PLAN_VERSION_B_2026-09-13.md) | 实施方案（批 V-1~V-5，**已全部完成**） | 查"批 V-N 具体怎么改"；**§8 是开工前定案** |
-
-### 📘 参考（4 份）
-
-| 文档 | 作用 | 注意 |
-|---|---|---|
-| [`ROADMAP_FALLBACK_FIRST.md`](./ROADMAP_FALLBACK_FIRST.md) | 落袋优先路线图 | ⚠️ **批 2/3/4/5 已冻结** |
-| [`MIGRATION_MAP.md`](./MIGRATION_MAP.md) | 阶段 ↔ 文件边界映射 | 稳定 |
-| [`DEVELOPMENT.md`](./DEVELOPMENT.md) | 开发环境与构建指南 | 稳定 |
-| [`TESTING.md`](./TESTING.md) | 测试指南 | 稳定 |
-| [`LITENOTE_COMPARISON_2026-10-10_payment_overlay.md`](./LITENOTE_COMPARISON_2026-10-10_payment_overlay.md) | 上游 LiteNote 弹窗机制对照：**上游无无障碍服务，纯通知驱动零门禁**；精简版砍掉通知换无障碍，继承"等 AI 定论"假设而 AI 已砍 ⇒ 架构债 |
-| [`AUTO_BOOKKEEPING_2026-10-25.md`](./AUTO_BOOKKEEPING_2026-10-25.md) | 页面规则引擎（mipay 移植）实施记录：8 渠道 + `kind` 分档 + 认领互斥 | **现行**（2026-11-04 已补渠道清单加注） |
-| [`lean-icon-system.md`](./lean-icon-system.md) | 精简版图标系统规范 | 现行 UI 规范 |
-| [`FIX_TASK_2026-09-29_attribution_pending_dup.md`](./FIX_TASK_2026-09-29_attribution_pending_dup.md) | 归属/待确认重复问题取证与修复 | 问题已处置（D-25） |
-
-### ⚠️ 快照 · 含未处置项（5 份）—— 问题还活着，查缺陷时读
-
-| 文档 | 活着的条目 |
+| 文档 | 读它回答什么 |
 |---|---|
-| [`CODE_REVIEW_BY_FEATURE_2026-09-06.md`](./CODE_REVIEW_BY_FEATURE_2026-09-06.md) | **唯一还活着的 P0/P1 来源**：P0-2（资损）、P1-6、P1-7、P1-10 |
-| [`ISSUE_REGISTER_2026-09-11.md`](./ISSUE_REGISTER_2026-09-11.md) | P2 / P4 / P6 / P7 / P8 / P9 / P11 / P12 / P13 / P14 / P16 / P17 / P19 / P22 |
-| [`SCHEME_INVENTORY_2026-09-10.md`](./SCHEME_INVENTORY_2026-09-10.md) | §6.9 多订单推演未验证；⚠️ 全文描述**已被取代的旧状态**（版本 A / 90s / 单槽） |
-| [`ISSUE_2026-10-10_lean_payment_overlay_popup_timing.md`](./ISSUE_2026-10-10_lean_payment_overlay_popup_timing.md) | 🔴 **精简版付款确认弹窗不在支付成功页出现，切回本应用后才弹**（直接阻断 L1 验收）；根因 A（前台守卫是死代码）/ B（30s vs 15s 窗口打架）/ C（成功页误判敏感）+ 附带 D/E/F。**代码层已定位，根因待日志确认** |
-| [`CODE_REVIEW_LEAN_2026-10-24.md`](./CODE_REVIEW_LEAN_2026-10-24.md) | 🔴 **精简版全量代码审查**：候选单槽位导致第二笔静默漏弹（P1）、90s 同额去重吞真实第二笔（P1）、成功反馈误关下一张（P2）等 5 项行为缺陷 + 13 处残留死代码 + L6 验收标准不可执行 |
+| [`CLAUDE.md`](../CLAUDE.md)（根目录） | 流程与纪律：改代码前读什么、先复述再动手、构建/验证命令、硬性纪律（含敏感页零采集） |
+| [`CONFLICT_REVIEW_SESSION_2026-09-11.md`](./CONFLICT_REVIEW_SESSION_2026-09-11.md) | **D 系列唯一完整出处**（DECISIONS.md 缺 D-10/11/20）+ 代码评估清单：判重、优先级、字段锁定等硬约束的裁定原文 |
+| [`DECISIONS.md`](./DECISIONS.md) | D 系列裁定速查（按主题分节的决策日志；不全，配合同上使用） |
+| [`IMPL_PLAN_VERSION_B_2026-09-13.md`](./IMPL_PLAN_VERSION_B_2026-09-13.md) | §8「开工前决策与修正」8 项已定案决策（含阻断级前置）；⚠️ §4 批次（V-1~V-5）语义已被后续改造接续，冲突以代码为准 |
+| [`AUTO_BOOKKEEPING_2026-10-25.md`](./AUTO_BOOKKEEPING_2026-10-25.md) | 页面规则引擎（8 渠道 + `kind` 分档）现状：渠道定义、认领互斥、与弹窗管线的边界 |
 
-### 📦 快照 · 已失效（6 份）—— 勿据此改代码
+**当前系统怎么工作**（六条信号源 → 合并 → 入账/待确认）暂无单一文档完整回答；`NEW_PROJECT_KICKOFF_V2.md` §7.6 现状信号源总表是最近的权威描述（2026-11-04 重写），完整现状文档待拍板新建（见 §二 说明）。
 
-| 文档 | 内容 | 失效原因 |
+## 二、主题参考（按需查）
+
+| 文档 | 作用 | 状态 |
 |---|---|---|
-| [`CONFLICT_REVIEW_SESSION_2026-09-11.md`](./CONFLICT_REVIEW_SESSION_2026-09-11.md) | **D-1~D-24 裁定的唯一原始出处** | ⚠️ **不可替代**：`DECISIONS.md` 未收录 D-10/D-11/D-20，只能在此查。checklist 全是 `- [ ]`（含已完成），**以 git 为准** |
-| [`CONFLICTS_2026-09-10.md`](./CONFLICTS_2026-09-10.md) | 24 项冲突取证 | 多数已闭合 |
-| [`RECONCILIATION_2026-09-11.md`](./RECONCILIATION_2026-09-11.md) | 三方对账 | ⚠️ 顶部裁定表编号有误（G1 应为 D-22） |
-| [`DESIGN_REVIEW_2026-09-13.md`](./DESIGN_REVIEW_2026-09-13.md) | R1~R6 设计评审 | 已裁定并实施 |
-| [`IMPL_READINESS_RISKS_2026-09-15.md`](./IMPL_READINESS_RISKS_2026-09-15.md) | 实施就绪风险 | 8 项待定已全部定案 |
-| [`DOC_VERIFICATION_2026-09-13.md`](./DOC_VERIFICATION_2026-09-13.md) | 文档核查 | 核出的 2 处缺陷已修 |
+| [`NEW_PROJECT_KICKOFF_V2.md`](./NEW_PROJECT_KICKOFF_V2.md) | 0.3.3 主设计：完整规格、FR 清单、信息架构 | **设计史料（含已废止需求）**——截图/通知停用时代正文已逐块加注（⚠️ 标记），改代码勿照抄其已废止章节 |
+| [`00-现状正本.md`](./00-现状正本.md) | 精简版方向 / 现状快照（2026-10-24） | 参考；部分口径已加注失效 |
+| [`MIGRATION_MAP.md`](./MIGRATION_MAP.md) | LiteNote → 精简版边界映射 | 参考；阶段边界已被 B1-B3/合并改造接续 |
+| [`ROADMAP_FALLBACK_FIRST.md`](./ROADMAP_FALLBACK_FIRST.md) | 落袋优先路线图 | 批 2/3/4/5 已冻结，部分被 2026-10~11 改造实现 |
+| [`DEVELOPMENT.md`](./DEVELOPMENT.md) / [`TESTING.md`](./TESTING.md) | 开发环境与构建 / 测试指南 | 稳定 |
+| [`lean-icon-system.md`](./lean-icon-system.md) | 图标系统规范 | 稳定 |
+| [`LITENOTE_COMPARISON_2026-10-10_payment_overlay.md`](./LITENOTE_COMPARISON_2026-10-10_payment_overlay.md) | 上游 LiteNote 弹窗机制对照（架构债出处） | 稳定 |
+| [`FIX_TASK_2026-09-29_attribution_pending_dup.md`](./FIX_TASK_2026-09-29_attribution_pending_dup.md) | 归属/待确认重复取证与修复（D-25 出处） | 问题已处置 |
 
-### 🗑 已失效（2 份）
+## 三、历史与过程（取证用，不引导开发）
 
-| 文档 | 说明 |
-|---|---|
-| `PROMPT_BATCH1_DEADCODE_CLEANUP.md` | 给其他 AI 的一次性开工提示词，**批 V-1 已于 2026-09-17 完成**。🗑 勿再使用 |
-| [`PROMPT_HANDOFF_2026-09-29_attribution_fix.md`](./PROMPT_HANDOFF_2026-09-29_attribution_fix.md) | 一次性接力提示词（"本轮任务：只做 ① 取证，不是修"）。**取证已于 2026-09-29 完成并落成裁定 D-25**。🗑 勿再使用；排查思路看 `FIX_TASK_2026-09-29` §二，当天全貌看 [`worklog/2026-09-29.md`](./worklog/2026-09-29.md) |
+### 历史取证（保留证据价值，结论可能已过时——先查状态头与 ⚠️ 加注）
+`CODE_REVIEW_BY_FEATURE_2026-09-06.md`、`CODE_REVIEW_LEAN_2026-10-24.md`（⚠️"通知停用"已失效）、`CONFLICTS_2026-09-10.md`、`RECONCILIATION_2026-09-11.md`、`DESIGN_REVIEW_2026-09-13.md`、`IMPL_READINESS_RISKS_2026-09-15.md`、`DOC_VERIFICATION_2026-09-13.md`、`ISSUE_REGISTER_2026-09-11.md`、`SCHEME_INVENTORY_2026-09-10.md`、`PROGRESS_REVIEW_2026-09-28.md`、`PROJECT_PROGRESS_REVIEW_2026-09-03.md`、`ISSUE_2026-10-10_lean_payment_overlay_popup_timing.md`
 
-### 🗄 归档（3 份）
+### 过程记录（🗑 纯工作痕迹，无规格价值）
+`PROMPT_BATCH1_DEADCODE_CLEANUP.md`、`PROMPT_HANDOFF_2026-09-29_attribution_fix.md`、`INCIDENT_2026-09-15_git_corruption.md`、`worklog/`（4 份）、`diagrams/version-b-business-flows-2026-09-13.md`（图，时代描述已过时）
 
-| 文档 | 内容 |
-|---|---|
-| `INCIDENT_2026-09-15_git_corruption.md` | git 损坏事故 + 恢复过程（**含备份位置**） |
-| `PROJECT_PROGRESS_REVIEW_2026-09-03.md` | 早期进度盘点，结论已被取代 |
-| `PROGRESS_REVIEW_2026-09-28.md` | 9-28 进度总览，**已由 `00-现状正本.md` 取代** |
+### 归档（`archive/`）
+[`archive/NEW_PROJECT_KICKOFF.md`](./archive/NEW_PROJECT_KICKOFF.md)（旧版主设计）、[`archive/LITENOTE_AI_PAYMENT_DESIGN.md`](./archive/LITENOTE_AI_PAYMENT_DESIGN.md)（上游设计参考）
 
----
-
-## 三、子目录
-
-| 目录 | 内容 | 规则 |
-|---|---|---|
-| `tdd/` | TDD 技术规格 01~08 | ⚠️ `08_phase4_journey_spec` **已冻结**（暂缓实施） |
-| `qa/` | QA 与真机验证记录 | — |
-| `qa/device/` · `qa/phase6/` · `qa/phase7/` · `qa/batch1/` | **原始证据**（logcat / 截图 / 布局 dump） | 🔒 **只增不改** |
-| `diagrams/` | 架构图 + **版本 B 业务流程图（含限制清单 15 条 / 设计原则 10 条）** | — |
-| `screenshots/` | 产品界面截图与演示动图 | — |
-| `archive/` | 旧版设计文档，仅作考古 | 🗄 |
-| `types/` | 原生契约类型定义 | — |
-| `worklog/` | **每日工作日志**（`YYYY-MM-DD.md`）—— 那天做了什么、发现了什么、踩了什么坑、还欠什么 | 追加，不改历史日期的文件（后一天可在文首加更正版指针） |
-| `showcase/` | 展示站（HTML/CSS/JS） | ⚠️ **未纳入版本控制**（2026-09-22，56.9MB） |
-
----
+### QA 原始证据（`qa/`，只增不改、禁止移动）
+- 验收 / 证据索引：[`qa/lean-version-acceptance.md`](./qa/lean-version-acceptance.md)（⚠️ L6 通知兜底验收待更新）、[`qa/golden-path-regression.md`](./qa/golden-path-regression.md)、[`qa/lean-user-scenarios.md`](./qa/lean-user-scenarios.md)、[`qa/PHASE2_ACCEPTANCE_REPORT.md`](./qa/PHASE2_ACCEPTANCE_REPORT.md)、[`qa/phase6/T9_ACCEPTANCE_REPORT.md`](./qa/phase6/T9_ACCEPTANCE_REPORT.md)、[`qa/import-samples/README_EVIDENCE_INDEX.md`](./qa/import-samples/README_EVIDENCE_INDEX.md)
+- 行为契约 / 真机证据：[`qa/checkout-recognition-verification.md`](./qa/checkout-recognition-verification.md)、[`qa/checkout-automatic-capture-review.md`](./qa/checkout-automatic-capture-review.md)、[`qa/checkout-manual-capture-priority-fix.md`](./qa/checkout-manual-capture-priority-fix.md)、[`qa/payment-notification-effectiveness-2026-09-10.md`](./qa/payment-notification-effectiveness-2026-09-10.md)、[`qa/lean-vs-litenote-comparison.md`](./qa/lean-vs-litenote-comparison.md)、[`qa/pending-reminder-logs.md`](./qa/pending-reminder-logs.md)、`qa/PHASE3_TASK_BREAKDOWN.md`、`qa/PHASE4_CONTRACT_CHANGE_NOTES.md`、`qa/phase7/`（5 份，含断链的 `../../../docs/` 历史链接）、`qa/import-samples/`（导入数据样本）
 
 ## 四、维护约定
 
-0. **代码为准**：文档冲突时以 `jotbill-app/android` 实现为事实源；历史文档按「加注不覆盖」订正（见第 2 条）。2026-10~11 的采集/合并改造（B1-B3、orderId 归并、N-2 吸收）已使早期"v1 唯一来源/通知停用/站内不支持"等口径失效，相关文档均已加注 ⚠️ 标记。
+0. **代码为准**：文档冲突时以 `jotbill-app/android` 实现为事实源；历史文档按「加注不覆盖」订正。2026-10~11 的采集/合并改造（B1-B3、orderId 归并、N-2 吸收）已使早期"v1 唯一来源/通知停用/站内不支持"等口径失效，相关文档均已加 ⚠️ 标记。
 1. **方向、状态、缺陷变化时，同步更新 [`00-现状正本.md`](./00-现状正本.md)**（尤其第二、三、四节）。
-2. **改动正文一律「加注不覆盖」**：用 `~~删除线~~` + ⚠️ 指向新裁定，**不删原文**（保留取证价值）。
-3. **原始证据目录只增不改**；日志分析引用行号时必须钉死到文件 + 时间戳。
-4. **裁定流转**：先落 `CONFLICT_REVIEW_SESSION` → 正典同步 `DECISIONS.md` → 规格同步 `NEW_PROJECT_KICKOFF_V2.md` → 实施同步 `IMPL_PLAN_VERSION_B`。
-5. **不要将自己推断的内容写成"裁定"** —— 推断必须显式标注（本项目已有先例：`IMPL_PLAN` §8 的 8.2 / 8.4 标为"推断"，未写入 `DECISIONS.md`）。
-6. **新增文档必须**：① 头部加一行状态标记 ② 在本文件第二节登记。
-7. **引用编号必须带文档名** —— P 有两套系统、「方案 A」有 6 种含义，详见 `00-现状正本.md` 第六节。
+2. **裁定变化必须同步 `CONFLICT_REVIEW_SESSION` 待议总表**；`DECISIONS.md` 按需补。
+3. **任何版本升级、范围修正，必须并行更新 `NEW_PROJECT_KICKOFF_V2.md` 正文与版本注记**（现已降级为设计史料，改为「加注不覆盖」）。
+4. **代码文档过期就修** —— 不留"以后补"。

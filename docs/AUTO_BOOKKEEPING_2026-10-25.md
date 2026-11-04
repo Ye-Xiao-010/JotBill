@@ -1,3 +1,4 @@
+> **状态头**：正典·必读 | 最后核实 2026-11-04 | 冲突时以 jotbill-app/android 代码为准（导航见 docs/README.md）
 # 规则式自动记账（mipay 逆向移植）—— 实施记录
 
 > 日期：2026-10-25　分支：`feat/auto-bookkeeping`（基于 `feat/lean-version` @ 3571675）
