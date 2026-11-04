@@ -30,11 +30,17 @@ import org.robolectric.annotation.Config
 @Config(sdk = [34], application = Application::class)
 class ImportMergeTargetTest {
 
+    private companion object {
+        /** P3 用：固定"当天"基准（本地日 2027-01-15 08:00 附近，同日窗判定稳定）。 */
+        const val BASE_DAY = 1_800_000_000_000L
+    }
+
     private lateinit var database: JotBillDatabase
+    private lateinit var context: Application
 
     @Before
     fun setUp() {
-        val context = ApplicationProvider.getApplicationContext<Application>()
+        context = ApplicationProvider.getApplicationContext<Application>()
         database = Room.inMemoryDatabaseBuilder(context, JotBillDatabase::class.java)
             .allowMainThreadQueries()
             .build()
@@ -49,12 +55,15 @@ class ImportMergeTargetTest {
         id: String,
         type: String,
         orderId: String?,
-        originalTransactionId: String? = null
+        originalTransactionId: String? = null,
+        occurredAt: Long = 1_000_000L,
+        amountMinor: Long = 1_000L,
+        merchant: String? = "拼多多"
     ) = BillEntity(
-        id = id, amountMinor = 1_000L, type = type,
-        occurredAt = 1_000_000L, description = null, categoryId = null,
+        id = id, amountMinor = amountMinor, type = type,
+        occurredAt = occurredAt, description = null, categoryId = null,
         accountId = null, targetAccountId = null, platform = "pdd",
-        merchant = "拼多多", productDescription = null, sourceType = "manual",
+        merchant = merchant, productDescription = null, sourceType = "manual",
         originalTransactionId = originalTransactionId, orderId = orderId,
         createdAt = 1L, updatedAt = 1L, version = 1
     )
@@ -95,5 +104,102 @@ class ImportMergeTargetTest {
 
         assertEquals("释放后同 file_hash 应可重建批次", "import-batch-new", replacement.id)
         assert(inserted != -1L)
+    }
+
+    // ── P3 拍板③：无商户订单号的强一致合并（金额精确 + 同日 + 商户模糊）──
+
+    private fun importRow(
+        occurredAt: Long,
+        amountMinor: Long,
+        merchant: String?
+    ) = ParsedImportRow(
+        occurredAt = occurredAt,
+        amountMinor = amountMinor,
+        type = "expense",
+        merchant = merchant,
+        productDescription = null,
+        paymentMethod = null,
+        transactionId = "txn-strong-1",
+        merchantOrderId = null,
+        remark = null,
+        rawStatus = "SUCCESS",
+        sourceLineNumber = 1
+    )
+
+    /** 三条件全部命中且唯一 ⇒ 强一致合并目标命中（MERGED）。 */
+    @Test
+    fun strongIdentityAllConditionsHitMerges() = runBlocking {
+        database.billDao().insert(
+            bill(
+                id = "target-1", type = "expense", orderId = null,
+                occurredAt = BASE_DAY + 3_600_000L, amountMinor = 5_000L, merchant = "拼多多"
+            )
+        )
+
+        val target = ImportEngine(context, database).findStrongIdentityMergeTarget(
+            importRow(
+                occurredAt = BASE_DAY + 7_200_000L,
+                amountMinor = 5_000L,
+                merchant = "拼多多旗舰店"
+            )
+        )
+
+        assertEquals("金额精确+同日+商户模糊全中应唯一命中", "target-1", target?.id)
+    }
+
+    /** 缺任一条件（金额不同 / 跨日 / 商户不匹配）或多候选 ⇒ 退回只提示（null）。 */
+    @Test
+    fun strongIdentityMissingAnyConditionReturnsNull() = runBlocking {
+        val engine = ImportEngine(context, database)
+        database.billDao().insert(
+            bill(
+                id = "target-2", type = "expense", orderId = null,
+                occurredAt = BASE_DAY + 3_600_000L, amountMinor = 5_000L, merchant = "拼多多"
+            )
+        )
+
+        assertEquals(
+            "金额不同不得合并",
+            null,
+            engine.findStrongIdentityMergeTarget(
+                importRow(BASE_DAY + 3_600_000L, amountMinor = 5_001L, merchant = "拼多多")
+            )?.id
+        )
+        assertEquals(
+            "跨日不得合并",
+            null,
+            engine.findStrongIdentityMergeTarget(
+                importRow(BASE_DAY + 86_400_000L, amountMinor = 5_000L, merchant = "拼多多")
+            )?.id
+        )
+        assertEquals(
+            "商户不匹配不得合并",
+            null,
+            engine.findStrongIdentityMergeTarget(
+                importRow(BASE_DAY + 3_600_000L, amountMinor = 5_000L, merchant = "美团外卖")
+            )?.id
+        )
+        assertEquals(
+            "商户缺失不得合并（模糊匹配无对象）",
+            null,
+            engine.findStrongIdentityMergeTarget(
+                importRow(BASE_DAY + 3_600_000L, amountMinor = 5_000L, merchant = null)
+            )?.id
+        )
+
+        // 多候选 ⇒ 只提示不合并
+        database.billDao().insert(
+            bill(
+                id = "target-3", type = "expense", orderId = null,
+                occurredAt = BASE_DAY + 5_400_000L, amountMinor = 5_000L, merchant = "拼多多"
+            )
+        )
+        assertEquals(
+            "多候选命中不得擅自择一合并",
+            null,
+            engine.findStrongIdentityMergeTarget(
+                importRow(BASE_DAY + 3_600_000L, amountMinor = 5_000L, merchant = "拼多多")
+            )?.id
+        )
     }
 }

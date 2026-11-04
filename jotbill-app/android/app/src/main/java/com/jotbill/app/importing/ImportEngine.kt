@@ -17,6 +17,9 @@ import org.json.JSONArray
 import org.json.JSONObject
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import java.time.Instant
+import java.time.LocalDate
+import java.time.ZoneId
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -108,7 +111,13 @@ internal class ImportEngine(
         val kind: String,
         val error: String? = null,
         val suspicious: Boolean = false,
-        val accountUnmatched: Boolean = false
+        val accountUnmatched: Boolean = false,
+        /**
+         * P3 拍板③：MERGED 决策携带的合并目标账单 id —— 无商户订单号的强一致
+         * 合并不能靠 orderId 重查目标，由 decide 选定后传给 [mergeImported]。
+         * null 时（有 merchantOrderId 的路径）维持原按订单号重查语义。
+         */
+        val mergeTargetId: String? = null
     ) {
         companion object {
             const val IMPORTED = "imported"
@@ -483,7 +492,10 @@ internal class ImportEngine(
                         }
 
                         RowDecision.MERGED -> {
-                            mergeImported(row, loaded.adapter, accounts, batchId)
+                            mergeImported(
+                                row, loaded.adapter, accounts, batchId,
+                                mergeTargetId = decision.mergeTargetId
+                            )
                             counts.merged += 1
                         }
                         RowDecision.SKIPPED -> counts.skipped += 1
@@ -590,10 +602,20 @@ internal class ImportEngine(
         if (level3Hit != null) {
             return RowDecision(RowDecision.SKIPPED)
         }
-        if (row.type != "refund" && !row.merchantOrderId.isNullOrBlank()) {
-            val mergeTarget = database.billDao().findByOrderIdForImportMerge(row.merchantOrderId)
-            if (mergeTarget != null) {
-                return RowDecision(RowDecision.MERGED)
+        if (row.type != "refund") {
+            if (!row.merchantOrderId.isNullOrBlank()) {
+                val mergeTarget = database.billDao().findByOrderIdForImportMerge(row.merchantOrderId)
+                if (mergeTarget != null) {
+                    return RowDecision(RowDecision.MERGED, mergeTargetId = mergeTarget.id)
+                }
+            } else {
+                // P3 拍板③：无商户订单号时的强一致合并 —— 金额精确 + 同日 +
+                // 商户模糊匹配三者全中且**唯一命中**才 MERGED；缺任一、多候选
+                // 一律退回 IMPORTED + 疑似提示（只提示不合并，保守侧）。
+                val strongTarget = findStrongIdentityMergeTarget(row)
+                if (strongTarget != null) {
+                    return RowDecision(RowDecision.MERGED, mergeTargetId = strongTarget.id)
+                }
             }
         }
         val accountsState = resolveImportAccounts(row, accounts)
@@ -615,6 +637,53 @@ internal class ImportEngine(
             suspicious = similarHits.isNotEmpty(),
             accountUnmatched = accountsState.unmatched
         )
+    }
+
+    /**
+     * P3 拍板③：无商户订单号导入行的「强一致」合并目标判定。
+     *
+     * 三条件**全部命中**才算同一笔（缺任一即退回只提示）：
+     * 1. 金额精确相等（同 type）；
+     * 2. 发生时间同一天（本地日 00:00–24:00 窗口）；
+     * 3. 商户模糊匹配（[merchantFuzzyMatch]）。
+     *
+     * 目标护栏与 `findByOrderIdForImportMerge` 同源：排除退款/带原交易关联的账单
+     * （导入行不得并进退款账单）。**多候选命中不合并** —— 无法客观证明是同一笔，
+     * 保守退回 IMPORTED + 疑似提示，由用户判断。
+     *
+     * internal 供 `ImportMergeTargetTest` 直驱（三条件判别性验证）。
+     */
+    internal suspend fun findStrongIdentityMergeTarget(row: ParsedImportRow): BillEntity? {
+        if (row.amountMinor <= 0L || row.occurredAt <= 0L) return null
+        val zone = ZoneId.systemDefault()
+        val dayStart = LocalDate.ofInstant(Instant.ofEpochMilli(row.occurredAt), zone)
+            .atStartOfDay(zone)
+            .toInstant()
+            .toEpochMilli()
+        val dayEnd = dayStart + 24 * 60 * 60 * 1000L - 1
+        val candidates = database.billDao().findSimilarAmountWindow(
+            type = row.type,
+            amountMinor = row.amountMinor,
+            fromAt = dayStart,
+            toAt = dayEnd,
+            excludeId = null
+        ).filter { bill ->
+            bill.originalTransactionId.isNullOrBlank() &&
+                merchantFuzzyMatch(bill.merchant, row.merchant)
+        }
+        return candidates.singleOrNull()
+    }
+
+    /**
+     * 商户模糊匹配（P3 条件 3）：两侧都非空，且相等或互相包含（忽略大小写）。
+     * 任一侧为空视为**不命中** —— 无商户信息不足以证明同一笔，保守退回只提示。
+     */
+    private fun merchantFuzzyMatch(existing: String?, incoming: String?): Boolean {
+        val left = existing?.trim()?.takeIf { it.isNotEmpty() } ?: return false
+        val right = incoming?.trim()?.takeIf { it.isNotEmpty() } ?: return false
+        return left.equals(right, ignoreCase = true) ||
+            left.contains(right, ignoreCase = true) ||
+            right.contains(left, ignoreCase = true)
     }
 
     private data class ResolvedImportAccounts(
@@ -765,12 +834,20 @@ internal class ImportEngine(
         row: ParsedImportRow,
         adapter: BillImportAdapter,
         accounts: List<AccountEntity>,
-        batchId: String
+        batchId: String,
+        mergeTargetId: String? = null
     ) {
-        val orderId = row.merchantOrderId
-            ?: throw ImportException("IMPORT_FAILED", "合并路径缺少商户订单号")
-        val existing = database.billDao().findByOrderIdForImportMerge(orderId)
-            ?: throw ImportException("IMPORT_FAILED", "合并目标账单已不存在")
+        // P3 拍板③：无商户订单号的强一致合并由 decide 选定目标（mergeTargetId），
+        // 不能靠 orderId 重查；有 merchantOrderId 的原路径维持按订单号重查语义。
+        val existing = if (mergeTargetId != null) {
+            database.billDao().getById(mergeTargetId)
+                ?: throw ImportException("IMPORT_FAILED", "合并目标账单已不存在")
+        } else {
+            val orderId = row.merchantOrderId
+                ?: throw ImportException("IMPORT_FAILED", "合并路径缺少商户订单号")
+            database.billDao().findByOrderIdForImportMerge(orderId)
+                ?: throw ImportException("IMPORT_FAILED", "合并目标账单已不存在")
+        }
         val accountsState = resolveImportAccounts(row, accounts)
         val now = System.currentTimeMillis()
         val locks = FieldPriorityResolver.parseLocks(existing.fieldLocks)

@@ -128,6 +128,19 @@ private const val PAYMENT_EVIDENCE_MERGE_WINDOW_MILLIS = 2 * 60 * 1000L
  */
 private const val ORPHAN_DEDUP_WINDOW_MILLIS = PaymentTiming.SAME_TXN_WINDOW_MILLIS
 
+/**
+ * P1 多信号合并：orderId 强键归并窗（拍板 2026-11-04：2 分钟）。
+ *
+ * 订单号相等已客观证明同一笔，窗口只需覆盖跨源晚到（站内腿/通知相对结果页
+ * 的到达时差），取 [PAYMENT_EVIDENCE_MERGE_WINDOW_MILLIS] 同值 —— 两者语义
+ * 同源（同笔信号的跨源收敛窗），有意同值，调参须同改。
+ *
+ * 无 orderId 的信号不适用本窗：维持同包同额 [ORPHAN_DEDUP_WINDOW_MILLIS]
+ * （2026-10-24 裁定，不改）。短信（mms）orderId 恒空 ⇒ 天然不参与 orderId
+ * 归并 —— 拍板②「短信与支付信号不归并」的实现即此，无需独立分支。
+ */
+private const val PAYMENT_IDENTITY_MERGE_WINDOW_MILLIS = PAYMENT_EVIDENCE_MERGE_WINDOW_MILLIS
+
 private const val PAYMENT_CONFIRMED_STATUS = "PAYMENT_CONFIRMED"
 private const val AI_PENDING_STATUS = "AI_PENDING"
 private const val WAITING_PAYMENT_STATUS = "WAITING_PAYMENT"
@@ -672,6 +685,7 @@ internal class CheckoutPaymentMatcher(
             val cooldownRemaining = RecentPaymentCooldown.cooldownRemaining(
                 paymentPackage = signal.paymentPackage,
                 amountMinor = signal.amountMinor,
+                orderId = signal.orderId,
                 now = now
             )
             if (cooldownRemaining != null) {
@@ -732,13 +746,13 @@ internal class CheckoutPaymentMatcher(
                     sameObservation != null &&
                     sameObservation.status == PendingTransactionEntity.STATUS_PENDING
                 ) {
-                    val mergedReason = mergeOrphanConflictReason(
-                        sameObservation.conflictReason,
-                        conflictReason
+                    // P4 合并留痕：冲突码合并 + 被并信号的 sourceEventKey 记入
+                    // appliedRules.mergedSourceEventKeys（原实现只合并冲突码）。
+                    mergeSignalIntoExisting(
+                        existing = sameObservation,
+                        incomingSourceEventKey = sourceEventKey,
+                        incomingReason = conflictReason
                     )
-                    if (mergedReason != sameObservation.conflictReason) {
-                        dao.updateConflictReason(sameObservation.id, mergedReason)
-                    }
                     JotBillLog.i(
                         "CheckoutPaymentMatcher",
                         "孤立支付证据判为同一笔重复观测(文本哈希一致)，未新建待确认: " +
@@ -755,6 +769,39 @@ internal class CheckoutPaymentMatcher(
                 // 否则这条过期登记会永久吞掉同额同文本的真实新支付（误杀方向）。
                 RecentResultObservation.forget(sameObservationId)
             }
+            // ---- P1 多信号合并：orderId 强键归并（跨源跨包，2 分钟窗）----
+            // 拍板（2026-11-04）：① orderId 非空且两侧相等 ⇒ 归并（订单号客观
+            // 证明同一笔，窗口覆盖站内腿/通知的跨源晚到）；两侧冲突（都非空且
+            // 不同）⇒ 显式拒绝归并、继续走下方判重建第二张卡（宁可误报可删，
+            // 不误并两笔真单）；② orderId 缺失 ⇒ 维持同包同额 15s（下方 D-25，
+            // 行为不变）—— 短信（mms）orderId 恒空，天然不与支付信号归并。
+            if (!signal.orderId.isNullOrBlank() && signal.occurredAt > 0L) {
+                val byOrder = dao.findRecentPendingByOrderId(
+                    orderId = signal.orderId!!,
+                    windowStart = signal.occurredAt - PAYMENT_IDENTITY_MERGE_WINDOW_MILLIS,
+                    windowEnd = signal.occurredAt + PAYMENT_IDENTITY_MERGE_WINDOW_MILLIS
+                )
+                if (byOrder != null && byOrder.orderId == signal.orderId) {
+                    // 冲突护栏：查询已保证 orderId 相等，此处显式再断言一次，
+                    // 防未来查询口径放宽时静默误并（拍板①的"冲突即拒绝"红线）。
+                    mergeSignalIntoExisting(
+                        existing = byOrder,
+                        incomingSourceEventKey = sourceEventKey,
+                        incomingReason = conflictReason
+                    )
+                    JotBillLog.i(
+                        "CheckoutPaymentMatcher",
+                        "孤立支付证据按订单号归并(跨源/跨包): pending=${byOrder.id.take(16)}, " +
+                            "orderId=${signal.orderId?.take(16)}, " +
+                            "amount=${signal.amountMinor}, reason=$conflictReason"
+                    )
+                    outcome = OrphanOutcome(
+                        OrphanOutcome.Kind.SUPPRESSED_DUPLICATE_WINDOW,
+                        byOrder.id
+                    )
+                    return@withTransaction
+                }
+            }
             // ---- D-25：跨桶重复观测去重（孤儿待确认专用）----
             // 上面的幂等键按 sourceEventKey 判重，而结果页事件键含 15 秒时间桶
             // （D-6 为防"同额两单撞键"而定的窄桶），跨桶即换键 ⇒ 挡不住重复观测。
@@ -769,14 +816,23 @@ internal class CheckoutPaymentMatcher(
                     windowStart = signal.occurredAt - ORPHAN_DEDUP_WINDOW_MILLIS,
                     windowEnd = signal.occurredAt + ORPHAN_DEDUP_WINDOW_MILLIS
                 )
-                if (duplicate != null) {
-                    val mergedReason = mergeOrphanConflictReason(
-                        duplicate.conflictReason,
-                        conflictReason
+                // P1 拍板①护栏：orderId 冲突（两侧都非空且不同）⇒ 显式拒绝归并 ——
+                // 同包同额 15s 内的两笔真单（各自带单号）不得吞并，宁可两张可删的卡。
+                // 任一侧缺单号时维持 D-25 既有裁定（15s 内同额接受合并）不变。
+                val orderIdConflict = duplicate != null &&
+                    !duplicate.orderId.isNullOrBlank() &&
+                    !signal.orderId.isNullOrBlank() &&
+                    duplicate.orderId != signal.orderId
+                // 类型护栏：refund/fee/transfer 卡键族独立（pending-refund/-fee/-transfer），
+                // 不得被普通支付信号吸收（反之亦然）—— 同额同单号的退款与原单是两笔账。
+                val typeMismatch = duplicate != null && duplicate.type != "expense"
+                if (duplicate != null && !orderIdConflict && !typeMismatch) {
+                    // P4 合并留痕：冲突码合并 + mergedSourceEventKeys 保全被并信号。
+                    mergeSignalIntoExisting(
+                        existing = duplicate,
+                        incomingSourceEventKey = sourceEventKey,
+                        incomingReason = conflictReason
                     )
-                    if (mergedReason != duplicate.conflictReason) {
-                        dao.updateConflictReason(duplicate.id, mergedReason)
-                    }
                     JotBillLog.i(
                         "CheckoutPaymentMatcher",
                         "孤立支付证据判为重复观测(同包同额" +
@@ -789,6 +845,13 @@ internal class CheckoutPaymentMatcher(
                         duplicate.id
                     )
                     return@withTransaction
+                }
+                if (orderIdConflict) {
+                    JotBillLog.i(
+                        "CheckoutPaymentMatcher",
+                        "同包同额但订单号冲突，拒绝归并(拍板①): pending=${duplicate?.id?.take(16)}, " +
+                            "existing=${duplicate?.orderId?.take(16)}, incoming=${signal.orderId?.take(16)}"
+                    )
                 }
             }
             // 阶段五 T1 时机一：纯通知待确认创建前执行规则；
@@ -889,7 +952,8 @@ internal class CheckoutPaymentMatcher(
                 RecentPaymentCooldown.rememberCard(
                     pendingId = settledBillId,
                     paymentPackage = signal.paymentPackage,
-                    amountMinor = signal.amountMinor
+                    amountMinor = signal.amountMinor,
+                    orderId = signal.orderId
                 )
                 RecentResultObservation.remember(
                     pendingId = settledBillId,
@@ -976,7 +1040,8 @@ internal class CheckoutPaymentMatcher(
                         RecentPaymentCooldown.rememberCard(
                             pendingId = firstInsertedId,
                             paymentPackage = signal.paymentPackage,
-                            amountMinor = signal.amountMinor
+                            amountMinor = signal.amountMinor,
+                            orderId = signal.orderId
                         )
                         RecentResultObservation.remember(
                             pendingId = firstInsertedId,
@@ -1022,7 +1087,8 @@ internal class CheckoutPaymentMatcher(
                 RecentPaymentCooldown.rememberCard(
                     pendingId = pendingId,
                     paymentPackage = signal.paymentPackage,
-                    amountMinor = signal.amountMinor
+                    amountMinor = signal.amountMinor,
+                    orderId = signal.orderId
                 )
                 // 同一笔判据的登记，同样必须在 emit 之前（见 [RecentResultObservation]）。
                 RecentResultObservation.remember(
@@ -1046,6 +1112,59 @@ internal class CheckoutPaymentMatcher(
             }
         }
         return outcome
+    }
+
+    /**
+     * P1/P4 归并落点：把重复/同笔信号归并进既有待确认卡，不新建第二张。
+     *
+     * 做两件事：
+     * 1. 冲突码合并 —— 沿用 [mergeOrphanConflictReason] 既有口径（逗号多码、
+     *    既有码在前、上限 3 段、幂等），不改其语义；
+     * 2. **合并即留痕**（P4）：被并信号的 `sourceEventKey` 追加进该卡
+     *    `appliedRules.mergedSourceEventKeys` 数组 —— 证据不丢弃，用户/审计
+     *    能看到"这张卡吸收了哪几条信号"。幂等（已含不重复记），规则命中键
+     *    （rule:*）与既有元数据键不受影响。
+     *
+     * 只改诊断列（conflict_reason / applied_rules），不动 version ——
+     * 见 [PendingTransactionDao.updateMergeTrace] 的同口径说明。
+     */
+    private suspend fun mergeSignalIntoExisting(
+        existing: PendingTransactionEntity,
+        incomingSourceEventKey: String,
+        incomingReason: String
+    ) {
+        val mergedReason = mergeOrphanConflictReason(existing.conflictReason, incomingReason)
+        val mergedRules = appendMergedSourceEventKey(existing.appliedRules, incomingSourceEventKey)
+        if (mergedReason != existing.conflictReason || mergedRules != existing.appliedRules) {
+            database.pendingTransactionDao().updateMergeTrace(
+                id = existing.id,
+                conflictReason = mergedReason,
+                appliedRules = mergedRules
+            )
+        }
+    }
+
+    /**
+     * P4 留痕：在 appliedRules JSON 对象上追加 `mergedSourceEventKeys` 数组元素。
+     *
+     * @return 更新后的 JSON；已含该键时原样返回 [base]（幂等，调用方按字符串
+     *   比较即可感知"无变化"）；base 非法时按空对象重建（与 [mergeRulesJson]
+     *   同容错口径）。
+     */
+    private fun appendMergedSourceEventKey(base: String, sourceEventKey: String): String {
+        if (sourceEventKey.isBlank()) return base
+        val merged = runCatching { JSONObject(base) }.getOrDefault(JSONObject())
+        val keys = merged.optJSONArray("mergedSourceEventKeys")
+        if (keys != null) {
+            for (index in 0 until keys.length()) {
+                if (keys.optString(index) == sourceEventKey) return base
+            }
+            keys.put(sourceEventKey)
+            merged.put("mergedSourceEventKeys", keys)
+        } else {
+            merged.put("mergedSourceEventKeys", org.json.JSONArray().put(sourceEventKey))
+        }
+        return merged.toString()
     }
 
     /**

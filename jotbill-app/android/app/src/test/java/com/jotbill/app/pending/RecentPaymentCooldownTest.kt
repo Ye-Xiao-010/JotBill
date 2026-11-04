@@ -35,10 +35,10 @@ class RecentPaymentCooldownTest {
     /** 核心不变式：消费后 147ms（真机实测值）的重复观测必须被抑制。 */
     @Test
     fun suppressesReobservationShortlyAfterConsumption() {
-        RecentPaymentCooldown.rememberCard("pending-orphan-4", PKG, 3906L)
+        RecentPaymentCooldown.rememberCard("pending-orphan-4", PKG, 3906L, null)
         assertEquals(PKG + "|3906", RecentPaymentCooldown.markConsumed("pending-orphan-4", NOW))
 
-        val remaining = RecentPaymentCooldown.cooldownRemaining(PKG, 3906L, NOW + 147L)
+        val remaining = RecentPaymentCooldown.cooldownRemaining(PKG, 3906L, null, NOW + 147L)
         assertNotNull("消费后 147ms 的重复观测必须被抑制", remaining)
         assertEquals(RecentPaymentCooldown.COOLDOWN_MILLIS - 147L, remaining!!)
     }
@@ -51,19 +51,19 @@ class RecentPaymentCooldownTest {
      */
     @Test
     fun allowsSameAmountPaymentAfterCooldownExpires() {
-        RecentPaymentCooldown.rememberCard("pending-orphan-4", PKG, 3906L)
+        RecentPaymentCooldown.rememberCard("pending-orphan-4", PKG, 3906L, null)
         RecentPaymentCooldown.markConsumed("pending-orphan-4", NOW)
 
         assertNotNull(
             "窗口内最后一毫秒仍须拦截",
             RecentPaymentCooldown.cooldownRemaining(
-                PKG, 3906L, NOW + RecentPaymentCooldown.COOLDOWN_MILLIS - 1
+                PKG, 3906L, null, NOW + RecentPaymentCooldown.COOLDOWN_MILLIS - 1
             )
         )
         assertNull(
             "到点必须放行",
             RecentPaymentCooldown.cooldownRemaining(
-                PKG, 3906L, NOW + RecentPaymentCooldown.COOLDOWN_MILLIS
+                PKG, 3906L, null, NOW + RecentPaymentCooldown.COOLDOWN_MILLIS
             )
         )
     }
@@ -72,25 +72,25 @@ class RecentPaymentCooldownTest {
     @Test
     fun unknownPendingIdStartsNoCooldown() {
         assertNull(RecentPaymentCooldown.markConsumed("pending-does-not-exist", NOW))
-        assertNull(RecentPaymentCooldown.cooldownRemaining(PKG, 3906L, NOW))
+        assertNull(RecentPaymentCooldown.cooldownRemaining(PKG, 3906L, null, NOW))
     }
 
     /** 冷却按 (支付包, 金额) 隔离：同金额换支付包、或同包换金额，都必须放行。 */
     @Test
     fun cooldownIsScopedToPaymentPackageAndAmount() {
-        RecentPaymentCooldown.rememberCard("pending-a", PKG, 3906L)
+        RecentPaymentCooldown.rememberCard("pending-a", PKG, 3906L, null)
         RecentPaymentCooldown.markConsumed("pending-a", NOW)
 
-        assertNotNull(RecentPaymentCooldown.cooldownRemaining(PKG, 3906L, NOW + 100L))
+        assertNotNull(RecentPaymentCooldown.cooldownRemaining(PKG, 3906L, null, NOW + 100L))
         assertNull(
             "支付宝的同额支付不应被微信的冷却牵连",
             RecentPaymentCooldown.cooldownRemaining(
-                "com.eg.android.AlipayGphone", 3906L, NOW + 100L
+                "com.eg.android.AlipayGphone", 3906L, null, NOW + 100L
             )
         )
         assertNull(
             "不同金额不应被牵连",
-            RecentPaymentCooldown.cooldownRemaining(PKG, 9900L, NOW + 100L)
+            RecentPaymentCooldown.cooldownRemaining(PKG, 9900L, null, NOW + 100L)
         )
     }
 
@@ -102,23 +102,23 @@ class RecentPaymentCooldownTest {
      */
     @Test
     fun twoSequentialSameAmountPaymentsBothLand() {
-        RecentPaymentCooldown.rememberCard("pending-1", PKG, 3906L)
+        RecentPaymentCooldown.rememberCard("pending-1", PKG, 3906L, null)
         RecentPaymentCooldown.markConsumed("pending-1", NOW)
-        assertNotNull(RecentPaymentCooldown.cooldownRemaining(PKG, 3906L, NOW + 147L))
+        assertNotNull(RecentPaymentCooldown.cooldownRemaining(PKG, 3906L, null, NOW + 147L))
 
         // 用户已离开结果页，30 秒后完成了一笔新的同额支付
         val second = NOW + RecentPaymentCooldown.COOLDOWN_MILLIS + 30_000L
-        RecentPaymentCooldown.rememberCard("pending-2", PKG, 3906L)
+        RecentPaymentCooldown.rememberCard("pending-2", PKG, 3906L, null)
         assertNull(
             "第二笔同额支付必须放行",
-            RecentPaymentCooldown.cooldownRemaining(PKG, 3906L, second)
+            RecentPaymentCooldown.cooldownRemaining(PKG, 3906L, null, second)
         )
     }
 
     /** 弹窗 30s 自动关闭不产生 removed 事件，因此不应启动冷却（职责归 90s 去重）。 */
     @Test
     fun plainNewPendingDoesNotStartCooldown() {
-        RecentPaymentCooldown.rememberCard("pending-x", PKG, 3580L)
+        RecentPaymentCooldown.rememberCard("pending-x", PKG, 3580L, null)
         RecentPaymentCooldown.onPendingChangeForTest(
             PendingChangeInfo(
                 pendingId = "pending-x",
@@ -131,13 +131,13 @@ class RecentPaymentCooldownTest {
                 removed = false
             )
         )
-        assertNull(RecentPaymentCooldown.cooldownRemaining(PKG, 3580L, NOW))
+        assertNull(RecentPaymentCooldown.cooldownRemaining(PKG, 3580L, null, NOW))
     }
 
     /** `removed=true` 事件确实会启动冷却（监听器接线正确性）。 */
     @Test
     fun removedEventStartsCooldown() {
-        RecentPaymentCooldown.rememberCard("pending-r", PKG, 3580L)
+        RecentPaymentCooldown.rememberCard("pending-r", PKG, 3580L, null)
         RecentPaymentCooldown.onPendingChangeForTest(
             PendingChangeInfo(
                 pendingId = "pending-r",
@@ -151,7 +151,7 @@ class RecentPaymentCooldownTest {
             ),
             now = NOW
         )
-        assertNotNull(RecentPaymentCooldown.cooldownRemaining(PKG, 3580L, NOW + 1L))
+        assertNotNull(RecentPaymentCooldown.cooldownRemaining(PKG, 3580L, null, NOW + 1L))
     }
 
     /**
@@ -172,7 +172,7 @@ class RecentPaymentCooldownTest {
         repeat(total) { i ->
             // 0199, 0198, … 0000：零填充使字典序等于数值序，故登记序与字典序相反
             val id = "pending-%04d".format(total - 1 - i)
-            RecentPaymentCooldown.rememberCard(id, PKG, (i + 1).toLong())
+            RecentPaymentCooldown.rememberCard(id, PKG, (i + 1).toLong(), null)
         }
 
         assertEquals(
@@ -180,6 +180,30 @@ class RecentPaymentCooldownTest {
             "$PKG|$total",
             RecentPaymentCooldown.markConsumed("pending-0000", NOW)
         )
-        assertNotNull(RecentPaymentCooldown.cooldownRemaining(PKG, total.toLong(), NOW + 1L))
+        assertNotNull(RecentPaymentCooldown.cooldownRemaining(PKG, total.toLong(), null, NOW + 1L))
+    }
+
+    /**
+     * orderId 护栏（拍板 A，2026-11-04）：冷却记录与新信号的订单号**都非空且
+     * 不同** ⇒ 不抑制（单号已证明是两笔，不得以冷却吞并第二笔真单）；任一为空
+     * 或相等时维持原 15s 抑制语义。
+     */
+    @Test
+    fun orderIdConflictBypassesCooldownGuard() {
+        RecentPaymentCooldown.rememberCard("pending-order-a", PKG, 3906L, "ORDER-A")
+        RecentPaymentCooldown.markConsumed("pending-order-a", NOW)
+
+        assertNull(
+            "订单号冲突必须放行（第二笔真单不得被冷却吞并）",
+            RecentPaymentCooldown.cooldownRemaining(PKG, 3906L, "ORDER-B", NOW + 147L)
+        )
+        assertNotNull(
+            "同一订单号仍须抑制（原语义不变）",
+            RecentPaymentCooldown.cooldownRemaining(PKG, 3906L, "ORDER-A", NOW + 147L)
+        )
+        assertNotNull(
+            "新信号缺订单号仍须抑制（原语义不变）",
+            RecentPaymentCooldown.cooldownRemaining(PKG, 3906L, null, NOW + 147L)
+        )
     }
 }

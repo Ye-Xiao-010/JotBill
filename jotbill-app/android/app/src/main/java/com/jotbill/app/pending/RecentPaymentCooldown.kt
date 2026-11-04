@@ -65,15 +65,21 @@ internal object RecentPaymentCooldown {
      */
     const val COOLDOWN_MILLIS = PaymentTiming.CONSUMED_COOLDOWN_MILLIS
 
+    /** 冷却键 + 该卡的订单号（orderId 护栏用，见 [cooldownRemaining]）。 */
+    private data class CardEntry(val key: String, val orderId: String?)
+
+    /** 被处理记录：处理时刻 + 该卡的订单号。 */
+    private data class ConsumedEntry(val at: Long, val orderId: String?)
+
     /**
-     * pendingId → 冷却键 `(支付包|金额)`。建卡时登记，消费时反查。
+     * pendingId → 冷却键 `(支付包|金额)` + 订单号。建卡时登记，消费时反查。
      *
      * 必须是 [LinkedHashMap]：超上限时按**插入序**淘汰（见 [rememberCard]）。
      */
-    private val cardKeys = LinkedHashMap<String, String>()
+    private val cardKeys = LinkedHashMap<String, CardEntry>()
 
-    /** 冷却键 → 被处理时刻。 */
-    private val consumedAt = HashMap<String, Long>()
+    /** 冷却键 → 被处理记录（时刻 + 订单号）。 */
+    private val consumedAt = HashMap<String, ConsumedEntry>()
 
     private val lock = Any()
 
@@ -112,13 +118,23 @@ internal object RecentPaymentCooldown {
      * 必须在 `insertIfAbsent` 成功后、且在 `PendingChangeHub.emit` **之前**调用：
      * emit 是同步的，消费者可能在同一线程栈上立刻走到"确认入账"，那时若还没登记
      * 就查不到冷却键。
+     *
+     * @param orderId 该卡的订单号（可空）—— 供消费后的冷却护栏区分"同额的另一笔"
+     *   （见 [cooldownRemaining]），不参与冷却键。
      */
-    fun rememberCard(pendingId: String, paymentPackage: String, amountMinor: Long) {
+    fun rememberCard(
+        pendingId: String,
+        paymentPackage: String,
+        amountMinor: Long,
+        orderId: String?
+    ) {
         val key = cooldownKey(paymentPackage, amountMinor)
         synchronized(lock) {
-            cardKeys[pendingId] = key
+            cardKeys[pendingId] = CardEntry(key, orderId)
             // 换 key 时清理上一条映射，避免 pendingId 与冷却键长期堆积
-            val stale = cardKeys.entries.firstOrNull { it.key != pendingId && it.value == key }
+            val stale = cardKeys.entries.firstOrNull {
+                it.key != pendingId && it.value.key == key
+            }
             if (stale != null) cardKeys.remove(stale.key)
             // 只裁剪 pendingId 映射（无时间语义）；consumedAt 的时间裁剪放在
             // [markConsumed] 里，那里才有与写入同一时间源的 now 可用 ——
@@ -147,22 +163,40 @@ internal object RecentPaymentCooldown {
      *   否则注入的历史时间戳会被判为过期，在同一次调用里自毁。
      */
     fun markConsumed(pendingId: String, now: Long): String? = synchronized(lock) {
-        val key = cardKeys.remove(pendingId) ?: return null
-        consumedAt[key] = now
-        consumedAt.entries.removeAll { now - it.value > COOLDOWN_MILLIS * 2 }
-        key
+        val entry = cardKeys.remove(pendingId) ?: return null
+        consumedAt[entry.key] = ConsumedEntry(at = now, orderId = entry.orderId)
+        consumedAt.entries.removeAll { now - it.value.at > COOLDOWN_MILLIS * 2 }
+        entry.key
     }
 
     /**
      * 该 `(支付包, 金额)` 是否处于冷却中。
      *
-     * @return 剩余冷却毫秒；不在冷却返回 null。
+     * **orderId 护栏（拍板 A，2026-11-04）**：冷却记录的订单号与新信号订单号
+     * **都非空且不同** ⇒ 不抑制 —— 单号已客观证明是两笔，不得以冷却抑制吞并
+     * 第二笔真单（放行后由 `CheckoutPaymentMatcher` 的 orderId 冲突护栏建第二
+     * 张卡）。任一侧为空或两者相等时，维持原 15s 抑制语义一字不变。
+     *
+     * @param orderId 新信号的订单号（可空）。
+     * @return 剩余冷却毫秒；不在冷却（或命中 orderId 护栏）返回 null。
      */
-    fun cooldownRemaining(paymentPackage: String, amountMinor: Long, now: Long): Long? =
+    fun cooldownRemaining(
+        paymentPackage: String,
+        amountMinor: Long,
+        orderId: String?,
+        now: Long
+    ): Long? =
         synchronized(lock) {
             val key = cooldownKey(paymentPackage, amountMinor)
-            val at = consumedAt[key] ?: return null
-            val elapsed = now - at
+            val entry = consumedAt[key] ?: return null
+            if (
+                !entry.orderId.isNullOrBlank() &&
+                !orderId.isNullOrBlank() &&
+                entry.orderId != orderId
+            ) {
+                return null
+            }
+            val elapsed = now - entry.at
 
             // 边界口径（2026-10-24 场景审查推演后保留 >=）：恰在 15.000s 时即使
             // 冷却放行，下游去重链（哈希 / D-25 均为闭区间）也会判同一笔合并，

@@ -93,6 +93,53 @@ interface PendingTransactionDao {
     ): PendingTransactionEntity?
 
     /**
+     * P1 多信号合并：按「支付身份」的强键 —— **订单号**（跨源跨包）查可归并的
+     * 既有待确认卡。
+     *
+     * 与 [findRecentPendingByPlatformAndAmount] 的分工（拍板 2026-11-04）：
+     * - orderId 非空且两侧相等 ⇒ 走本查询，**跨平台**归并，窗口 2 分钟
+     *   （对齐 `PAYMENT_EVIDENCE_MERGE_WINDOW_MILLIS` 语义，订单号客观证明同笔，
+     *   补偿通知/站内腿的跨源晚到）；
+     * - orderId 缺失 ⇒ 维持同包同额 15s（[findRecentPendingByPlatformAndAmount]，
+     *   行为不变）；
+     * - orderId 冲突（两侧都非空且不同）⇒ **显式拒绝归并**（调用方不调本查询 /
+     *   旧查询前先做冲突护栏），宁可两张可删的卡，不误并两笔真单。
+     *
+     * 只匹配 `status='pending'` 且 `type='expense'`：退款/手续费/转账卡键族独立
+     * （`pending-refund`/`pending-fee`/`pending-transfer`），不得被普通支付信号吸收。
+     */
+    @Query(
+        """
+        SELECT * FROM pending_transactions
+        WHERE status = 'pending'
+          AND type = 'expense'
+          AND order_id = :orderId
+          AND occurred_at BETWEEN :windowStart AND :windowEnd
+        ORDER BY created_at DESC
+        LIMIT 1
+        """
+    )
+    suspend fun findRecentPendingByOrderId(
+        orderId: String,
+        windowStart: Long,
+        windowEnd: Long
+    ): PendingTransactionEntity?
+
+    /**
+     * P4 合并留痕：归并第二条信号时同时更新冲突码与留痕键，与
+     * [updateConflictReason] 同口径 —— 只改诊断列、**不递增 version**
+     * （version 服务于确认/忽略乐观锁，归并不应使前端已持有的版本失效）。
+     */
+    @Query(
+        """
+        UPDATE pending_transactions
+        SET conflict_reason = :conflictReason, applied_rules = :appliedRules
+        WHERE id = :id AND status = 'pending'
+        """
+    )
+    suspend fun updateMergeTrace(id: String, conflictReason: String, appliedRules: String): Int
+
+    /**
      * 只更新冲突原因列（批 V-4）：用于同一笔支付被两条路径各落一次孤儿时的
      * **诊断信息保全**——幂等键保证不产生第二条待确认，但后到路径的
      * `conflictReason`（如 `PAYMENT_PROCESS_SNAPSHOT_MISSING`，量化"搬运漏检率"
