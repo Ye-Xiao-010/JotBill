@@ -26,7 +26,7 @@ import { DashboardSkeleton } from '../../components/skeleton';
 import CategoryIcon from '../../components/business/CategoryIcon';
 import { useDashboard, useStyles } from '../../hooks';
 import { useTheme } from '../../providers';
-import { nativeData } from '../../native';
+import { nativeData, nativeRecognition } from '../../native';
 import { formatPlatform } from '../../utils/platform';
 import { formatCurrency, formatSignedCurrency } from '../../utils/format';
 import { getCategoryIcon, getCategoryColor } from '../../constants/app';
@@ -187,6 +187,16 @@ export default function DashboardScreen() {
     staleTime: CACHE_TIME.CATEGORIES,
     gcTime: GC_TIME.DEFAULT,
   });
+
+  /** 待确认笔数：与 ReviewScreen 共享同一 queryKey/缓存；桥接失败时
+   *  data 为 undefined → count=0 不渲染横幅（失败静默，不打断首页主信息）。 */
+  const { data: recognitionStatus } = useQuery({
+    queryKey: QUERY_KEYS.recognition.status,
+    queryFn: () => nativeRecognition.getRecognitionStatus(),
+    staleTime: 30 * 1000,
+    gcTime: GC_TIME.DEFAULT,
+  });
+  const pendingCount = recognitionStatus?.pendingCount ?? 0;
   const categoryById = useMemo(
     () =>
       new Map<string, Category>(
@@ -331,6 +341,23 @@ export default function DashboardScreen() {
         onRetry={onRefresh}
         style={styles.errorBanner}
       />
+
+      {/* 待确认入口：有待确认卡时才出现，0 笔不占位 */}
+      {pendingCount > 0 ? (
+        <TouchableOpacity
+          style={styles.pendingBanner}
+          onPress={() => navigation.navigate('Review' as never)}
+          activeOpacity={0.8}
+          accessibilityLabel={`${pendingCount} 笔交易待确认，点击前往处理`}
+          accessibilityRole="button"
+        >
+          <View style={styles.pendingBadge}>
+            <Text style={styles.pendingBadgeText}>{pendingCount}</Text>
+          </View>
+          <Text style={styles.pendingText}>有待确认的交易</Text>
+          <Text style={styles.pendingAction}>去处理 →</Text>
+        </TouchableOpacity>
+      ) : null}
 
       <View style={styles.overviewCard}>
         <View style={styles.overviewContent}>
@@ -761,6 +788,48 @@ const createStyles = (colors: ThemeColors) => ({
     errorBanner: {
       margin: 0,
       marginBottom: spacing.xxl,
+    },
+    pendingBanner: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      backgroundColor: colors.surface,
+      borderRadius: borderRadius.card,
+      borderWidth: borderWidth.thin,
+      borderColor: colors.stroke,
+      paddingHorizontal: spacing.lg,
+      paddingVertical: spacing.md,
+      marginBottom: spacing.xxl,
+      minHeight: 44,
+      ...shadow.soft,
+    },
+    pendingBadge: {
+      minWidth: 24,
+      height: 24,
+      borderRadius: borderRadius.small,
+      backgroundColor: colors.warning,
+      borderWidth: borderWidth.hairline,
+      borderColor: colors.stroke,
+      alignItems: 'center',
+      justifyContent: 'center',
+      paddingHorizontal: spacing.xs,
+      marginRight: spacing.sm,
+    },
+    pendingBadgeText: {
+      fontSize: 13,
+      fontWeight: '800',
+      color: colors.textPrimary,
+      fontVariant: ['tabular-nums'],
+    },
+    pendingText: {
+      flex: 1,
+      fontSize: 14,
+      fontWeight: '700',
+      color: colors.textPrimary,
+    },
+    pendingAction: {
+      fontSize: 13,
+      fontWeight: '700',
+      color: colors.primary,
     },
     progressLoadingPlaceholder: {
       height: 148,
