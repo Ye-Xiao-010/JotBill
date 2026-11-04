@@ -79,6 +79,18 @@ internal object PaymentResultParser {
         "支付失败", "交易关闭", "支付取消", "付款失败", "订单取消", "订单关闭", "支付未完成"
     )
 
+    /**
+     * 订单页标题特征词（B1 站内结果页负向守卫专用）。
+     *
+     * 站内支付结果页接线后，购物 App 的订单详情/订单列表/账单页也会进入本解析器
+     * （它们常含"已付款/交易完成"+金额+时间，30 分钟时效闸对"刚付完的订单页"无效）。
+     * 这些词是**页面级标题词**（出现在页面顶部），与结果页的"支付成功"标题互斥共存。
+     * 不收"账单"裸词（结果页可能带"账单"按钮）、不收"订单"（过泛）。
+     */
+    private val ORDER_PAGE_TITLE_TERMS = listOf(
+        "订单详情", "订单列表", "全部订单", "我的订单", "账单明细", "交易明细", "交易记录"
+    )
+
     /** 金额匹配正则 */
     private val AMOUNT_PATTERNS = listOf(
         Regex("""(?:¥|￥)\s*([0-9]+(?:\.[0-9]+)?)"""),
@@ -247,6 +259,38 @@ internal object PaymentResultParser {
                 sourceEventKey = sourceEventKey
             )
         )
+    }
+
+    /**
+     * B1 站内结果页负向守卫：判定页面文本是否更像「订单详情 / 订单列表 / 账单」页
+     * 而非「当次支付结果页」。仅供站内结果页入口（购物包上下文）在调用
+     * [parseResult] 之前使用；**支付包结果页腿不经过本守卫**（既有行为不变）。
+     *
+     * 判定口径（位置启发式，纯文本）：
+     * 1. 无 [ORDER_PAGE_TITLE_TERMS] 任一标题词 ⇒ 不是订单页（false）；
+     * 2. 有订单页标题词但无成功词 ⇒ 判为订单页（true，与 [parseResult] 双保险）；
+     * 3. 两者皆有 ⇒ **先出现者代表页面标题**：订单页标题先于成功词 ⇒ 订单页
+     *    （典型：「订单详情」标题 + "已付款"状态行）；成功词在前 ⇒ 真结果页
+     *    （典型：「支付成功」标题 + "查看订单详情"按钮 —— 按钮词在后，不误杀）。
+     *
+     * ⚠️ 已知取舍：页面标题为「订单详情」但顶部带"支付成功"横幅的订单页会被本
+     * 守卫抑制（宁可漏一张可补的卡，不可把可反复回看的历史订单页当新支付落卡
+     * —— 该页在支付后 30 分钟内随时可翻出，时效闸挡不住）。真机校准见 B1 验证。
+     *
+     * @param pageText 页面文本（含隐藏文本，站内入口与支付包入口同款输入形态）。
+     * @return true 表示疑似订单页，调用方不得据此产出支付证据。
+     */
+    internal fun isLikelyOrderDetailPage(pageText: String): Boolean {
+        if (pageText.isBlank()) return false
+        val orderTitleIndex = ORDER_PAGE_TITLE_TERMS
+            .mapNotNull { term -> pageText.indexOf(term).takeIf { it >= 0 } }
+            .minOrNull()
+            ?: return false
+        val successIndex = SUCCESS_KEYWORDS
+            .mapNotNull { term -> pageText.indexOf(term).takeIf { it >= 0 } }
+            .minOrNull()
+            ?: return true
+        return orderTitleIndex < successIndex
     }
 
     /** 时间解析结果：fromPage 区分"页面显示时间"与"回退观察时间"。 */

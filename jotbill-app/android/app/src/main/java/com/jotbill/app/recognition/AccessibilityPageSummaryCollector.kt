@@ -721,7 +721,13 @@ internal object AccessibilityPageSummaryCollector {
 
     private fun containsAny(text: String, terms: List<String>): Boolean = terms.any(text::contains)
 
-    private fun containsSensitiveSignal(text: String): Boolean =
+    /**
+     * 敏感信号判定（密码/验证码/付款码/银行卡等）。
+     *
+     * internal 供 JVM 单测钉住「敏感页零采集」不变式的词表口径
+     * （`PaymentResultInAppGuardTest`）；行为与 private 时期完全一致。
+     */
+    internal fun containsSensitiveSignal(text: String): Boolean =
         containsAny(text, sensitiveTerms) || sensitiveAsciiPattern.containsMatchIn(text)
 
     private fun normalizeWindowClass(windowClass: String?): String =

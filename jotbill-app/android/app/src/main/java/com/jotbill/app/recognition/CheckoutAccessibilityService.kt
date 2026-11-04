@@ -655,6 +655,20 @@ open class CheckoutAccessibilityService : AccessibilityService() {
                     logCheckoutGateSampled(observation, rejection = detection.reason)
                 }
             }
+
+            // ★ B1 站内支付结果页接线：购物 App 内的支付成功页（多多钱包/京东支付/
+            // 抖音支付等不跳包支付）此前只被 classifyPageRole 判为 PAYMENT_RESULT
+            // 却无人消费该角色，只能靠页面规则引擎单腿。此处把它接入支付结果页的
+            // 同一扫描管线 [observePaymentResultIfApplicable]：敏感页跳过（本条件 +
+            // scanPaymentResultCore 内部二次判定）、30 分钟时间闸、事件级幂等记忆、
+            // 规则引擎认领让路（shouldSuppressPopup）全部在该管线内原样生效，一行未改。
+            // 个人转账语义（"转账给XXX"）同样经该管线分流到 recordPersonalTransfer。
+            if (observation.pageRole == CheckoutPageRole.PAYMENT_RESULT &&
+                !observation.isSensitivePage
+            ) {
+                observePaymentResultIfApplicable(event = event, paymentPackage = shoppingPackage)
+                return
+            }
         } catch (error: RuntimeException) {
             JotBillLog.w(TAG, "读取无障碍节点摘要失败", error)
         } finally {
@@ -937,6 +951,9 @@ open class CheckoutAccessibilityService : AccessibilityService() {
     /**
      * 真实无障碍事件入口：重置重扫兜底预算并撤销待执行的重扫，本帧立即全量扫描。
      * 重扫兜底（[runPaymentResultRescan]）复用同一扫描核心 [scanPaymentResultCore]。
+     *
+     * B1 起由两类上下文共用：支付包（微信/支付宝）结果页，以及购物包内的站内
+     * 支付结果页（`paymentPackage` 传购物包名，证据 sourceType 仍是 accessibility）。
      */
     private fun observePaymentResultIfApplicable(
         event: AccessibilityEvent,
@@ -948,7 +965,8 @@ open class CheckoutAccessibilityService : AccessibilityService() {
     }
 
     /**
-     * 阶段四 T3：在支付应用中观察支付结果页，提取结构化证据。
+     * 阶段四 T3：在支付应用（或购物应用站内结果页，B1）中观察支付结果页，
+     * 提取结构化证据。
      *
      * 由两条路径驱动：真实无障碍事件（[observePaymentResultIfApplicable]）与
      * 静止页重扫兜底（[runPaymentResultRescan]，合成事件）。两者走同一管线，
@@ -1049,6 +1067,21 @@ open class CheckoutAccessibilityService : AccessibilityService() {
                     // 从节点文本和 contentDescription 提取结构化证据
                     // （敏感页已在角色判断前统一拦截并 continue，此处无需重复判定）
                     val pageText = collectPageText(root)
+                    // ★ B1 负向守卫：仅站内（购物包）上下文生效 —— 订单详情/订单列表/
+                    // 账单页常含"已付款/交易完成"+金额，且刚付完的订单页时间在时效窗内，
+                    // 30 分钟闸挡不住，须按页面标题语义排除；支付包上下文不经过本守卫
+                    // （既有行为一行未变）。
+                    if (!pageDetector.supportsPaymentPackage(paymentPackage) &&
+                        PaymentResultParser.isLikelyOrderDetailPage(pageText)
+                    ) {
+                        JotBillLog.i(
+                            TAG,
+                            "站内页面判为订单页(非当次支付结果页)，跳过证据提取: " +
+                                "pkg=$paymentPackage, class=${observation.windowClass}, " +
+                                "textLength=${pageText.length}"
+                        )
+                        continue
+                    }
                     val parseResult = PaymentResultParser.parseResult(
                         pageText = pageText,
                         sourcePackage = paymentPackage,
@@ -1227,7 +1260,16 @@ open class CheckoutAccessibilityService : AccessibilityService() {
         } catch (_: RuntimeException) {
             ""
         }
-        if (rootPackage.isNotBlank() && !pageDetector.supportsPaymentPackage(rootPackage)) {
+        // B1 适配：停止条件按扫描上下文区分 —— 支付包上下文保持原语义（在白名单
+        // 支付包之间切换仍继续）；站内（购物包）上下文只在原购物包内继续，切到
+        // 支付包/其他应用即停，避免把别的窗口树按购物包上下文误解析出错平台证据。
+        // （原条件对站内上下文恒判"已离开支付包"而立即自停 ⇒ 重扫兜底失效。）
+        val stillInScanContext = if (pageDetector.supportsPaymentPackage(paymentPackage)) {
+            pageDetector.supportsPaymentPackage(rootPackage)
+        } else {
+            rootPackage == paymentPackage
+        }
+        if (rootPackage.isNotBlank() && !stillInScanContext) {
             JotBillLog.i(TAG, "支付结果页重扫兜底停止: 已离开支付包, rootPkg=$rootPackage")
             return
         }
@@ -1355,6 +1397,11 @@ open class CheckoutAccessibilityService : AccessibilityService() {
      * 该分支在精简版**从未可达**，不是"可达但很少走"。
      *
      * 证据来源固定标记为 ACCESSIBILITY（无障碍结果页），与通知（NOTIFICATION）区分。
+     *
+     * ⚠️ B1 站内（购物包）证据的落点：`resolveSessionForPayment` 的支付包闸
+     * （`DEFAULT_SUPPORTED_PAYMENT_PACKAGES`）保持不动 ⇒ 站内证据恒走 NoMatch →
+     * `recordOrphanPaymentSignal` 落**待确认**，不进会话匹配、不自动入账。
+     * 这是有意的降级语义（站内结果页字段弱于支付包结果页），非缺陷。
      *
      * @return 证据**成功落库**时的会话 id；证据被拒（已转孤儿待确认）或无会话可关联
      *   时返回 null。

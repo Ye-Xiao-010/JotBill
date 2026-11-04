@@ -267,4 +267,61 @@ class PaymentResultParserTest {
         assertTrue("期望文本主路径解析成功，实际为 $result", result is PaymentResultParseResult.Success)
         return (result as PaymentResultParseResult.Success).evidence.sourceEventKey
     }
+
+    // ---------- B1：站内结果页接入文本解析管线 ----------
+
+    @Test
+    fun inAppResultPageParsesWithPackageScopedStableEventKey() {
+        // 站内（购物包）支付成功页文案：解析为成功证据，事件键按来源包名 + 15 秒桶
+        // + 金额 + 订单号生成 —— 同输入幂等、不同包名不撞键（D-6 单一生成点复用）。
+        val pageText = "支付成功 实付 ¥29.90 订单号: PDD20261103001"
+
+        val first = PaymentResultParser.parseResult(
+            pageText = pageText,
+            sourcePackage = "com.xunmeng.pinduoduo",
+            pageFingerprint = "f".repeat(64),
+            observedAt = observedAt
+        )
+        val second = PaymentResultParser.parseResult(
+            pageText = pageText,
+            sourcePackage = "com.xunmeng.pinduoduo",
+            pageFingerprint = "f".repeat(64),
+            observedAt = observedAt + 5_000L
+        )
+        val otherPackage = PaymentResultParser.parseResult(
+            pageText = pageText,
+            sourcePackage = "com.tencent.mm",
+            pageFingerprint = "f".repeat(64),
+            observedAt = observedAt
+        )
+
+        assertTrue(first is PaymentResultParseResult.Success)
+        val evidence = (first as PaymentResultParseResult.Success).evidence
+        assertEquals(2990L, evidence.amountMinor)
+        assertEquals("PDD20261103001", evidence.orderId)
+        assertEquals(
+            "同输入重复观测应收敛到同一事件键",
+            evidence.sourceEventKey,
+            (second as PaymentResultParseResult.Success).evidence.sourceEventKey
+        )
+        assertNotEquals(
+            "不同来源包名不得撞键",
+            evidence.sourceEventKey,
+            (otherPackage as PaymentResultParseResult.Success).evidence.sourceEventKey
+        )
+    }
+
+    @Test
+    fun historicalVoucherWithOldPageTimeIsRejected() {
+        // 30 分钟时间闸回归（B1 站内入口复用本闸，不得绕过）：页面显示时间距观察
+        // 时刻超过时效窗 ⇒ 历史订单/凭证回放，静默拒绝，不产出成功证据。
+        val result = PaymentResultParser.parseResult(
+            pageText = "支付成功 实付 ¥12.34 商户：历史小店 2021-06-01 10:30 订单号: OLD20210601",
+            sourcePackage = "com.xunmeng.pinduoduo",
+            pageFingerprint = "f".repeat(64),
+            observedAt = observedAt
+        )
+
+        assertTrue(result is PaymentResultParseResult.NotPaymentResult)
+    }
 }
