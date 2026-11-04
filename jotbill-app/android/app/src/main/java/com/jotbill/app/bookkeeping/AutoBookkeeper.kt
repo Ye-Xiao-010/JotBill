@@ -1,6 +1,7 @@
 package com.jotbill.app.bookkeeping
 
 import com.jotbill.app.data.CreateBillOutcome
+import com.jotbill.app.data.JotBillDatabase
 import com.jotbill.app.data.JotBillDatabaseProvider
 import com.jotbill.app.data.LedgerRepository
 import com.jotbill.app.data.entity.BillEntity
@@ -28,16 +29,27 @@ import kotlinx.coroutines.launch
  * 3. 任一环节不适合自动入账（无默认账户 / 疑似重复 / 落库异常）→ 转待确认兜底
  *    （复用 [CheckoutPaymentMatcher.recordOrphanPaymentSignal]，含同额合并语义）；
  * 4. 入账成功 → 系统通知「已自动记一笔」，带撤销动作（设计方案 §2.7）。
+ *
+ * ⚠️ B3 拍板（2026-11-04）：银行短信（[SMS_SOURCE_PACKAGE]）默认走现金兜底**自动
+ * 入账**（口径乙）；但若账户字段命中**用户自建 set_account 规则**（[RuleEngine]
+ * patch.accountId 非空，即 FieldPriorityResolver 的 RULE 级来源），属于猜测性人工
+ * 干预 ⇒ **强制转待确认**（[CONFLICT_RULE_ACCOUNT_NEEDS_REVIEW]），由用户核对。
+ * 该强制仅对短信渠道生效，通知/结果页等其他渠道不适用。
  */
 class AutoBookkeeper(
     appContext: android.content.Context,
-    private val scope: CoroutineScope
+    private val scope: CoroutineScope,
+    /**
+     * 数据库注入点（B3 测试用）：生产不传（走 [JotBillDatabaseProvider]），
+     * JVM 单测注入 Room 内存库以覆盖落库语义；默认值保证生产行为零变化。
+     */
+    private val databaseOverride: JotBillDatabase? = null
 ) : AutoBookkeepingEngine.Sink {
 
     private val context = appContext.applicationContext
 
     private val database by lazy {
-        JotBillDatabaseProvider.get(context)
+        databaseOverride ?: JotBillDatabaseProvider.get(context)
     }
 
     private val ledger by lazy { LedgerRepository(database) }
@@ -121,6 +133,20 @@ class AutoBookkeeper(
         } catch (error: RuntimeException) {
             JotBillLog.w(TAG, "分类规则补全净化失败，按无规则补全处理", error)
             RuleEngine.FieldPatch()
+        }
+
+        // ---- B3 拍板（2026-11-04）：短信渠道 + 用户 set_account 规则命中 ⇒ 强制待确认 ----
+        // 判据 = 净化后的 patch.accountId 非空（RuleEngine 的 patch 只来自用户自建规则，
+        // set_account 是唯一填充 accountId 的动作；sanitizePatch 已滤掉失效/停用账户，
+        // 引用失效等同未配置 ⇒ 走默认现金兜底自动入账）。语义：默认兜底走自动化，
+        // 但用户人为指定账户属于猜测性干预，必须让用户核对。
+        // ⚠️ 仅短信渠道（com.android.mms）生效，不得扩散到通知/结果页等其他渠道。
+        if (record.sourcePackage == SMS_SOURCE_PACKAGE && patch.accountId != null) {
+            fallbackToPending(
+                record, amountMinor, merchant, orderId, occurredAt,
+                CONFLICT_RULE_ACCOUNT_NEEDS_REVIEW
+            )
+            return
         }
 
         val accountId = resolveAccountId(record.sourcePackage, patch)
@@ -265,6 +291,11 @@ class AutoBookkeeper(
      * 抖音）的无障碍事件**读不到实际扣款账户**，兜底落「现金」保证自动入账
      * 闭环 —— 用户可用分类规则 set_account 精确覆盖，或在账单里改。
      * 兜底账户也不存在/停用时返回 null 转待确认。
+     *
+     * ⚠️ B3 拍板（2026-11-04）：银行短信（[SMS_SOURCE_PACKAGE]）同走现金兜底
+     * **自动入账**（口径乙，2026-11-04 前后行为不变）；短信 + 用户 set_account
+     * 规则命中的强制待确认在 [book] 内**先于本方法**短路，不会走到这里的
+     * patch.accountId 分支。
      */
     private suspend fun resolveAccountId(
         sourcePackage: String,
@@ -378,6 +409,16 @@ class AutoBookkeeper(
 
         /** 非微信/支付宝渠道的入账兜底账户（现金）。 */
         private const val CASH_FALLBACK_ACCOUNT_ID = "default-account-cash"
+
+        /** 银行短信来源包（BookkeepingChannels 的 mms 渠道同款包名）。 */
+        private const val SMS_SOURCE_PACKAGE = "com.android.mms"
+
+        /**
+         * B3 拍板（2026-11-04）：短信渠道账户字段命中用户 set_account 规则时的
+         * 冲突码 —— 强制转待确认（猜测性人工干预须用户核对），不自动入账。
+         * 落 `pending.conflictReason`，与 `NO_DEFAULT_ACCOUNT` 同消费路径。
+         */
+        const val CONFLICT_RULE_ACCOUNT_NEEDS_REVIEW = "RULE_ACCOUNT_NEEDS_REVIEW"
 
         private val FULL_TIME_PATTERN = Pattern.compile(
             "(\\d{4})年(\\d{1,2})月(\\d{1,2})日\\s*(\\d{1,2}):(\\d{2})(?::(\\d{2}))?"
