@@ -1139,6 +1139,9 @@ const CONFLICT_LABELS: Record<string, string> = {
   // 阶段五 T2/T3/T4/T6 新增冲突码
   ACCOUNT_UNRESOLVED: '账户无法自动判定，请手动选择账户与目标账户',
   RULE_FORCED_REVIEW: '命中转待确认规则，需人工确认',
+  // B3 银行短信渠道：短信命中用户自建 set_account 规则 ⇒ 账户由规则指定、强制人工核对
+  //（口径对齐 docs/CURRENT_SYSTEM.md 冲突码表；仅 mms 渠道产生）
+  RULE_ACCOUNT_NEEDS_REVIEW: '短信命中账户规则，账户由规则指定，请核对后确认',
   SUSPECTED_DUPLICATE: '疑似重复交易（同金额/时间/账户/商户相近），请核对后再确认',
   DEDUP_CHECK_FAILED: '去重检查异常，请人工核对是否重复',
   FEE_AMOUNT_UNPARSED: '手续费金额解析失败，请补填金额',
