@@ -45,6 +45,9 @@
 | [`DEVELOPMENT.md`](./DEVELOPMENT.md) | 开发环境与构建指南 | 稳定 |
 | [`TESTING.md`](./TESTING.md) | 测试指南 | 稳定 |
 | [`LITENOTE_COMPARISON_2026-10-10_payment_overlay.md`](./LITENOTE_COMPARISON_2026-10-10_payment_overlay.md) | 上游 LiteNote 弹窗机制对照：**上游无无障碍服务，纯通知驱动零门禁**；精简版砍掉通知换无障碍，继承"等 AI 定论"假设而 AI 已砍 ⇒ 架构债 |
+| [`AUTO_BOOKKEEPING_2026-10-25.md`](./AUTO_BOOKKEEPING_2026-10-25.md) | 页面规则引擎（mipay 移植）实施记录：8 渠道 + `kind` 分档 + 认领互斥 | **现行**（2026-11-04 已补渠道清单加注） |
+| [`lean-icon-system.md`](./lean-icon-system.md) | 精简版图标系统规范 | 现行 UI 规范 |
+| [`FIX_TASK_2026-09-29_attribution_pending_dup.md`](./FIX_TASK_2026-09-29_attribution_pending_dup.md) | 归属/待确认重复问题取证与修复 | 问题已处置（D-25） |
 
 ### ⚠️ 快照 · 含未处置项（5 份）—— 问题还活着，查缺陷时读
 
@@ -102,6 +105,7 @@
 
 ## 四、维护约定
 
+0. **代码为准**：文档冲突时以 `jotbill-app/android` 实现为事实源；历史文档按「加注不覆盖」订正（见第 2 条）。2026-10~11 的采集/合并改造（B1-B3、orderId 归并、N-2 吸收）已使早期"v1 唯一来源/通知停用/站内不支持"等口径失效，相关文档均已加注 ⚠️ 标记。
 1. **方向、状态、缺陷变化时，同步更新 [`00-现状正本.md`](./00-现状正本.md)**（尤其第二、三、四节）。
 2. **改动正文一律「加注不覆盖」**：用 `~~删除线~~` + ⚠️ 指向新裁定，**不删原文**（保留取证价值）。
 3. **原始证据目录只增不改**；日志分析引用行号时必须钉死到文件 + 时间戳。

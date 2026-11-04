@@ -14,7 +14,7 @@ jotbill-app/          React Native + 原生 Android（Kotlin）—— 当前开�
     overlay/          悬浮窗
   android/app/src/test/java/com/jotbill/app/   Kotlin 单元测试
 litenote-backend/     NestJS 后端（历史遗留，非当前重心）
-docs/                 设计与裁定文档 —— 改代码前必读
+docs/                 设计与裁定文档 —— 改代码前必读（导航与状态标记见 docs/README.md；冲突时以代码为准）
 ```
 
 ## 二、改代码前必读（三份互补，缺一会漏规格）
