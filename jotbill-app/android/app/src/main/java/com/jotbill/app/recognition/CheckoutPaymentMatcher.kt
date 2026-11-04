@@ -141,6 +141,16 @@ private const val ORPHAN_DEDUP_WINDOW_MILLIS = PaymentTiming.SAME_TXN_WINDOW_MIL
  */
 private const val PAYMENT_IDENTITY_MERGE_WINDOW_MILLIS = PAYMENT_EVIDENCE_MERGE_WINDOW_MILLIS
 
+/**
+ * N-2 吸收窗（拍板 2026-11-04：24 小时）：强证据入账时在此窗内认领同 orderId 的
+ * 既有待确认卡。orderId 相等已客观证明同一笔，窗口只需防极端脏数据；取 24h 而
+ * 非 2min 是为覆盖"用户挂卡很久后重复通知/晚到强证据"的真实场景。
+ */
+private const val N2_ABSORB_WINDOW_MILLIS = 24 * 60 * 60 * 1000L
+
+/** N-2 吸收留痕的审计实体类型（被吸收待确认卡 → 账单的证据承接记录）。 */
+private const val AUDIT_ABSORBED_PENDING = "absorbed_pending"
+
 private const val PAYMENT_CONFIRMED_STATUS = "PAYMENT_CONFIRMED"
 private const val AI_PENDING_STATUS = "AI_PENDING"
 private const val WAITING_PAYMENT_STATUS = "WAITING_PAYMENT"
@@ -698,8 +708,27 @@ internal class CheckoutPaymentMatcher(
                 return@withTransaction
             }
             val sourceEventKey = sourceEventKey(signal)
+            // N-2 强证据候选预判（拍板 2026-11-04）：此类信号命中同单卡时要**吸收卡
+            // 入账**（N-2 段），而非并进卡等确认 —— 下方 orderId 归并与 D-25 两段
+            // 对它让路，避免"归并进卡"挡住吸收入账。它最终不入账（规则 Ignored /
+            // 疑似重复 / 账户不可解析）落到建卡段前，有回落归并块兜底（不双卡）。
+            val strongEvidenceSignal = normalizedSourceType == "notification" &&
+                !signal.orderId.isNullOrBlank()
             val pendingId = stableId("pending-orphan", sourceEventKey)
             val dao = database.pendingTransactionDao()
+            // N-2 幂等承接（拍板 2026-11-04）：强证据入账后不建 pending 卡，
+            // 同一 sourceEventKey 的重复通知在上方幂等键处查不到 —— 按确定性账单键
+            // `bill-notification:<key>` 承接幂等，重复信号直接返回既有账单，
+            // 不得再落出"疑似重复"卡或第二笔账单。
+            val committedBillId = stableId("bill-notification", sourceEventKey)
+            if (database.billDao().getById(committedBillId) != null) {
+                JotBillLog.i(
+                    "CheckoutPaymentMatcher",
+                    "强证据重复通知幂等跳过(账单已存在): bill=${committedBillId.take(16)}"
+                )
+                outcome = OrphanOutcome(OrphanOutcome.Kind.AUTO_COMMITTED, committedBillId)
+                return@withTransaction
+            }
             val existingOrphan = dao.getById(pendingId)
             if (existingOrphan != null) {
                 // 批 V-4 处置：同一笔支付可能被**两条路径**各落一次孤儿（服务层证据落库
@@ -775,7 +804,7 @@ internal class CheckoutPaymentMatcher(
             // 不同）⇒ 显式拒绝归并、继续走下方判重建第二张卡（宁可误报可删，
             // 不误并两笔真单）；② orderId 缺失 ⇒ 维持同包同额 15s（下方 D-25，
             // 行为不变）—— 短信（mms）orderId 恒空，天然不与支付信号归并。
-            if (!signal.orderId.isNullOrBlank() && signal.occurredAt > 0L) {
+            if (!strongEvidenceSignal && !signal.orderId.isNullOrBlank() && signal.occurredAt > 0L) {
                 val byOrder = dao.findRecentPendingByOrderId(
                     orderId = signal.orderId!!,
                     windowStart = signal.occurredAt - PAYMENT_IDENTITY_MERGE_WINDOW_MILLIS,
@@ -809,7 +838,7 @@ internal class CheckoutPaymentMatcher(
             // 口径：同支付包 + 同金额 + 窗口内已有 pending ⇒ 判为同一笔的重复观测，
             // 合并 conflictReason 而不新建第二张卡（证据不丢弃，冲突码照旧保全）。
             // 本道是**兜底**：哈希缺失（通知回退）或页面动态漂移导致哈希不同时才生效。
-            if (signal.occurredAt > 0L) {
+            if (!strongEvidenceSignal && signal.occurredAt > 0L) {
                 val duplicate = dao.findRecentPendingByPlatformAndAmount(
                     platform = signal.paymentPackage,
                     amountMinor = signal.amountMinor,
@@ -921,18 +950,63 @@ internal class CheckoutPaymentMatcher(
                 resolvedAccountId != null &&
                 effectiveConflictReason != DuplicateGuard.CONFLICT_SUSPECTED_DUPLICATE
             if (strongEvidence) {
+                // ---- N-2 吸收（拍板 2026-11-04）：先删后写 + 失败降级归并 ----
+                // 同 orderId 的既有待确认卡（24h 窗、type=expense）与本强证据证明
+                // 同一笔（订单号客观唯一）⇒ 入账时必须吸收该卡，消灭"1 卡 + 1 账单"
+                // 双记。顺序**先删后写**：逐张 deleteByIdIfVersion（乐观锁）全成功
+                // 才入账 —— 删除失败（如用户正同时确认该卡的版本冲突）⇒ 恢复已删卡、
+                // 降级走 mergeSignalIntoExisting 归并进卡不入账（方案乙形态）；
+                // 入账失败 ⇒ 外层事务整体回滚，已删卡自动复活。全有或全无。
+                val absorbedCards = mutableListOf<PendingTransactionEntity>()
+                var absorbFailed: PendingTransactionEntity? = null
+                while (true) {
+                    val card = dao.findRecentPendingByOrderId(
+                        orderId = signal.orderId!!,
+                        windowStart = signal.occurredAt - N2_ABSORB_WINDOW_MILLIS,
+                        windowEnd = signal.occurredAt + N2_ABSORB_WINDOW_MILLIS
+                    ) ?: break
+                    if (dao.deleteByIdIfVersion(card.id, card.version) == 1) {
+                        absorbedCards += card
+                    } else {
+                        absorbFailed = card
+                        break
+                    }
+                }
+                if (absorbFailed != null) {
+                    // 全有或全无：恢复本轮已删的卡，降级归并（不入账）。
+                    absorbedCards.forEach { dao.insertIfAbsent(it) }
+                    mergeSignalIntoExisting(
+                        existing = absorbFailed,
+                        incomingSourceEventKey = sourceEventKey,
+                        incomingReason = conflictReason
+                    )
+                    JotBillLog.i(
+                        "CheckoutPaymentMatcher",
+                        "强证据吸收降级为归并(卡删除失败): pending=${absorbFailed.id.take(16)}, " +
+                            "orderId=${signal.orderId?.take(12)}, amount=${signal.amountMinor}"
+                    )
+                    outcome = OrphanOutcome(
+                        OrphanOutcome.Kind.SUPPRESSED_DUPLICATE_WINDOW,
+                        absorbFailed.id
+                    )
+                    return@withTransaction
+                }
+                // 卡字段只补空（EVIDENCE 级同源口径）：卡上的页面字段（商户/商品/
+                // 分类）比通知丰富，不得随卡删除而丢失；通知字段优先（它是本次
+                // 入账的直接证据）。
+                val absorbedPrimary = absorbedCards.maxByOrNull { it.createdAt }
                 val bill = BillEntity(
                     id = stableId("bill-notification", sourceEventKey),
                     amountMinor = signal.amountMinor,
                     type = "expense",
                     occurredAt = signal.occurredAt,
-                    description = resolvedMerchant ?: "支付通知",
-                    categoryId = rulePatch.categoryId,
+                    description = resolvedMerchant ?: absorbedPrimary?.merchant ?: "支付通知",
+                    categoryId = rulePatch.categoryId ?: absorbedPrimary?.categoryId,
                     accountId = resolvedAccountId,
                     targetAccountId = null,
                     platform = signal.paymentPackage,
-                    merchant = resolvedMerchant,
-                    productDescription = null,
+                    merchant = resolvedMerchant ?: absorbedPrimary?.merchant,
+                    productDescription = absorbedPrimary?.productDescription,
                     sourceType = normalizedSourceType,
                     originalTransactionId = null,
                     orderId = signal.orderId,
@@ -946,6 +1020,27 @@ internal class CheckoutPaymentMatcher(
                 val settledBillId = when (commit) {
                     is CreateBillOutcome.Committed -> commit.bill.id
                     is CreateBillOutcome.MergedInto -> commit.bill.id
+                }
+                // 合并留痕（P4 同口径）：被吸收卡的证据不丢弃 —— 卡 id / 冲突码 /
+                // appliedRules（含 mergedSourceEventKeys）记入审计，承接追溯
+                // （与 confirmPendingTransaction 删卡后"审计承接"同哲学）。
+                absorbedCards.forEach { card ->
+                    database.auditEntryDao().insertIfAbsent(
+                        AuditEntryEntity(
+                            id = "absorbed-pending:$settledBillId:${card.id}",
+                            entityType = AUDIT_ABSORBED_PENDING,
+                            entityId = settledBillId,
+                            action = "absorb",
+                            fieldName = null,
+                            oldValue = card.id,
+                            newValue = rulesJson(
+                                "conflictReason" to card.conflictReason,
+                                "appliedRules" to card.appliedRules
+                            ),
+                            operator = NOTIFICATION_AUTO_COMMIT_OPERATOR,
+                            createdAt = now
+                        )
+                    )
                 }
                 // 同额冷却登记必须在返回之前：下一条同额通知据此判为重复观测，
                 // 不会因为"没有 pending 行"而绕过三道既有去重。
@@ -971,6 +1066,29 @@ internal class CheckoutPaymentMatcher(
                 )
                 outcome = OrphanOutcome(OrphanOutcome.Kind.AUTO_COMMITTED, settledBillId)
                 return@withTransaction
+            }
+
+            // N-2 未命中回落至此（规则 Ignored 之外的：疑似重复 / 账户不可解析）：
+            // 强证据候选虽不入账，同单卡仍应归并而非双卡 —— 补一次 orderId 归并
+            // （上方两段已为它让路，此处是让路后的兜底，拍板甲的边界收敛）。
+            if (strongEvidenceSignal && signal.occurredAt > 0L) {
+                val fallbackCard = dao.findRecentPendingByOrderId(
+                    orderId = signal.orderId!!,
+                    windowStart = signal.occurredAt - PAYMENT_IDENTITY_MERGE_WINDOW_MILLIS,
+                    windowEnd = signal.occurredAt + PAYMENT_IDENTITY_MERGE_WINDOW_MILLIS
+                )
+                if (fallbackCard != null && fallbackCard.orderId == signal.orderId) {
+                    mergeSignalIntoExisting(
+                        existing = fallbackCard,
+                        incomingSourceEventKey = sourceEventKey,
+                        incomingReason = conflictReason
+                    )
+                    outcome = OrphanOutcome(
+                        OrphanOutcome.Kind.SUPPRESSED_DUPLICATE_WINDOW,
+                        fallbackCard.id
+                    )
+                    return@withTransaction
+                }
             }
 
             val pending = PendingTransactionEntity(

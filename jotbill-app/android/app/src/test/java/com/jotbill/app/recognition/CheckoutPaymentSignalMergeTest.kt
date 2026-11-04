@@ -179,4 +179,162 @@ class CheckoutPaymentSignalMergeTest {
 
         assertEquals("短信与支付信号不归并（拍板②）", 2, pendingCount())
     }
+
+    // ── N-2 吸收（拍板 2026-11-04）：强证据入账吸收同单待确认卡 ──────────
+
+    /** 建一张可被 N-2 吸收的待确认卡（模拟结果页腿先落卡）。 */
+    private suspend fun insertCard(
+        id: String,
+        amount: Long,
+        orderId: String?,
+        type: String = "expense",
+        merchant: String? = "测试商户",
+        productDescription: String? = null
+    ) {
+        database.pendingTransactionDao().insertIfAbsent(
+            PendingTransactionEntity(
+                id = id,
+                candidateId = null,
+                sessionId = null,
+                amountMinor = amount,
+                type = type,
+                occurredAt = BASE,
+                platform = WECHAT,
+                merchant = merchant,
+                productDescription = productDescription,
+                orderId = orderId,
+                accountId = null,
+                categoryId = null,
+                conflictReason = "NO_ACTIVE_SESSION",
+                sourceType = "accessibility",
+                appliedRules = "{}",
+                createdAt = BASE,
+                version = 1
+            )
+        )
+    }
+
+    /** N-2 前置：支付平台种子账户存在（createBillWithDedup 要求启用账户）。 */
+    private suspend fun insertWechatAccount() {
+        database.accountDao().insert(
+            com.jotbill.app.data.entity.AccountEntity(
+                id = "default-account-wechat", name = "微信零钱", subtype = "wallet",
+                kind = "asset", initialBalanceMinor = 0L, currentBalanceMinor = 100_000L,
+                currency = "CNY", icon = null, color = null, sortOrder = 0,
+                isActive = true, createdAt = 1L, updatedAt = 1L
+            )
+        )
+    }
+
+    /** N-2 强证据信号（NOTIFICATION 来源 + 单号 + 可解析账户 ⇒ 自动入账）。 */
+    private fun strongSignal(amount: Long, orderId: String?, key: String) =
+        signal(WECHAT, amount, BASE, orderId, key)
+
+    /** N-2 ①：同单卡 + 强证据 ⇒ 只剩 1 笔账单、0 卡，吸收留痕审计。 */
+    @Test
+    fun 强证据吸收同单卡入账后零卡留痕() = runBlocking {
+        insertWechatAccount()
+        insertCard(id = "pending-n2-1", amount = 31001L, orderId = "JD-N2-1")
+
+        CheckoutPaymentMatcher(database).recordOrphanPaymentSignal(
+            strongSignal(31001L, "JD-N2-1", "evt-n2-1"),
+            sourceType = "NOTIFICATION"
+        )
+
+        val bill = database.billDao().findByOrderAndAmount("JD-N2-1", 31001L)
+        assertEquals("强证据应入账", "JD-N2-1", bill?.orderId)
+        assertEquals("同单卡必须被吸收", 0, pendingCount())
+        val audit = database.auditEntryDao().getByEntity("absorbed_pending", bill!!.id)
+        assertTrue("吸收必须留痕审计", audit.isNotEmpty())
+    }
+
+    /** N-2 ②：不同 orderId 的卡不得被删。 */
+    @Test
+    fun 异订单号卡不被吸收() = runBlocking {
+        insertWechatAccount()
+        insertCard(id = "pending-n2-2", amount = 32001L, orderId = "OTHER-ORDER")
+
+        CheckoutPaymentMatcher(database).recordOrphanPaymentSignal(
+            strongSignal(32001L, "JD-N2-2", "evt-n2-2"),
+            sourceType = "NOTIFICATION"
+        )
+
+        assertEquals("异 orderId 的卡必须保留", 1, pendingCount())
+        assertTrue(database.billDao().findByOrderAndAmount("JD-N2-2", 32001L) != null)
+    }
+
+    /** N-2 ③：无 orderId 的卡不受影响。 */
+    @Test
+    fun 无订单号卡不被吸收() = runBlocking {
+        insertWechatAccount()
+        insertCard(id = "pending-n2-3", amount = 33001L, orderId = null)
+
+        CheckoutPaymentMatcher(database).recordOrphanPaymentSignal(
+            strongSignal(33001L, "JD-N2-3", "evt-n2-3"),
+            sourceType = "NOTIFICATION"
+        )
+
+        assertEquals("无 orderId 的卡必须保留", 1, pendingCount())
+    }
+
+    /** N-2 ④：refund 卡键族独立，不被吸收。 */
+    @Test
+    fun 退款卡不被吸收() = runBlocking {
+        insertWechatAccount()
+        insertCard(
+            id = "pending-n2-4", amount = 34001L, orderId = "JD-N2-4",
+            type = "refund"
+        )
+
+        CheckoutPaymentMatcher(database).recordOrphanPaymentSignal(
+            strongSignal(34001L, "JD-N2-4", "evt-n2-4"),
+            sourceType = "NOTIFICATION"
+        )
+
+        assertEquals("refund 卡必须保留", 1, pendingCount())
+        assertTrue(database.billDao().findByOrderAndAmount("JD-N2-4", 34001L) != null)
+    }
+
+    /** N-2 ⑤：重复通知幂等 —— 第二次同键强证据不再产生第二笔账单。 */
+    @Test
+    fun 重复强证据通知幂等不重复入账() = runBlocking {
+        insertWechatAccount()
+        insertCard(id = "pending-n2-5", amount = 35001L, orderId = "JD-N2-5")
+        val matcher = CheckoutPaymentMatcher(database)
+        val dup = strongSignal(35001L, "JD-N2-5", "evt-n2-5")
+
+        matcher.recordOrphanPaymentSignal(dup, sourceType = "NOTIFICATION")
+        matcher.recordOrphanPaymentSignal(dup, sourceType = "NOTIFICATION")
+
+        assertEquals("重复通知不得产生第二笔账单", 1, database.billDao().count())
+        assertEquals(0, pendingCount())
+    }
+
+    /** N-2 ⑥：卡字段只补空 —— 卡上的页面字段（商户/商品）随吸收并入账单。 */
+    @Test
+    fun 吸收时卡字段补空并入账单() = runBlocking {
+        insertWechatAccount()
+        insertCard(
+            id = "pending-n2-6", amount = 36001L, orderId = "JD-N2-6",
+            merchant = "页面商户", productDescription = "测试商品"
+        )
+
+        CheckoutPaymentMatcher(database).recordOrphanPaymentSignal(
+            PaymentNotificationFallbackSignal(
+                paymentPackage = WECHAT,
+                amountMinor = 36001L,
+                occurredAt = BASE,
+                merchant = null,
+                orderId = "JD-N2-6",
+                sourceEventKey = "evt-n2-6",
+                rawTextHash = null
+            ),
+            sourceType = "NOTIFICATION"
+        )
+
+        val bill = database.billDao().findByOrderAndAmount("JD-N2-6", 36001L)
+        assertTrue(bill != null)
+        assertEquals("卡商户补空并入账单", "页面商户", bill!!.merchant)
+        assertEquals("卡商品描述补空并入账单", "测试商品", bill.productDescription)
+    }
 }
