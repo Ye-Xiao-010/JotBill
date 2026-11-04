@@ -1,0 +1,182 @@
+> **状态头**：正典·必读（现状规格） | 最后核实 2026-11-04 | 冲突时以 `jotbill-app/android` 代码为准
+
+# 自动记账现状规格（CURRENT_SYSTEM）
+
+> **定位**：唯一一份"现在系统怎么工作"的说明。读者 = 要改自动记账代码的 AI/新人，读完应能定位到该改哪个符号。
+> **只写现状**：历史演进/已废止需求/批次编号见 `NEW_PROJECT_KICKOFF_V2.md`（设计史料）与各历史取证文档。
+> 全文只用符号名（行号会漂，用 `grep` 按符号定位）。
+
+## 1. 系统总览
+
+```
+六条信号源（采集层）
+  ├─ 无障碍支付结果页文本 ──┐
+  ├─ 支付通知（N-1/N-2）──┤
+  ├─ 页面规则引擎（8 渠道）─┼─→ 归并/去重（合并层）──→ 落点判定
+  ├─ 银行短信（mms 通知）──┤      ├ orderId 归并 2min          ├─→ Bill（自动入账）
+  ├─ 账单导入 ─────────────┤      ├ 同包同额 15s / 文本哈希     └─→ Pending（待确认）
+  └─ 手动录入/确认 ─────────┘      └ L1-L4 四级判重 + N-2 吸收          │
+                                                                    ↓
+                                              RN 展示（Review/Pending）← PendingChangeHub 事件
+```
+
+## 2. 采集层（六条信号源）
+
+| # | 信号源 | 入口类（符号） | 包名闸 | 时间闸/敏感页 | 产出 |
+|---|---|---|---|---|---|
+| 1 | 无障碍观察（总入口） | `CheckoutAccessibilityService.onAccessibilityEvent` → `CheckoutPageDetector.detect` | `RecognitionPackages.SHOPPING_PACKAGES_CORE` / `PAYMENT_PACKAGES` | 敏感页整帧跳过（`AccessibilityPageSummaryCollector` 敏感判定先于一切） | 页面角色/指纹/汇总 |
+| 2 | 支付结果页文本 | `CheckoutAccessibilityService.scanPaymentResultCore` → `PaymentResultParser.parseResult` | 支付包 `supportsPaymentPackage`；购物包走 B1 接线（`pageRole == PAYMENT_RESULT`） | **30 分钟时间闸**（`RESULT_PAGE_FRESHNESS_MILLIS`，页面时间 >30min 拒）；敏感页零文本采集；事件级 15s 幂等（`markPaymentResultEvent`） | `PaymentEvidenceInput` |
+| 3 | 支付通知 | `PaymentNotificationService` → `PaymentResultNormalizer`（消费/退款/转账/手续费四路） | `RecognitionPackages.NOTIFICATION_PACKAGES`（微信/支付宝；**手工维护的 `PAYMENT_PACKAGES` 真子集**，`BookkeepingChannels.CHANNELS` 经 `ChannelInfo.kind` 向它对齐、`BookkeepingChannelsTest` 锁一致性） | 微信身份闸 `wechatIdentityOk`；`PAYMENT_KEYWORDS` 闸 | 证据 → N-1/N-2 |
+| 4 | 页面规则引擎 | `AutoBookkeepingEngine`（PageRule 状态机）→ `AutoBookkeeper.book` | `BookkeepingChannels.CHANNELS`（8 渠道，默认 7 开 1 关） | 规则资产 key = `包/类名` > `包/*` > 裸类名（`PageRuleRegistry.matchKey`） | 记录 → 入账/待确认 |
+| 5 | 银行短信 | 同 4（mms 系统通知 `typeNotificationStateChanged`，**无需 SMS 权限**） | `com.android.mms` 渠道（默认关，用户开关） | 抽取失败 → 不产出 | 同 4 |
+| 6 | 账单导入 | `ImportEngine.execute`（微信/支付宝账单文件） | — | — | 行 → `decide()` 判重 |
+
+- **分档**：`RecognitionPackages` = 包名单一出处。`SHOPPING_PACKAGES_CORE`（8 包，进结算观察）/ `SHOPPING_PACKAGES_RESULT_ONLY`（得物/唯品会/苏宁，只进结果页腿）/ `PAYMENT_PACKAGES`（微信/支付宝/云闪付）。
+- **页级硬不变式**：敏感页（密码/验证码/付款码等词表 + `isSensitiveNode`）**零文本采集**。
+- 指纹稳定性三层：`isRotatingWidgetClass`（静态轮播类名）+ `VolatileTokenTracker`（动态易变池）+ `PageAmountAccumulator` 金额豁免。
+
+## 3. 合并层（同一笔不双记，不同笔不误并）
+
+宿主：`CheckoutPaymentMatcher`（支付信号）+ `LedgerRepository.createBillWithDedup`（账单）+ `AutoBookkeeper`（规则/短信）。
+
+| 机制 | 判据 | 窗口 | 跨包 | 跨源 | 位置（符号） |
+|---|---|---|---|---|---|
+| **orderId 强键归并** | 两侧 orderId 相等 → 归并进既有卡 | **2min**（`PAYMENT_IDENTITY_MERGE_WINDOW_MILLIS`） | ✅ | ✅ | `CheckoutPaymentMatcher.recordOrphanPaymentSignal` → `findRecentPendingByOrderId` |
+| **orderId 冲突护栏** | 两侧非空且不同 → **显式拒绝归并**，宁出两张可删的卡 | — | ✅ | ✅ | 同上（护栏段）+ `RecentPaymentCooldown.cooldownRemaining`（冷却层同款放行） |
+| 同包同额窗（D-25） | 金额精确相等，无 orderId 时兜底 | 15s（`PaymentTiming.SAME_TXN_WINDOW_MILLIS`） | ❌ | ✅（同包内） | `findRecentPendingByPlatformAndAmount` |
+| 文本哈希主判据 | `(包, 金额, rawTextHash)` 含订单号摘要 | 15s 保留 | ❌ | ❌ | `RecentResultObservation.findSameObservation` |
+| sourceEventKey 幂等 | 确定性键：结果页 `result-event\|pkg\|15s桶\|额\|单`；通知 SHA-256（包+key+ID+时间+额+单）；规则/短信 `abk:ruleId:extractTime` | — | ❌ | ❌ | `insertIfAbsent`（同键不建第二张） |
+| **L1-L4 四级判重** | L1 `DuplicateGuard.checkLevel1`（orderId 精确合并，跨源互认、refund 豁免）；L2 sourceEventKey 幂等（不在 DuplicateGuard——由 `stableId` 确定性主键 + `insertIfAbsent` 承担）；L3 `DuplicateGuard.checkLevel3`（`importRecordId`）；L4 `DuplicateGuard.findSimilar`（金额精确+±10min+辅因子，**只提示不合并**） | — | ✅ | ✅ | `DuplicateGuard`（实际方法仅 `checkLevel1`/`checkLevel3`/`findSimilar` 三个） |
+| **N-2 吸收** | 强证据入账命中同 orderId 卡（24h 窗）→ 同事务**先删卡再入账**；删除失败 → 恢复已删卡并**降级归并进卡**（不入账） | 24h | ✅ | ✅ | `recordOrphanPaymentSignal` N-2 段（`deleteByIdIfVersion` 乐观锁） |
+| **合并即留痕** | 被归并信号的 `sourceEventKey` 幂等追加进卡片 `appliedRules.mergedSourceEventKeys` | — | — | — | `mergeSignalIntoExisting` → `appendMergedSourceEventKey` |
+
+- **短信不参与跨源归并**（显式决策）：短信 orderId 恒空（规则资产无 orderNo 槽），走原同包逻辑。
+- 导入强一致：`ImportEngine.decide` 无 `merchantOrderId` 时，**金额精确 + 同日 + 商户模糊三者全中且唯一**才 MERGED（`findStrongIdentityMergeTarget`），缺一退回只提示。
+- 事件级冷却：`RecentPaymentCooldown`（消费后同键 15s 抑制；orderId 冲突放行）。
+
+## 4. 落点判定
+
+**自动入账（Bill）** 满足任一：
+- N-2 强证据：通知 + orderId 非空 + 账户可解析（`defaultAccountIdForPayment` 包名映射）+ 非疑似重复 → `createBillWithDedup`；
+- 页面规则/短信：`AutoBookkeeper.book` 账户可解析（含 `CASH_FALLBACK_ACCOUNT_ID` 现金兜底）且非"用户 set_account 规则命中"；
+- 用户手动确认：`PendingConfirmService.confirm` → `confirmPendingTransaction`。
+
+**驳回/不产出**（连卡都不建）：
+- 结果页解析失败（无金额）/ 页面超 30 分钟 / 敏感页 → 采集中断，仅日志留痕；
+- 规则抽取失败（`necessaryFields` 不满足）→ 无记录；
+- 重复观测（幂等键/哈希/同额窗命中）→ `SUPPRESSED_*`/`ALREADY_STORED`，合并进既有卡 conflictReason；
+- L4 疑似重复且无法吸收 → `CONFLICT_SUSPECTED_DUPLICATE` **转待确认**（不入账、不合并）。
+
+**转待确认（Pending）** 冲突码（`conflictReason`；常量名与存储值不同时成对标注）：
+
+| 码（常量名 = 存储值） | 含义 | 产出符号 | 可达性 |
+|---|---|---|---|
+| `"NO_DEFAULT_ACCOUNT"`（无常量，字面值） | 规则/短信路径账户无法解析 | `AutoBookkeeper.book`（`resolveAccountId` null → `fallbackToPending`） | 活跃 |
+| `"ACCOUNT_UNRESOLVED"` | 通知侧账户无法解析/他人转账/约束不满足 | `PaymentNotificationService` | 活跃 |
+| `CONFLICT_RULE_ACCOUNT_NEEDS_REVIEW` = `"RULE_ACCOUNT_NEEDS_REVIEW"` | 短信 + 用户 `set_account` 规则命中 ⇒ 强制人工核对（仅 mms 渠道） | `AutoBookkeeper.book` 短信短路分支 | 活跃 |
+| `RuleEngine.CONFLICT_RULE_FORCED_REVIEW` = `"RULE_FORCED_REVIEW"` | 用户规则强制转待确认 | `AutoBookkeeper.book` / `FeeExtractor` | 活跃 |
+| `CONFLICT_AUTO_COMMIT_DEFERRED` = `"AUTO_COMMIT_DEFERRED"` | 退款/转账自动入账闸（`isNotificationAutoCommitAllowed` 恒 false）拦截 | `RefundLinker` / `TransferClassifier` | 活跃 |
+| `CONFLICT_FEE_AMOUNT_UNPARSED` = `"FEE_AMOUNT_UNPARSED"` | 手续费金额解析失败整条转待确认 | `FeeExtractor` | 活跃 |
+| `"IMPORT_SEMANTIC_UNSAFE"`（字面值） | 导入语义不安全（refund 无原单等） | `ImportEngine` | 活跃 |
+| `CONFLICT_SUSPECTED_DUPLICATE` | L4 疑似重复，**只提示不合并** | `DuplicateGuard.findSimilar` | 活跃 |
+| `"AUTO_BOOK_FAILED"`（字面值） | 自动入账失败 | `AutoBookkeeper`（`fallbackToPending`） | 活跃 |
+| `"PAYMENT_RESULT_NO_MATCHING_SESSION"`（字面值） | 支付结果页无匹配会话（孤儿卡） | `RecognitionModule` / `recordOrphanPaymentSignal` | 活跃 |
+| `"AMBIGUOUS_SESSION_IDS:<id列表>"`（字面值+后缀） | 多会话歧义，每会话一张 + 孤儿兜底 | `CheckoutAccessibilityService` | 活跃 |
+| `"EVIDENCE_PERSIST_FAILED"`（字面值） | 证据落库失败兜底 | `CheckoutAccessibilityService` | 活跃 |
+| `"ORDER_ID_MISMATCH"`（字面值） | 订单号不符（`ORDER_ID_PARTIAL` 只是判定标签非落库码） | 会话匹配 `evaluate`（conflicts 字面） | **当前不可达**（见下） |
+| `"TIME_MISSING"` / `"TIME_WINDOW_MISMATCH"` / `PAYMENT_TIME_OUTSIDE_WINDOW` | 时间缺失/超窗/页面超 30 分钟（均为 conflicts 字面） | 会话匹配 `evaluate` / `validatePayment` | **当前不可达** |
+| `"EVIDENCE_AMOUNT_CONFLICT"`（字面值） | 占位候选与实付金额精确不等 | 会话匹配（占位补证据） | **当前不可达** |
+| `"AI_AMOUNT_MISSING"` / `"AI_AMOUNT_LOWER_THAN_PAYMENT"` / `"AI_AMOUNT_HIGHER_THAN_PAYMENT"`（conflicts 字面）+ `AI_UNVERIFIED_PAYMENT_REASON = "AI_UNVERIFIED_PAYMENT"` | AI 金额缺失/不符/截图未证实 | 会话匹配 `evaluate` | **当前不可达**（AI 侧恒缺席） |
+| `ACCOUNT_UNAVAILABLE` / `DEDUP_CHECK_FAILED` | 自动入账账户不可用 / 判重查询失败 | 会话匹配 `autoCommitMatchedCandidate` 区 | **当前不可达**（本会话取证：仅出现在该函数区；`RULE_FORCED_REVIEW` 另有活跃产出见上） |
+
+> **"当前不可达"口径**：以上六组码的产出点在会话匹配路径（`evaluate` / `autoCommitMatchedCandidate` / `pendingFromConflict`），而 `ensureSession` 无生产调用方、生产永不建会话（见第七章）——**两章口径一致**。改会话匹配逻辑时这些码的语义仍有效。
+> **旧码名勘误**：旧文档曾写 `NO_MATCH` / `AMBIGUOUS` —— 实际落库字面为 `PAYMENT_RESULT_NO_MATCHING_SESSION` 与 `AMBIGUOUS_SESSION_IDS:<id列表>`。
+
+- 个人转账走独立通道：`TransferClassifier`（源/目标账户匹配）与 `recordPersonalTransfer`（确定性 ID 幂等），键族 `transfer-`，不与消费归并。
+- 退款/手续费独立键族 `pending-refund`/`pending-fee`（`RefundLinker`/`FeeExtractor`），不参与消费归并（`checkLevel1` 对 refund 豁免）。
+
+## 5. 字段与账务
+
+- **优先级链**：`FieldPriorityResolver.Source` 7 级 USER_LOCK(1) > RULE(2) > IMPORT(3) > EVIDENCE(4) > AI(5) > SESSION(6) > DEFAULT(7)；低级不得覆盖高级、锁定字段（USER_LOCK）不可覆盖。**当前生产活跃 3 级**：USER_LOCK / IMPORT / EVIDENCE（RULE 级**无独立落账产出**——用户规则 patch 由规则引擎产出后按 EVIDENCE 级落账；AI/SESSION 恒缺席）。
+- 合并/吸收只补空字段（`?:`），不覆盖已有值。
+- 账单写入与余额原子：`createBillWithDedup` 同事务（`withTransaction`），失败整体回滚；判重命中走 `mergeIntoExistingBill`（只补空）。
+
+## 6. RN 展示与手动确认
+
+事件：落卡/入账 → `PendingChangeHub.emit` → `PendingReminderNotifier`（通知）/ 前台弹窗（`PendingPromptPolicy`，仅 `USER_ASSERTED*` 前缀优先 —— ⚠️ **该优先级当前作用在死码上**：`USER_ASSERTED_REASON` 全仓只有定义无写入点；`PENDING_CONFLICT_REASON_USER_ASSERTED` 仅用于通知过滤前缀匹配）→ RN `ReviewScreen`。
+确认：RN → `DataModule`（`confirm`/`reject`）→ `PendingConfirmService` → `confirmPendingTransaction`（`deleteByIdIfVersion` 原子删卡 + L1 判重后写 Bill）。
+通知消费监听：`PaymentNotificationService` 用户设置页二次过滤（配置只收窄不扩展）。
+
+## 7. 已知限制与死代码（改动前先看）
+
+| 项 | 事实 | 影响 |
+|---|---|---|
+| 会话链路断裂 | `ensureSession`/`findReferenceForPayment` **无生产调用方**（两者均有测试调用：`CheckoutPaymentMatcherIntegrationTest` 等）；会话匹配/`evaluate` 不可达 | 自动记账不依赖会话；删改需拍板 |
+| `aiOrderId` 恒 null | `TransactionCandidateEntity.aiOrderId`/`aiOccurredAt` 写入恒 null（AI 候选链路已删）；`TransactionCandidateDao.findActiveByOrderId` 恒空 | 三重校验实际只余金额一项 |
+| 跳包跨包双卡 | 跨包无 orderId 不归并（显式安全侧）；跳包支付（拼多多→微信）同笔会出两张可删的卡 | 已知限制，跨包同额归并未做 |
+| 短信口径 | 默认自动入账现金兜底账户（乙口径）；`set_account` 规则命中强制转待确认 | 误报面靠负向测试与文案提示 |
+| 手动重试必然拒绝 | `performUserRetryForSession` 恒返回 `SERVICE_NOT_CONNECTED`（入口壳保留） | 前端入口不可用 |
+| `AI_TRIGGER_ARMED` 死状态 | `CheckoutJourneyState.AI_TRIGGER_ARMED` 枚举与迁移映射保留，生产不可达 | 待随会话链路清理 |
+| 进程保活为零 | 无前台服务（Manifest 权限已声明未用）；杀进程窗口漏采无补偿 | 已知限制 |
+| 微信页面规则实验性 | 微信渠道规则可能打不中（基类 key 打不中子类页） | 微信内站内支付靠结果页文本腿兜底 |
+
+## 8. 如何自证（改哪块跑哪些测试）
+
+| 改动域 | 必跑测试 | 锁住的行为 |
+|---|---|---|
+| 结果页解析/站内接线 | `PaymentResultParserTest`、`PaymentResultInAppGuardTest` | 30min 闸、订单页负向守卫、敏感页零采集、幂等键 |
+| 归并/去重 | `CheckoutPaymentSignalMergeTest`（8 场景含 orderId 冲突 2 卡）、`RecentPaymentCooldownTest`、`RecentResultObservationTest`、`OrphanOutcomeTest` | orderId 归并 2min/冲突拒绝、同包同额 15s、N-2 吸收、留痕 |
+| 短信/规则入账 | `BankSmsNegativeTest`、`AutoBookkeepingEngineTest`、`AutoBookkeeperEnrichmentTest` | 四类误报零记录、乙口径落库、规则命中转待确认、认领互斥 |
+| 包名/分档 | `RecognitionPackagesTest`、`BookkeepingChannelsTest`、`CheckoutClassSemanticTest` | 白名单派生一致性、CORE/RESULT_ONLY 分档 |
+| 指纹/敏感 | `VolatileTokenTrackerTest`、`PageFingerprintStabilityTest`、`SensitivePageLatchTest` | 漂移三层、敏感锁存 |
+| 导入 | `ImportMergeTargetTest`、`WechatBillAdapterTest`、`AlipayBillAdapterTest`、`CsvTableReaderTest`、`ImportPerformanceSmokeTest` | 强一致三条件 MERGED、账单文件解析适配、CSV 读取、导入性能 |
+| 账务 | `CheckoutPaymentAmountToleranceTest`、`PendingConfirmServiceTest` | 金额容差、确认删卡原子 |
+
+全量：`./gradlew.bat :app:testDebugUnitTest`（基线 326 tests / 0 failures）。
+
+## 附录 A：典型场景走查（改动合并/落点逻辑时逐条对照）
+
+| 场景 | 预期行为 | 由哪条机制保证 |
+|---|---|---|
+| 同一订单返回再进结果页 | 只 1 张卡 | 幂等键 + 文本哈希 + 同额窗三层 |
+| 跳包支付（拼多多→微信）同笔 | **2 张卡**（已知限制） | 跨包无 orderId 不归并 |
+| 结果页先到、通知 1min 后到（同 orderId） | 归并进同一卡，`mergedSourceEventKeys` 留痕 | orderId 归并 2min 窗 |
+| 同包同额 15s 内两笔真单（orderId 不同） | **2 张卡**（冲突护栏放行） | orderId 冲突护栏 + 冷却放行 |
+| 结果页卡在、N-2 强证据后到（同 orderId） | 1 笔账单、0 卡、`absorbed_pending` 审计留痕 | N-2 吸收（先删后写） |
+| N-2 入账时删卡冲突 | 卡恢复、信号降级归并进卡、不入账 | `deleteByIdIfVersion` 乐观锁 + 降级分支 |
+| 退款到达 | 独立 `pending-refund` 卡，不并入消费 | 键族隔离 + `checkLevel1` refund 豁免 |
+| 微信转账（"已转账给XX"） | 走 `recordPersonalTransfer`/`TransferClassifier`，确定性 ID 幂等 | 转账强语义 + `transfer-` 键族 |
+| 银行短信 + 用户 set_account 规则命中 | 转待确认（`CONFLICT_RULE_ACCOUNT_NEEDS_REVIEW`） | `AutoBookkeeper.book` 短信短路分支 |
+| 短信 + 无规则 | 自动入账现金兜底账户 | `resolveAccountId` → `CASH_FALLBACK_ACCOUNT_ID` |
+| 导入行与实时账单同商户同额同日（无商户单号） | MERGED 合并进既有账单 | `findStrongIdentityMergeTarget` 三条件 |
+| 连续两笔同额同商户 >15s | 2 笔账单/卡 | 不同 occurredAt 桶 + 无 orderId 归并 |
+| 密码/付款码页出现 | 零文本采集、零记录 | 敏感页判定先于解析 |
+| 订单详情页出现"支付成功"字样 | 不产证据 | `isLikelyOrderDetailPage` 负向守卫 |
+
+## 附录 B：主要采集字段
+
+| 字段 | 结果页 | 通知 | 规则/短信 | 导入 | 手动 |
+|---|---|---|---|---|---|
+| 金额 `amountMinor` | ✅（¥/元/金额： 三模式） | ✅ | ✅ | ✅ | ✅ |
+| 商户 `merchant` | ✅（4 模式） | ✅ | ✅（orgName 等） | ✅ | ✅ |
+| 订单号 `orderId` | 页面有才采 | 较高（通知常带） | 部分规则有；**短信恒缺** | `merchantOrderId` 可空 | 用户填 |
+| 时间 `occurredAt` | 页面时间优先（30min 闸） | 通知发送时间 | 抽取时刻/短信时间 | 账单时间 | 用户填 |
+| 账户 `accountId` | 包名映射默认账户 | 包名映射 | 现金兜底/账户名匹配 | 账单账户 | 用户选 |
+| 商品/分类 | 部分 | 少 | 规则 `item`/`detailType` | — | 用户填 |
+
+## 附录 C：改动意图 → 落点符号速查
+
+| 想改什么 | 找哪里 |
+|---|---|
+| 加/减采集包名 | `RecognitionPackages`（+ `BookkeepingChannels.ChannelInfo.kind` 对齐，`BookkeepingChannelsTest` 锁） |
+| 改结果页解析（金额/商户/单号/时间正则） | `PaymentResultParser`（`parseResult` / 各 `extract*`） |
+| 改订单页负向守卫 | `PaymentResultParser.isLikelyOrderDetailPage` |
+| 改 30 分钟时间闸 | `RESULT_PAGE_FRESHNESS_MILLIS`（`PaymentResultParser` 内消费） |
+| 改归并窗口/冲突护栏 | `CheckoutPaymentMatcher.PAYMENT_IDENTITY_MERGE_WINDOW_MILLIS` + `recordOrphanPaymentSignal` 归并段 |
+| 改同包同额 15s 窗 | `PaymentTiming.SAME_TXN_WINDOW_MILLIS` + `findRecentPendingByPlatformAndAmount` |
+| 改 N-2 强证据/吸收 | `recordOrphanPaymentSignal`（N-2 段 + `strongEvidenceSignal`） |
+| 改短信落库口径 | `AutoBookkeeper.book`（短信短路分支）+ `resolveAccountId` |
+| 改页面规则/渠道 | `BookkeepingChannels` + 资产 `assets/bookkeeping/bookkeeping_builtin_rules.json`（⚠️ 改资产需拍板） |
+| 改导入判重 | `ImportEngine.decide` / `findStrongIdentityMergeTarget` |
+| 改字段优先级 | `FieldPriorityResolver`（⚠️ 不动清单，先拍板） |
+| 改确认入账流程 | `PendingConfirmService.confirm` / `confirmPendingTransaction` |
