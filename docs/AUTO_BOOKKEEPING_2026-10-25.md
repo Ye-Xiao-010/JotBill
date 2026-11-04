@@ -21,7 +21,7 @@
 | `ce.p1.b` 规则 schema | `bookkeeping/PageRule.kt` | 1:1（singleField 多候选、extractFieldsMapper 三级归一化、locateConfirm 继承定位字段）；全部正则 DOTALL 编译（原实现语义） |
 | dump 格式（e0/f0） | `bookkeeping/PageNodeDumper.kt` | `<View text=xxx contentDesc=yyy />`，4 空格缩进，无引号转义；locateMaxTraverseCount 只限搜索阶段。**改动此处必须对照逆向源** |
 | assets/mocked_rule.json | `assets/bookkeeping/bookkeeping_builtin_rules.json` | 原样移植 + 5 条收入规则 `jotbillType:"income"` 标注（小米把分类留给服务端，本地靠标注+detailType 字段定收支） |
-| `ce.o0` 开关体系 | `BookkeepingChannels`（SP `auto_bookkeeping`） | 总开关默认开；渠道：支付宝/微信/云闪付开、短信关 |
+| `ce.o0` 开关体系 | `BookkeepingChannels`（SP `auto_bookkeeping`） | ~~总开关默认开；渠道：支付宝/微信/云闪付开、短信关~~ ⚠️ **2026-11-04 核实（以代码为准）**：实际 **8 渠道** —— 支付宝/微信/云闪付/京东/美团/拼多多/抖音默认开、银行短信默认关（`BookkeepingChannels.CHANNELS`；jd/meituan/pdd/douyin 于 2026-10-25 差距复查补入）。同批新增 `ChannelInfo.kind` 采集档位（PAYMENT/SHOPPING_CORE/SHOPPING_RESULT_ONLY/NOTIFICATION_RULES_ONLY）与识别白名单 `RecognitionPackages` 的 CORE/RESULT_ONLY 降级分档（B2 `b8cf887`） |
 | 上报→轮询→通知（ce.j1） | `AutoBookkeeper` 本地化 | 无服务端：抽取→本地入账→通知（带撤销）。去重 = createBillWithDedup level-1(orderId) + DuplicateGuard 相似度 + 引擎认领指纹 |
 | FLAG_INCLUDE_NOT_IMPORTANT_VIEWS 运行时舞蹈（l0） | 不做 | 本服务该 flag 常开（lean 既有决定） |
 

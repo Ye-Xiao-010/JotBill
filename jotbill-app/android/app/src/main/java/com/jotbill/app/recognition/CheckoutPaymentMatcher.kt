@@ -366,6 +366,8 @@ internal class CheckoutPaymentMatcher(
     private val ruleEngine = RuleEngine(database)
 
     /** AI 请求开始前先建立会话，支付通知可以在 AI 返回前安全落到同一 sessionId。 */
+    // TODO(2026-11-04 死代码标注)：本方法当前**无生产调用方**（会话链路随截图识别链路
+    //  4c62779 整链删除后断裂，仅测试调用）。保留待「会话恢复」功能决策；删除需用户拍板。
     suspend fun ensureSession(
         reference: CheckoutSnapshotReference,
         requestKey: CheckoutRequestKey,
@@ -381,6 +383,8 @@ internal class CheckoutPaymentMatcher(
     }
 
     /** AI 已消费内存快照后，从未过期的唯一会话恢复原始 sessionId。 */
+    // TODO(2026-11-04 死代码标注)：同 ensureSession —— 无生产调用方（仅测试），
+    //  保留待会话恢复功能决策；删除需用户拍板。
     suspend fun findReferenceForPayment(
         shoppingPackage: String,
         pageFingerprint: String,
@@ -2426,6 +2430,8 @@ internal class CheckoutPaymentMatcher(
             }
         }
         val orderRule = when {
+            // TODO(2026-11-04 死代码标注)：aiOrderId 恒 null ⇒ 本分支恒走 ORDER_ID_PARTIAL
+            //  （订单号比对当前不可达，保留待 AI 候选恢复决策）。
             candidate.aiOrderId.isNullOrBlank() || evidence.orderId.isNullOrBlank() -> "ORDER_ID_PARTIAL"
             candidate.aiOrderId == evidence.orderId -> "ORDER_ID_EXACT"
             else -> {

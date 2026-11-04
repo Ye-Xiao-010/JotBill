@@ -1,7 +1,7 @@
 # JotBill —— AI 协作说明
 
 > 本文件供 AI 编程助手读取。**改代码前请先读完本文件。**
-> 最后更新：2026-09-15
+> 最后更新：2026-11-04
 
 ## 一、项目结构
 
@@ -10,7 +10,7 @@ jotbill-app/          React Native + 原生 Android（Kotlin）—— 当前开�
   android/app/src/main/java/com/jotbill/app/
     recognition/      ★ 识别子系统（自动截屏 / 支付匹配 / 入账）—— 主要改动区
     pending/          待确认中心
-    notification/     支付通知（v1 停用，代码保留）
+    notification/     支付通知（活跃：N-1 放行 + N-2 强证据入账；以代码为准，2026-11-04 核实）
     overlay/          悬浮窗
   android/app/src/test/java/com/jotbill/app/   Kotlin 单元测试
 litenote-backend/     NestJS 后端（历史遗留，非当前重心）
@@ -136,13 +136,13 @@ cd jotbill-app/android
 - 裁定流转：先落 `CONFLICT_REVIEW_SESSION` → `DECISIONS.md`（正典）→ `NEW_PROJECT_KICKOFF_V2.md`（设计规格）→ `IMPL_PLAN_VERSION_B`（实施）。
 - **不要将自己推断的内容写成"裁定"** —— 推断必须显式标注（本项目已有先例：`IMPL_PLAN` §8 中 8.2 / 8.4 标注为"推断"，未写入 `DECISIONS.md`）。
 
-## 七、当前开工状态（2026-09-15）
+## 七、当前开工状态（2026-11-04 更新；原 2026-09-15 的 V-1~V-5 批次计划已被后续改造接续，历史状态见 `IMPL_PLAN` §4）
 
-- 文档已就位：分支 `docs/version-b-design-chain`，`NEW_PROJECT_KICKOFF_V2.md` 版本 **0.3.3**。
-- **8 项决策已定案**（`IMPL_PLAN` §8），**无遗留待拍板项**。
-- **建议开工顺序**：**V-1a（纯删除，零行为变化）** → V-1b（行为改动）→ V-2（Y4 + 页面金额字段）→ V-3（改造 B + E）→ V-4（触发点后移，**含 D-11**）→ V-5（落库顺序）。
-- ⚠️ **批次结构已于 2026-09-15 修订**（详见 `IMPL_PLAN` §4 的注）：
-  1. **批 V-1 拆为两小批** —— **V-1a「纯删除」**（D-10 死枚举 + 死入口清理 + D-20 删死代码，验收仅"编译通过 + 全测试绿"）/ **V-1b「行为改动」**（D-9 / D-16 / D-19 / D-21 / D-6，逐项独立验证）。理由："规格完整 ≠ 零风险"，混做会让测试红**无法归因**。
-  2. **D-11 从 V-1 移至 V-4** —— 它的 `Service:934-936` 是**当前活的**派发路径；单独先删会出现"旧触发点已删、新触发点未接"的空窗。它与 V-4 接入 `PAYMENT_RESULT` 是**同一语义变更的两半**。
-- ⚠️ **`DECISIONS.md` 不覆盖全部 D 项** —— 它是按主题分节的"决策日志"；**D-10 / D-11 / D-20 在其中无编号行**（2026-09-15 实测）。裁定口径请查 `CONFLICT_REVIEW_SESSION_2026-09-11.md` 的**待议总表**。
-- ⚠️ **批 V-3 的硬前置**：`IntentCoordinator` 侧当前**拿不到 `sessionId`**（`SafeCheckoutContext` / `StableCheckoutPage` / `CheckoutPageObservation` 三者均无该字段）⇒ 须先补"sessionId 传递链路"，否则改造 B 的 `retained.sessionId` 编译不过。
+- 分支 `feat/auto-bookkeeping`。**已落地**（截至 2026-11-04，均已提交）：
+  1. **采集层**（B1-B3）：站内结果页接入文本解析腿（`78b25b4`）、包名白名单收敛 `RecognitionPackages` + CORE/RESULT_ONLY 分档（`b8cf887`）、银行短信渠道（乙口径：现金兜底自动入账 + 规则命中转待确认，`11ccea2`）。
+  2. **多信号合并**：orderId 强键跨源跨包归并（2min 窗、冲突显式拒绝）+ 合并留痕 `mergedSourceEventKeys` + 冷却层 orderId 护栏 + 导入三条件强一致（`3338441`）。
+  3. **N-2 吸收**：强证据入账吸收同单待确认卡（先删后写、失败降级归并，`e4df699`）。
+- **当前存活链路**（6 条信号源）：无障碍支付结果页文本（微信/支付宝/云闪付/站内）+ 支付通知（N-1/N-2）+ 页面规则引擎（8 渠道）+ 银行短信 + 账单导入 + 手动。
+- **已知死代码**（显式标注未删，删除需拍板）：`ensureSession`/`findReferenceForPayment` 无生产调用方（会话链路随截图识别链路 `4c62779` 整链删除后断裂）；`TransactionCandidateEntity.aiOrderId` 恒 null（AI 候选缺席）。详见各符号 KDoc。
+- ⚠️ **`DECISIONS.md` 不覆盖全部 D 项** —— `CONFLICT_REVIEW_SESSION_2026-09-11.md` 的**待议总表**是 D 系列唯一完整出处。
+- 历史批次（V-1~V-5，2026-09-15 计划）的执行细节与 8 项决策见 `IMPL_PLAN_VERSION_B_2026-09-13.md` §8；其语义已部分被精简版改造（`4c62779`）与上述 B1-B3/合并改造取代，冲突处**以代码为准**。

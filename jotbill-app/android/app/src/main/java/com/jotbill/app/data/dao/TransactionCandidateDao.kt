@@ -65,6 +65,8 @@ interface TransactionCandidateDao {
         ORDER BY candidates.created_at DESC
         """
     )
+    // TODO(2026-11-04 死代码标注)：ai_order_id 恒 null ⇒ 本查询恒空（"订单号优先匹配"
+    //  语义当前不可达）。保留待 AI 候选恢复决策；删除需用户拍板。
     suspend fun findActiveByOrderId(orderId: String, at: Long): List<TransactionCandidateEntity>
 
     /**

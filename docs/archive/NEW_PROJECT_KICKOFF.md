@@ -1146,7 +1146,7 @@ updatedAt
 #### FR-011 截图与上传
 
 - 使用 `AccessibilityService.takeScreenshot()`，不使用 MediaProjection。
-- Android 11+ 在无障碍服务已连接且 Manifest 声明 `android:canTakeScreenshot="true"` 时调用该 API；它不应触发 MediaProjection 的录屏授权弹窗，也不需要创建录屏通知。
+- Android 11+ 在无障碍服务已连接且 Manifest 声明 `android:canTakeScreenshot="true"` 时调用该 API；它不应触发 MediaProjection 的录屏授权弹窗，也不需要创建录屏通知。 ⚠️ **2026-11-04 加注**：截图识别链路已由 `4c62779` 整链删除，本条为历史描述；XML 中该声明为残留配置。
 - 截图回调返回 `HardwareBuffer` 后立即复制到受控的内存 `Bitmap`，复制成功后关闭 buffer；任何异常路径都必须释放 buffer、bitmap 和压缩字节数组。
 - 截图仅存在于内存；结算页阶段先进入 `CheckoutSnapshotBuffer`，触发 AI 后立即取出并清空，或 30 秒到期自动释放。
 - 上传前裁剪结算区域并做本地脱敏。
