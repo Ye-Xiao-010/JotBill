@@ -594,7 +594,7 @@ AI 调用：`CheckoutAiVisionClient.recognizePaymentResult()`（`:591`）——*
 | 个人转账（"转账给X"） | 不落消费证据，转待确认 transfer | `PaymentResultParser:182-201` |
 | 通知含 收款/到账/转入/红包/提现… | 被 `EXCLUDE_KEYWORDS` 排除 | `Normalizer:86-88` |
 
-**证据可先于 AI 到达**（重要分支，`:744-797`）：支付证据先到时**建 `EVIDENCE_ONLY` 占位候选**（`amountMinor` 填证据金额、`aiOrderId`/`aiOccurredAt` 为空）→ `advanceStatus(WAITING_ENRICHMENT)` → `pendingFromEvidenceOnly` **立即落待确认**（不等 AI）。AI 后续返回时才可能升级为自动入账。**注意：该路径同时会立即弹窗，与原始设计不符，详见 §6.8。**
+**证据可先于 AI 到达**（重要分支，`:744-797`）：支付证据先到时**建 `EVIDENCE_ONLY` 占位候选**（`amountMinor` 填证据金额、`aiOrderId`/`aiOccurredAt` 为空）→ `advanceStatus(WAITING_ENRICHMENT)` → `pendingFromEvidenceOnly` **立即落待确认**（不等 AI）。AI 后续返回时才可能升级为自动入账。 ⚠️ 2026-11-04 加注：`EVIDENCE_ONLY` 占位候选的 `aiOrderId` 升级路径已失效（AI 管道删除，`aiOrderId` 恒 null）。**注意：该路径同时会立即弹窗，与原始设计不符，详见 §6.8。**
 
 ### 6.7 弹窗/待确认的触发条件全表（订正：本文早前表述易被误读）
 

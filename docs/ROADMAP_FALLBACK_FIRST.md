@@ -158,7 +158,7 @@
 
 ## 七、批 5:支付场景扩面(#4→#5,依赖批 1 闭环)
 
-- **#4 站内支付结果页**:放开 `PAYMENT_RESULT` 的包名限制 + 通用解析器;实验 flag,只产待确认候选。
+- **#4 站内支付结果页**:放开 `PAYMENT_RESULT` 的包名限制 + 通用解析器;实验 flag,只产待确认候选。 ⚠️ 2026-11-04 加注：已由 `78b25b4` 落地，方式与本文档设想不同（无实验 flag、默认开启、直接进解析腿）。
 - **#5 小众 App 实验模式**:用户自开、白名单自选、只产 pending 候选(kickoff 已预留设计)。
 - 顺序:#4 先于 #5;两者都默认关闭,逐步放量。
 
@@ -261,7 +261,7 @@
 
 ### 批 4(journey)——工作量下调:状态机已存在且是活的
 12. `CheckoutJourneyState`(16 态 + canTransitionTo,journey_state 已落库)已上线:
-    matcher.ensureSession 创建、advanceStatus 推进。批 4 应**扩展它**而非新造,并顺手修
+    matcher.ensureSession 创建、advanceStatus 推进。批 4 应**扩展它**而非新造,并顺手修 ⚠️ 2026-11-04 加注：`ensureSession` 调用链已随 `4c62779` 断裂（函数本体仍残留于 `CheckoutPaymentMatcher.kt`，无生产调用方），**批 4 计划已作废，不要按此扩展**。
     三个缺口:advanceStatus 非法迁移静默 no-op(CheckoutPaymentMatcher.kt:1343-1362)、
     LedgerRepository 绕过状态机直写 COMPLETED/DISMISSED(:424-433/:511-520)、
     从未实例化的 CheckoutJourney 包装类(CheckoutContract.kt:329-364,删除候选)。
@@ -301,7 +301,7 @@
    对新会话整体替换槽位状态,会毁掉在途自动候选与交接栅栏);复用 buffer 的
    字节卫生(复制/抹零)与 consumeForAi 原子消费,消费意图 USER_RETRY,
    合成指纹 = sha256(user-asserted|pkg|sessionId)。
-4. **落库即有用**:派发走既有 AI 管道(ensureSession→recognize→recordAiResult);
+4. **落库即有用**:派发走既有 AI 管道(ensureSession→recognize→recordAiResult); ⚠️ 2026-11-04 加注：`recognize` / `recordAiResult` 已随 `4c62779` 删除，`ensureSession` 仅残留定义；此句作废。
    识别成功且无支付证据时 `promoteAssertedSessionToPending` 立即转待确认
    (金额取 AI 候选,无金额落 0 占位 USER_ASSERTED_AMOUNT_MISSING;规则 ignore
    或已有账单/成功证据时跳过)。支付证据晚到仍走既有匹配链路:自动入账会

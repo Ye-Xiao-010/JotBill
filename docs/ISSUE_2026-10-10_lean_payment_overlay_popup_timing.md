@@ -11,7 +11,7 @@
 > | 代码基线 | `HEAD 4eb89a5`，工作区干净 |
 > | 报告人 | 用户真机测试（微信 / 支付宝两个支付 App） |
 > | 诊断方式 | **纯代码走查**，未取真机日志 |
-> | 关联验收项 | `qa/lean-version-acceptance.md` **L1**（唯一一票否决项） |
+> | 关联验收项 | `qa/lean-version-acceptance.md` **L1**（唯一一票否决项） | ⚠️ 2026-11-05 加注：该验收文档已按用户拍板删除（20 笔真机验收不做），链接/引用失效。
 > | 标记 | 🔴 阻断 L1 · 🔧 可直接执行 |
 
 ---
@@ -113,7 +113,7 @@ private fun canShowNow(): Boolean {
 1. **切回 JotBill 后弹窗能盖上来** —— 现象 ②。30 秒内有过一帧"非敏感"观察即可放行，
    与它自己的设计注释（"应用内待确认中心已覆盖该场景"）**正好相反**。
 2. **弹窗并不绑定在"支付成功页"上** —— 它只绑定"最近 30 秒内有帧"。
-   这直接说明 `qa/lean-version-acceptance.md` L1 的判据（弹窗出现在支付成功页）
+   这直接说明 `qa/lean-version-acceptance.md` L1 的判据（弹窗出现在支付成功页） ⚠️ 2026-11-05 加注：该验收文档已按用户拍板删除（20 笔真机验收不做），链接/引用失效。
    在当前代码下**没有任何机制保证**。
 
 > `worklog/2026-10-08.md` §二·前提 1 已预警过相邻风险
@@ -222,7 +222,7 @@ Select-String -Path $log -Encoding UTF8 -Pattern `
 | # | 对应根因 | 方案 | 风险 |
 |---|---|---|---|
 | **1** | A（核心） | 在 `onAccessibilityEvent` 里，当 `resolveEffectiveShoppingPackage()` 返回值**不在白名单内**时，主动喂一帧"前台已离开支付/购物应用"的状态给 `PendingConfirmOverlayManager`，让 `:338` 的守卫真正生效 | 低。需新增一个显式的"前台变更"喂入口，不能复用 `onObservationState` 的 sensitive 语义 |
-| **2** | B | `OBSERVATION_FRESH_MILLIS` 收敛到与 `CANDIDATE_TTL_MILLIS` 同量级；候选超时前若已确认"用户仍停留在支付应用"，**延长而非放弃** | 中。会影响 L6（无障碍未启用时不弹窗）的口径，需同步复核 `lean-version-acceptance.md:145` |
+| **2** | B | `OBSERVATION_FRESH_MILLIS` 收敛到与 `CANDIDATE_TTL_MILLIS` 同量级；候选超时前若已确认"用户仍停留在支付应用"，**延长而非放弃** | 中。会影响 L6（无障碍未启用时不弹窗）的口径，需同步复核 `lean-version-acceptance.md:145` | ⚠️ 2026-11-05 加注：该验收文档已按用户拍板删除（20 笔真机验收不做），链接/引用失效。
 | **3** | C | 敏感判定**只让可见节点**的敏感词翻转整页标记；隐藏节点仅记录不翻转。**角色与金额通道保持现状** | 中。微信结果页关键语义在隐藏 `contentDescription` 里（`CHECKOUT_OVERLAY_FLICKER_AND_PAYMENT_CAPTURE_FIX.md:36-38`），**必须只改敏感通道**，否则结果页路径整体失效 |
 | **4** | D/E/F | emit 的 `pendingId` 与实际插入主键对齐；补齐缺失的 emit；`accessibility_transfer` 要么加进 `BridgeDtoMapper.supportedSourceTypes` 并 emit，要么明确并入 `accessibility` | 低。各自独立，可分开提交 |
 
@@ -236,8 +236,8 @@ Select-String -Path $log -Encoding UTF8 -Pattern `
 
 | 文档 | 关系 |
 |---|---|
-| `qa/lean-version-acceptance.md` L1 | **本问题直接使 L1 无法通过**（一票否决项） |
-| `qa/lean-version-acceptance.md` L6 | 方案 2 会影响其"无障碍未启用时不弹窗"口径，需同步复核 |
+| `qa/lean-version-acceptance.md` L1 | **本问题直接使 L1 无法通过**（一票否决项） | ⚠️ 2026-11-05 加注：该验收文档已按用户拍板删除（20 笔真机验收不做），链接/引用失效。
+| `qa/lean-version-acceptance.md` L6 | 方案 2 会影响其"无障碍未启用时不弹窗"口径，需同步复核 | ⚠️ 2026-11-05 加注：该验收文档已按用户拍板删除（20 笔真机验收不做），链接/引用失效。
 | `worklog/2026-10-08.md` §二·前提 1 | 相邻风险预警（"侥幸成立，不是设计上成立"），**但未发现根因 A** |
 | `ISSUE_REGISTER_2026-09-11.md` P19 | 相邻缺陷（已显示弹窗不自动撤下），同属弹窗生命周期治理 |
 | `FIX_TASK_2026-09-29_attribution_pending_dup.md` | D-25 跨桶去重（90s 窗口）与本问题同处结果页建卡路径，需注意叠加 |
@@ -249,4 +249,4 @@ Select-String -Path $log -Encoding UTF8 -Pattern `
 - [ ] 取一笔真机日志，按 §四 判别表确定实际命中的根因（A / B / C）
 - [ ] 用户裁定修复范围（是否含方案 3）
 - [ ] 实施后重跑 `scripts/verify-lean-l1.ps1`，L1 命中率需 ≥ 90%
-- [ ] 同步复核 `qa/lean-version-acceptance.md` L6 口径是否需修订
+- [ ] 同步复核 `qa/lean-version-acceptance.md` L6 口径是否需修订 ⚠️ 2026-11-05 加注：该验收文档已按用户拍板删除（20 笔真机验收不做），链接/引用失效。

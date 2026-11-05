@@ -121,7 +121,7 @@ cd jotbill-app/android
 1. **行号会漂，用符号名定位** —— 文档中的行号（如 `Buffer:352`）仅作参考；重新定位请用符号名（`hasRetainableCandidate`、`store()`、`moveToPaymentProcess`）。
 
 2. **凡改「常量 / 键 / 枚举」类，先全仓 grep 找所有生成点** —— 本项目多次出现"改一处漏一处"。
-   - 已实例：结果页事件去重键有**两个**生成点（`PaymentResultParser.kt:209` 主路径 + `CheckoutAccessibilityService.kt:1840` 截图兜底）。只改一个，主路径仍按旧值撞键 ⇒ 问题未修、测试假绿。
+   - 已实例：结果页事件去重键有**两个**生成点（~~`PaymentResultParser.kt:209` 主路径 + `CheckoutAccessibilityService.kt:1840` 截图兜底~~）⚠️ 2026-11-04 加注：截图兜底生成点已随 `4c62779` 整链删除，现存唯一生成点在 `PaymentResultParser`（复核实证）；**这里的"两个"指 4c62779 之前的两个生成点**。教训保留：改常量/键前先 grep 全部生成点。
 
 3. **文档常显式标注「哪些不动」，不得顺手改** —— 例：`canEstablishUserRetrySession`、`hasAutomaticCandidate` 有真机故障背书，文档明示不动。
 

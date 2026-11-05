@@ -669,7 +669,7 @@ AI 上传时图片从 buffer 取出，后续覆盖不影响已上传的请求。
 - 抖音：`com.ss.android.ugc.aweme`
 - 小红书：`com.xingin.xhs`
 
-未知包名交给待确认流程，不根据 Logo 或单个文本强行推断。
+未知包名交给待确认流程，不根据 Logo 或单个文本强行推断。 ⚠️ 2026-11-04 加注：现行包名唯一出处 = `RecognitionPackages`（CORE 8 / RESULT_ONLY 3 / PAYMENT 3 / NOTIFICATION 2，2026-11-04）。
 
 ### 7.3 小程序与 WebView 处理
 

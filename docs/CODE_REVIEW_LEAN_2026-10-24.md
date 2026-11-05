@@ -253,7 +253,9 @@ grep -n "postDelayed|scheduleAtFixedRate|Timer|repeat(" CheckoutAccessibilitySer
 
 ## 五、验收标准缺陷：L6 在精简版不可执行
 
-`qa/lean-version-acceptance.md` L6 的操作是：
+> ⚠️ 2026-11-04 加注：本节中"精简版唯一的数据源是无障碍结果页""通知链路（`PaymentNotificationService`）已按 D-3 停用"**均已失效** —— 现为六条信号源（含活跃的通知 N-1 放行 / N-2 强证据入账），下述论证基于当时的单腿状态，**结论仅存档**，勿据此实施。
+
+`qa/lean-version-acceptance.md` L6 的操作是： ⚠️ 2026-11-05 加注：该验收文档已按用户拍板删除（20 笔真机验收不做），链接/引用失效。
 
 > 在系统设置里关掉无障碍服务，然后**完成一笔支付**（或用任意方式产生一条待确认）。
 
@@ -518,7 +520,7 @@ grep -n "postDelayed|scheduleAtFixedRate|Timer|repeat(" CheckoutAccessibilitySer
 
 ### P2
 
-- **`LEAN_DEFAULT` 在代码里不存在**：`grep` 全仓零引用，`build.gradle` 无该字段。`docs/qa/lean-version-acceptance.md` §零 的"能力开关必须关闭"前置条件已随截图链路整链删除而失效，需改写。
+- **`LEAN_DEFAULT` 在代码里不存在**：`grep` 全仓零引用，`build.gradle` 无该字段。`docs/qa/lean-version-acceptance.md` §零 的"能力开关必须关闭"前置条件已随截图链路整链删除而失效，需改写。 ⚠️ 2026-11-05 加注：该验收文档已按用户拍板删除（20 笔真机验收不做），链接/引用失效。
 - 死代码：`SensitivePageLatch`（5 处，整类无消费者）、`sawResultPage`（2 处，只写不读）、`shouldSkipForeignEventCollection`（1 处，恒 false 且零调用）、`ensureSession`（零调用）、`UserRetryCaptureContext`（生产零引用）、`SnapshotCaptureTarget`（零引用）。
 - `autoCommitMatchedCandidate` 仍在 `recordPaymentEvidence` 内，精简版不可达；一旦会话链路恢复会违反"不做自动入账"。
 - D-21 的"0 金额允许弹窗"在本版本不可达（`isValid()` 要求金额 ≥1）。
@@ -557,7 +559,7 @@ eslint 对 6 个改动文件检查，无新增错误（2 个 error 为 Dashboard
 
 ### 4. 文档同步
 
-- `qa/lean-version-acceptance.md` §零："能力开关"前置条件加注失效（`LEAN_DEFAULT`
+- `qa/lean-version-acceptance.md` §零："能力开关"前置条件加注失效（`LEAN_DEFAULT` ⚠️ 2026-11-05 加注：该验收文档已按用户拍板删除（20 笔真机验收不做），链接/引用失效。
   已随截图链路删除，全仓零引用，精简包只有一种形态）。
 
 ---
