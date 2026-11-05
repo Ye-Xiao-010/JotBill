@@ -2191,18 +2191,24 @@ internal class CheckoutPaymentMatcher(
     }
 
     /**
-     * 支付包名到种子资金账户的固定映射：微信支付对应"微信零钱"，支付宝对应"支付宝"。
-     * 账户被删除或停用时返回 null，账单不指定账户也不更新余额，
-     * 由用户在后续编辑中补充（T6 待确认路径不受影响）。
+     * 账户解析（读法一信号层之后的层级，与 AutoBookkeeper.resolveAccountId 共用
+     * [com.jotbill.app.bookkeeping.AccountInference.inferSignalThenFallback]）：
+     * 信号推断（通知无银行名/支付方式线索，恒落空）→ 包名映射 → 现金兜底。
+     * 返回 null = 无法解析（含多候选需核对），N-2 强证据条件不满足，转待确认。
      */
     private suspend fun defaultAccountIdForPayment(paymentPackage: String?): String? {
-        val accountId = when (paymentPackage) {
-            "com.tencent.mm" -> WECHAT_PAY_ACCOUNT_ID
-            "com.eg.android.AlipayGphone" -> ALIPAY_ACCOUNT_ID
-            else -> return null
+        val accounts = database.accountDao().getAll().filter { it.isActive }
+        return when (
+            val resolution = com.jotbill.app.bookkeeping.AccountInference.inferSignalThenFallback(
+                sourcePackage = paymentPackage,
+                bankHint = null,
+                accounts = accounts
+            )
+        ) {
+            is com.jotbill.app.bookkeeping.AccountResolution.Resolved -> resolution.accountId
+            // 多候选/无命中：N-2 不满足（账户不可解析），由调用方转待确认，不猜测
+            else -> null
         }
-        val account = database.accountDao().getById(accountId) ?: return null
-        return if (account.isActive) accountId else null
     }
 
     /**

@@ -149,10 +149,25 @@ class AutoBookkeeper(
             return
         }
 
-        val accountId = resolveAccountId(record.sourcePackage, patch)
-        if (accountId == null) {
-            fallbackToPending(record, amountMinor, merchant, orderId, occurredAt, "NO_DEFAULT_ACCOUNT")
-            return
+        val accountResolution = resolveAccountId(
+            record.sourcePackage,
+            patch,
+            bankHint = record.fields["bank"]
+        )
+        val accountId = when (accountResolution) {
+            is AccountResolution.Resolved -> accountResolution.accountId
+            // 短信银行名多账户命中：转待确认（复用 RULE_ACCOUNT_NEEDS_REVIEW，不猜测）
+            AccountResolution.NeedsReview -> {
+                fallbackToPending(
+                    record, amountMinor, merchant, orderId, occurredAt,
+                    CONFLICT_RULE_ACCOUNT_NEEDS_REVIEW
+                )
+                return
+            }
+            AccountResolution.Unresolved -> {
+                fallbackToPending(record, amountMinor, merchant, orderId, occurredAt, "NO_DEFAULT_ACCOUNT")
+                return
+            }
         }
         val categoryId = patch.categoryId?.takeIf { database.categoryDao().getById(it) != null }
             ?: BookkeepingCategoryHints.guess(
@@ -286,32 +301,26 @@ class AutoBookkeeper(
     }
 
     /**
-     * 用户规则指定的账户优先（引用失效则弃用），否则按支付包名取种子账户：
-     * 微信支付→微信零钱、支付宝→支付宝；其余渠道（云闪付/京东/美团/拼多多/
-     * 抖音）的无障碍事件**读不到实际扣款账户**，兜底落「现金」保证自动入账
-     * 闭环 —— 用户可用分类规则 set_account 精确覆盖，或在账单里改。
-     * 兜底账户也不存在/停用时返回 null 转待确认。
+     * 账户解析（读法一）：规则 → 信号推断 → 包名映射 → 现金兜底。
      *
-     * ⚠️ B3 拍板（2026-11-04）：银行短信（[SMS_SOURCE_PACKAGE]）同走现金兜底
-     * **自动入账**（口径乙，2026-11-04 前后行为不变）；短信 + 用户 set_account
-     * 规则命中的强制待确认在 [book] 内**先于本方法**短路，不会走到这里的
-     * patch.accountId 分支。
+     * 信号层与包名/兜底层共用 [AccountInference.inferSignalThenFallback]（与
+     * CheckoutPaymentMatcher.defaultAccountIdForPayment 同一实现）；规则（set_account）
+     * 命中在此**之前**已由调用方处理（短信渠道命中即强制待确认）。
+     *
+     * @param bankHint 短信解析的银行名（其它信号恒 null）；多账户命中返回
+     *   [AccountResolution.NeedsReview] 由调用方转待确认，不猜测。
      */
     private suspend fun resolveAccountId(
         sourcePackage: String,
-        patch: RuleEngine.FieldPatch
-    ): String? {
+        patch: RuleEngine.FieldPatch,
+        bankHint: String?
+    ): AccountResolution {
         patch.accountId?.let { candidate ->
             val account = database.accountDao().getById(candidate)
-            if (account != null && account.isActive) return candidate
+            if (account != null && account.isActive) return AccountResolution.Resolved(candidate)
         }
-        val accountId = when (sourcePackage) {
-            "com.tencent.mm" -> WECHAT_PAY_ACCOUNT_ID
-            "com.eg.android.AlipayGphone" -> ALIPAY_ACCOUNT_ID
-            else -> CASH_FALLBACK_ACCOUNT_ID
-        }
-        val account = database.accountDao().getById(accountId) ?: return null
-        return if (account.isActive) accountId else null
+        val activeAccounts = database.accountDao().getAll().filter { it.isActive }
+        return AccountInference.inferSignalThenFallback(sourcePackage, bankHint, activeAccounts)
     }
 
         /**
@@ -402,13 +411,13 @@ class AutoBookkeeper(
 
         private const val CROSS_DAY_TOLERANCE_MINUTES = 60L
 
-        /** 与 DefaultDataInitializer 种子账户一致（CheckoutPaymentMatcher 同源约定）。 */
-        private const val WECHAT_PAY_ACCOUNT_ID = "default-account-wechat"
+        /** 与 DefaultDataInitializer 种子账户一致（CheckoutPaymentMatcher 同源约定）；唯一出处见 [AccountInference]。 */
+        private const val WECHAT_PAY_ACCOUNT_ID = AccountInference.WECHAT_PAY_ACCOUNT_ID
 
-        private const val ALIPAY_ACCOUNT_ID = "default-account-alipay"
+        private const val ALIPAY_ACCOUNT_ID = AccountInference.ALIPAY_ACCOUNT_ID
 
-        /** 非微信/支付宝渠道的入账兜底账户（现金）。 */
-        private const val CASH_FALLBACK_ACCOUNT_ID = "default-account-cash"
+        /** 非微信/支付宝渠道的入账兜底账户（现金，推断链链尾）。 */
+        private const val CASH_FALLBACK_ACCOUNT_ID = AccountInference.CASH_FALLBACK_ACCOUNT_ID
 
         /** 银行短信来源包（BookkeepingChannels 的 mms 渠道同款包名）。 */
         private const val SMS_SOURCE_PACKAGE = "com.android.mms"

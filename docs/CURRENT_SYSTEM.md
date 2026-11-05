@@ -118,6 +118,11 @@
 | 手动重试必然拒绝 | `performUserRetryForSession` 恒返回 `SERVICE_NOT_CONNECTED`（入口壳保留） | 前端入口不可用 |
 | `AI_TRIGGER_ARMED` 死状态 | `CheckoutJourneyState.AI_TRIGGER_ARMED` 枚举与迁移映射保留，生产不可达 | 待随会话链路清理 |
 | 进程保活为零 | 无前台服务（Manifest 权限已声明未用）；杀进程窗口漏采无补偿 | 已知限制 |
+| 无服务端能力 | 无服务端规则下发、无服务端去重（`litenote-backend` 非重心）；规则来自本地内置 JSON（`bookkeeping_builtin_rules.json`）+ 用户规则 | 规则更新随版本发布 |
+| 支付方式不可见 | 普通消费通知/结果页不暴露"支付方式"字样（实测 grep 零命中），**"微信零钱 vs 绑卡支付"无法区分** —— 微信/支付宝固定映射到对应平台账户或规则账户；`payMethod` 刻意不做 | 账户推断仅短信层可用 |
+| 账户无卡号字段 | `AccountEntity` 无卡号/尾号字段 ⇒ 短信只能按**银行名→账户名**匹配（`AccountInference.inferFromSignal`），同银行多账户命中**转待确认**（`RULE_ACCOUNT_NEEDS_REVIEW`）、不猜测 | 精度受限，唯一命中才映射 |
+| 无解锁入口 | 用户手改字段自动进 `fieldLocks`（`DataModule.updateBill`），此后**不接受自动链路回填**；当前无"解除字段锁定"UI（刻意取舍：用户优先） | 需解锁功能时另行拍板 |
+| N-2 表单竞态 | 待确认卡上的用户编辑是**表单态、卡上无痕**；N-2 吸收删卡后用户提交会因卡不存在而落空，需重填；账单侧由 L1 `checkLevel1` + `mergeIntoExistingBill`（只补空）兜底 ⇒ 不双记、不覆盖用户值 | 已知竞态，可接受 |
 | 微信页面规则实验性 | 微信渠道规则可能打不中（基类 key 打不中子类页） | 微信内站内支付靠结果页文本腿兜底 |
 
 ## 8. 如何自证（改哪块跑哪些测试）
@@ -133,6 +138,8 @@
 | 账务 | `CheckoutPaymentAmountToleranceTest`、`PendingConfirmServiceTest` | 金额容差、确认删卡原子 |
 
 全量：`./gradlew.bat :app:testDebugUnitTest`（基线 326 tests / 0 failures）。
+
+> 补充：①行为红线的**负向断言清单**（"不创建会话/无 `ensureSession` 日志"等通过判定）见 `docs/qa/golden-path-regression.md`，比本节更细；②排查金额解析可看 **`AmountDiag` 采样日志**（token / dropped 计数），出处 `docs/FIX_TASK_2026-09-29_attribution_pending_dup.md`。
 
 ## 附录 A：典型场景走查（改动合并/落点逻辑时逐条对照）
 

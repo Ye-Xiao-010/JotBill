@@ -264,27 +264,16 @@ internal class TransferClassifier(
      * 目标账户名匹配：先精确匹配（忽略大小写），再双向包含匹配。
      * 只匹配启用账户；匹配到多个同名账户时视为歧义返回 null（转待确认）。
      * 例：提示"转到银行卡"可命中本地"银行卡"账户；"还款至花呗"命中"花呗"。
+     * 匹配语义与 [com.jotbill.app.bookkeeping.AccountInference.matchAccountsByName] 共用（唯一命中才返回）。
      */
     private suspend fun matchAccountByName(hint: String): AccountEntity? {
         val normalizedHint = hint.trim()
         if (normalizedHint.isEmpty()) return null
         val activeAccounts = database.accountDao().getAll().filter { it.isActive }
         if (activeAccounts.isEmpty()) return null
-
-        // 精确匹配（忽略大小写）
-        val exactMatches = activeAccounts.filter {
-            it.name.equals(normalizedHint, ignoreCase = true)
-        }
-        if (exactMatches.size == 1) return exactMatches.first()
-        if (exactMatches.size > 1) return null
-
-        // 包含匹配：账户名包含提示，或提示包含账户名（账户名至少 2 字符防误匹配）
-        val containsMatches = activeAccounts.filter { account ->
-            account.name.length >= 2 &&
-                (account.name.contains(normalizedHint, ignoreCase = true) ||
-                    normalizedHint.contains(account.name, ignoreCase = true))
-        }
-        return containsMatches.singleOrNull()
+        return com.jotbill.app.bookkeeping.AccountInference
+            .matchAccountsByName(activeAccounts, normalizedHint)
+            .singleOrNull()
     }
 
     /** 确定性 ID：SHA-256(prefix|payload)，同一事件重复到达生成相同 ID。 */

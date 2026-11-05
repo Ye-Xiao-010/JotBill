@@ -292,18 +292,36 @@ class DataModule(
             updatedAt = System.currentTimeMillis(),
             version = existing.version + 1
         )
-        if (updated.amountMinor < 0) {
+        // A-1（2026-11-05 拍板）：用户手改字段自动并入 fieldLocks —— 只锁**实际发生变更**的
+        // 字段（判据 = updated 与 existing 逐字段值比较；RN 全量表单提交时未改字段值相等
+        // ⇒ 不会误锁一批字段）。用户再次编辑同一字段 = 写入新值并保持锁定（更新锁值、
+        // 保持锁）；自动链路（EVIDENCE/IMPORT）不经过本入口，不会触发加锁。
+        // 锁由 Kotlin 侧生成，不依赖 RN 传参（RN 契约仍不声明 fieldLocks）。
+        val autoLockedFields = FieldPriorityResolver.LOCKABLE_FIELDS.filter { field ->
+            FieldPriorityResolver.billFieldValue(updated, field) !=
+                FieldPriorityResolver.billFieldValue(existing, field)
+        }
+        val updatedWithLocks = if (autoLockedFields.isEmpty()) {
+            updated
+        } else {
+            updated.copy(
+                fieldLocks = FieldPriorityResolver.serializeLocks(
+                    FieldPriorityResolver.parseLocks(updated.fieldLocks) + autoLockedFields
+                )
+            )
+        }
+        if (updatedWithLocks.amountMinor < 0) {
             throw BridgeException("INVALID_ARGUMENT", "amountMinor must not be negative")
         }
-        if (!repository.updateBillWithBalanceUpdate(existing, updated)) {
+        if (!repository.updateBillWithBalanceUpdate(existing, updatedWithLocks)) {
             if (database.billDao().getById(existing.id) == null) {
                 throw BridgeException("NOT_FOUND", "Bill $id was not found")
             }
             throw BridgeException("VERSION_CONFLICT", "Bill $id has changed; refresh before updating")
         }
-        events.emit("onBillUpdated", BridgeDtoMapper.bill(updated))
+        events.emit("onBillUpdated", BridgeDtoMapper.bill(updatedWithLocks))
         maybeNotifyBudgetAlerts()
-        BridgeDtoMapper.bill(updated).toString()
+        BridgeDtoMapper.bill(updatedWithLocks).toString()
     }
 
     @ReactMethod
