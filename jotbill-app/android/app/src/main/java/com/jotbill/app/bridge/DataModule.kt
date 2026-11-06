@@ -546,6 +546,34 @@ class DataModule(
         }.toString()
     }
 
+    /**
+     * B4：余额一致性实时重算（桥）。RN 账户页进入时调用；
+     * 不一致清单逐条含 expected/actual/diff，UI 指向「校准余额」入口。
+     * 口径见 [com.jotbill.app.data.BalanceReconciler]（含校准差额，校准过的账户不误报）。
+     */
+    @ReactMethod
+    fun getBalanceReconcileWarnings(promise: Promise) = launch(promise) {
+        val mismatches = com.jotbill.app.data.BalanceReconciler(database).check()
+        JSONObject().apply {
+            put("checkedAt", System.currentTimeMillis())
+            put(
+                "mismatches",
+                JSONArray().also { array ->
+                    mismatches.forEach { mismatch ->
+                        array.put(
+                            JSONObject().apply {
+                                put("accountId", mismatch.accountId)
+                                put("expectedMinor", mismatch.expectedMinor)
+                                put("actualMinor", mismatch.actualMinor)
+                                put("diffMinor", mismatch.diffMinor)
+                            }
+                        )
+                    }
+                }
+            )
+        }.toString()
+    }
+
     @ReactMethod
     fun getCategories(type: String?, promise: Promise) = launch(promise) {
         val categories = if (type.isNullOrBlank()) {

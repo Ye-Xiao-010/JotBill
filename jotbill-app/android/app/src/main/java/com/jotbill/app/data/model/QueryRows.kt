@@ -31,3 +31,9 @@ data class NetWorthRow(
     val totalAssets: Long,
     val totalLiabilities: Long
 )
+
+/** B4：逐账户聚合行（账单净增减 / 转账目标侧入账 / 校准差额共用）。 */
+data class AccountDeltaRow(
+    val accountId: String,
+    val delta: Long
+)

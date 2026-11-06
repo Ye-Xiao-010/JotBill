@@ -318,6 +318,20 @@ export interface NetWorthSummary {
   updatedAt: string;
 }
 
+/** B4：单个账户的余额不一致快照（diffMinor = actual - expected）。 */
+export interface BalanceReconcileMismatch {
+  accountId: string;
+  expectedMinor: number;
+  actualMinor: number;
+  diffMinor: number;
+}
+
+/** B4：余额一致性抽检结果；mismatches 为空表示全部一致。 */
+export interface BalanceReconcileWarnings {
+  checkedAt: number;
+  mismatches: BalanceReconcileMismatch[];
+}
+
 export interface CategoryStatistic {
   categoryId: string;
   categoryName: string;
@@ -362,6 +376,7 @@ interface RawDataModule {
   calibrateAccountBalance(id: string, actualBalanceMinor: number, note?: string | null): Promise<string>;
   getNetWorth(): Promise<string>;
   getBalanceCalibrations(accountId: string): Promise<string>;
+  getBalanceReconcileWarnings(): Promise<string>;
   getCategories(type?: Category['type'] | null): Promise<string>;
   addCategory(inputJson: string): Promise<string>;
   updateCategory(id: string, inputJson: string): Promise<string>;
@@ -510,6 +525,17 @@ export const nativeData = {
     return parseJson(
       await getRawDataModule().getBalanceCalibrations(accountId),
       'getBalanceCalibrations',
+    );
+  },
+
+  /**
+   * B4：余额一致性实时重算。不一致时 mismatches 逐条给出
+   * 账户 ID 与 expected/actual/diff，账户页据此提示并指向「校准余额」。
+   */
+  async getBalanceReconcileWarnings(): Promise<BalanceReconcileWarnings> {
+    return parseJson(
+      await getRawDataModule().getBalanceReconcileWarnings(),
+      'getBalanceReconcileWarnings',
     );
   },
 

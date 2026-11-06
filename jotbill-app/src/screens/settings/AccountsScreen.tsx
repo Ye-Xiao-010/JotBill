@@ -81,8 +81,14 @@ export default function AccountsScreen() {
     queryKey: QUERY_KEYS.accountsBalance,
     queryFn: () => nativeData.getNetWorth(),
   });
+  // B4：余额一致性提示 —— 进入账户页实时重算，命中时展示横幅并指向「校准余额」
+  const reconcileQuery = useQuery({
+    queryKey: ['balance-reconcile-warnings'],
+    queryFn: () => nativeData.getBalanceReconcileWarnings(),
+  });
   const refetchAccounts = accountsQuery.refetch;
   const refetchNetWorth = netWorthQuery.refetch;
+  const refetchReconcile = reconcileQuery.refetch;
 
   const selectedOption = useMemo(
     () => ACCOUNT_OPTIONS.find((option) => option.subtype === subtype) ?? ACCOUNT_OPTIONS[0],
@@ -94,6 +100,7 @@ export default function AccountsScreen() {
     queryClient.invalidateQueries({ queryKey: QUERY_KEYS.accountsBalance });
     queryClient.invalidateQueries({ queryKey: ['net-worth'] });
     queryClient.invalidateQueries({ queryKey: ['asset-trend'] });
+    queryClient.invalidateQueries({ queryKey: ['balance-reconcile-warnings'] });
   }, [queryClient]);
 
   const saveMutation = useMutation({
@@ -204,16 +211,23 @@ export default function AccountsScreen() {
   };
 
   const onRefresh = useCallback(async () => {
-    await Promise.all([refetchAccounts(), refetchNetWorth()]);
-  }, [refetchAccounts, refetchNetWorth]);
+    await Promise.all([refetchAccounts(), refetchNetWorth(), refetchReconcile()]);
+  }, [refetchAccounts, refetchNetWorth, refetchReconcile]);
 
   const accounts = accountsQuery.data ?? [];
+  // B4：不一致账户清单（含名称解析，账户可能被停用但仍有余额）
+  const reconcileMismatches = reconcileQuery.data?.mismatches ?? [];
+  const reconcileRows = reconcileMismatches.map((mismatch) => ({
+    mismatch,
+    name: accounts.find((account) => account.id === mismatch.accountId)?.name ?? '未知账户',
+  }));
 
   useFocusEffect(
     useCallback(() => {
       void refetchAccounts();
       void refetchNetWorth();
-    }, [refetchAccounts, refetchNetWorth]),
+      void refetchReconcile();
+    }, [refetchAccounts, refetchNetWorth, refetchReconcile]),
   );
 
   return (
@@ -251,6 +265,18 @@ export default function AccountsScreen() {
             <Text style={styles.summaryMeta}>负债 {formatMoney(netWorthQuery.data?.totalLiabilitiesMinor ?? 0, 'liability')}</Text>
           </View>
         </View>
+
+        {reconcileRows.length > 0 && (
+          <View style={styles.warningCard}>
+            <Text style={styles.warningTitle}>余额与账单汇总不一致</Text>
+            {reconcileRows.map(({ mismatch, name }) => (
+              <Text key={mismatch.accountId} style={styles.warningText}>
+                {name}：账面比账单{mismatch.diffMinor >= 0 ? '多' : '少'} {formatMoney(Math.abs(mismatch.diffMinor), 'asset')}
+              </Text>
+            ))}
+            <Text style={styles.warningHint}>请核对后使用对应账户的「校准余额」修正</Text>
+          </View>
+        )}
 
         {accounts.length === 0 ? (
           <View style={styles.emptyState}>
@@ -428,6 +454,18 @@ const createStyles = (colors: ThemeColors) => ({
     summaryAmount: { marginTop: spacing.xs, fontSize: 30, fontWeight: '900', color: colors.textPrimary, fontFamily: 'Courier' },
     summaryRow: { flexDirection: 'row', justifyContent: 'space-between', marginTop: spacing.md },
     summaryMeta: { fontSize: 13, fontWeight: '700', color: colors.textSecondary },
+    // B4：余额不一致提示横幅（沿用积木风卡片，语义色 error）
+    warningCard: {
+      padding: spacing.lg,
+      backgroundColor: colors.surface,
+      borderWidth: borderWidth.medium,
+      borderColor: colors.error,
+      borderRadius: borderRadius.card,
+      ...shadow.small,
+    },
+    warningTitle: { fontSize: 14, fontWeight: '800', color: colors.error },
+    warningText: { marginTop: spacing.xs, fontSize: 13, fontWeight: '700', color: colors.textPrimary },
+    warningHint: { marginTop: spacing.sm, fontSize: 12, fontWeight: '600', color: colors.textSecondary },
     accountCard: {
       padding: spacing.md,
       backgroundColor: colors.surface,

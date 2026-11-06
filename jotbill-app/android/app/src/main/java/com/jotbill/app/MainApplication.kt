@@ -29,6 +29,7 @@ import com.jotbill.app.pending.RecentResultObservation
 import com.jotbill.app.budget.BudgetReminderNotifier
 import com.facebook.react.ReactInstanceManager
 import com.facebook.react.bridge.JSBundleLoader
+import kotlinx.coroutines.launch
 import java.io.File
 
 class MainApplication : Application(), ReactApplication {
@@ -164,6 +165,19 @@ class MainApplication : Application(), ReactApplication {
     // 同一笔支付的重复观测识别(页面文本哈希):区分"同一笔停留"与"真实第二笔"。
     // 与冷却互补 —— 冷却管消费后 15 秒,本类管消费前的重复观测(见 RecentResultObservation)。
     RecentResultObservation.init()
+    // B4:余额一致性后台抽检(只提示不改数)。后台协程不阻塞首屏;命中写审计,
+    // 用户可见提示由 RN 账户页经 DataModule.getBalanceReconcileWarnings 实时重算。
+    kotlinx.coroutines.CoroutineScope(
+        kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.IO
+    ).launch {
+        runCatching {
+            com.jotbill.app.data.BalanceReconciler(
+                com.jotbill.app.data.JotBillDatabaseProvider.get(this@MainApplication)
+            ).auditMismatches()
+        }.onFailure { error ->
+            android.util.Log.w("MainApplication", "余额一致性抽检失败(不影响启动)", error)
+        }
+    }
     HotUpdateModule.recoverInterruptedSwap(this)
     loadReactNative(this)
     initializeSentry()
