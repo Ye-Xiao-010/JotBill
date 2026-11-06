@@ -91,6 +91,14 @@ internal object PaymentResultParser {
         "订单详情", "订单列表", "全部订单", "我的订单", "账单明细", "交易明细", "交易记录"
     )
 
+    /**
+     * 强支付成功语义（P8）：订单详情页的支付状态行惯用「已付款/交易完成」弱语义，
+     * **不会**出现「支付成功/付款成功/支付完成」—— 这三个词是当次支付结果页的
+     * 标志性标题。订单页标题词与强语义同时出现时按结果页放行（修复 P8：旧判据
+     * 只比先后位置，「订单详情标题 + 支付成功横幅」的当次页被误杀漏卡）。
+     */
+    private val STRONG_PAYMENT_SUCCESS_TERMS = listOf("支付成功", "付款成功", "支付完成")
+
     /** 金额匹配正则 */
     private val AMOUNT_PATTERNS = listOf(
         Regex("""(?:¥|￥)\s*([0-9]+(?:\.[0-9]+)?)"""),
@@ -268,14 +276,17 @@ internal object PaymentResultParser {
      *
      * 判定口径（位置启发式，纯文本）：
      * 1. 无 [ORDER_PAGE_TITLE_TERMS] 任一标题词 ⇒ 不是订单页（false）；
-     * 2. 有订单页标题词但无成功词 ⇒ 判为订单页（true，与 [parseResult] 双保险）；
-     * 3. 两者皆有 ⇒ **先出现者代表页面标题**：订单页标题先于成功词 ⇒ 订单页
-     *    （典型：「订单详情」标题 + "已付款"状态行）；成功词在前 ⇒ 真结果页
+     * 2. 含**强支付成功语义**（[STRONG_PAYMENT_SUCCESS_TERMS]，P8）⇒ 按结果页
+     *    放行（false）—— 订单详情页的状态行惯用「已付款/交易完成」弱语义，
+     *    不写「支付成功」；订单标题 + 支付成功横幅是当次支付结果页的典型形态；
+     * 3. 有订单页标题词但无成功词 ⇒ 判为订单页（true，与 [parseResult] 双保险）；
+     * 4. 两者皆有（弱语义）⇒ **先出现者代表页面标题**：订单页标题先于成功词 ⇒
+     *    订单页（典型：「订单详情」标题 + "已付款"状态行）；成功词在前 ⇒ 真结果页
      *    （典型：「支付成功」标题 + "查看订单详情"按钮 —— 按钮词在后，不误杀）。
      *
-     * ⚠️ 已知取舍：页面标题为「订单详情」但顶部带"支付成功"横幅的订单页会被本
-     * 守卫抑制（宁可漏一张可补的卡，不可把可反复回看的历史订单页当新支付落卡
-     * —— 该页在支付后 30 分钟内随时可翻出，时效闸挡不住）。真机校准见 B1 验证。
+     * ⚠️ 已知取舍：弱语义（已付款/交易完成）与订单标题共存的页面仍被抑制（宁可
+     * 漏一张可补的卡，不可把可反复回看的历史订单页当新支付落卡）。P8 起强语义
+     * 页面不再误杀，该取舍只作用于弱语义场景。真机校准见 B1 验证。
      *
      * @param pageText 页面文本（含隐藏文本，站内入口与支付包入口同款输入形态）。
      * @return true 表示疑似订单页，调用方不得据此产出支付证据。
@@ -286,6 +297,8 @@ internal object PaymentResultParser {
             .mapNotNull { term -> pageText.indexOf(term).takeIf { it >= 0 } }
             .minOrNull()
             ?: return false
+        // P8：强支付成功语义直接放行 —— 与订单标题词的先后位置无关。
+        if (STRONG_PAYMENT_SUCCESS_TERMS.any { pageText.contains(it) }) return false
         val successIndex = SUCCESS_KEYWORDS
             .mapNotNull { term -> pageText.indexOf(term).takeIf { it >= 0 } }
             .minOrNull()

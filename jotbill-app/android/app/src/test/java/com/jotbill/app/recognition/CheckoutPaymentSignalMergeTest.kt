@@ -23,8 +23,13 @@ import org.robolectric.annotation.Config
  * - 正向收敛：① 跳包同 orderId（跨包 2min 窗）→ 1 卡；② 跨源晚到同 orderId → 1 卡；
  *   ③ 归并留痕 mergedSourceEventKeys 记下被并信号。
  * - 负向不误并：④ orderId 冲突（同包同额 15s 内两单号不同）→ 2 卡（拍板①核心）；
- *   ⑤ 跨包同额无 orderId → 2 卡；⑥ 同包同额 >15s 两笔真单 → 2 卡（回归）；
+ *   ⑥ 同包同额 >15s 两笔真单 → 2 卡（回归）；
  *   ⑦ refund/fee 不参与归并（回归）；⑧ 短信 + 支付信号 → 2 卡（拍板②）。
+ * - P3 跨包双卡保守收敛（2026-11-05 拍板）：⑤ 跨包同额无 orderId 15s 内 ⇒
+ *   归并进单卡 + SUSPECTED_DUPLICATE 标记（**行为变更**：旧语义出双卡，旧断言
+ *   解决的是"不误并两笔真单"；新形态把决策权交给用户 —— 卡上带疑似标记、
+ *   被并信号留痕可追溯，15s 内跨包同额两笔真单物理上几乎不可能）；
+ *   ⑤b 超 15s 窗仍 2 卡（不误并边界）；⑤c 短信卡双向排除（拍板②延伸）。
  *
  * 驱动：Robolectric + Room 内存库直驱 `CheckoutPaymentMatcher.recordOrphanPaymentSignal`
  * （ACCESSIBILITY 来源，避开 N-2 强证据自动入账；N-2 与卡并存的缺口见批次报告遗留）。
@@ -123,13 +128,43 @@ class CheckoutPaymentSignalMergeTest {
         assertEquals("orderId 冲突的两笔真单不得吞并", 2, pendingCount())
     }
 
-    /** ⑤ 跨包同额无 orderId ⇒ 不归并（维持可删双卡的安全侧）。 */
+    /** ⑤ P3：跨包同额无 orderId 15s 内 ⇒ 归并进单卡 + SUSPECTED_DUPLICATE 标记。 */
     @Test
-    fun 跨包同额无订单号出两张卡() = runBlocking {
+    fun 跨包同额无订单号归并单卡并标记疑似() = runBlocking {
         deliver(signal(PDD, 25001L, BASE, null, "evt-noorder-1"))
         deliver(signal(WECHAT, 25001L, BASE + 5_000L, null, "evt-noorder-2"))
 
-        assertEquals("跨包无 orderId 不得归并", 2, pendingCount())
+        assertEquals("P3：跨包同额 15s 内必须收敛为一张卡", 1, pendingCount())
+        val cards = database.pendingTransactionDao().getPage(10, 0)
+        assertEquals(1, cards.size)
+        val reason = cards[0].conflictReason.orEmpty()
+        assertTrue(
+            "归并卡必须带 SUSPECTED_DUPLICATE 标记（用户一次决策）: $reason",
+            reason.split(",").any { it.trim() == "SUSPECTED_DUPLICATE" }
+        )
+        val keys = JSONObject(cards[0].appliedRules).optJSONArray("mergedSourceEventKeys")
+        assertTrue(
+            "被并信号必须留痕 mergedSourceEventKeys",
+            keys != null && (0 until keys.length()).any { keys.getString(it) == "evt-noorder-2" }
+        )
+    }
+
+    /** ⑤b P3 边界：跨包同额无 orderId 但**超过 15s 窗** ⇒ 仍 2 卡（不误并真单）。 */
+    @Test
+    fun 跨包同额超窗不归并出两张卡() = runBlocking {
+        deliver(signal(PDD, 25501L, BASE, null, "evt-xfar-1"))
+        deliver(signal(WECHAT, 25501L, BASE + 20_000L, null, "evt-xfar-2"))
+
+        assertEquals("P3：超过 15s 窗的跨包同额不得归并", 2, pendingCount())
+    }
+
+    /** ⑤c P3 护栏：短信卡**不被**跨包归并吸收（拍板②延伸：同额短信可能是另一笔真单）。 */
+    @Test
+    fun 短信卡不被跨包归并() = runBlocking {
+        deliver(signal(MMS, 25601L, BASE, null, "evt-xsms-1"))
+        deliver(signal(WECHAT, 25601L, BASE + 5_000L, null, "evt-xpay-1"))
+
+        assertEquals("P3：短信卡与支付信号不得跨包归并（拍板②）", 2, pendingCount())
     }
 
     /** ⑥ 回归：同包同额两笔真单相隔 >15s（无 orderId）⇒ 2 卡（既有裁定边界不动）。 */

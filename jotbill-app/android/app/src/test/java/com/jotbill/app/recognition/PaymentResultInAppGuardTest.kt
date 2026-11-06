@@ -93,6 +93,35 @@ class PaymentResultInAppGuardTest {
     }
 
     @Test
+    fun orderTitleWithStrongPaymentSuccessBannerIsNotGuarded() {
+        // P8：「订单详情」标题 + 「支付成功」横幅 = 当次支付结果页（订单页状态行
+        // 惯用「已付款」弱语义，不写「支付成功」）。旧判据只比先后位置会误杀，
+        // 细化后强语义直接放行并正常产出证据。
+        val pageText = "订单详情 支付成功 实付 ¥29.90 商户：测试小店 查看物流"
+
+        assertFalse(PaymentResultParser.isLikelyOrderDetailPage(pageText))
+        val result = inAppScan(pageText)
+        assertNotNull("强语义页面不得被守卫抑制", result)
+        assertTrue(result is PaymentResultParseResult.Success)
+        assertEquals(2990L, (result as PaymentResultParseResult.Success).evidence.amountMinor)
+    }
+
+    @Test
+    fun orderTitleWithWeakPaymentStatusRemainsGuarded() {
+        // P8 回归钉：弱语义（已付款/交易完成）与订单标题共存时仍按订单页抑制 ——
+        // 细化只放行强语义，不得把历史订单页的口子撕开。
+        val samples = listOf(
+            "订单详情 已付款 实付 ¥29.90 商户：测试小店 再次购买",
+            "我的订单 交易完成 ¥88.00 美团外卖"
+        )
+        for (pageText in samples) {
+            assertTrue("弱语义订单页仍应被守卫抑制: $pageText",
+                PaymentResultParser.isLikelyOrderDetailPage(pageText))
+            assertNull(inAppScan(pageText))
+        }
+    }
+
+    @Test
     fun plainShoppingPageWithoutOrderTermsIsNotGuarded() {
         // 无订单页标题词 ⇒ 守卫不动作（是否出证据由 parseResult 自行判定）。
         val pageText = "商品详情 选择规格 加入购物车 ¥29.90 立即购买"

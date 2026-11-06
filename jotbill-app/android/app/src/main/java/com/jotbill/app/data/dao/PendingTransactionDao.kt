@@ -93,6 +93,38 @@ interface PendingTransactionDao {
     ): PendingTransactionEntity?
 
     /**
+     * P3 跳包双卡收敛：**跨包**同额待确认查询 —— 跳包支付（购物 App 拉起微信/
+     * 支付宝）会被站内腿与支付包腿各落一张卡，两卡金额相同、时间相邻、分属
+     * 不同包名。本查询与 [findRecentPendingByPlatformAndAmount] 互补：只查
+     * **其它包**的卡，供调用方归并标记而非双卡并存。
+     *
+     * 银行短信（com.android.mms）卡被显式排除：短信同额可能是另一笔真实交易
+     * （拍板②：短信 orderId 恒空，不与支付信号归并），不得被跨包吸收。
+     * 同样只匹配 `status='pending'` 且 `type='expense'`（键族隔离口径与
+     * [findRecentPendingByOrderId] 一致）。
+     */
+    @Query(
+        """
+        SELECT * FROM pending_transactions
+        WHERE status = 'pending'
+          AND type = 'expense'
+          AND platform != :platform
+          AND platform != :excludedPlatform
+          AND amount_minor = :amountMinor
+          AND occurred_at BETWEEN :windowStart AND :windowEnd
+        ORDER BY created_at DESC
+        LIMIT 1
+        """
+    )
+    suspend fun findRecentPendingByAmountCrossPlatform(
+        platform: String,
+        excludedPlatform: String,
+        amountMinor: Long,
+        windowStart: Long,
+        windowEnd: Long
+    ): PendingTransactionEntity?
+
+    /**
      * P1 多信号合并：按「支付身份」的强键 —— **订单号**（跨源跨包）查可归并的
      * 既有待确认卡。
      *

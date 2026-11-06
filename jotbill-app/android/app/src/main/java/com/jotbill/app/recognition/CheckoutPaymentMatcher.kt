@@ -128,6 +128,9 @@ private const val PAYMENT_EVIDENCE_MERGE_WINDOW_MILLIS = 2 * 60 * 1000L
  */
 private const val ORPHAN_DEDUP_WINDOW_MILLIS = PaymentTiming.SAME_TXN_WINDOW_MILLIS
 
+/** P3：银行短信来源包 —— 跨包同额归并的双向排除对象（拍板②：短信 orderId 恒空）。 */
+private const val MMS_SOURCE_PACKAGE = "com.android.mms"
+
 /**
  * P1 多信号合并：orderId 强键归并窗（拍板 2026-11-04：2 分钟）。
  *
@@ -894,6 +897,54 @@ internal class CheckoutPaymentMatcher(
                         "同包同额但订单号冲突，拒绝归并(拍板①): pending=${duplicate?.id?.take(16)}, " +
                             "existing=${duplicate?.orderId?.take(16)}, incoming=${signal.orderId?.take(16)}"
                     )
+                }
+            }
+            // ---- P3 跳包双卡保守收敛：跨包同额无单号 ⇒ 归并进单卡 + 疑似标记 ----
+            // 跳包支付（购物 App 拉起微信/支付宝）会被站内腿与支付包腿各落一张卡，
+            // 既有去重全部按包名隔离（D-25/冷却/哈希），双卡不收敛。两笔真实支付
+            // 15s 内跨包同额物理上几乎不可能（须离开支付 App、回商户重新下单），
+            // 故归并进既有卡、追加 SUSPECTED_DUPLICATE 让用户一次决策 —— 不直接
+            // 合并成账单（保留"误并可删、不误吞"的安全侧：确认前被并信号可追溯，
+            // 记在 appliedRules.mergedSourceEventKeys）。
+            // 护栏：① 仅无 orderId 场景（有单号走 P1 强键归并/拍板①显式拒绝）；
+            // ② 短信（com.android.mms）双向排除（拍板②：同额短信可能是另一笔真单）。
+            if (
+                !strongEvidenceSignal &&
+                signal.orderId.isNullOrBlank() &&
+                signal.occurredAt > 0L &&
+                signal.paymentPackage != MMS_SOURCE_PACKAGE
+            ) {
+                val crossDup = dao.findRecentPendingByAmountCrossPlatform(
+                    platform = signal.paymentPackage,
+                    excludedPlatform = MMS_SOURCE_PACKAGE,
+                    amountMinor = signal.amountMinor,
+                    windowStart = signal.occurredAt - ORPHAN_DEDUP_WINDOW_MILLIS,
+                    windowEnd = signal.occurredAt + ORPHAN_DEDUP_WINDOW_MILLIS
+                )
+                if (crossDup != null) {
+                    mergeSignalIntoExisting(
+                        existing = crossDup,
+                        incomingSourceEventKey = sourceEventKey,
+                        incomingReason = conflictReason
+                    )
+                    // 追加疑似重复标记（复用既有码，RN 已有中文映射），
+                    // 让用户一次决策解决「可能是同一笔的跨包双卡」。
+                    val flagged = mergeOrphanConflictReason(
+                        dao.getById(crossDup.id)?.conflictReason,
+                        DuplicateGuard.CONFLICT_SUSPECTED_DUPLICATE
+                    )
+                    dao.updateConflictReason(crossDup.id, flagged)
+                    JotBillLog.i(
+                        "CheckoutPaymentMatcher",
+                        "跨包同额信号已归并(跳包疑似同笔): pending=${crossDup.id.take(16)}, " +
+                            "incoming=${pendingId.take(16)}, amount=${signal.amountMinor}, " +
+                            "pkg=${signal.paymentPackage}->${crossDup.platform}"
+                    )
+                    outcome = OrphanOutcome(
+                        OrphanOutcome.Kind.SUPPRESSED_DUPLICATE_WINDOW,
+                        crossDup.id
+                    )
+                    return@withTransaction
                 }
             }
             // 阶段五 T1 时机一：纯通知待确认创建前执行规则；
