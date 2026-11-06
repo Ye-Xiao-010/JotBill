@@ -154,6 +154,12 @@ internal object BridgeDtoMapper {
         putOptional("accountId", entity.accountId)
         putOptional("categoryId", entity.categoryId)
         putOptional("conflictReason", entity.conflictReason)
+        // 归并计数透出（隐私窄化，2026-11-06 终审）：不再透传 appliedRules 原始
+        // JSON（含 sourceEventKey 明细），只下发 native 侧算好的归并计数，
+        // RN 卡面据此显示「已归并 N 条信号」。原始 JSON 仍留存于数据库
+        // （审计/留痕语义不变）；RN 若未来需要 factors/decision 等字段，
+        // 应在 native 侧新增**具名字段**下发，不得恢复整串透传。
+        put("mergedSignalCount", mergedSignalCountOf(entity.appliedRules))
         put("sourceType", entity.sourceType)
         put("createdAt", formatTimestamp(entity.createdAt))
         put("version", entity.version)
@@ -356,6 +362,23 @@ internal object BridgeDtoMapper {
             // appliedRules 不是预期 JSON 对象时静默回退，避免污染桥接层。
         }
         return array
+    }
+
+    /**
+     * 归并计数（隐私窄化）：从待确认卡 appliedRules JSON 计算
+     * `mergedSourceEventKeys` 数组长度 + `mergedSourceEventKeysOverflow` 溢出计数。
+     * 与 `CheckoutPaymentMatcher.appendMergedSourceEventKey` 的留痕口径对应；
+     * 解析失败/字段缺失按 0 处理（卡面不渲染归并行）。
+     */
+    private fun mergedSignalCountOf(rawValue: String?): Int {
+        if (rawValue.isNullOrBlank()) return 0
+        return try {
+            val parsed = JSONObject(rawValue)
+            val keys = parsed.optJSONArray("mergedSourceEventKeys")?.length() ?: 0
+            keys + parsed.optInt("mergedSourceEventKeysOverflow", 0)
+        } catch (_: JSONException) {
+            0
+        }
     }
 
     private fun JSONObject.putOptional(key: String, value: Any?) {

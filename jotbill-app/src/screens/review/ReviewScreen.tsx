@@ -524,6 +524,13 @@ function PendingCard({
     [pending.conflictReason],
   );
   const hasConflict = Boolean(pending.conflictReason);
+  /**
+   * 归并计数（M-补③，2026-11-06 隐私窄化）：native 已从 appliedRules 算好
+   * （mergedSourceEventKeys 长度 + overflow 计数）直接下发，原始 JSON
+   * （含 sourceEventKey 明细）不再过桥。只展示计数不给字段堆叠 —— 让用户
+   * 知道"这是同一个事实被多处看到"，不改变任何确认语义；0 时不渲染。
+   */
+  const mergedSignalCount = pending.mergedSignalCount;
   // 审查修复配套：AI 失败占位条目金额未知（0），禁止确认入账，只能忽略或重试识别
   const isAiFailedPlaceholder =
     pending.conflictReason === 'AI_RECOGNITION_FAILED' && pending.amountMinor === 0;
@@ -618,6 +625,13 @@ function PendingCard({
             value={conflictLabel}
             colors={colors}
             highlight
+          />
+        ) : null}
+        {mergedSignalCount > 0 ? (
+          <MetaRow
+            label="归并"
+            value={`已归并 ${mergedSignalCount} 条信号（同一事实的多处观测）`}
+            colors={colors}
           />
         ) : null}
       </View>

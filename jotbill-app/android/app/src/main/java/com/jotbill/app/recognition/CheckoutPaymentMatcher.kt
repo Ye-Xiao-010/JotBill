@@ -694,6 +694,21 @@ internal class CheckoutPaymentMatcher(
      *    （第 1 道挡不住：结果页事件键含 15 秒时间桶，跨桶即换键。）
      */
     /**
+     * N-2 强证据提交失败的信号异常（P5 最终形态，2026-11-06 探针实证）：携带回落
+     * 所需的原始信号，用于**故意击穿**外层 Room 事务 —— 使「吸收删除随回滚复原」，
+     * 再由函数边界的第二段独立事务完成归并/建卡。
+     * 探针留存：[com.jotbill.app.data.RoomNestedTransactionProbeTest] 已钉死「外层
+     * withTransaction 内 catch 内层 Room 事务异常后继续写库 → 行不存在（外层回滚）」，
+     * 故 N-2 通用失败**不得**使用「catch 后同事务写库」形态。
+     * 该异常永远不应逃出 [recordOrphanPaymentSignal] 的边界。
+     */
+    private class N2CommitFailedException(
+        val signal: PaymentNotificationFallbackSignal,
+        val sourceType: String,
+        val conflictReason: String
+    ) : RuntimeException("N-2 commit failed, fallback runs in second top-level transaction")
+
+    /**
      * [recordOrphanPaymentSignal] 的落库结果（N-0a）。
      *
      * 该函数内部有多条早退路径（D-3 闸、冷却、幂等、规则忽略…），此前一律返回 Unit，
@@ -705,14 +720,21 @@ internal class CheckoutPaymentMatcher(
         signal: PaymentNotificationFallbackSignal,
         sourceType: String = "NOTIFICATION",
         conflictReason: String = "NO_ACTIVE_SESSION",
-        sessionIds: List<String> = emptyList()
+        sessionIds: List<String> = emptyList(),
+        /**
+         * P5 回落段专用：为 true 时**抑制 N-2 强证据吸收/入账尝试**（只做归并/建卡）。
+         * 仅由本函数在「提交失败 → 击穿回滚」后的第二段独立事务递归调用时传入；
+         * 生产/测试调用方一律使用默认 false。
+         */
+        suppressStrongEvidence: Boolean = false
     ): OrphanOutcome {
         // M5：订单号在归并入口处统一格式归一（trim/全角转半角/大写），
         // 各采集腿写法差异（大小写/全半角）不再导致跨源漏并。
         val signal = signal.copy(orderId = OrderIdNormalizer.normalize(signal.orderId))
         var outcome: OrphanOutcome = OrphanOutcome(OrphanOutcome.Kind.SIGNAL_INVALID)
         val now = nowMillis()
-        database.withTransaction {
+        try {
+            database.withTransaction {
             if (!signal.isValid()) {
                 JotBillLog.w(
                     "CheckoutPaymentMatcher",
@@ -1046,7 +1068,7 @@ internal class CheckoutPaymentMatcher(
                 !signal.orderId.isNullOrBlank() &&
                 resolvedAccountId != null &&
                 effectiveConflictReason != DuplicateGuard.CONFLICT_SUSPECTED_DUPLICATE
-            if (strongEvidence) {
+            if (strongEvidence && !suppressStrongEvidence) {
                 // ---- N-2 吸收（拍板 2026-11-04）：先删后写 + 失败降级归并 ----
                 // 同 orderId 的既有待确认卡（24h 窗、type=expense）与本强证据证明
                 // 同一笔（订单号客观唯一）⇒ 入账时必须吸收该卡，消灭"1 卡 + 1 账单"
@@ -1111,7 +1133,8 @@ internal class CheckoutPaymentMatcher(
                     updatedAt = now,
                     version = 1
                 )
-                // ---- M1 撞号预检（2026-11-06 探针实证）----
+                // ---- M1 撞号预检（2026-11-06 探针实证，留存
+                // [com.jotbill.app.data.RoomNestedTransactionProbeTest]）----
                 // LedgerRepository.createBillWithDedup 自身在 Room withTransaction 内
                 // 抛 OrderConflictException；嵌套事务内层异常会让**外层事务整体回滚**
                 // —— 靠 catch 回落建卡是假象（恢复写库随外层回滚一起消失）。改为与
@@ -1138,21 +1161,20 @@ internal class CheckoutPaymentMatcher(
                     try {
                         createBillDelegate(bill, NOTIFICATION_AUTO_COMMIT_OPERATOR)
                     } catch (error: Exception) {
-                        // 协程取消不是落库失败：不得在已取消的作用域里再做回落写库
+                        // 协程取消不是落库失败：不得在已取消的作用域里再抛
                         if (error is kotlinx.coroutines.CancellationException) throw error
-                        // ---- P5：入账失败不得静默丢证据 ----
-                        // 上游 normalizer 不做金额安全上限校验，异常金额由
-                        // validateSafeAmount 在此拦截；旧实现让异常直接炸掉整个事务 —
-                        // 证据既未入账也未落卡，静默丢失。恢复已吸收的卡后**回落到下方
-                        // 建卡段**：证据以普通待确认卡存活，由用户核对处理。
-                        JotBillLog.w(
-                            "CheckoutPaymentMatcher",
-                            "强证据入账失败，回落建待确认卡: orderId=${signal.orderId?.take(12)}, " +
-                                "amount=${signal.amountMinor}, restoredCards=${absorbedCards.size}",
-                            error
+                        // ---- P5 通用失败（最终形态，2026-11-06 探针实证）----
+                        // **不得**在此 catch 内恢复写库：内层 Room 事务异常会让外层
+                        // 整体回滚（恢复写库随之消失，探针留存
+                        // [com.jotbill.app.data.RoomNestedTransactionProbeTest]）。
+                        // 抛出专用信号异常**故意击穿**外层事务 —— 吸收删除随回滚复原、
+                        // 账单未写入；随后由函数边界的**第二段独立事务**（抑制强证据的
+                        // 递归调用）完成归并/建卡，证据以普通待确认卡存活。
+                        throw N2CommitFailedException(
+                            signal = signal,
+                            sourceType = normalizedSourceType,
+                            conflictReason = conflictReason
                         )
-                        absorbedCards.forEach { dao.insertIfAbsent(it) }
-                        null
                     }
                 }
                 if (commit != null) {
@@ -1370,6 +1392,19 @@ internal class CheckoutPaymentMatcher(
                     )
                 )
             }
+        }
+        } catch (error: N2CommitFailedException) {
+            // ---- P5 回落段（第二段顶层事务）----
+            // 第一段（上方 withTransaction）已被击穿回滚：吸收删除已复原、账单未写入。
+            // 此处以**抑制强证据**递归调用自身：只做归并/建卡（原卡已被回滚复原 ⇒
+            // orderId 归并并入留痕；无卡 ⇒ 新建孤儿卡），不再尝试吸收与入账 ——
+            // 与「拆两段顶层事务」同语义，且不复制第二份建卡逻辑。
+            return recordOrphanPaymentSignal(
+                signal = error.signal,
+                sourceType = error.sourceType,
+                conflictReason = error.conflictReason,
+                suppressStrongEvidence = true
+            )
         }
         return outcome
     }
@@ -2294,7 +2329,9 @@ internal class CheckoutPaymentMatcher(
         // 阶段五 T6：内部执行第 1 级查重——(sourceType, orderId) 命中时合并进
         // 既有账单（不产生第二笔），settledBillId 为实际落库账单
         // M1：撞号（同单号不同金额/类型）不静默合并，转冲突待确认由用户核对。
-        // M1-补（2026-11-06 探针实证）：嵌套事务内层异常会让外层整体回滚，
+        // M1-补（2026-11-06 探针实证，留存
+        // [com.jotbill.app.data.RoomNestedTransactionProbeTest]）：嵌套事务内层
+        // 异常会让外层整体回滚，
         // 撞号改为**预检**（checkLevel1Consistent）而非 catch OrderConflictException。
         val level1 = DuplicateGuard(database).checkLevel1Consistent(
             orderId = bill.orderId,

@@ -274,6 +274,13 @@ export interface PendingTransaction {
   accountId?: string;
   categoryId?: string;
   conflictReason?: string;
+  /**
+   * 归并计数（隐私窄化，2026-11-06）：native 侧从 appliedRules 算好的
+   * mergedSourceEventKeys 数组长度 + overflow 计数之和，卡面据此显示
+   * 「已归并 N 条信号」（M-补③）。原始 appliedRules JSON 不再下发
+   * （含 sourceEventKey 明细），仍留存于原生数据库。
+   */
+  mergedSignalCount: number;
   sourceType: TransactionSource;
   createdAt: string;
   version: number;
