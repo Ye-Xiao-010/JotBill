@@ -39,7 +39,9 @@ class OrphanOutcomeTest {
         database = Room.inMemoryDatabaseBuilder(context, JotBillDatabase::class.java)
             .allowMainThreadQueries()
             .build()
-        matcher = CheckoutPaymentMatcher(database) { now }
+        // P5 测试缝加入第三参数后，nowMillis 必须按名传递（尾随 lambda 会
+        // 落到最后的 createBillDelegate 上）。
+        matcher = CheckoutPaymentMatcher(database, nowMillis = { now })
         // 内存单例表是全局的，用例之间必须复位，否则互相污染。
         com.jotbill.app.pending.RecentPaymentCooldown.reset()
         com.jotbill.app.pending.RecentResultObservation.reset()

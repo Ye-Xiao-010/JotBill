@@ -52,7 +52,7 @@ class CheckoutPaymentMatcherIntegrationTest {
         database = Room.inMemoryDatabaseBuilder(context, JotBillDatabase::class.java)
             .allowMainThreadQueries()
             .build()
-        matcher = CheckoutPaymentMatcher(database) { now }
+        matcher = CheckoutPaymentMatcher(database, nowMillis = { now })
         // 同一笔判据的内存表是单例：必须复位，否则用例之间互相污染。
         // init() 注册 removed 监听（生产在 MainApplication 调用）；重复注册无害，
         // forget 是幂等的。

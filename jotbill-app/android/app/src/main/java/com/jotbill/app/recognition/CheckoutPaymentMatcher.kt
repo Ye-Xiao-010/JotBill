@@ -360,7 +360,16 @@ internal const val NOTIFICATION_AUTO_COMMIT_OPERATOR = "notification_auto_commit
  */
 internal class CheckoutPaymentMatcher(
     private val database: JotBillDatabase,
-    private val nowMillis: () -> Long = { System.currentTimeMillis() }
+    private val nowMillis: () -> Long = { System.currentTimeMillis() },
+    /**
+     * P5 测试缝：N-2 强证据入账的写库委托。生产默认走
+     * [LedgerRepository.createBillWithDedup]；单测注入抛错实现，以确定性地
+     * 覆盖「入账失败回落建卡、不静默丢证据」路径（真实触发源 = 账户在解析与
+     * 入账之间被停用/删除、落库约束冲突等难以直接构造的场景）。
+     */
+    private val createBillDelegate: suspend (BillEntity, String) -> CreateBillOutcome = { bill, operator ->
+        LedgerRepository(database).createBillWithDedup(bill, operator)
+    }
 ) {
     private val ledger = LedgerRepository(database)
     private val ruleEngine = RuleEngine(database)
@@ -1018,9 +1027,26 @@ internal class CheckoutPaymentMatcher(
                     updatedAt = now,
                     version = 1
                 )
-                val commit = ledger.createBillWithDedup(
-                    bill, operator = NOTIFICATION_AUTO_COMMIT_OPERATOR
-                )
+                val commit = try {
+                    createBillDelegate(bill, NOTIFICATION_AUTO_COMMIT_OPERATOR)
+                } catch (error: Exception) {
+                    // 协程取消不是落库失败：不得在已取消的作用域里再做回落写库
+                    if (error is kotlinx.coroutines.CancellationException) throw error
+                    // ---- P5：入账失败不得静默丢证据 ----
+                    // 上游 normalizer 不做金额安全上限校验，异常金额由
+                    // validateSafeAmount 在此拦截；旧实现让异常直接炸掉整个事务 —
+                    // 证据既未入账也未落卡，静默丢失。恢复已吸收的卡后**回落到下方
+                    // 建卡段**：证据以普通待确认卡存活，由用户核对处理。
+                    JotBillLog.w(
+                        "CheckoutPaymentMatcher",
+                        "强证据入账失败，回落建待确认卡: orderId=${signal.orderId?.take(12)}, " +
+                            "amount=${signal.amountMinor}, restoredCards=${absorbedCards.size}",
+                        error
+                    )
+                    absorbedCards.forEach { dao.insertIfAbsent(it) }
+                    null
+                }
+                if (commit != null) {
                 val settledBillId = when (commit) {
                     is CreateBillOutcome.Committed -> commit.bill.id
                     is CreateBillOutcome.MergedInto -> commit.bill.id
@@ -1070,6 +1096,9 @@ internal class CheckoutPaymentMatcher(
                 )
                 outcome = OrphanOutcome(OrphanOutcome.Kind.AUTO_COMMITTED, settledBillId)
                 return@withTransaction
+                }
+                // commit == null（P5 回落）：已吸收的卡恢复完毕，落到下方 orderId
+                // 兜底归并 / 建卡段，证据以普通待确认卡存活。
             }
 
             // N-2 未命中回落至此（规则 Ignored 之外的：疑似重复 / 账户不可解析）：

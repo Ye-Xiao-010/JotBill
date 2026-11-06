@@ -61,8 +61,21 @@ class AutoBookkeeper(
     // ── Sink：主线程回调，只做轻量同步判定 ────────────────────────────────
 
     override fun onRecordReady(record: AutoBookkeepingEngine.ExtractedRecord): Boolean {
-        val amountMinor = AutoBookkeepingEngine.parseAmountMinor(record.fields["amount"])
+        val rawAmount = record.fields["amount"]
+        val amountMinor = AutoBookkeepingEngine.parseAmountMinor(rawAmount)
         if (amountMinor == null || amountMinor <= 0L) {
+            // P7：规则抽到了金额字段但不可入账（解析失败/非正数，如短信里的
+            // "-100.00" 负号金额）—— 此前在此静默返回，全链无任何痕迹，规则资产
+            // 一旦抽出负号金额就是系统性漏记。落诊断日志供真机回溯；不猜符号、
+            // 不取绝对值（无法判断是支出还是退款冲正，猜错方向比丢更糟）。
+            if (!rawAmount.isNullOrBlank()) {
+                JotBillLog.w(
+                    TAG,
+                    "规则金额字段不可入账，记录已丢弃(诊断): rule=${record.ruleId}" +
+                        "(${record.ruleNote}), raw=${rawAmount.take(30)}, " +
+                        "parsed=$amountMinor, pkg=${record.sourcePackage}"
+                )
+            }
             return false
         }
         scope.launch {

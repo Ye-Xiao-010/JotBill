@@ -39,7 +39,8 @@ private const val ACCOUNT_KIND_LIABILITY = "liability"
  * - 自动入账条件（严格执行）：
  *   转账 = 源与目标均精确匹配启用账户 且 源 ≠ 目标；
  *   还款 = 源与目标均精确匹配启用账户 且 目标为负债类型（欠款减少）；
- * - 收款人命中（转账给他人）按支出语义进待确认，由用户改类型，不自动判定为自有账户转账；
+ * - 收款人命中（转账给他人）按 transfer 语义进待确认（P13：方向与账户都由用户
+ *   显式决策），不自动判定为自有账户转账，也不再预填为消费支出；
  * - 推断失败、源=目标、目标非负债（还款）一律 ACCOUNT_UNRESOLVED 进待确认；
  * - 转账/还款不计收支，余额为双账户调整（复用修复后的 applyBalanceDelta）；
  * - 幂等：确定性账单 ID + 待确认 ID + 用户确认审计墓碑，重复通知只处理一次。
@@ -77,11 +78,11 @@ internal class TransferClassifier(
     suspend fun processTransfer(input: PaymentEvidenceInput): TransferOutcome = database.withTransaction {
         // D-3：通知派生链路在 v1 整体停用。
         //
-        // N-1：通知来源放行（D-3 整体停用闸已删）。本分类器是三条绕过链路里后果最重的
-        // 一条：直写 Bill、自动入账、联动双账户余额；且收款人命中时把 pending 定型为
-        // `type="expense"`，而 PendingPromptPolicy 只按 `type == "expense"` 放行 ⇒
-        // 一条通知来源的"转账给他人"会命中付款确认弹窗，用户点确认即写成**支出**。
-        // 故自动入账仍由 [isNotificationAutoCommitAllowed] 扣住，证据先落待确认。
+        // N-1：通知来源放行（D-3 整体停用闸已删）。本分类器直写 Bill、自动入账、
+        // 联动双账户余额，是三条绕过链路里后果最重的一条；故自动入账仍由
+        // [isNotificationAutoCommitAllowed] 扣住，证据先落待确认。
+        // P13：收款人命中的待确认卡已改为 transfer 语义预填（不再定型 expense），
+        // 不会命中付款确认弹窗（PendingPromptPolicy 只放行 expense）。
         val now = nowMillis()
         if (input.amountMinor !in 1L..MAX_SAFE_MINOR_UNIT || input.occurredAt <= 0L) {
             return@withTransaction TransferOutcome.Duplicate
@@ -197,8 +198,13 @@ internal class TransferClassifier(
             return@withTransaction TransferOutcome.AutoCommitted(settledBillId, billType)
         }
 
-        // ---- 待确认：类型按语义预填，他人转账按支出语义由用户改类型 ----
-        val pendingType = if (input.recipientName != null) "expense" else billType
+        // ---- 待确认：类型按语义预填 ----
+        // P13：收款人命中（转账给他人）**不再**预填 type="expense" —— 旧形态下
+        // PendingPromptPolicy 只按 expense 放行弹窗，用户点一次确认就把一笔
+        // 「转账给他人」写成消费支出（方向错账）。改为按业务语义预填 transfer/
+        // repayment，方向（给他人支出 vs 自有账户互转）连同账户一起在待确认
+        // 中心由用户显式决策；收款人仍记录在 appliedRules.recipient 供核对。
+        val pendingType = billType
         val pending = PendingTransactionEntity(
             id = pendingId,
             candidateId = null,

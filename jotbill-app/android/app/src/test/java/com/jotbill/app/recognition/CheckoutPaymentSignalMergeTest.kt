@@ -337,4 +337,35 @@ class CheckoutPaymentSignalMergeTest {
         assertEquals("卡商户补空并入账单", "页面商户", bill!!.merchant)
         assertEquals("卡商品描述补空并入账单", "测试商品", bill.productDescription)
     }
+
+    /**
+     * P5：强证据入账失败（经测试缝注入抛错的写库委托，模拟账户在解析与入账
+     * 之间被停用/约束冲突等真实失败源）⇒ 不静默丢证据 —— 已吸收的卡恢复、
+     * 信号归并进卡，0 账单、1 卡存活。旧实现让异常炸掉整个事务，
+     * 证据既未入账也未落卡。
+     */
+    @Test
+    fun 强证据入账失败回落建卡不丢证据() = runBlocking {
+        insertWechatAccount()
+        insertCard(id = "pending-p5-1", amount = 37001L, orderId = "JD-P5-1")
+
+        val matcher = CheckoutPaymentMatcher(
+            database,
+            createBillDelegate = { _, _ ->
+                throw com.jotbill.app.data.LedgerValidationException("模拟入账失败")
+            }
+        )
+        val outcome = matcher.recordOrphanPaymentSignal(
+            strongSignal(37001L, "JD-P5-1", "evt-p5-1"),
+            sourceType = "NOTIFICATION"
+        )
+
+        assertEquals("入账失败不得产生账单", 0, database.billDao().count())
+        assertEquals("被吸收卡必须恢复（证据存活）", 1, pendingCount())
+        assertEquals(
+            "回落后信号应归并进恢复的卡: $outcome",
+            OrphanOutcome.Kind.SUPPRESSED_DUPLICATE_WINDOW,
+            outcome.kind
+        )
+    }
 }

@@ -67,7 +67,7 @@ class CheckoutPaymentAmountToleranceTest {
         database = Room.inMemoryDatabaseBuilder(context, JotBillDatabase::class.java)
             .allowMainThreadQueries()
             .build()
-        matcher = CheckoutPaymentMatcher(database) { now }
+        matcher = CheckoutPaymentMatcher(database, nowMillis = { now })
         // 自动入账需要可解析的支付账户：缺失时 accountId 为 null，
         // autoCommitMatchedCandidate 会改道 ACCOUNT_UNAVAILABLE 待确认（与容差无关）。
         runBlocking {
