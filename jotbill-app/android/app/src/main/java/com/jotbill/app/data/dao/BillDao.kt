@@ -433,15 +433,66 @@ interface BillDao {
     /**
      * 阶段五 T2：原交易已入账退款合计（多次部分退款的累计口径）。
      * 统计 original_transaction_id 指向原账单且 type = 'refund' 的全部退款。
+     *
+     * @param excludeId 需要从合计中排除的退款账单 ID —— 编辑既有退款时传自身，
+     *   否则旧金额被计入会导致 [com.jotbill.app.data.RefundCapGuard] 误报超额；
+     *   新建场景传 null
      */
     @Query(
         """
         SELECT COALESCE(SUM(amount_minor), 0)
         FROM bills
         WHERE original_transaction_id = :originalBillId AND type = 'refund'
+          AND (:excludeId IS NULL OR id != :excludeId)
         """
     )
-    suspend fun sumRefundsByOriginalId(originalBillId: String): Long
+    suspend fun sumRefundsByOriginalId(originalBillId: String, excludeId: String? = null): Long
+
+    /**
+     * B1：同原单 + 同金额的已入账退款条数 —— 导入退款行的跨源查重判据之一。
+     * 退款去重不能靠 orderId（通知链路存的是原支付单号、导入行是退款单号），
+     * 只能走"原单关联 + 金额"口径。
+     */
+    @Query(
+        """
+        SELECT COUNT(*) FROM bills
+        WHERE original_transaction_id = :originalBillId
+          AND type = 'refund'
+          AND amount_minor = :amountMinor
+        """
+    )
+    suspend fun countRefundsByOriginalAndAmount(originalBillId: String, amountMinor: Long): Int
+
+    /**
+     * B4：逐账户的账单净增减合计（源账户侧）。
+     * 方向与 BalanceCalculator.delta 对齐：income/refund 为正，expense/fee/transfer/repayment
+     * 为负，adjustment 恒 0；transfer/repayment 的目标侧由 [sumTransferTargetDeltaByAccount] 补齐。
+     */
+    @Query(
+        """
+        SELECT account_id AS accountId,
+          SUM(CASE
+            WHEN type IN ('income', 'refund') THEN amount_minor
+            WHEN type IN ('expense', 'fee', 'transfer', 'repayment') THEN -amount_minor
+            ELSE 0
+          END) AS delta
+        FROM bills
+        WHERE account_id IS NOT NULL
+        GROUP BY account_id
+        """
+    )
+    suspend fun sumNetDeltaByAccount(): List<com.jotbill.app.data.model.AccountDeltaRow>
+
+    /** B4：transfer/repayment 目标账户侧的入账合计（目标恒 +amount，与 applyBalanceDelta 对齐）。 */
+    @Query(
+        """
+        SELECT target_account_id AS accountId, SUM(amount_minor) AS delta
+        FROM bills
+        WHERE type IN ('transfer', 'repayment') AND target_account_id IS NOT NULL
+        GROUP BY target_account_id
+        """
+    )
+    suspend fun sumTransferTargetDeltaByAccount(): List<com.jotbill.app.data.model.AccountDeltaRow>
 
     /**
      * 阶段五 T2：无订单号时的退款原交易组合候选。

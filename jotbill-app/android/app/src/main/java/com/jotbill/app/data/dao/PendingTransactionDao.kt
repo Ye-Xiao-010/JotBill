@@ -241,4 +241,20 @@ interface PendingTransactionDao {
         """
     )
     suspend fun deleteByIdIfVersion(id: String, expectedVersion: Int): Int
+
+    /**
+     * B1：同原单 + 同金额的退款待确认卡条数 —— 导入退款行的跨源查重判据之一。
+     * 通知链路的退款待确认（`pending-refund` 键族）经 original_bill_id 锚定原交易；
+     * 只匹配 status='pending'（已忽略/已删除的卡不构成重复）。
+     */
+    @Query(
+        """
+        SELECT COUNT(*) FROM pending_transactions
+        WHERE status = 'pending'
+          AND type = 'refund'
+          AND original_bill_id = :originalBillId
+          AND amount_minor = :amountMinor
+        """
+    )
+    suspend fun countPendingRefundsByOriginalAndAmount(originalBillId: String, amountMinor: Long): Int
 }

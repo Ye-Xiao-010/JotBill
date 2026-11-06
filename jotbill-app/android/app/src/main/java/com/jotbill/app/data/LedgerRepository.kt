@@ -256,6 +256,22 @@ class LedgerRepository(private val database: JotBillDatabase) {
                 current, updated, fieldUpdateSource
             )
             validateBillAccounts(protected, requireActiveAccounts = true)
+            // B2：编辑路径的退款累计上限（此前只有自动入账/确认路径有，编辑可绕过）。
+            // 覆盖两种场景：调大已有退款金额、把支出改为 refund 并关联原交易。
+            // excludeId = 自身 —— 事务内此刻 DB 仍是旧行，不剔除会把旧金额计入合计误报。
+            // 走向：抛 LedgerValidationException 整体回滚（桥接层映射 INVALID_ARGUMENT），
+            // 与确认路径同口径 —— 编辑是用户显式操作，即时拒绝比转待确认更直接，
+            // 且本路径没有"转待确认"的既有通道。
+            if (protected.type == "refund") {
+                RefundCapGuard(database)
+                    .evaluate(
+                        protected.amountMinor,
+                        protected.originalTransactionId,
+                        excludeId = protected.id
+                    )
+                    ?.takeIf { it.exceeded }
+                    ?.let { throw LedgerValidationException(RefundCapGuard.REFUND_EXCEEDED_MESSAGE) }
+            }
             val updatedRows = database.billDao().updateIfVersion(
                 id = protected.id,
                 expectedVersion = current.version,
@@ -397,19 +413,12 @@ class LedgerRepository(private val database: JotBillDatabase) {
             // 累计退款不得超过原交易金额（与 RefundLinker 自动入账路径同口径）：
             // 只在自动入账路径校验会漏掉确认路径——如两笔同原交易退款，首笔尚在
             // 待确认时第二笔已自动入账（sum=0），再确认首笔即累计 2×原金额。
+            // 判定逻辑已收拢到 RefundCapGuard（唯一出处，B1/B2/B3 共用）。
             if (isRefund) {
-                val originalId = effectiveBill.originalTransactionId
-                if (originalId != null) {
-                    val original = database.billDao().getById(originalId)
-                    val refundedBefore = original
-                        ?.let { database.billDao().sumRefundsByOriginalId(it.id) }
-                        ?: 0L
-                    if (original != null &&
-                        refundedBefore + effectiveBill.amountMinor > original.amountMinor
-                    ) {
-                        throw LedgerValidationException("Refund exceeds original transaction amount")
-                    }
-                }
+                RefundCapGuard(database)
+                    .evaluate(effectiveBill.amountMinor, effectiveBill.originalTransactionId)
+                    ?.takeIf { it.exceeded }
+                    ?.let { throw LedgerValidationException(RefundCapGuard.REFUND_EXCEEDED_MESSAGE) }
             }
             validateConfirmationBill(effectiveBill)
             // 与 createBillWithDedup 同口径：adjustment 不允许经确认路径落库。

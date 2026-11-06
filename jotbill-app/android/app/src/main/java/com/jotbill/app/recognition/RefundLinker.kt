@@ -9,6 +9,7 @@ import com.jotbill.app.pending.PendingChangeHub
 import com.jotbill.app.pending.PendingChangeInfo
 import com.jotbill.app.data.LedgerRepository
 import com.jotbill.app.data.PENDING_CONFIRM_AUDIT_TYPE
+import com.jotbill.app.data.RefundCapGuard
 import com.jotbill.app.data.entity.AuditEntryEntity
 import com.jotbill.app.data.entity.BillEntity
 import com.jotbill.app.data.entity.PendingTransactionEntity
@@ -157,12 +158,10 @@ internal class RefundLinker(
             emptyList()
         }
 
-        // ---- 累计退款校验（多次部分退款口径）----
-        val refundedBefore = original
-            ?.let { database.billDao().sumRefundsByOriginalId(it.id) }
-            ?: 0L
-        val exceeded = original != null &&
-            refundedBefore + input.amountMinor > original.amountMinor
+        // ---- 累计退款校验（多次部分退款口径；判定唯一出处 RefundCapGuard）----
+        val capState = original?.let { RefundCapGuard(database).evaluate(input.amountMinor, it.id) }
+        val refundedBefore = capState?.refundedBeforeMinor ?: 0L
+        val exceeded = capState?.exceeded == true
 
         // ---- 资金账户解析：规则指定 > 原交易账户（原路退回）> 支付包默认 ----
         val accountId = rulePatch.accountId

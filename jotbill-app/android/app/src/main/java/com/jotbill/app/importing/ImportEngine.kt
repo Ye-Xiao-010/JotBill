@@ -4,6 +4,7 @@ import android.content.Context
 import android.database.sqlite.SQLiteConstraintException
 import androidx.room.withTransaction
 import com.jotbill.app.data.JotBillDatabase
+import com.jotbill.app.data.RefundCapGuard
 import com.jotbill.app.data.entity.AccountEntity
 import com.jotbill.app.data.entity.AuditEntryEntity
 import com.jotbill.app.data.entity.BillEntity
@@ -107,11 +108,65 @@ internal class ImportEngine(
         val accountUnmatchedCount: Int
     )
 
-    private data class RowDecision(
+    /**
+     * 退款判重的批次内计数器（计数差值口径）。
+     *
+     * 为什么不是"每行独立查库 >0 即跳"：同一原单两笔**同额的真实分次退款**
+     * （两件同价商品分两次退）会被"有 ≥1 笔即 SKIPPED"吞掉第二笔 —— 吞单方向
+     * 违反"宁可误报可删、不误并真单"红线。计数差值口径：
+     * 对同一 (原单, 金额) 键，`baseline` = 本批次**首次遇到该键时**库里已有的
+     * 同原单同额退款条数（账单 + 待确认卡），`skipped` = 本批次已判重的行数；
+     * 第 1..baseline 行 SKIPPED，第 baseline+1 行起放行（作为真实新退款）。
+     *
+     * 批次内计数靠**单次运行一份实例**保证：inspect（buildPlan）与 execute
+     * （executeLoaded）各自 new 一份，跨 chunk 共享；基线在首遇时固化，避免
+     * "本批前面放行的行写库后抬高后续行的 existing 计数"导致错位。
+     * 同文件完全相同的退款行（同 transactionId）在 L3 已被跳过，到不了这里。
+     */
+    internal class RefundSkipCounter {
+        private class State(var baseline: Int, var skipped: Int)
+
+        private val states = HashMap<Pair<String, Long>, State>()
+
+        /**
+         * 判定本行是否应判重跳过（是则递增该键已跳过计数）。
+         * 首次遇到该键时落库查询固化 baseline；同键后续行只读内存状态。
+         */
+        internal suspend fun shouldSkip(
+            database: JotBillDatabase,
+            originalBillId: String,
+            amountMinor: Long
+        ): Boolean {
+            val key = originalBillId to amountMinor
+            val state = states.getOrPut(key) {
+                val existing =
+                    database.billDao().countRefundsByOriginalAndAmount(originalBillId, amountMinor) +
+                        database.pendingTransactionDao()
+                            .countPendingRefundsByOriginalAndAmount(originalBillId, amountMinor)
+                State(baseline = existing, skipped = 0)
+            }
+            return if (state.skipped < state.baseline) {
+                state.skipped += 1
+                true
+            } else {
+                false
+            }
+        }
+    }
+
+    /**
+     * 行级决策。internal（而非 private）：`checkRefundRowGuard` 作为 B1/B3 防线
+     * 的 internal 入口以本类型为返回值，测试（ImportRefundGuardTest）需直驱断言。
+     *
+     * @param skipReason SKIPPED 的细分原因；非空时 execute 路径写批次审计留痕
+     *   （行号/脱敏样本/判据），让"被跳过的行"可追溯。L3 同文件重复为 null（不留痕）。
+     */
+    internal data class RowDecision(
         val kind: String,
         val error: String? = null,
         val suspicious: Boolean = false,
         val accountUnmatched: Boolean = false,
+        val skipReason: String? = null,
         /**
          * P3 拍板③：MERGED 决策携带的合并目标账单 id —— 无商户订单号的强一致
          * 合并不能靠 orderId 重查目标，由 decide 选定后传给 [mergeImported]。
@@ -125,6 +180,9 @@ internal class ImportEngine(
             const val SKIPPED = "skipped"
             const val PENDING = "pending"
             const val FAILED = "failed"
+
+            /** skipReason：退款行被"原单+金额"计数差值判重跳过（B1，写审计留痕）。 */
+            const val SKIP_REASON_REFUND_DUPLICATE = "REFUND_DUPLICATE_COUNTED"
         }
     }
 
@@ -385,12 +443,14 @@ internal class ImportEngine(
         var suspiciousCount = 0
         var accountUnmatchedCount = 0
 
+        // B1：预览也是一次完整 decide 扫描，退款判重计数器随本次预览独立累计
+        val refundSkipCounter = RefundSkipCounter()
         for (row in loaded.parseResult.rows) {
             typeDistribution[row.type] = (typeDistribution[row.type] ?: 0) + 1
             if (startAt == null || row.occurredAt < startAt) startAt = row.occurredAt
             if (endAt == null || row.occurredAt > endAt) endAt = row.occurredAt
 
-            val decision = decide(row, loaded.adapter, accounts)
+            val decision = decide(row, loaded.adapter, accounts, refundSkipCounter)
             when (decision.kind) {
                 RowDecision.IMPORTED -> counts.imported += 1
                 RowDecision.MERGED -> counts.merged += 1
@@ -467,6 +527,8 @@ internal class ImportEngine(
     ): JSONObject {
         val accounts = database.accountDao().getAll().filter { it.isActive }
         val counts = PlannedCounts()
+        // B1：execute 全生命周期一份退款判重计数器，跨 chunk 共享（计数差值口径）
+        val refundSkipCounter = RefundSkipCounter()
         val errors = loaded.parseResult.errors
             .map { "第${it.lineNumber}行：${it.message}｜${it.sample}" }
             .toMutableList()
@@ -484,7 +546,7 @@ internal class ImportEngine(
                         throw ImportException("IMPORT_CANCELLED", "导入已取消，已写入部分已清理")
                     }
                     typeDistribution[row.type] = (typeDistribution[row.type] ?: 0) + 1
-                    val decision = decide(row, loaded.adapter, accounts)
+                    val decision = decide(row, loaded.adapter, accounts, refundSkipCounter)
                     when (decision.kind) {
                         RowDecision.IMPORTED -> {
                             writeImported(row, loaded.adapter, accounts, batchId)
@@ -498,7 +560,13 @@ internal class ImportEngine(
                             )
                             counts.merged += 1
                         }
-                        RowDecision.SKIPPED -> counts.skipped += 1
+                        RowDecision.SKIPPED -> {
+                            counts.skipped += 1
+                            // 建议 3：带 skipReason 的跳过（当前仅 B1 退款判重）写批次审计留痕
+                            decision.skipReason?.let { reason ->
+                                writeSkipAudit(row, batchId, reason)
+                            }
+                        }
                         RowDecision.PENDING -> {
                             writePending(row, batchId)
                             counts.pending += 1
@@ -589,7 +657,8 @@ internal class ImportEngine(
     private suspend fun decide(
         row: ParsedImportRow,
         adapter: BillImportAdapter,
-        accounts: List<AccountEntity>
+        accounts: List<AccountEntity>,
+        refundSkipCounter: RefundSkipCounter
     ): RowDecision {
         if (row.amountMinor <= 0L || row.amountMinor > MAX_SAFE_MINOR_UNIT) {
             return RowDecision(RowDecision.FAILED, "第${row.sourceLineNumber}行：金额超出可入账范围")
@@ -617,6 +686,9 @@ internal class ImportEngine(
                     return RowDecision(RowDecision.MERGED, mergeTargetId = strongTarget.id)
                 }
             }
+        } else {
+            // B1/B3：退款行的跨源查重（计数差值）与累计上限（判定逻辑唯一出处，详见方法注释）。
+            checkRefundRowGuard(row, refundSkipCounter)?.let { return it }
         }
         val accountsState = resolveImportAccounts(row, accounts)
         val similarHits = guard.findSimilar(
@@ -787,7 +859,10 @@ internal class ImportEngine(
         return contained.singleOrNull()
     }
 
-    private suspend fun writeImported(
+    /**
+     * 导入行写账（internal 供 `ImportRefundGuardTest` 直驱断言放行行的真实落库）。
+     */
+    internal suspend fun writeImported(
         row: ParsedImportRow,
         adapter: BillImportAdapter,
         accounts: List<AccountEntity>,
@@ -958,6 +1033,34 @@ internal class ImportEngine(
         }
     }
 
+    /**
+     * 跳过留痕（建议 3）：带 skipReason 的 SKIPPED 行写批次审计 —— 行号、金额、
+     * 类型、商户单号、脱敏样本均可追溯（参考 `import_pending` 审计先例）。
+     * 不新造页面；审计表可经诊断导出查看。internal 供 `ImportRefundGuardTest` 直驱。
+     */
+    internal suspend fun writeSkipAudit(row: ParsedImportRow, batchId: String, reason: String) {
+        database.auditEntryDao().insertIfAbsent(
+            AuditEntryEntity(
+                id = "import-skip:$batchId:${row.transactionId ?: "line-${row.sourceLineNumber}"}",
+                entityType = "import_skip",
+                entityId = row.transactionId ?: "line-${row.sourceLineNumber}",
+                action = "skip",
+                fieldName = null,
+                oldValue = null,
+                newValue = JSONObject()
+                    .put("reason", reason)
+                    .put("lineNumber", row.sourceLineNumber)
+                    .put("amountMinor", row.amountMinor)
+                    .put("type", row.type)
+                    .put("merchantOrderId", row.merchantOrderId ?: JSONObject.NULL)
+                    .put("sample", maskSample(row.merchant ?: ""))
+                    .toString(),
+                operator = batchId,
+                createdAt = System.currentTimeMillis()
+            )
+        )
+    }
+
     private suspend fun writePending(row: ParsedImportRow, batchId: String) {
         val now = System.currentTimeMillis()
         val pending = PendingTransactionEntity(
@@ -1017,6 +1120,55 @@ internal class ImportEngine(
         val orderId = row.merchantOrderId ?: return null
         val expenses = database.billDao().findExpensesByOrderId(orderId)
         return expenses.firstOrNull { it.amountMinor >= row.amountMinor } ?: expenses.firstOrNull()
+    }
+
+    /**
+     * B1/B3：导入退款行的跨源查重与累计上限判定（本方法是这两条防线的唯一出处）。
+     *
+     * 背景（B1）：去重 L1 对 refund 豁免、[findByOrderIdForImportMerge] 也豁免 refund
+     * —— 豁免是必要的（通知链路退款账单的 orderId 是**原支付单号**，导入退款行的
+     * 单号是**退款单号**，取消豁免会让退款账单去撞原支付单），但导致同一笔退款
+     * "通知链路已入账 + 导入再入账"双写，余额 +amount 两次。修复走**原单关联**：
+     * 经 [findRefundOriginal] 锚定原交易后，按"原单 + 金额"匹配既有退款账单
+     * （含通知链路入账的）与退款待确认卡。
+     *
+     * **计数差值判重**（复核修订，防吞真单）：同一原单两笔同额的真实分次退款
+     * （两件同价商品分两次退）会被"有 ≥1 笔即跳"吞掉第二笔。改用 [RefundSkipCounter]：
+     * 同 (原单, 金额) 键下，批次内第 1..baseline 行 SKIPPED，第 baseline+1 行起放行
+     * （baseline = 批前库里已有的同原单同额退款数）。
+     *
+     * 命中走向 SKIPPED 而非 MERGED：退款账单已存在且金额/原单一致，导入行没有
+     * 任何可补字段（refund 无商户/平台 enrich 价值），MERGED 只会无意义地重放
+     * 余额 -1/+1 并以 IMPORT 级改写字段 —— 纯风险无收益。用户在导入结果中看到
+     * skipped 计数 +1；SKIPPED 带 `skipReason=REFUND_DUPLICATE_COUNTED`，
+     * execute 路径据此写批次审计留痕（行号/脱敏样本/原单判据）。
+     *
+     * B3：未判重时校验累计上限（[RefundCapGuard]，与自动入账/确认/编辑路径同一
+     * 实现），超额转 PENDING（沿用"语义不安全转待确认"先例，不丢行、由用户核对），
+     * 不直接 FAILED —— FAILED 的行只进 errors 样本，没有任何入账入口。
+     *
+     * 无原单（[findRefundOriginal] 返回 null）时不拦截，维持既有"大额无原单退款
+     * 转待确认"阈值逻辑（decide 内 REFUND_PENDING_THRESHOLD_MINOR 分支）。
+     *
+     * internal 供 `ImportRefundGuardTest` 直驱。
+     */
+    internal suspend fun checkRefundRowGuard(
+        row: ParsedImportRow,
+        skipCounter: RefundSkipCounter
+    ): RowDecision? {
+        if (row.type != "refund") return null
+        val original = findRefundOriginal(row) ?: return null
+        if (skipCounter.shouldSkip(database, original.id, row.amountMinor)) {
+            return RowDecision(
+                RowDecision.SKIPPED,
+                skipReason = RowDecision.SKIP_REASON_REFUND_DUPLICATE
+            )
+        }
+        val cap = RefundCapGuard(database).evaluate(row.amountMinor, original.id)
+        if (cap?.exceeded == true) {
+            return RowDecision(RowDecision.PENDING)
+        }
+        return null
     }
 
     private fun buildImportedDescription(
