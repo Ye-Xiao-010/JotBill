@@ -14,6 +14,7 @@ import com.jotbill.app.data.entity.AuditEntryEntity
 import com.jotbill.app.data.entity.BillEntity
 import com.jotbill.app.data.entity.PendingTransactionEntity
 import com.jotbill.app.notification.PaymentEvidenceInput
+import com.jotbill.app.rules.DuplicateGuard
 import com.jotbill.app.rules.RuleEngine
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
@@ -48,7 +49,13 @@ private const val ACCOUNT_KIND_LIABILITY = "liability"
  */
 internal class TransferClassifier(
     private val database: JotBillDatabase,
-    private val nowMillis: () -> Long = { System.currentTimeMillis() }
+    private val nowMillis: () -> Long = { System.currentTimeMillis() },
+    /**
+     * 自动入账闸的测试缝：生产默认走 [isNotificationAutoCommitAllowed]（当前恒
+     * false，自动入账分支不可达）；单测注入 true 以驱动撞号回落路径（复核发现的
+     * 潜伏缺口：该分支未接 OrderConflictException，闸一旦放开异常会逃出事务）。
+     */
+    private val autoCommitAllowed: () -> Boolean = { isNotificationAutoCommitAllowed() }
 ) {
     private val ledger = LedgerRepository(database)
     private val ruleEngine = RuleEngine(database)
@@ -157,12 +164,15 @@ internal class TransferClassifier(
             // 还款目标必须是负债账户（欠款减少），否则语义不成立
             isRepayment && targetAccount.kind != ACCOUNT_KIND_LIABILITY -> "ACCOUNT_UNRESOLVED"
             // N-1：放在各分类器自己的冲突码**之后** —— 有更具体原因时优先展示具体原因。
-            !isNotificationAutoCommitAllowed() -> CONFLICT_AUTO_COMMIT_DEFERRED
+            !autoCommitAllowed() -> CONFLICT_AUTO_COMMIT_DEFERRED
             else -> null
         }
 
+        // 撞号回落标记（复核修复）：自动入账撞号时改为待确认原因，证据转建卡段。
+        var effectiveConflictReason = conflictReason
+
         // ---- 自动入账：双账户精确匹配且约束满足 ----
-        if (conflictReason == null) {
+        if (effectiveConflictReason == null) {
             val source = sourceAccount!!
             val target = targetAccount!!
             val bill = BillEntity(
@@ -191,12 +201,43 @@ internal class TransferClassifier(
             // 不动余额，只把新证据字段合并进既有账单。此前这里忽略返回值并一律上报
             // AutoCommitted(bill.id)，而 bill.id 是一个从未落库的 UUID ——
             // 上层会据此认为"已入账"并把该 ID 当作退款/转账的关联目标。
-            val outcome = ledger.createBillWithDedup(bill, operator = TRANSFER_AUTO_COMMIT_OPERATOR)
-            val settledBillId = when (outcome) {
-                is CreateBillOutcome.Committed -> outcome.bill.id
-                is CreateBillOutcome.MergedInto -> outcome.bill.id
+            //
+            // 复核修复（M1 潜伏缺口，2026-11-06 探针实证）：撞号处理**不得**靠
+            // catch OrderConflictException —— LedgerRepository.createBillWithDedup
+            // 自身在 Room withTransaction 内抛错，嵌套事务内层异常会让**外层事务
+            // 整体回滚**（回落建卡行随之消失）。改为**预检**：与 L1 同口径先查
+            // checkLevel1Consistent，撞号（Conflict）直接转建卡段，不产生异常；
+            // Consistent 仍由 createBillWithDedup 走原合并语义（MergedInto）。
+            val level1 = DuplicateGuard(database).checkLevel1Consistent(
+                orderId = input.orderId,
+                type = billType,
+                amountMinor = input.amountMinor,
+                excludeId = billId
+            )
+            if (level1 is DuplicateGuard.Level1Check.Conflict) {
+                JotBillLog.w(
+                    "TransferClassifier",
+                    "转账/还款撞号(单号同但金额/类型不同)，回落建卡: " +
+                        "orderId=${input.orderId?.take(12)}, existing=${level1.bill.id.take(8)}"
+                )
+                effectiveConflictReason = DuplicateGuard.CONFLICT_DEDUP_CHECK_FAILED
+            } else {
+            val outcome = try {
+                ledger.createBillWithDedup(bill, operator = TRANSFER_AUTO_COMMIT_OPERATOR)
+            } catch (error: com.jotbill.app.data.OrderConflictException) {
+                // 预检后理论上不再到达（同事务内无并发写）；保留作兜底防御：
+                // 真到此处说明预检与落库之间有并发变更，转建卡段保证据。
+                effectiveConflictReason = DuplicateGuard.CONFLICT_DEDUP_CHECK_FAILED
+                null
             }
-            return@withTransaction TransferOutcome.AutoCommitted(settledBillId, billType)
+            if (outcome != null) {
+                val settledBillId = when (outcome) {
+                    is CreateBillOutcome.Committed -> outcome.bill.id
+                    is CreateBillOutcome.MergedInto -> outcome.bill.id
+                }
+                return@withTransaction TransferOutcome.AutoCommitted(settledBillId, billType)
+            }
+            }
         }
 
         // ---- 待确认：类型按语义预填 ----
@@ -220,7 +261,7 @@ internal class TransferClassifier(
             // 源账户可用时预填，用户确认时可直接选用
             accountId = sourceAccount?.id ?: rulePatch.accountId,
             categoryId = null,
-            conflictReason = conflictReason,
+            conflictReason = effectiveConflictReason,
             sourceType = "notification",
             appliedRules = ruleEngine.mergeAppliedRules(
                 JSONObject().apply {
@@ -250,7 +291,10 @@ internal class TransferClassifier(
                 )
             )
         }
-        TransferOutcome.PendingCreated(pending.id, conflictReason, pendingType)
+        // effectiveConflictReason 此处必非 null：要么判定阶段就非空（各类未解析），
+        // 要么撞号回落已写入 DEDUP_CHECK_FAILED；为 null 的唯一路径是自动入账分支，
+        // 其成功时已 return。故可安全断言非空（不变式，非覆盖式强转）。
+        TransferOutcome.PendingCreated(pending.id, effectiveConflictReason!!, pendingType)
     }
 
     /** 账户存在且启用时返回实体，否则 null。 */

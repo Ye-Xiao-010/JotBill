@@ -237,7 +237,16 @@ class DataModule(
         // UUID）返回给 JS 并广播 onBillCreated，前端跳详情页会得到 NOT_FOUND，
         // 而余额分毫未动、UI 却显示"保存成功"。addBill 的 id 是随机 UUID、
         // 无幂等键，用户重试就会真的产生重复账单。
-        val outcome = repository.createBillWithDedup(bill)
+        val outcome = try {
+            repository.createBillWithDedup(bill)
+        } catch (error: com.jotbill.app.data.OrderConflictException) {
+            // M1：同单号撞号 —— 明确错误码返回 RN，新账单不落库、不动余额，
+            // 用户看到冲突提示而不是"保存成功"的假象。
+            throw BridgeException(
+                "ORDER_CONFLICT",
+                "订单号与既有账单（金额或类型）冲突，请到账单列表核对: ${bill.orderId}"
+            )
+        }
         val settledBill = when (outcome) {
             is CreateBillOutcome.Committed -> outcome.bill
             is CreateBillOutcome.MergedInto -> outcome.bill

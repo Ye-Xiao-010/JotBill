@@ -92,7 +92,7 @@ interface BillDao {
     @Query(
         """
         SELECT * FROM bills
-        WHERE order_id = :orderId
+        WHERE UPPER(TRIM(order_id)) = UPPER(TRIM(:orderId))
           AND source_type != 'manual'
           AND (:excludeId IS NULL OR id != :excludeId)
         LIMIT 1
@@ -136,7 +136,7 @@ interface BillDao {
     @Query(
         """
         SELECT * FROM bills
-        WHERE order_id = :orderId
+        WHERE UPPER(TRIM(order_id)) = UPPER(TRIM(:orderId))
           AND type != 'refund'
           AND original_transaction_id IS NULL
         ORDER BY occurred_at DESC, id DESC
@@ -406,7 +406,7 @@ interface BillDao {
     @Query(
         """
         SELECT * FROM bills
-        WHERE order_id = :orderId AND type = 'expense'
+        WHERE UPPER(TRIM(order_id)) = UPPER(TRIM(:orderId)) AND type = 'expense'
         ORDER BY occurred_at DESC
         LIMIT 1
         """
@@ -416,11 +416,15 @@ interface BillDao {
     /**
      * 阶段五 T2：按订单号查全部支出账单。
      * 退款原交易关联需要感知多笔命中（同订单号多笔支出时不自动关联，转待确认由用户选择）。
+     *
+     * M5 归一：与 [findByOrderIdForAutoMerge] 同款 `UPPER(TRIM())` 双侧归一 ——
+     * 存量小写/带空白单号的账单对归一后的退款号（OrderIdNormalizer 大写半角）
+     * 不再 miss（复核发现的退款原单关联漏配缺口）。
      */
     @Query(
         """
         SELECT * FROM bills
-        WHERE order_id = :orderId AND type = 'expense'
+        WHERE UPPER(TRIM(order_id)) = UPPER(TRIM(:orderId)) AND type = 'expense'
         ORDER BY occurred_at DESC
         """
     )

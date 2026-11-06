@@ -125,7 +125,14 @@ internal class PendingConfirmService(private val database: JotBillDatabase) {
         )
         // 事务内乐观锁确认：版本不一致返回 false，Bill 不写入、余额不更新。
         // 阶段五 T6：确认前执行去重（第 1 级命中合并进既有账单，不产生第二笔）。
-        val confirmResult = LedgerRepository(database).confirmPendingTransaction(pending, bill)
+        // M1：同单号撞号（金额/类型不一致）→ 事务回滚、卡保留，明确告知用户冲突。
+        val confirmResult = try {
+            LedgerRepository(database).confirmPendingTransaction(pending, bill)
+        } catch (error: com.jotbill.app.data.OrderConflictException) {
+            return Outcome.Invalid(
+                "订单号与既有账单（金额或类型）冲突，请到账单列表核对后再处理"
+            )
+        }
         if (!confirmResult.success) {
             return Outcome.AlreadyHandled
         }

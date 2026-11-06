@@ -145,7 +145,7 @@ interface PendingTransactionDao {
         SELECT * FROM pending_transactions
         WHERE status = 'pending'
           AND type = 'expense'
-          AND order_id = :orderId
+          AND UPPER(TRIM(order_id)) = UPPER(TRIM(:orderId))
           AND occurred_at BETWEEN :windowStart AND :windowEnd
         ORDER BY created_at DESC
         LIMIT 1

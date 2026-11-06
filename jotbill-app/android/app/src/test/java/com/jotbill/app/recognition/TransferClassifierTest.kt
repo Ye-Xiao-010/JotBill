@@ -9,6 +9,8 @@ import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -104,4 +106,73 @@ class TransferClassifierTest {
         assertEquals("ACCOUNT_UNRESOLVED", created?.conflictReason)
         assertEquals("repayment", created?.pendingType)
     }
+
+    /**
+     * 复核修复钉：自动入账撞号（同 orderId 不同金额）⇒ 回落建卡带
+     * DEDUP_CHECK_FAILED，异常不逃出事务、证据不丢。
+     * 触达方式：该分支生产上因 `isNotificationAutoCommitAllowed() = false`
+     * 不可达，用构造参数测试缝 [TransferClassifier.autoCommitAllowed] 注入
+     * true 把自动入账分支跑起来（与 CheckoutPaymentMatcher.createBillDelegate
+     * 同款注入风格，生产行为零变化）。
+     */
+    @Test
+    fun 自动入账撞号回落建卡不丢证据() = runBlocking {
+        // 自动入账可达性准备：源=微信零钱（包名映射）、目标=招行储蓄（提示唯一命中）
+        database.accountDao().insert(account("default-account-wechat", "微信零钱"))
+        database.accountDao().insert(account("acc-target", "招行储蓄"))
+        // 预置撞号账单：同 orderId、金额 3000（新证据 2000）⇒ M1 撞号
+        database.billDao().insert(conflictBill(orderId = "TX-1", amount = 3000L))
+
+        val outcome = TransferClassifier(database, autoCommitAllowed = { true })
+            .processTransfer(
+                input(status = "TRANSFER", key = "m1fix-1", targetHint = "招行储蓄")
+                    .copy(orderId = "TX-1")
+            )
+
+        assertTrue(
+            "撞号必须回落建卡（不得抛异常逃出事务）: $outcome",
+            outcome is TransferClassifier.TransferOutcome.PendingCreated
+        )
+        assertEquals(
+            com.jotbill.app.rules.DuplicateGuard.CONFLICT_DEDUP_CHECK_FAILED,
+            (outcome as TransferClassifier.TransferOutcome.PendingCreated).conflictReason
+        )
+        assertEquals("撞号后新账单不得落库", 1, database.billDao().count())
+        val stored = database.pendingTransactionDao().getById(
+            (outcome as TransferClassifier.TransferOutcome.PendingCreated).pendingId
+        )
+        assertNotNull("回落的待确认行必须存在: stored=$stored", stored)
+        val probeRows = database.pendingTransactionDao().getPage(10, 0)
+        assertEquals("证据必须以待确认卡存活: rows=$probeRows", 1, probeRows.size)
+    }
+
+    /** 构造启用账户（供包名映射与目标账户匹配）。 */
+    private fun account(id: String, name: String) = com.jotbill.app.data.entity.AccountEntity(
+        id = id, name = name, subtype = "cash", kind = "asset",
+        initialBalanceMinor = 0L, currentBalanceMinor = 0L, currency = "CNY",
+        icon = null, color = null, sortOrder = 0, isActive = true,
+        createdAt = 1L, updatedAt = 1L
+    )
+
+    /** 构造预置撞号账单（同 orderId、金额与新证据不同）。 */
+    private fun conflictBill(orderId: String, amount: Long) =
+        com.jotbill.app.data.entity.BillEntity(
+            id = "conflict-bill-1",
+            amountMinor = amount,
+            type = "transfer",
+            occurredAt = BASE,
+            description = "既有转账",
+            categoryId = null,
+            accountId = "default-account-wechat",
+            targetAccountId = "acc-target",
+            platform = null,
+            merchant = null,
+            productDescription = null,
+            sourceType = "notification",
+            originalTransactionId = null,
+            orderId = orderId,
+            createdAt = BASE,
+            updatedAt = BASE,
+            version = 1
+        )
 }

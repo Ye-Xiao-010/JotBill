@@ -1,5 +1,6 @@
 package com.jotbill.app.importing
 
+import com.jotbill.app.rules.OrderIdNormalizer
 import java.io.File
 import java.math.BigDecimal
 import java.time.LocalDateTime
@@ -170,7 +171,8 @@ internal object WechatBillAdapter : BillImportAdapter {
             productDescription = valueAt(values, columns.product),
             paymentMethod = valueAt(values, columns.paymentMethod),
             transactionId = transactionId,
-            merchantOrderId = valueAt(values, columns.merchantOrderId),
+            // M5：商户单号提取点格式归一（与通知/结果页同一套 OrderIdNormalizer）
+            merchantOrderId = OrderIdNormalizer.normalize(valueAt(values, columns.merchantOrderId)),
             remark = remark,
             rawStatus = rawStatus,
             sourceLineNumber = lineNumber

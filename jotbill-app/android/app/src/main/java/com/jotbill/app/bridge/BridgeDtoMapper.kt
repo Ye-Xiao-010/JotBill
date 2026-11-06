@@ -5,6 +5,7 @@ import com.jotbill.app.data.entity.BalanceCalibrationEntity
 import com.jotbill.app.data.entity.BillEntity
 import com.jotbill.app.data.entity.BudgetEntity
 import com.jotbill.app.data.entity.CategoryEntity
+import com.jotbill.app.rules.OrderIdNormalizer
 import com.jotbill.app.data.entity.CheckoutSessionEntity
 import com.jotbill.app.data.entity.FinancialGoalEntity
 import com.jotbill.app.data.entity.PaymentEvidenceEntity
@@ -254,7 +255,8 @@ internal object BridgeDtoMapper {
             productDescription = json.optionalString("productDescription"),
             sourceType = sourceType,
             originalTransactionId = json.optionalString("originalTransactionId"),
-            orderId = json.optionalString("orderId"),
+            // M5：手动/桥接录入的订单号同样格式归一，与采集链路同一套键
+            orderId = OrderIdNormalizer.normalize(json.optionalString("orderId")),
             createdAt = now,
             updatedAt = now,
             version = 1

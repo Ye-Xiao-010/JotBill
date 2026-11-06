@@ -54,6 +54,18 @@ internal class LedgerValidationException(
     cause: Throwable? = null
 ) : IllegalArgumentException(message, cause)
 
+/**
+ * M1：同 orderId 撞号异常 —— 既有账单与待入账证据金额/类型不一致时抛出，
+ * 替代旧的静默合并（吞新金额/改旧语义）。调用方必须捕获并转待确认或向用户
+ * 报错，新证据不得随事务回滚静默丢失。
+ *
+ * @param existingBillId 撞号的既有账单 ID（供冲突标记与审计追溯）
+ */
+internal class OrderConflictException(
+    message: String,
+    val existingBillId: String
+) : IllegalStateException(message)
+
 private val TERMINAL_SESSION_STATUSES = setOf("COMPLETED", "CANCELLED", "FAILED", "EXPIRED")
 
 /**
@@ -115,14 +127,24 @@ class LedgerRepository(private val database: JotBillDatabase) {
             // update / delete 路径已有 requireMutableBill，本路径此前是缺口 ——
             // 漏了它就等于"能创建、不能改、不能删"的幽灵账单。口径统一在此。
             requireMutableBill(bill)
-            // ---- 去重第 1 级：orderId 精确查重（跨来源互认，退款豁免）----
-            val duplicate = DuplicateGuard(database).checkLevel1(
+            // ---- 去重第 1 级：orderId 精确查重 + 金额/类型一致性（M1）----
+            // 一致才合并；撞号（同单号不同金额/类型）抛 [OrderConflictException]，
+            // 由调用方转待确认或向用户报错 —— 新证据绝不被静默吞进旧账单。
+            val level1 = DuplicateGuard(database).checkLevel1Consistent(
                 orderId = bill.orderId,
                 type = bill.type,
+                amountMinor = bill.amountMinor,
                 excludeId = bill.id
             )
-            if (duplicate != null) {
-                return@withTransaction mergeIntoExistingBill(duplicate, bill, now)
+            when (level1) {
+                is DuplicateGuard.Level1Check.Conflict -> throw OrderConflictException(
+                    message = "订单 ${bill.orderId} 已存在金额/类型不同的账单 " +
+                        "(existing=${level1.bill.id}, mismatches=${level1.mismatches})",
+                    existingBillId = level1.bill.id
+                )
+                is DuplicateGuard.Level1Check.Consistent ->
+                    return@withTransaction mergeIntoExistingBill(level1.bill, bill, now)
+                DuplicateGuard.Level1Check.Clear -> Unit
             }
 
             validateBillAccounts(bill, requireActiveAccounts = true)
@@ -405,24 +427,32 @@ class LedgerRepository(private val database: JotBillDatabase) {
                 throw LedgerValidationException("Checkout session has already been committed")
             }
 
-            // ---- 去重第 1 级：确认入账前查重（orderId 跨来源互认，退款豁免）----
+            // ---- 去重第 1 级：确认入账前查重（orderId 跨来源互认 + M1 一致性，退款豁免）----
             val guard = DuplicateGuard(database)
-            val duplicate = guard.checkLevel1(
+            val level1 = guard.checkLevel1Consistent(
                 orderId = effectiveBill.orderId,
                 type = effectiveBill.type,
+                amountMinor = effectiveBill.amountMinor,
                 excludeId = effectiveBill.id
             )
-            val outcome: CreateBillOutcome = if (duplicate != null) {
-                mergeIntoExistingBill(duplicate, effectiveBill, now)
-            } else {
-                database.billDao().insert(effectiveBill)
-                applyBalanceDelta(
-                    effectiveBill,
-                    multiplier = 1L,
-                    updatedAt = now,
-                    requireActiveAccounts = true
+            val outcome: CreateBillOutcome = when (level1) {
+                is DuplicateGuard.Level1Check.Conflict -> throw OrderConflictException(
+                    message = "订单 ${effectiveBill.orderId} 已存在金额/类型不同的账单 " +
+                        "(existing=${level1.bill.id}, mismatches=${level1.mismatches})",
+                    existingBillId = level1.bill.id
                 )
-                CreateBillOutcome.Committed(effectiveBill)
+                is DuplicateGuard.Level1Check.Consistent ->
+                    mergeIntoExistingBill(level1.bill, effectiveBill, now)
+                DuplicateGuard.Level1Check.Clear -> {
+                    database.billDao().insert(effectiveBill)
+                    applyBalanceDelta(
+                        effectiveBill,
+                        multiplier = 1L,
+                        updatedAt = now,
+                        requireActiveAccounts = true
+                    )
+                    CreateBillOutcome.Committed(effectiveBill)
+                }
             }
             // 落库账单（新建或合并目标）作为候选收口/审计的关联对象
             val settledBill = when (outcome) {

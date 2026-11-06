@@ -1,5 +1,6 @@
 package com.jotbill.app.importing
 
+import com.jotbill.app.rules.OrderIdNormalizer
 import java.io.File
 import java.math.BigDecimal
 import java.time.LocalDateTime
@@ -180,7 +181,8 @@ internal object AlipayBillAdapter : BillImportAdapter {
             productDescription = product,
             paymentMethod = "支付宝",
             transactionId = transactionId,
-            merchantOrderId = valueAt(values, columns.merchantOrderNo),
+            // M5：商户单号提取点格式归一（与通知/结果页同一套 OrderIdNormalizer）
+            merchantOrderId = OrderIdNormalizer.normalize(valueAt(values, columns.merchantOrderNo)),
             remark = remark,
             rawStatus = status,
             sourceLineNumber = lineNumber

@@ -8,6 +8,7 @@ import com.jotbill.app.data.entity.BillEntity
 import com.jotbill.app.recognition.CheckoutPaymentMatcher
 import com.jotbill.app.recognition.PaymentNotificationFallbackSignal
 import com.jotbill.app.rules.DuplicateGuard
+import com.jotbill.app.rules.OrderIdNormalizer
 import com.jotbill.app.rules.RuleEngine
 import com.jotbill.app.utils.JotBillLog
 import java.time.Instant
@@ -93,7 +94,7 @@ class AutoBookkeeper(
             ?.trim()
             ?.takeIf { it.isNotEmpty() }
             ?.take(MAX_TEXT_LENGTH)
-        val orderId = record.fields["orderNo"]?.trim()?.takeIf { it.isNotEmpty() }
+        val orderId = OrderIdNormalizer.normalize(record.fields["orderNo"])
             ?.take(MAX_TEXT_LENGTH)
         val occurredAt = parseBusinessTimeMillis(
             record.fields["businessTime"],
@@ -322,6 +323,16 @@ class AutoBookkeeper(
         } catch (error: Exception) {
             // 协程取消（服务销毁等）静默退出，不做兜底（兜底也必然再被取消）
             if (error is kotlinx.coroutines.CancellationException) throw error
+            if (error is com.jotbill.app.data.OrderConflictException) {
+                // M1：同单号撞号（金额/类型不一致）—— 新证据转待确认并带可识别
+                // 冲突标记，绝不被静默吞进旧账单。
+                JotBillLog.w(TAG, "同单号撞号，转待确认: orderId=$orderId", error)
+                fallbackToPending(
+                    record, amountMinor, merchant, orderId, occurredAt,
+                    DuplicateGuard.CONFLICT_DEDUP_CHECK_FAILED
+                )
+                return
+            }
             JotBillLog.w(TAG, "自动入账失败，转待确认", error)
             fallbackToPending(record, amountMinor, merchant, orderId, occurredAt, "AUTO_BOOK_FAILED")
         }

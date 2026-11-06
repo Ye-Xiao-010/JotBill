@@ -15,6 +15,7 @@ import com.jotbill.app.data.entity.PendingTransactionEntity
 import com.jotbill.app.data.entity.TransactionCandidateEntity
 import com.jotbill.app.data.entity.PaymentEvidenceEntity
 import com.jotbill.app.rules.DuplicateGuard
+import com.jotbill.app.rules.OrderIdNormalizer
 import com.jotbill.app.rules.RuleEngine
 import com.jotbill.app.utils.JotBillLog
 import com.jotbill.app.utils.PaymentTiming
@@ -677,6 +678,9 @@ internal class CheckoutPaymentMatcher(
         conflictReason: String = "NO_ACTIVE_SESSION",
         sessionIds: List<String> = emptyList()
     ): OrphanOutcome {
+        // M5：订单号在归并入口处统一格式归一（trim/全角转半角/大写），
+        // 各采集腿写法差异（大小写/全半角）不再导致跨源漏并。
+        val signal = signal.copy(orderId = OrderIdNormalizer.normalize(signal.orderId))
         var outcome: OrphanOutcome = OrphanOutcome(OrphanOutcome.Kind.SIGNAL_INVALID)
         val now = nowMillis()
         database.withTransaction {
@@ -1078,24 +1082,49 @@ internal class CheckoutPaymentMatcher(
                     updatedAt = now,
                     version = 1
                 )
-                val commit = try {
-                    createBillDelegate(bill, NOTIFICATION_AUTO_COMMIT_OPERATOR)
-                } catch (error: Exception) {
-                    // 协程取消不是落库失败：不得在已取消的作用域里再做回落写库
-                    if (error is kotlinx.coroutines.CancellationException) throw error
-                    // ---- P5：入账失败不得静默丢证据 ----
-                    // 上游 normalizer 不做金额安全上限校验，异常金额由
-                    // validateSafeAmount 在此拦截；旧实现让异常直接炸掉整个事务 —
-                    // 证据既未入账也未落卡，静默丢失。恢复已吸收的卡后**回落到下方
-                    // 建卡段**：证据以普通待确认卡存活，由用户核对处理。
+                // ---- M1 撞号预检（2026-11-06 探针实证）----
+                // LedgerRepository.createBillWithDedup 自身在 Room withTransaction 内
+                // 抛 OrderConflictException；嵌套事务内层异常会让**外层事务整体回滚**
+                // —— 靠 catch 回落建卡是假象（恢复写库随外层回滚一起消失）。改为与
+                // L1 同口径**预检**：撞号（Conflict）直接恢复+标记+转建卡段，不产生异常。
+                val level1 = DuplicateGuard(database).checkLevel1Consistent(
+                    orderId = signal.orderId,
+                    type = "expense",
+                    amountMinor = signal.amountMinor,
+                    excludeId = bill.id
+                )
+                val commit = if (level1 is DuplicateGuard.Level1Check.Conflict) {
                     JotBillLog.w(
                         "CheckoutPaymentMatcher",
-                        "强证据入账失败，回落建待确认卡: orderId=${signal.orderId?.take(12)}, " +
-                            "amount=${signal.amountMinor}, restoredCards=${absorbedCards.size}",
-                        error
+                        "强证据撞号(单号同但金额/类型不同)，回落建卡: " +
+                            "orderId=${signal.orderId?.take(12)}, existing=${level1.bill.id.take(8)}"
                     )
                     absorbedCards.forEach { dao.insertIfAbsent(it) }
+                    effectiveConflictReason = mergeOrphanConflictReason(
+                        effectiveConflictReason,
+                        DuplicateGuard.CONFLICT_DEDUP_CHECK_FAILED
+                    )
                     null
+                } else {
+                    try {
+                        createBillDelegate(bill, NOTIFICATION_AUTO_COMMIT_OPERATOR)
+                    } catch (error: Exception) {
+                        // 协程取消不是落库失败：不得在已取消的作用域里再做回落写库
+                        if (error is kotlinx.coroutines.CancellationException) throw error
+                        // ---- P5：入账失败不得静默丢证据 ----
+                        // 上游 normalizer 不做金额安全上限校验，异常金额由
+                        // validateSafeAmount 在此拦截；旧实现让异常直接炸掉整个事务 —
+                        // 证据既未入账也未落卡，静默丢失。恢复已吸收的卡后**回落到下方
+                        // 建卡段**：证据以普通待确认卡存活，由用户核对处理。
+                        JotBillLog.w(
+                            "CheckoutPaymentMatcher",
+                            "强证据入账失败，回落建待确认卡: orderId=${signal.orderId?.take(12)}, " +
+                                "amount=${signal.amountMinor}, restoredCards=${absorbedCards.size}",
+                            error
+                        )
+                        absorbedCards.forEach { dao.insertIfAbsent(it) }
+                        null
+                    }
                 }
                 if (commit != null) {
                 val settledBillId = when (commit) {
@@ -2175,6 +2204,31 @@ internal class CheckoutPaymentMatcher(
         // 写 Bill + 按类型联动余额 + 审计日志；嵌套 withTransaction 合并到外层事务；
         // 阶段五 T6：内部执行第 1 级查重——(sourceType, orderId) 命中时合并进
         // 既有账单（不产生第二笔），settledBillId 为实际落库账单
+        // M1：撞号（同单号不同金额/类型）不静默合并，转冲突待确认由用户核对。
+        // M1-补（2026-11-06 探针实证）：嵌套事务内层异常会让外层整体回滚，
+        // 撞号改为**预检**（checkLevel1Consistent）而非 catch OrderConflictException。
+        val level1 = DuplicateGuard(database).checkLevel1Consistent(
+            orderId = bill.orderId,
+            type = bill.type,
+            amountMinor = bill.amountMinor,
+            excludeId = bill.id
+        )
+        if (level1 is DuplicateGuard.Level1Check.Conflict) {
+            val fallbackPending = pendingFromConflict(
+                session = session,
+                candidate = candidate,
+                evidence = evidence,
+                conflictReason = DuplicateGuard.CONFLICT_DEDUP_CHECK_FAILED,
+                now = now
+            )
+            if (fallbackPending != null) {
+                upsertPendingForSession(fallbackPending)
+            }
+            return AutoCommitOutcome(
+                advanceStatus(session, NEEDS_CONFIRMATION_STATUS, now),
+                null
+            )
+        }
         val createOutcome = ledger.createBillWithDedup(bill, operator = AUTO_COMMIT_OPERATOR)
         val settledBillId = when (createOutcome) {
             is CreateBillOutcome.Committed -> createOutcome.bill.id

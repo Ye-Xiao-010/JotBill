@@ -1,5 +1,6 @@
 package com.jotbill.app.recognition
 
+import com.jotbill.app.rules.OrderIdNormalizer
 import com.jotbill.app.utils.PaymentTiming
 import java.math.BigDecimal
 import java.security.MessageDigest
@@ -212,7 +213,8 @@ internal object PaymentResultParser {
             ?: return PaymentResultParseResult.Failure(PaymentResultFailureReason.INVALID_AMOUNT)
 
         // 提取订单号和商户；结构化字段仍供核心匹配器使用，原文哈希不会包含其数字值。
-        val orderId = extractField(pageText, ORDER_ID_PATTERNS)
+        // M5：订单号在提取点格式归一（trim/全角转半角/大写），跨源归并不被写法差异漏并。
+        val orderId = OrderIdNormalizer.normalize(extractField(pageText, ORDER_ID_PATTERNS))
         val merchant = extractField(pageText, MERCHANT_PATTERNS)
 
         // 个人转账语义优先于消费证据：微信/支付宝向好友转账的成功页

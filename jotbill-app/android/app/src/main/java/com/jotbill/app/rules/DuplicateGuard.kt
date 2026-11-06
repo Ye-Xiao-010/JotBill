@@ -34,29 +34,61 @@ internal class DuplicateGuard(
     )
 
     /**
-     * 第 1 级：按 **orderId** 精确查重（跨来源互认）。
+     * L1 一致性校验结果（M1）：同单号命中后**必须**先过金额/类型一致性，
+     * 不再仅凭 orderId 静默合并。
      *
-     * 同一笔被页面规则 / 通知监听 / 账单导入任一通道先入账后，其余通道都归并到同一条 ——
-     * 订单号是「同一笔交易」的唯一客观键，与它是被哪个通道看到的无关。
-     * 历史实现按 `(sourceType, orderId)` 查，跨通道同笔无法归并；而 [BillDao.findByOrderIdForImportMerge]
-     * 一直只看 orderId，同仓两种口径。现统一为后者。
-     *
-     * **例外：`manual` 来源不参与互认**（由 DAO 层排除）—— 用户手写的账可能带刻意调整，
-     * 不得被自动链路擅自吸收。
-     *
-     * @param orderId 来源订单号；空值视为无订单号，直接未命中
-     * @param type 交易类型；refund 豁免（多次部分退款不按订单号合并）
-     * @param excludeId 排除的账单 ID（更新场景排除自身）
-     * @return 命中的既有账单；未命中返回 null
+     * orderId 是「同一笔交易」跨来源互认的唯一客观键（页面规则/通知监听/账单
+     * 导入任一通道先入账后，其余通道归并到同一条）；**例外：`manual` 来源不
+     * 参与互认**（由 DAO 层排除）—— 用户手写的账可能带刻意调整，不得被自动
+     * 链路擅自吸收。
      */
-    suspend fun checkLevel1(
+    sealed interface Level1Check {
+        /** 无同单号账单（或无单号/退款豁免），可直接入账。 */
+        data object Clear : Level1Check
+
+        /** 同单号且金额与类型一致：客观同一笔，可安全合并（只补空、不动金额）。 */
+        data class Consistent(val bill: BillEntity) : Level1Check
+
+        /**
+         * 同单号但金额或类型不一致：订单号撞号（改价重付/单号复用/类型相异），
+         * 客观上**不是**同一笔，禁止静默合并 —— 调用方必须转待确认保留新证据。
+         */
+        data class Conflict(val bill: BillEntity, val mismatches: List<String>) : Level1Check
+    }
+
+    /**
+     * 去重第 1 级（M1 口径）：orderId 精确查重 + 金额/类型一致性校验。
+     *
+     * 一致性只校验**金额精确相等**与**类型相同**，不校验时间 —— 订单号已客观
+     * 证明同一笔，而跨源时间字段（页面时间/通知送达时间/导入文件时间）合法
+     * 存在差异，拦时间会误伤 N-2 吸收与导入合流的既有设计。
+     * 金额/类型不一致则撞号（改价重付、单号复用、支出误撞退款），绝不合账。
+     *
+     * @param orderId 来源订单号（内部经 [OrderIdNormalizer] 归一）；空值直接 Clear
+     * @param type 交易类型；refund 豁免（多次部分退款不按订单号合并）
+     * @param amountMinor 新证据金额（分），用于与既有账单精确比对
+     * @param excludeId 排除的账单 ID（更新场景排除自身）
+     */
+    suspend fun checkLevel1Consistent(
         orderId: String?,
         type: String,
+        amountMinor: Long,
         excludeId: String? = null
-    ): BillEntity? {
-        if (orderId.isNullOrBlank()) return null
-        if (type == "refund") return null
-        return database.billDao().findByOrderIdForAutoMerge(orderId, excludeId)
+    ): Level1Check {
+        if (orderId.isNullOrBlank()) return Level1Check.Clear
+        if (type == "refund") return Level1Check.Clear
+        val normalized = OrderIdNormalizer.normalize(orderId) ?: return Level1Check.Clear
+        val existing = database.billDao().findByOrderIdForAutoMerge(normalized, excludeId)
+            ?: return Level1Check.Clear
+        val mismatches = buildList {
+            if (existing.amountMinor != amountMinor) add("amount")
+            if (existing.type != type) add("type")
+        }
+        return if (mismatches.isEmpty()) {
+            Level1Check.Consistent(existing)
+        } else {
+            Level1Check.Conflict(existing, mismatches)
+        }
     }
 
     /**

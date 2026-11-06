@@ -1,6 +1,7 @@
 package com.jotbill.app.notification
 
 import com.jotbill.app.recognition.RecognitionPackages
+import com.jotbill.app.rules.OrderIdNormalizer
 import java.math.BigDecimal
 import java.security.MessageDigest
 import java.time.Instant
@@ -412,8 +413,8 @@ internal object PaymentResultNormalizer {
             ) ?: return null
         if (amountMinor <= 0L) return null
 
-        // 提取订单号
-        val orderId = extractField(fullContent, ORDER_ID_PATTERNS)
+        // 提取订单号（M5：提取点格式归一）
+        val orderId = OrderIdNormalizer.normalize(extractField(fullContent, ORDER_ID_PATTERNS))
 
         // 提取商户
         val merchant = extractField(fullContent, MERCHANT_PATTERNS)
@@ -486,8 +487,8 @@ internal object PaymentResultNormalizer {
         val amountMinor = extractRefundAmountMinor(fullContent) ?: return null
         if (amountMinor <= 0L) return null
 
-        // 提取订单号（原交易号优先）
-        val orderId = extractField(fullContent, REFUND_ORDER_ID_PATTERNS)
+        // 提取订单号（原交易号优先；M5：提取点格式归一）
+        val orderId = OrderIdNormalizer.normalize(extractField(fullContent, REFUND_ORDER_ID_PATTERNS))
 
         // 提取商户
         val merchant = extractField(fullContent, MERCHANT_PATTERNS)
@@ -586,7 +587,7 @@ internal object PaymentResultNormalizer {
         val amountMinor = extractTransferAmountMinor(fullContent) ?: return null
         if (amountMinor <= 0L) return null
 
-        val orderId = extractField(fullContent, ORDER_ID_PATTERNS)
+        val orderId = OrderIdNormalizer.normalize(extractField(fullContent, ORDER_ID_PATTERNS))
 
         // 目标账户提示：还款取还款目标模式，转账取转账目标模式
         val targetAccountHint = if (isRepayment) {
@@ -705,7 +706,7 @@ internal object PaymentResultNormalizer {
         }
 
         val occurredAt = extractOccurredAt(fullContent, postTime)
-        val orderId = extractField(fullContent, ORDER_ID_PATTERNS)
+        val orderId = OrderIdNormalizer.normalize(extractField(fullContent, ORDER_ID_PATTERNS))
 
         // ---- 手续费证据：fee-event 键空间 + fee 语义后缀 ----
         // P6 修复：键族改用业务字段（原因见 normalizeRefund 同段注释）。
