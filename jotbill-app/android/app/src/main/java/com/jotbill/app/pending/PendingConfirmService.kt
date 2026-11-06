@@ -48,15 +48,34 @@ internal class PendingConfirmService(private val database: JotBillDatabase) {
 
         /** 桥接层传入参数非法（金额越界/类型不支持）。 */
         data class Invalid(val reason: String) : Outcome()
+
+        /**
+         * M4：卡带 SUSPECTED_DUPLICATE 冲突码且调用方未显式二次确认 ——
+         * 不落账、不删卡，由 RN 弹二次确认后带 confirmedDuplicate=true 重试。
+         * 不是硬阻断：用户明确知道自己在做什么时必须能过（第二次带标记即放行）。
+         */
+        object DuplicateConfirmRequired : Outcome()
     }
 
     /**
      * 确认入账。调用方无需预读 pending；版本冲突与已处理统一收敛为
      * [Outcome.AlreadyHandled]，由各入口自行决定提示方式。
+     *
+     * @param confirmedDuplicate M4 二次确认标记：卡带 SUSPECTED_DUPLICATE 时
+     *   必须为 true 才放行（RN 弹过「疑似重复」确认后重传）。
      */
-    suspend fun confirm(pendingId: String, overrides: Overrides): Outcome {
+    suspend fun confirm(pendingId: String, overrides: Overrides, confirmedDuplicate: Boolean = false): Outcome {
         val pending = database.pendingTransactionDao().getById(pendingId)
             ?: return Outcome.AlreadyHandled
+        // M4：疑似重复卡不许"点一下就过" —— 首次确认返回 DuplicateConfirmRequired，
+        // 由 RN 弹窗明示后带 confirmedDuplicate=true 重试；不做硬阻断。
+        if (
+            !confirmedDuplicate &&
+            pending.conflictReason?.split(',')
+                ?.any { it.trim() == com.jotbill.app.rules.DuplicateGuard.CONFLICT_SUSPECTED_DUPLICATE } == true
+        ) {
+            return Outcome.DuplicateConfirmRequired
+        }
         val now = System.currentTimeMillis()
         val type = overrides.type ?: pending.type
         val sourceType = overrides.sourceType ?: pending.sourceType

@@ -92,7 +92,7 @@ class PendingConfirmServiceTest {
         database.close()
     }
 
-    private fun insertPending(amountMinor: Long = 3580L) = runBlocking {
+    private fun insertPending(amountMinor: Long = 3580L, conflictReason: String = "NO_ACTIVE_SESSION") = runBlocking {
         database.pendingTransactionDao().insertIfAbsent(
             PendingTransactionEntity(
                 id = PENDING_ID,
@@ -108,12 +108,49 @@ class PendingConfirmServiceTest {
                 orderId = null,
                 accountId = null,
                 categoryId = null,
-                conflictReason = "NO_ACTIVE_SESSION",
+                conflictReason = conflictReason,
                 sourceType = "notification",
                 createdAt = NOW,
                 version = 1
             )
         )
+    }
+
+    /** M4：疑似重复卡首次确认被拦，显式二次确认后放行。 */
+    @Test
+    fun suspectedDuplicateRequiresExplicitSecondConfirm() = runBlocking {
+        insertPending(conflictReason = "SUSPECTED_DUPLICATE")
+
+        val first = service.confirm(
+            pendingId = PENDING_ID,
+            overrides = PendingConfirmService.Overrides(
+                amountMinor = 3580L,
+                categoryId = CATEGORY_ID,
+                accountId = ACCOUNT_ID
+            )
+        )
+        assertEquals(
+            "疑似重复卡首次确认必须被拦（不删卡、不落账）",
+            PendingConfirmService.Outcome.DuplicateConfirmRequired,
+            first
+        )
+        assertNotNull("卡必须保留待用户核对", database.pendingTransactionDao().getById(PENDING_ID))
+        assertEquals("被拦时不得落账", 0, database.billDao().count())
+
+        val second = service.confirm(
+            pendingId = PENDING_ID,
+            overrides = PendingConfirmService.Overrides(
+                amountMinor = 3580L,
+                categoryId = CATEGORY_ID,
+                accountId = ACCOUNT_ID
+            ),
+            confirmedDuplicate = true
+        )
+        assertTrue(
+            "用户显式二次确认后必须放行",
+            second is PendingConfirmService.Outcome.Confirmed
+        )
+        assertEquals(1, database.billDao().count())
     }
 
     @Test

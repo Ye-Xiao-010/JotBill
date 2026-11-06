@@ -284,7 +284,14 @@ export interface PendingTransactionFilter {
   limit?: number;
 }
 
-export type PendingConfirmationInput = Partial<BillInput>;
+export type PendingConfirmationInput = Partial<BillInput> & {
+  /**
+   * M4：疑似重复卡的二次确认标记。卡带 SUSPECTED_DUPLICATE 冲突码时，
+   * 原生首次确认返回 DUPLICATE_CONFIRM_REQUIRED；RN 弹「疑似重复」确认后
+   * 带本标记重试即放行（不做硬阻断，用户明确后必须能过）。
+   */
+  confirmedDuplicate?: boolean;
+};
 
 export interface BalanceCalibration {
   id: string;

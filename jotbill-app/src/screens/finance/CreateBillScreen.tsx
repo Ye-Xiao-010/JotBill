@@ -17,6 +17,7 @@ import CategoryIcon from '../../components/business/CategoryIcon';
 import { useToast, useCategories, useStyles } from '../../hooks';
 import { nativeData, type Account, type Bill, type Category } from '../../native';
 import { invalidateCache } from '../../lib/queryClient';
+import { findDuplicateBills } from '../../lib/billDuplicateCheck';
 import { ThemeColors } from '../../theme/colors';
 import { spacing, borderRadius, borderWidth, shadow } from '../../theme';
 
@@ -102,6 +103,10 @@ const CreateBillScreen: React.FC<CreateBillScreenProps> = ({ navigation, route }
   // P15：表单会话级幂等键 —— 本组件实例生命周期内稳定，创建保存的重试/
   // 双击复用同一键；成功保存后页面返回、实例销毁，下次进入重新生成。
   const clientRequestIdRef = useRef(generateClientRequestId());
+  // M8：查重命中的二次确认弹窗状态（暂存完整创建流程，确认后续跑）
+  const [showDuplicateConfirm, setShowDuplicateConfirm] = useState(false);
+  const [duplicateHint, setDuplicateHint] = useState('');
+  const pendingDuplicateActionRef = useRef<(() => Promise<void>) | null>(null);
 
   // 转账/还款不计收支，无分类概念
   const isTransferLike = type === 'transfer' || type === 'repayment';
@@ -293,18 +298,68 @@ const CreateBillScreen: React.FC<CreateBillScreenProps> = ({ navigation, route }
           ...billData,
           version: editingBill!.version,
         });
-      } else {
-        // P15：创建路径携带表单会话级幂等键 —— 保存重试/双击由原生按
-        // 确定性主键幂等，不再产生重复账单（编辑路径走 updateBill 无需）。
+        invalidateCache.bills();
+        showSuccess('账单更新成功');
+        navigation.goBack();
+        return;
+      }
+
+      // 创建路径的完整收尾（P15 幂等键 + 缓存失效 + 提示 + 返回）——
+      // M8 查重命中后的弹窗确认路径复用同一份，避免两处漂移。
+      const completeCreate = async () => {
         await nativeData.addBill({
           ...billData,
           clientRequestId: clientRequestIdRef.current,
         });
-      }
+        invalidateCache.bills();
+        showSuccess('账单创建成功');
+        navigation.goBack();
+      };
 
-      invalidateCache.bills();
-      showSuccess(isEditing ? '账单更新成功' : '账单创建成功');
-      navigation.goBack();
+      // M8：手动录入保存前查重（与 AI 提案同款「同日同额同向」判据，共享实现）——
+      // 命中先弹确认，用户明确后再入账；查重失败保守放行（不阻塞保存）。
+      // 转账/还款无收支方向语义，不参与查重。
+      if (!isTransferLike) {
+        let duplicates: string[] = [];
+        try {
+          const today = new Date();
+          const dateText = `${today.getFullYear()}-${
+            String(today.getMonth() + 1).padStart(2, '0')
+          }-${String(today.getDate()).padStart(2, '0')}`;
+          duplicates = await findDuplicateBills([{
+            amount: parseFloat(amount),
+            type: type as 'income' | 'expense',
+            date: dateText,
+            description: description.trim(),
+          }]);
+        } catch (error) {
+          console.warn('手动录入保存前查重失败，按无重复继续', error);
+        }
+        if (duplicates.length > 0) {
+          pendingDuplicateActionRef.current = completeCreate;
+          setDuplicateHint(duplicates.join('、'));
+          setShowDuplicateConfirm(true);
+          setLoading(false);
+          return;
+        }
+      }
+      await completeCreate();
+    } catch (error: any) {
+      showError(error.message || '操作失败');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  /** M8 弹窗确认：执行暂存的完整创建流程（与直接保存同一错误处理）。 */
+  const handleDuplicateConfirm = async () => {
+    setShowDuplicateConfirm(false);
+    const action = pendingDuplicateActionRef.current;
+    pendingDuplicateActionRef.current = null;
+    if (!action) return;
+    setLoading(true);
+    try {
+      await action();
     } catch (error: any) {
       showError(error.message || '操作失败');
     } finally {
@@ -577,6 +632,19 @@ const CreateBillScreen: React.FC<CreateBillScreenProps> = ({ navigation, route }
         cancelText="取消"
         onConfirm={handleConfirmDelete}
         onCancel={() => { setShowDeleteConfirm(false); setCategoryToDelete(null); }}
+      />
+      {/* M8：疑似重复二次确认（命中"同日同额同向"既有账单时先弹） */}
+      <ConfirmModal
+        visible={showDuplicateConfirm}
+        title="疑似重复"
+        message={`当日已有同金额同方向的账单：${duplicateHint}，确定仍要入账吗？`}
+        confirmText="仍要入账"
+        cancelText="取消"
+        onConfirm={handleDuplicateConfirm}
+        onCancel={() => {
+          setShowDuplicateConfirm(false);
+          pendingDuplicateActionRef.current = null;
+        }}
       />
     </View>
   );

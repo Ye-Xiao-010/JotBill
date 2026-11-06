@@ -78,7 +78,7 @@ export default function ReviewScreen() {
   const navigation = useNavigation();
   const queryClient = useQueryClient();
   const styles = useStyles(createStyles);
-  const { alert } = useAlert();
+  const { alert, confirm } = useAlert();
   const [retrySubmittedVersions, setRetrySubmittedVersions] = useState<
     Record<string, number>
   >({});
@@ -118,7 +118,24 @@ export default function ReviewScreen() {
         );
       }
     },
-    onError: (error) => {
+    onError: (error, variables) => {
+      // M4：疑似重复卡首次确认被原生拦下（DUPLICATE_CONFIRM_REQUIRED）——
+      // 这里弹二次确认，用户明确后带 confirmedDuplicate=true 重试放行；
+      // 不做硬阻断（用户知道自己在做什么时必须能过）。
+      const rawMessage = error instanceof Error ? error.message : String(error);
+      if (rawMessage.includes('DUPLICATE_CONFIRM_REQUIRED')) {
+        confirm(
+          '疑似重复',
+          '该笔交易与既有账单（同金额/时间/账户/商户）相近，确定仍要入账吗？',
+          () => {
+            confirmMutation.mutate({
+              pending: variables.pending,
+              input: { ...variables.input, confirmedDuplicate: true },
+            });
+          },
+        );
+        return;
+      }
       // 不再回显裸 pendingId：那是内部 UUID，对用户零信息量，
       // 反而把真正的原因挤到后面。改为可照做的中文指引。
       alert('确认失败', describeConfirmError(error));

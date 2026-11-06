@@ -995,6 +995,23 @@ internal object PendingConfirmOverlayManager {
                         updateConfirmEnabled(confirmButton)
                     }
 
+                    is PendingConfirmService.Outcome.DuplicateConfirmRequired -> {
+                        // M4：疑似重复卡需要二次确认 —— 弹窗不做重复判断，保留卡片
+                        // 并引导到待确认中心核对（弹窗确认不带 confirmedDuplicate）。
+                        if (!isCurrentCard) {
+                            JotBillLog.i(
+                                TAG,
+                                "疑似重复确认要求已过期(卡片已更换)，丢弃: id=${pendingRow.id.take(16)}"
+                            )
+                            return@post
+                        }
+                        isConfirming = false
+                        showErrorFeedback(view, "疑似重复交易，请到待确认中心核对后再确认")
+                        scheduleAutoDismiss()
+                        confirmButton.text = "确认入账"
+                        updateConfirmEnabled(confirmButton)
+                    }
+
                     null -> {
                         if (!isCurrentCard) {
                             JotBillLog.i(

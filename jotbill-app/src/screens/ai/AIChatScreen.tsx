@@ -43,6 +43,7 @@ import { ProviderIcon } from '../../components/icons';
 import CategoryIcon from '../../components/business/CategoryIcon';
 import storage from '../../utils/storage';
 import { invalidateCache } from '../../lib/queryClient';
+import { findDuplicateBills } from '../../lib/billDuplicateCheck';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const SIDEBAR_WIDTH = Dimensions.get('window').width * 0.78;
@@ -1930,32 +1931,8 @@ export default function AIChatScreen() {
    * P12：AI 提案保存前查重 —— 同日、同金额、同收支方向的既有账单。
    * AI 提案不带 orderId，原生 level-1 去重永不命中；同一笔既手动记过又
    * 确认 AI 提案时此前必然双记。命中时由用户显式确认后再入账。
-   *
-   * @returns 命中重复的提案描述列表（最多 5 条）；查询失败向上抛出，
-   *   由调用方决定放行策略（查重失败不阻塞保存）。
+   * 判据实现已收敛到共享工具 [billDuplicateCheck]（M8：手动录入屏复用同款）。
    */
-  const findDuplicateBills = async (bills: BillItem[]): Promise<string[]> => {
-    const hits: string[] = [];
-    for (const bill of bills) {
-      const dayStart = new Date(`${bill.date}T00:00:00`).toISOString();
-      const dayEnd = new Date(`${bill.date}T23:59:59.999`).toISOString();
-      const existing = await nativeData.getBills({
-        startDate: dayStart,
-        endDate: dayEnd,
-        limit: 500,
-      });
-      const amountMinor = Math.round(bill.amount * 100);
-      const duplicated = existing.items.some(
-        b => b.amountMinor === amountMinor && b.type === bill.type
-      );
-      if (duplicated) {
-        hits.push(`${bill.description || '未命名'} ¥${bill.amount.toFixed(2)}`);
-        if (hits.length >= 5) break;
-      }
-    }
-    return hits;
-  };
-
   const handleSaveAllBills = async () => {
     if (pendingBills.length === 0) {
       alert('提示', '没有待保存的账单');

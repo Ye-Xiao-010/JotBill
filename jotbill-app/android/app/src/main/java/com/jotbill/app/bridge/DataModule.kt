@@ -1058,12 +1058,20 @@ class DataModule(
                     null
                 },
                 originalTransactionId = input.optionalString("originalTransactionId")
-            )
+            ),
+            // M4：RN 在「疑似重复」二次确认弹窗点确定后回传 true 放行
+            confirmedDuplicate = input.optBoolean("confirmedDuplicate", false)
         )
         val settledBill = when (outcome) {
             is PendingConfirmService.Outcome.Confirmed -> outcome.bill
             is PendingConfirmService.Outcome.AlreadyHandled ->
                 throw BridgeException("VERSION_CONFLICT", "Pending transaction $id has changed")
+            is PendingConfirmService.Outcome.DuplicateConfirmRequired ->
+                // M4：可识别错误码 —— RN 据此弹二次确认，而不是普通失败提示
+                throw BridgeException(
+                    "DUPLICATE_CONFIRM_REQUIRED",
+                    "疑似重复交易，请核对后再确认"
+                )
             is PendingConfirmService.Outcome.Invalid ->
                 throw BridgeException("INVALID_ARGUMENT", outcome.reason)
         }
