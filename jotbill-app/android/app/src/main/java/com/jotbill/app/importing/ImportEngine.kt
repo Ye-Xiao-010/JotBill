@@ -632,10 +632,18 @@ internal class ImportEngine(
         ) {
             return RowDecision(RowDecision.PENDING)
         }
+        // ---- P9：账户未匹配 ⇒ 显式决策（转待确认），不再落「无账户账单」----
+        // 旧行为：账户未匹配的行仍以 accountId=null 直接入账，余额静默不动
+        // （applyImportedBalance 对空账户直接 return）—— 账单落库了却没有任何
+        // 账户归属，统计与余额口径里这笔完全隐形。改为转待确认卡，由用户在
+        // 待确认中心显式选择账户后入账；accountUnmatched 计数口径保持不变。
+        if (accountsState.unmatched) {
+            return RowDecision(RowDecision.PENDING, accountUnmatched = true)
+        }
         return RowDecision(
             kind = RowDecision.IMPORTED,
             suspicious = similarHits.isNotEmpty(),
-            accountUnmatched = accountsState.unmatched
+            accountUnmatched = false
         )
     }
 

@@ -52,6 +52,13 @@ export interface BillInput {
   sourceType: TransactionSource;
   originalTransactionId?: string;
   orderId?: string;
+  /**
+   * P15：可选客户端幂等键。表单会话/AI 提案在生命周期内生成一次并随重试
+   * 原样重传；原生侧据此确定性生成账单 id，重放命中既有账单即幂等返回，
+   * 不再产生重复账单（此前 addBill 无幂等键，重试/双击必然双记）。
+   * 字符集 [A-Za-z0-9_.:-]，最长 128。
+   */
+  clientRequestId?: string;
 }
 
 export interface BillFilter {

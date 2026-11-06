@@ -209,7 +209,29 @@ class DataModule(
         val input = parseJson(inputJson)
         val now = System.currentTimeMillis()
         input.optionalMinor("amountMinor")
-        val bill = BridgeDtoMapper.parseBillInput(input, now, UUID.randomUUID().toString())
+        // ---- P15：可选客户端幂等键 ----
+        // RN 在每个表单会话/AI 提案内生成 clientRequestId 并随重试原样重传，
+        // 账单 id 由它确定性生成：重试/双击/部分失败重传命中既有账单即幂等返回，
+        // 不再产生第二条。缺省（旧客户端）保持原随机 UUID 语义，契约向后兼容。
+        val clientRequestId = input.optionalString("clientRequestId")
+            ?.trim()?.takeIf { it.isNotEmpty() }
+        if (clientRequestId != null &&
+            (clientRequestId.length > 128 || !clientRequestId.matches(CLIENT_REQUEST_ID_PATTERN))
+        ) {
+            throw BridgeException(
+                "INVALID_ARGUMENT",
+                "clientRequestId must match [A-Za-z0-9_.:-]{1,128}"
+            )
+        }
+        val billId = clientRequestId?.let { "manual:$it" } ?: UUID.randomUUID().toString()
+        if (clientRequestId != null) {
+            database.billDao().getById(billId)?.let { existing ->
+                // 幂等重放：不重复 insert、不动余额、不再广播 onBillCreated，
+                // 直接把首次入账的结果返回给 RN（与首响应语义一致）。
+                return@launch BridgeDtoMapper.bill(existing).toString()
+            }
+        }
+        val bill = BridgeDtoMapper.parseBillInput(input, now, billId)
         // 必须按 outcome 分支：命中去重第 1 级时并未 insert 新账单，也未动余额，
         // 实际是把新证据字段合并进了既有账单。此时若仍把 `bill`（一个从未落库的
         // UUID）返回给 JS 并广播 onBillCreated，前端跳详情页会得到 NOT_FOUND，
@@ -1226,6 +1248,9 @@ class DataModule(
 }
 
 private const val MAX_SAFE_MINOR_UNIT = 9_007_199_254_740_991L
+
+/** P15：客户端幂等键的合法字符集（防注入、限长，键会直接进入账单主键）。 */
+private val CLIENT_REQUEST_ID_PATTERN = Regex("[A-Za-z0-9_.:-]+")
 
 internal fun dataErrorCode(message: String?): String {
     return if (

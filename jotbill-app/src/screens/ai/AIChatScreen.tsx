@@ -1926,6 +1926,36 @@ export default function AIChatScreen() {
     );
   };
 
+  /**
+   * P12：AI 提案保存前查重 —— 同日、同金额、同收支方向的既有账单。
+   * AI 提案不带 orderId，原生 level-1 去重永不命中；同一笔既手动记过又
+   * 确认 AI 提案时此前必然双记。命中时由用户显式确认后再入账。
+   *
+   * @returns 命中重复的提案描述列表（最多 5 条）；查询失败向上抛出，
+   *   由调用方决定放行策略（查重失败不阻塞保存）。
+   */
+  const findDuplicateBills = async (bills: BillItem[]): Promise<string[]> => {
+    const hits: string[] = [];
+    for (const bill of bills) {
+      const dayStart = new Date(`${bill.date}T00:00:00`).toISOString();
+      const dayEnd = new Date(`${bill.date}T23:59:59.999`).toISOString();
+      const existing = await nativeData.getBills({
+        startDate: dayStart,
+        endDate: dayEnd,
+        limit: 500,
+      });
+      const amountMinor = Math.round(bill.amount * 100);
+      const duplicated = existing.items.some(
+        b => b.amountMinor === amountMinor && b.type === bill.type
+      );
+      if (duplicated) {
+        hits.push(`${bill.description || '未命名'} ¥${bill.amount.toFixed(2)}`);
+        if (hits.length >= 5) break;
+      }
+    }
+    return hits;
+  };
+
   const handleSaveAllBills = async () => {
     if (pendingBills.length === 0) {
       alert('提示', '没有待保存的账单');
@@ -1944,6 +1974,28 @@ export default function AIChatScreen() {
       return;
     }
 
+    // P12：保存前查重提示；查重查询失败时保守放行（责任回到用户确认弹窗）。
+    let duplicates: string[] = [];
+    try {
+      duplicates = await findDuplicateBills(pendingBills);
+    } catch (error) {
+      console.warn('AI 账单保存前查重失败，按无重复继续', error);
+    }
+    if (duplicates.length > 0) {
+      confirm(
+        '疑似重复',
+        `以下 ${duplicates.length} 条与既有账单同日同金额：\n${duplicates.join('、')}\n\n仍要保存吗？`,
+        () => { void doSaveAllBills(fallbackAccountId); },
+        undefined,
+        { confirmText: '仍要保存' },
+      );
+      return;
+    }
+    await doSaveAllBills(fallbackAccountId);
+  };
+
+  /** 实际批量入账（P12 查重通过/用户确认后进入）。 */
+  const doSaveAllBills = async (fallbackAccountId: string) => {
     setSavingBills(true);
     let successCount = 0;
     let failCount = 0;
@@ -1968,6 +2020,9 @@ export default function AIChatScreen() {
           categoryId,
           accountId,
           sourceType: 'ai_chat',
+          // P15：提案 id 即幂等键 —— 部分失败后的整批重试、重复点击
+          // 「全部保存」由原生按确定性主键幂等，不再重复入账。
+          clientRequestId: bill.id,
         });
         successCount++;
         savedBillIds.push(bill.id);

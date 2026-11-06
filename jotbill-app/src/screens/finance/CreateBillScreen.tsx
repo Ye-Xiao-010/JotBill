@@ -2,7 +2,7 @@
  * 创建/编辑账单屏幕 - Neo-Brutalism 风格
  * 描边金额输入 + 糖果色类型切换 + 描边分类网格
  */
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   View,
   ScrollView,
@@ -41,6 +41,15 @@ const FORM_TYPE_OPTIONS: Array<{ value: BillFormType; label: string }> = [
   { value: 'transfer', label: '转账' },
   { value: 'repayment', label: '还款' },
 ];
+
+/**
+ * P15：生成表单会话级幂等键（每次进入创建表单生成一次）。
+ * 保存失败重试、双击、网络超时后重发都复用同一个键，原生侧按
+ * `manual:<key>` 确定性主键幂等，杜绝此前「随机 UUID、重试必双记」的窗口。
+ */
+function generateClientRequestId(): string {
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
+}
 
 /** 编辑既有账单时，回显支持的手动类型；不支持的类型（退款/手续费等）回退支出。 */
 function resolveInitialFormType(billType: string | undefined, fallback?: 'income' | 'expense'): BillFormType {
@@ -90,6 +99,9 @@ const CreateBillScreen: React.FC<CreateBillScreenProps> = ({ navigation, route }
   );
   const [description, setDescription] = useState(editingBill?.description || '');
   const [loading, setLoading] = useState(false);
+  // P15：表单会话级幂等键 —— 本组件实例生命周期内稳定，创建保存的重试/
+  // 双击复用同一键；成功保存后页面返回、实例销毁，下次进入重新生成。
+  const clientRequestIdRef = useRef(generateClientRequestId());
 
   // 转账/还款不计收支，无分类概念
   const isTransferLike = type === 'transfer' || type === 'repayment';
@@ -282,7 +294,12 @@ const CreateBillScreen: React.FC<CreateBillScreenProps> = ({ navigation, route }
           version: editingBill!.version,
         });
       } else {
-        await nativeData.addBill(billData);
+        // P15：创建路径携带表单会话级幂等键 —— 保存重试/双击由原生按
+        // 确定性主键幂等，不再产生重复账单（编辑路径走 updateBill 无需）。
+        await nativeData.addBill({
+          ...billData,
+          clientRequestId: clientRequestIdRef.current,
+        });
       }
 
       invalidateCache.bills();
