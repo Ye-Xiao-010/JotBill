@@ -246,9 +246,9 @@ private val TERMINAL_SESSION_STATUSES = setOf(
     "EXPIRED"
 )
 
-/** 与 DefaultDataInitializer 种子账户 ID 保持一致的支付平台资金账户映射。 */
-private const val WECHAT_PAY_ACCOUNT_ID = "default-account-wechat"
-private const val ALIPAY_ACCOUNT_ID = "default-account-alipay"
+// P14：支付平台种子账户 ID 唯一出处为
+// [com.jotbill.app.bookkeeping.AccountInference]（本文件原先私有的
+// WECHAT_PAY_ACCOUNT_ID/ALIPAY_ACCOUNT_ID 常量已无引用，随统一收归删除）。
 
 internal sealed class CheckoutPaymentMatchResult {
     data class Accepted(

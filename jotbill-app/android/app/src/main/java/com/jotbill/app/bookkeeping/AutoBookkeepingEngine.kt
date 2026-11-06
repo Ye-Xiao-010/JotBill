@@ -552,6 +552,11 @@ class AutoBookkeepingEngine(
      * 服务解绑/重绑后的状态复位：窗口 id 与页面跟踪是易变的会话态，跨绑定周期
      * 保留只会让新周期的事件错配旧跟踪；认领指纹带时间窗可安全保留。
      * 由宿主服务在 onServiceConnected（引擎已存在的重连场景）调用。
+     *
+     * P11 修复：[pendingConfirms] **不再随复位清空** —— 已抽取待二次确认的记录
+     * 自带 5 分钟过期（[CONFIRM_WINDOW_MILLIS]），重绑即清空会让"抽取成功 →
+     * 服务重绑 → 确认页到达"之间的记录静默丢失（漏记方向）。保留后由
+     * [pendingFor] 的过期淘汰兜底，锚点命中仍按包名队列正常消费。
      */
     fun resetTracking() {
         trackedWindowId = 0
@@ -559,7 +564,6 @@ class AutoBookkeepingEngine(
         trackedRuleKey = null
         reportedWindowId = 0
         lastContentChangeAt = 0L
-        pendingConfirms.clear()
         rescanScheduler.cancelAll()
         rescanCount = 0
         rescanPackageName = null

@@ -1,6 +1,7 @@
 package com.jotbill.app.recognition
 
 import androidx.room.withTransaction
+import com.jotbill.app.bookkeeping.AccountInference
 import com.jotbill.app.data.CreateBillOutcome
 import com.jotbill.app.data.JotBillDatabase
 import com.jotbill.app.utils.JotBillLog
@@ -27,9 +28,9 @@ private const val REFUND_CANDIDATE_LIMIT = 5
 /** 退款自动入账的审计操作者标记。 */
 private const val REFUND_AUTO_COMMIT_OPERATOR = "refund_auto_commit"
 
-/** 与 DefaultDataInitializer 种子账户 ID 保持一致的支付平台资金账户映射。 */
-private const val WECHAT_PAY_ACCOUNT_ID = "default-account-wechat"
-private const val ALIPAY_ACCOUNT_ID = "default-account-alipay"
+// P14：支付平台种子账户 ID 唯一出处为 [AccountInference]，本文件不再私有定义。
+private val WECHAT_PAY_ACCOUNT_ID = AccountInference.WECHAT_PAY_ACCOUNT_ID
+private val ALIPAY_ACCOUNT_ID = AccountInference.ALIPAY_ACCOUNT_ID
 
 /** 与 DefaultDataInitializer 保持一致的退款种子分类。 */
 private const val DEFAULT_REFUND_CATEGORY_ID = "default-category-income-refund"

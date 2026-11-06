@@ -1,6 +1,7 @@
 package com.jotbill.app.recognition
 
 import androidx.room.withTransaction
+import com.jotbill.app.bookkeeping.AccountInference
 import com.jotbill.app.data.CreateBillOutcome
 import com.jotbill.app.data.JotBillDatabase
 import com.jotbill.app.utils.JotBillLog
@@ -19,9 +20,9 @@ import java.security.MessageDigest
 import org.json.JSONArray
 import org.json.JSONObject
 
-/** 与 DefaultDataInitializer 种子账户 ID 保持一致的支付平台资金账户映射。 */
-private const val WECHAT_PAY_ACCOUNT_ID = "default-account-wechat"
-private const val ALIPAY_ACCOUNT_ID = "default-account-alipay"
+// P14：支付平台种子账户 ID 唯一出处为 [AccountInference]，本文件不再私有定义。
+private val WECHAT_PAY_ACCOUNT_ID = AccountInference.WECHAT_PAY_ACCOUNT_ID
+private val ALIPAY_ACCOUNT_ID = AccountInference.ALIPAY_ACCOUNT_ID
 
 /** 转账/还款自动入账的审计操作者标记。 */
 private const val TRANSFER_AUTO_COMMIT_OPERATOR = "transfer_auto_commit"

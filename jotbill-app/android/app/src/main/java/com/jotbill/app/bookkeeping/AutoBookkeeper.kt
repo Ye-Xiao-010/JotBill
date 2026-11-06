@@ -182,6 +182,13 @@ class AutoBookkeeper(
                 return
             }
         }
+
+        // ---- P1：现金兜底可识别标记（不改乙口径，只提可观测性/可纠正性）----
+        // 账户来自推断链**链尾**（无用户 set_account 规则、银行名/包名映射均未命中，
+        // 落入现金兜底）时，该笔的账户归属是"系统猜的"。入账后写一条审计标记，
+        // 供 UI 提示「该笔账户为推断」、用户核对纠正；账单数据本身不变。
+        val accountInferred = patch.accountId == null &&
+            accountId == CASH_FALLBACK_ACCOUNT_ID
         val categoryId = patch.categoryId?.takeIf { database.categoryDao().getById(it) != null }
             ?: BookkeepingCategoryHints.guess(
                 merchant = merchant,
@@ -275,6 +282,24 @@ class AutoBookkeeper(
             val outcome = ledger.createBillWithDedup(bill, operator = AUDIT_OPERATOR)
             val settled = (outcome as? CreateBillOutcome.Committed)?.bill
             if (settled != null) {
+                if (accountInferred) {
+                    // P1：审计标记失败不得拖垮已完成的入账（兜底静默）。
+                    runCatching {
+                        database.auditEntryDao().insertIfAbsent(
+                            com.jotbill.app.data.entity.AuditEntryEntity(
+                                id = "${settled.id}:account-inferred",
+                                entityType = "bill",
+                                entityId = settled.id,
+                                action = AUDIT_ACTION_ACCOUNT_INFERRED,
+                                fieldName = "accountId",
+                                oldValue = null,
+                                newValue = settled.accountId,
+                                operator = AUDIT_OPERATOR,
+                                createdAt = now
+                            )
+                        )
+                    }
+                }
                 notifier.notifyAutoBooked(
                     billId = settled.id,
                     amountMinor = settled.amountMinor,
@@ -419,6 +444,12 @@ class AutoBookkeeper(
         const val BILL_SOURCE_TYPE = "accessibility"
 
         const val AUDIT_OPERATOR = "auto_bookkeeping"
+
+        /**
+         * P1：现金兜底自动入账的审计动作标记 —— 账户归属来自推断链链尾（系统猜测）
+         * 的账单会带一条该动作的审计记录，供 UI 提示「该笔账户为推断」并引导纠正。
+         */
+        const val AUDIT_ACTION_ACCOUNT_INFERRED = "account_inferred_cash_fallback"
 
         private const val MAX_TEXT_LENGTH = 120
 

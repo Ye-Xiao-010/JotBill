@@ -316,6 +316,33 @@ class AutoBookkeepingEngineTest {
         assertEquals("同订单号的重复记录仍须丢弃", 2, sink.records.size)
     }
 
+    /** P11：服务重绑复位（resetTracking）不再丢弃二次确认挂起记录。 */
+    @Test
+    fun `P11 服务重绑复位不丢二次确认挂起`() {
+        val h = Harness()
+        val confirmClass =
+            "com.alibaba.android.ultron.vfw.weex2.highPerformance.widget.UltronTradeHybridActivity"
+        // 收银台密码页抽取成功，挂入二次确认（尚未交付）
+        h.engine.onEvent(h.windowEvent("com.alipay.android.msp.ui.views.MspContainerActivity", windowId = 2)) {
+            FakePageNode(
+                null,
+                null,
+                children = listOf(
+                    FakePageNode("请输入支付密码", null),
+                    FakePageNode(null, "支付金额88.00元")
+                )
+            )
+        }
+        assertEquals("二次确认前不得交付", 0, h.sink.records.size)
+        // 模拟无障碍服务解绑→重绑：宿主在 onServiceConnected 调用 resetTracking
+        h.engine.resetTracking()
+        // 确认页到达：P11 前挂起已被清空（漏记），现必须按队列消费交付
+        h.engine.onEvent(h.windowEvent(confirmClass, windowId = 3)) { alipayResultPage() }
+        assertEquals("复位后确认锚点命中仍应交付", 1, h.sink.records.size)
+        assertEquals(2000098, h.sink.records[0].ruleId)
+        assertEquals("88.00", h.sink.records[0].fields["amount"])
+    }
+
     companion object {
         /** 支付宝结果页 / 淘宝收银台（带确认锚点）/ 支付宝通知 三条规则的最小集。 */
         private val TEST_REGISTRY_TEXT = """
