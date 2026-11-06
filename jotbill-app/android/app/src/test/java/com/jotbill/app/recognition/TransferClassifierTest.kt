@@ -107,6 +107,66 @@ class TransferClassifierTest {
         assertEquals("repayment", created?.pendingType)
     }
 
+    /** M2：结果页个人转账卡先在，通知腿同收款人转账 ⇒ 归并为单卡（不双卡）。 */
+    @Test
+    fun 通知腿转账与结果页卡归并为单卡() = runBlocking {
+        // 结果页腿先落卡（recordPersonalTransfer，收款人存 merchant 列）
+        CheckoutPaymentMatcher(database).recordPersonalTransfer(
+            amountMinor = 2000L,
+            paymentPackage = WECHAT,
+            recipient = "张三",
+            occurredAt = BASE
+        )
+        assertEquals(1, database.pendingTransactionDao().count())
+
+        // 通知腿同笔转账到达 ⇒ M2 归并，不新建第二张卡
+        val outcome = TransferClassifier(database).processTransfer(
+            input(status = "TRANSFER", key = "m2-cross-1", recipient = "张三")
+        )
+
+        assertTrue(outcome is TransferClassifier.TransferOutcome.Duplicate)
+        assertEquals("同一笔转账两腿必须收敛为一张卡", 1, database.pendingTransactionDao().count())
+    }
+
+    /** M2 反向：通知腿卡先在，结果页腿同收款人转账 ⇒ 归并为单卡。 */
+    @Test
+    fun 结果页腿转账与通知腿卡归并为单卡() = runBlocking {
+        val created = TransferClassifier(database).processTransfer(
+            input(status = "TRANSFER", key = "m2-cross-2", recipient = "李四")
+        )
+        assertTrue(created is TransferClassifier.TransferOutcome.PendingCreated)
+        assertEquals(1, database.pendingTransactionDao().count())
+
+        CheckoutPaymentMatcher(database).recordPersonalTransfer(
+            amountMinor = 2000L,
+            paymentPackage = WECHAT,
+            recipient = "李四",
+            occurredAt = BASE + 5_000L
+        )
+
+        assertEquals("同一笔转账两腿必须收敛为一张卡", 1, database.pendingTransactionDao().count())
+    }
+
+    /** M2 护栏：收款人不同的两笔真实转账 ⇒ 两张卡（绝不误并）。 */
+    @Test
+    fun 不同收款人的两笔转账出两卡() = runBlocking {
+        CheckoutPaymentMatcher(database).recordPersonalTransfer(
+            amountMinor = 2000L,
+            paymentPackage = WECHAT,
+            recipient = "张三",
+            occurredAt = BASE
+        )
+        val outcome = TransferClassifier(database).processTransfer(
+            input(status = "TRANSFER", key = "m2-diff-1", recipient = "王五")
+        )
+
+        assertTrue(
+            "收款人不同必须各自成卡",
+            outcome is TransferClassifier.TransferOutcome.PendingCreated
+        )
+        assertEquals("两笔不同收款人的转账不得合并", 2, database.pendingTransactionDao().count())
+    }
+
     /**
      * 复核修复钉：自动入账撞号（同 orderId 不同金额）⇒ 回落建卡带
      * DEDUP_CHECK_FAILED，异常不逃出事务、证据不丢。

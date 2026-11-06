@@ -132,6 +132,9 @@ private const val ORPHAN_DEDUP_WINDOW_MILLIS = PaymentTiming.SAME_TXN_WINDOW_MIL
 /** P3：银行短信来源包 —— 跨包同额归并的双向排除对象（拍板②：短信 orderId 恒空）。 */
 private const val MMS_SOURCE_PACKAGE = "com.android.mms"
 
+/** M7：mergedSourceEventKeys 留痕数组上限（先到者优先，溢出转计数键）。 */
+private const val MAX_MERGED_SOURCE_EVENT_KEYS = 16
+
 /**
  * P1 多信号合并：orderId 强键归并窗（拍板 2026-11-04：2 分钟）。
  *
@@ -605,6 +608,24 @@ internal class CheckoutPaymentMatcher(
         if (dao.getById(pendingId) != null) {
             return
         }
+        // ---- M2：跨腿查重 —— 通知腿（TransferClassifier）已落同收款人转账卡 ----
+        // 两条键族（personal-transfer / pending-transfer）互不认识，同一笔微信转账
+        // 会各落一张卡。建卡前互查：同包+同额+同收款人（2min 窗）⇒ 归并进既有卡
+        // 并留痕，不再双卡；收款人缺失或不等绝不合并（两笔真实转账不并）。
+        findSameTransferCard(paymentPackage, amountMinor, recipient, effectiveOccurredAt)
+            ?.let { existing ->
+                mergeTransferSignalInto(
+                    existing = existing,
+                    incomingSourceEventKey = pendingId,
+                    incomingReason = ""
+                )
+                JotBillLog.i(
+                    "CheckoutPaymentMatcher",
+                    "个人转账与通知腿转账归并为单卡: pending=${existing.id.take(16)}, " +
+                        "amount=$amountMinor, recipient=${recipient ?: "未知"}"
+                )
+                return
+            }
         val pending = PendingTransactionEntity(
             id = pendingId,
             candidateId = null,
@@ -629,6 +650,14 @@ internal class CheckoutPaymentMatcher(
             if (dao.insertIfAbsent(pending) == -1L) {
                 return@withTransaction
             }
+            // M2 顺带修复：转账卡纳入冷却登记（此前未登记）—— 该卡被确认/忽略后，
+            // 同额重复观测才有 RecentPaymentCooldown 的 15s 抑制，与其他卡同口径。
+            RecentPaymentCooldown.rememberCard(
+                pendingId = pendingId,
+                paymentPackage = paymentPackage,
+                amountMinor = amountMinor,
+                orderId = null
+            )
             PendingChangeHub.emit(
                 PendingChangeInfo(
                     pendingId = pendingId,
@@ -1358,8 +1387,10 @@ internal class CheckoutPaymentMatcher(
      *
      * 只改诊断列（conflict_reason / applied_rules），不动 version ——
      * 见 [PendingTransactionDao.updateMergeTrace] 的同口径说明。
+     *
+     * internal：M2 转账跨腿归并（TransferClassifier → 结果页卡）共用同一实现。
      */
-    private suspend fun mergeSignalIntoExisting(
+    internal suspend fun mergeSignalIntoExisting(
         existing: PendingTransactionEntity,
         incomingSourceEventKey: String,
         incomingReason: String
@@ -1375,8 +1406,58 @@ internal class CheckoutPaymentMatcher(
         }
     }
 
+    // ── M2：转账跨腿查重（结果页个人转账腿 × 通知转账腿）────────────────────
+
+    /**
+     * 提取待确认转账卡的收款人：两条腿存储位置不同 —— 结果页卡存 `merchant` 列
+     * （[recordPersonalTransfer]），通知腿卡存 `appliedRules.recipient`
+     * （TransferClassifier）。统一在此收口，比对判据只有这一处。
+     */
+    private fun transferRecipientOf(card: PendingTransactionEntity): String? {
+        card.merchant?.trim()?.takeIf { it.isNotEmpty() }?.let { return it }
+        return runCatching {
+            JSONObject(card.appliedRules).optString("recipient").trim().takeIf { it.isNotEmpty() }
+        }.getOrNull()
+    }
+
+    /**
+     * M2：查「同包 + 同额 + 同收款人」的既有转账待确认卡（默认 2min 窗，
+     * 与 orderId 强键归并同哲学：收款人+金额+包名 = 转账场景的最强身份键）。
+     * 收款人任一侧缺失或不等 ⇒ 不匹配 —— 两笔真实转账绝不许合并（拍板）。
+     */
+    internal suspend fun findSameTransferCard(
+        platform: String,
+        amountMinor: Long,
+        recipient: String?,
+        occurredAt: Long,
+        windowMillis: Long = PAYMENT_IDENTITY_MERGE_WINDOW_MILLIS
+    ): PendingTransactionEntity? {
+        val normalizedRecipient = recipient?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+        if (occurredAt <= 0L) return null
+        return database.pendingTransactionDao().findRecentTransferPendings(
+            platform = platform,
+            amountMinor = amountMinor,
+            windowStart = occurredAt - windowMillis,
+            windowEnd = occurredAt + windowMillis
+        ).firstOrNull { transferRecipientOf(it) == normalizedRecipient }
+    }
+
+    /** M2：把后到的转账信号归并进既有卡（留痕被并信号键与冲突码）。 */
+    internal suspend fun mergeTransferSignalInto(
+        existing: PendingTransactionEntity,
+        incomingSourceEventKey: String,
+        incomingReason: String
+    ) {
+        mergeSignalIntoExisting(existing, incomingSourceEventKey, incomingReason)
+    }
+
     /**
      * P4 留痕：在 appliedRules JSON 对象上追加 `mergedSourceEventKeys` 数组元素。
+     *
+     * M7：数组设硬上限 [MAX_MERGED_SOURCE_EVENT_KEYS] 防极端重复信号下的无限
+     * 膨胀 —— 超限后保留**先到者**（归并链路起点信号，审计价值最高），溢出
+     * 条数累计进独立键 `mergedSourceEventKeysOverflow`，"吸收过多少条信号"
+     * 这一事实不丢失。
      *
      * @return 更新后的 JSON；已含该键时原样返回 [base]（幂等，调用方按字符串
      *   比较即可感知"无变化"）；base 非法时按空对象重建（与 [mergeRulesJson]
@@ -1389,6 +1470,14 @@ internal class CheckoutPaymentMatcher(
         if (keys != null) {
             for (index in 0 until keys.length()) {
                 if (keys.optString(index) == sourceEventKey) return base
+            }
+            if (keys.length() >= MAX_MERGED_SOURCE_EVENT_KEYS) {
+                // M7：溢出只计数不再追加（先到者已保全归并链路起点）
+                merged.put(
+                    "mergedSourceEventKeysOverflow",
+                    merged.optInt("mergedSourceEventKeysOverflow", 0) + 1
+                )
+                return merged.toString()
             }
             keys.put(sourceEventKey)
             merged.put("mergedSourceEventKeys", keys)

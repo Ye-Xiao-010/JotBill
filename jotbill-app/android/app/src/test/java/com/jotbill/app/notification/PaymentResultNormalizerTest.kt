@@ -155,4 +155,68 @@ class PaymentResultNormalizerTest {
             otherRecipient?.sourceEventKey
         )
     }
+
+    @Test
+    fun refundKeyWithoutContentTimeUsesContentHashAndStaysStable() {
+        // M3：正文无可解析时间时，键的时间分量改用脱敏内容哈希 ——
+        // 重发换 postTime 不再换键；不同内容必须异键。
+        val pkg = "com.eg.android.AlipayGphone"
+        val text = "退款 ¥5.00 退回至余额 原交易号: ABC123456"
+        val first = PaymentResultNormalizer.normalizeRefund(
+            sourcePackage = pkg, title = "支付宝", text = text, bigText = "",
+            subText = "", summaryText = "", tickerText = "",
+            postTime = epochMillis(0, 11, 0), notificationKey = "k1", notificationId = 1
+        )
+        val second = PaymentResultNormalizer.normalizeRefund(
+            sourcePackage = pkg, title = "支付宝", text = text, bigText = "",
+            subText = "", summaryText = "", tickerText = "",
+            postTime = epochMillis(1, 8, 0), notificationKey = "k2", notificationId = 2
+        )
+        val other = PaymentResultNormalizer.normalizeRefund(
+            sourcePackage = pkg, title = "支付宝",
+            text = "退款 ¥6.00 退回至余额 原交易号: ABC123456",
+            bigText = "", subText = "", summaryText = "", tickerText = "",
+            postTime = epochMillis(1, 8, 0), notificationKey = "k3", notificationId = 3
+        )
+
+        assertNotNull(first)
+        assertNotNull(second)
+        assertEquals(
+            "正文无时间时重发必须同键（内容哈希兜底）",
+            first?.sourceEventKey,
+            second?.sourceEventKey
+        )
+        assertNotNull(other)
+        org.junit.Assert.assertNotEquals(
+            "不同内容必须异键",
+            first?.sourceEventKey,
+            other?.sourceEventKey
+        )
+    }
+
+    @Test
+    fun refundKeyDistinguishesTwoRefundsWithinSameMinute() {
+        // M6：时间桶收窄到秒级 —— 同分钟内同额同单号的两笔部分退款不再同键。
+        val pkg = "com.eg.android.AlipayGphone"
+        val earlier = PaymentResultNormalizer.normalizeRefund(
+            sourcePackage = pkg, title = "支付宝",
+            text = "退款 ¥5.00 退回至余额 原交易号: ABC123456 退款时间 10:00:05",
+            bigText = "", subText = "", summaryText = "", tickerText = "",
+            postTime = epochMillis(0, 10, 1), notificationKey = "k1", notificationId = 1
+        )
+        val later = PaymentResultNormalizer.normalizeRefund(
+            sourcePackage = pkg, title = "支付宝",
+            text = "退款 ¥5.00 退回至余额 原交易号: ABC123456 退款时间 10:00:30",
+            bigText = "", subText = "", summaryText = "", tickerText = "",
+            postTime = epochMillis(0, 10, 1), notificationKey = "k2", notificationId = 2
+        )
+
+        assertNotNull(earlier)
+        assertNotNull(later)
+        org.junit.Assert.assertNotEquals(
+            "同分钟内不同秒的两笔退款必须异键（M6）",
+            earlier?.sourceEventKey,
+            later?.sourceEventKey
+        )
+    }
 }

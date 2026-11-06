@@ -109,6 +109,32 @@ internal class TransferClassifier(
             return@withTransaction TransferOutcome.Duplicate
         }
 
+        // ---- M2：跨腿查重 —— 结果页个人转账卡已存在（同收款人）⇒ 归并，不再双卡 ----
+        // 结果页腿（recordPersonalTransfer）与通知腿是两条独立键族，同一笔微信转账
+        // 会各落一张卡。命中即归并留痕并返回 Duplicate；收款人缺失/不等绝不合并。
+        if (!isRepayment && input.recipientName != null) {
+            val matcher = CheckoutPaymentMatcher(database)
+            val crossDup = matcher.findSameTransferCard(
+                platform = input.sourcePackage,
+                amountMinor = input.amountMinor,
+                recipient = input.recipientName,
+                occurredAt = input.occurredAt
+            )
+            if (crossDup != null) {
+                matcher.mergeTransferSignalInto(
+                    existing = crossDup,
+                    incomingSourceEventKey = input.sourceEventKey,
+                    incomingReason = ""
+                )
+                JotBillLog.i(
+                    "TransferClassifier",
+                    "通知转账与结果页转账归并为单卡: pending=${crossDup.id.take(16)}, " +
+                        "amount=${input.amountMinor}, recipient=${input.recipientName}"
+                )
+                return@withTransaction TransferOutcome.Duplicate
+            }
+        }
+
         // ---- 规则引擎（阶段五 T1：纯通知路径同样执行规则）----
         val ruleDecision = ruleEngine.evaluateAndRecord(
             RuleEngine.Subject(
@@ -202,7 +228,8 @@ internal class TransferClassifier(
             // AutoCommitted(bill.id)，而 bill.id 是一个从未落库的 UUID ——
             // 上层会据此认为"已入账"并把该 ID 当作退款/转账的关联目标。
             //
-            // 复核修复（M1 潜伏缺口，2026-11-06 探针实证）：撞号处理**不得**靠
+            // 复核修复（M1 潜伏缺口，2026-11-06 探针实证，留存
+            // [com.jotbill.app.data.RoomNestedTransactionProbeTest]）：撞号处理**不得**靠
             // catch OrderConflictException —— LedgerRepository.createBillWithDedup
             // 自身在 Room withTransaction 内抛错，嵌套事务内层异常会让**外层事务
             // 整体回滚**（回落建卡行随之消失）。改为**预检**：与 L1 同口径先查

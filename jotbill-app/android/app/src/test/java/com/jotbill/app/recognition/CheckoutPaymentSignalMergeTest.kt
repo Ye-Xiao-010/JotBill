@@ -403,4 +403,29 @@ class CheckoutPaymentSignalMergeTest {
             outcome.kind
         )
     }
+
+    /** M7：留痕数组达上限后先到者保留、溢出转计数（不无限膨胀）。 */
+    @Test
+    fun 留痕数组超上限转溢出计数() = runBlocking {
+        // 首信号建卡，随后 17 条同单号信号逐条归并（2min 窗内）
+        deliver(signal(WECHAT, 39001L, BASE, "JD-M7-1", "evt-m7-0"))
+        repeat(17) { index ->
+            deliver(signal(WECHAT, 39001L, BASE + 1_000L, "JD-M7-1", "evt-m7-${index + 1}"))
+        }
+
+        assertEquals(1, pendingCount())
+        val card = database.pendingTransactionDao().getPage(10, 0).single()
+        val json = JSONObject(card.appliedRules)
+        val keys = json.optJSONArray("mergedSourceEventKeys")
+        assertEquals(
+            "留痕数组必须封顶（先到者保留）",
+            16,
+            keys?.length()
+        )
+        assertEquals(
+            "溢出条数必须转计数（留痕能力不丢）",
+            1,
+            json.optInt("mergedSourceEventKeysOverflow", 0)
+        )
+    }
 }

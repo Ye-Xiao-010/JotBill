@@ -339,8 +339,9 @@ internal object PaymentResultNormalizer {
             """\s*[:：]?\s*(?<!\d)([01]?\d|2[0-3]):([0-5]\d)(?::([0-5]\d))?"""
     )
 
-    /** P6 业务键族的时间桶宽：同笔业务的重复通知按分钟桶归一为同一键。 */
-    private const val BUSINESS_KEY_TIME_BUCKET_MILLIS = 60_000L
+    /** P6 业务键族的时间桶宽：M6 收窄到秒级 —— 同分钟内同额同单号的连续两笔
+     *  部分退款（秒级时间可区分）不再同键被幂等吞并。 */
+    private const val BUSINESS_KEY_TIME_BUCKET_MILLIS = 1_000L
     private val SENSITIVE_NUMBER_PATTERN = Regex("""(?<![\p{L}\p{N}])\d{3,}(?:[.,]\d+)?(?![\p{L}\p{N}])""")
 
     /** 商户名匹配正则 */
@@ -499,19 +500,25 @@ internal object PaymentResultNormalizer {
         // 发生时间：优先正文时间，回退通知时间
         val occurredAt = extractOccurredAt(fullContent, postTime)
 
-        // sourceEventKey：refund- 前缀与支付事件键隔离。
-        // P6 修复：键族改用**业务字段**（包名+金额+原交易单号+业务时间分钟桶），
-        // 不再混入 notificationKey/notificationId/postTime —— 同一条退款通知被系统
-        // 或应用重发时会拿到新通知 id/新送达时间，旧键族因此失效、重复退款各落一卡。
-        // 业务字段对"同一笔退款"稳定：正文含时间时 occurredAt 由正文解析，重发不变；
-        // 正文无时间时回退 postTime（与旧实现同样不稳，不更差）。
-        val sourceEventKey = sha256(
-            "refund-event|$sourcePackage|$amountMinor|${orderId.orEmpty()}|" +
-                occurredAt / BUSINESS_KEY_TIME_BUCKET_MILLIS
-        )
-
         val rawTextHash = sha256(
             "refund-raw|$sourcePackage|${sanitizeForHash(fullContent, orderId)}"
+        )
+
+        // sourceEventKey：refund- 前缀与支付事件键隔离。
+        // P6 修复：键族改用**业务字段**（包名+金额+原交易单号+业务时间分量），
+        // 不再混入 notificationKey/notificationId/postTime —— 同一条退款通知被系统
+        // 或应用重发时会拿到新通知 id/新送达时间，旧键族因此失效、重复退款各落一卡。
+        // M3：正文**无**可解析时间时，时间分量改用**脱敏内容哈希**（rawTextHash 的
+        // 哈希输入已剥离订单号与连续敏感数字，不落原文、不新增采集面）——
+        // 正文无时间时 occurredAt 回退 postTime，重发即漂移；同一通知重发同键、
+        // 不同内容异键，幂等不再依赖通知系统 id。
+        val keyTimePart = if (contentHasBusinessTime(fullContent)) {
+            (occurredAt / BUSINESS_KEY_TIME_BUCKET_MILLIS).toString()
+        } else {
+            "h:$rawTextHash"
+        }
+        val sourceEventKey = sha256(
+            "refund-event|$sourcePackage|$amountMinor|${orderId.orEmpty()}|$keyTimePart"
         )
 
         return PaymentEvidenceInput(
@@ -601,18 +608,23 @@ internal object PaymentResultNormalizer {
 
         val occurredAt = extractOccurredAt(fullContent, postTime)
 
-        // P6 修复：键族改用业务字段（包名+金额+单号+目标账户/收款人提示+业务时间
-        // 分钟桶），不再混入 notificationKey/notificationId/postTime —— 通知重发
-        // 换系统 id/送达时间会让旧键失效，同一笔转账重复落卡。目标提示参与键构成：
-        // 同额不同目标（还招行 vs 还工行）是两笔，不得共键吞并。
-        val sourceEventKey = sha256(
-            "transfer-event|$sourcePackage|$amountMinor|${orderId.orEmpty()}|" +
-                "${targetAccountHint.orEmpty()}|${recipientName.orEmpty()}|" +
-                occurredAt / BUSINESS_KEY_TIME_BUCKET_MILLIS
-        )
-
         val rawTextHash = sha256(
             "transfer-raw|$sourcePackage|${sanitizeForHash(fullContent, orderId)}"
+        )
+
+        // P6 修复：键族改用业务字段（包名+金额+单号+目标账户/收款人提示+业务时间
+        // 分量），不再混入 notificationKey/notificationId/postTime —— 通知重发
+        // 换系统 id/送达时间会让旧键失效，同一笔转账重复落卡。目标提示参与键构成：
+        // 同额不同目标（还招行 vs 还工行）是两笔，不得共键吞并。
+        // M3：正文无时间时时间分量改用脱敏内容哈希（同 normalizeRefund 口径）。
+        val keyTimePart = if (contentHasBusinessTime(fullContent)) {
+            (occurredAt / BUSINESS_KEY_TIME_BUCKET_MILLIS).toString()
+        } else {
+            "h:$rawTextHash"
+        }
+        val sourceEventKey = sha256(
+            "transfer-event|$sourcePackage|$amountMinor|${orderId.orEmpty()}|" +
+                "${targetAccountHint.orEmpty()}|${recipientName.orEmpty()}|$keyTimePart"
         )
 
         return PaymentEvidenceInput(
@@ -708,11 +720,18 @@ internal object PaymentResultNormalizer {
         val occurredAt = extractOccurredAt(fullContent, postTime)
         val orderId = OrderIdNormalizer.normalize(extractField(fullContent, ORDER_ID_PATTERNS))
 
+        // M3：手续费/主交易键的时间分量同 normalizeRefund 口径 —— 正文无时间时
+        // 用脱敏内容哈希，通知重发不再换键。
+        val keyTimePart = if (contentHasBusinessTime(fullContent)) {
+            (occurredAt / BUSINESS_KEY_TIME_BUCKET_MILLIS).toString()
+        } else {
+            "h:" + sha256("fee-raw|$sourcePackage|${sanitizeForHash(fullContent, orderId)}")
+        }
+
         // ---- 手续费证据：fee-event 键空间 + fee 语义后缀 ----
         // P6 修复：键族改用业务字段（原因见 normalizeRefund 同段注释）。
         val feeSourceEventKey = sha256(
-            "fee-event|$sourcePackage|$feeAmountMinor|${orderId.orEmpty()}|fee|" +
-                occurredAt / BUSINESS_KEY_TIME_BUCKET_MILLIS
+            "fee-event|$sourcePackage|$feeAmountMinor|${orderId.orEmpty()}|fee|$keyTimePart"
         )
         val feePart = PaymentEvidenceInput(
             sourcePackage = sourcePackage,
@@ -741,9 +760,9 @@ internal object PaymentResultNormalizer {
 
         // transfer-event 键空间 + main 语义后缀，与纯转账通知键天然区分
         // P6 修复：键族改用业务字段（原因见 normalizeRefund 同段注释）。
+        // M3：正文无时间时时间分量同 fee 键，复用同一脱敏内容哈希。
         val mainSourceEventKey = sha256(
-            "transfer-event|$sourcePackage|$mainAmountMinor|${orderId.orEmpty()}|main|" +
-                occurredAt / BUSINESS_KEY_TIME_BUCKET_MILLIS
+            "transfer-event|$sourcePackage|$mainAmountMinor|${orderId.orEmpty()}|main|$keyTimePart"
         )
 
         val mainPart = PaymentEvidenceInput(
@@ -878,6 +897,15 @@ internal object PaymentResultNormalizer {
                 "$notificationId|$postTime|$amountMinor|${orderId.orEmpty()}"
         )
     }
+
+    /**
+     * 正文是否携带可解析的业务时间（M3）：决定 sourceEventKey 时间分量取
+     * 「业务时间秒级桶」还是「脱敏内容哈希」。与 [extractOccurredAt] 的解析
+     * 判据同源（先业务标签时间、后裸时间），两处不得漂移。
+     */
+    private fun contentHasBusinessTime(content: String): Boolean =
+        LABELED_BUSINESS_TIME_PATTERN.find(content) != null ||
+            TIME_PATTERN.find(content) != null
 
     /**
      * 从正文提取交易发生时间，优先级高于通知到达时间。

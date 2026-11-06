@@ -125,6 +125,33 @@ interface PendingTransactionDao {
     ): PendingTransactionEntity?
 
     /**
+     * M2 转账跨腿查重：同包同额的**转账**待确认卡列表（窗口内）。
+     *
+     * 结果页个人转账（`recordPersonalTransfer`，收款人存 merchant 列）与通知
+     * 转账/还款（`TransferClassifier`，收款人存 appliedRules.recipient）是
+     * 两条独立键族，同一笔转账会各落一张卡。本查询供两侧在建卡前互查；
+     * 收款人一致性由调用方在 Kotlin 侧比对（两处存储位置不同），**收款人
+     * 不同绝不许合并**（拍板：不得把两笔真实转账并成一笔）。
+     */
+    @Query(
+        """
+        SELECT * FROM pending_transactions
+        WHERE status = 'pending'
+          AND type = 'transfer'
+          AND platform = :platform
+          AND amount_minor = :amountMinor
+          AND occurred_at BETWEEN :windowStart AND :windowEnd
+        ORDER BY created_at DESC
+        """
+    )
+    suspend fun findRecentTransferPendings(
+        platform: String,
+        amountMinor: Long,
+        windowStart: Long,
+        windowEnd: Long
+    ): List<PendingTransactionEntity>
+
+    /**
      * P1 多信号合并：按「支付身份」的强键 —— **订单号**（跨源跨包）查可归并的
      * 既有待确认卡。
      *
