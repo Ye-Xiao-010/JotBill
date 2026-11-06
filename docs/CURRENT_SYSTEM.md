@@ -55,6 +55,7 @@
 
 - **短信不参与跨源归并**（显式决策）：短信 orderId 恒空（规则资产无 orderNo 槽），走原同包逻辑。
 - 导入强一致：`ImportEngine.decide` 无 `merchantOrderId` 时，**金额精确 + 同日 + 商户模糊三者全中且唯一**才 MERGED（`findStrongIdentityMergeTarget`），缺一退回只提示。
+- 导入退款行先过 `checkRefundRowGuard`（B1 **计数差值**查重：同 (原单,金额) 键批次内第 1..baseline 行 SKIPPED、之后放行，同额真分次退款不丢；SKIPPED 带 `REFUND_DUPLICATE_COUNTED` 写 `import_skip` 批次审计留痕；B3 累计超额 → PENDING），详见 §5.1。
 - 事件级冷却：`RecentPaymentCooldown`（消费后同键 15s 抑制；orderId 冲突放行）。
 
 ## 4. 落点判定
@@ -107,6 +108,32 @@
 - 账单写入与余额原子：`createBillWithDedup` 同事务（`withTransaction`），失败整体回滚；判重命中走 `mergeIntoExistingBill`（只补空，**M1：金额/类型不一致抛 `OrderConflictException`，不再静默合并**）。
 - 手动/AI 录入幂等（P15）：`DataModule.addBill` 支持可选 `clientRequestId`（RN 表单会话/AI 提案 id），确定性主键 `manual:<id>`，重试/双击/重放命中既有账单即幂等返回；缺省保持随机 UUID。
 
+### 5.1 余额模型与账务联动（2026-11-06 审查后补写）
+
+- **余额是冗余存储，不是实时聚合**：`AccountEntity` 同存 `initialBalanceMinor`（期初）与 `currentBalanceMinor`（当前）；每笔账单写/改/删在同一 Room 事务内增量维护后者。不变式口径：**current = initial + Σ(账单delta) + Σ(校准diff)**。
+- **六类型方向真值表**（唯一出处 `BalanceCalculator.delta`；导入侧 `ImportEngine.applyImportedBalance` / `ImportUndo.applyBalance` 为平行实现、方向逐字对齐）：
+
+  | 类型 | 源账户 | 目标账户 |
+  |---|---|---|
+  | income / refund | +amount | — |
+  | expense / fee | -amount | — |
+  | transfer / repayment | -amount | **恒 +amount**（负债账户负数=欠款，+amount 即欠款减少向 0 靠近） |
+  | adjustment | **0**（余额由 `calibrateAccountBalance` 直接设值） | — |
+
+- **编辑 = 重算法**（`updateBillWithBalanceUpdate`）：事务内 `-1×旧账单` + `+1×新账单`，改账户时旧账户回滚、新账户应用两边都做；**删除 = 反向回滚**（`deleteBillWithBalanceUpdate`，含通知栏撤销 `AutoBookkeepingUndoReceiver`）。adjustment 账单三路径均锁死（`requireMutableBill`）。
+- **校准语义**：`calibrateAccountBalance` 直接设余额 + 写 delta=0 的 adjustment 账单 + `balance_calibrations` 留痕 —— 它是**人工对账修复口**，校准本身改变余额但不改变 Σ账单delta，因此不变式必须把 Σ校准diff 纳入。
+- **账户删除 = 软删**（`DataModule.deleteAccount` 只置 `isActive=false`）：余额与历史账单保留；净资产只算活跃账户，收支统计（`BillDao.getSummary` 等）不含账户活跃过滤。注意：已停用账户的历史账单**不可编辑**（`validateBillAccounts` 要求 active）但**可删除**。
+- **退款防线（唯一出处 `RefundCapGuard`：累计退款 ≤ 原实付，覆盖四条路径）**：自动入账（`RefundLinker`）/ 确认（`confirmPendingTransaction`）/ **编辑**（`updateBillWithBalanceUpdate`，B2 起，超额抛 `LedgerValidationException` 整体回滚）/ **导入**（`ImportEngine.checkRefundRowGuard`，B3 起，超额转待确认）。无原单关联或原单已删不校验（无锚点）。超额文案唯一出处 `RefundCapGuard.REFUND_EXCEEDED_MESSAGE`（中文，经桥接层原样展示，RN 不套壳）。
+- **退款跨源查重（B1，计数差值口径）**：L1 与导入合并对 refund 的豁免是**必要**的（通知链路退款账单 orderId=原支付单号，导入退款行单号=退款单号）；重复判定走**原单关联**——`checkRefundRowGuard` + `RefundSkipCounter`：同 (原单, 金额) 键下 baseline=批前库里已有退款数（账单+待确认卡），批次内第 1..baseline 行 SKIPPED、第 baseline+1 行起放行（**同额第二笔真实分次退款不吞**）；inspect/execute 各自一份计数器、跨 chunk 共享。SKIPPED 行写 `import_skip` 审计（`writeSkipAudit`：行号/金额/商户单号/脱敏样本，`insertIfAbsent` 幂等）。
+- **余额一致性抽检（B4，只提示不改数）**：`BalanceReconciler`（口径含 Σ校准diff，**校准过的账户不误报**）；启动时后台协程 `MainApplication.onCreate` → `auditMismatches`（命中写审计 `entityType=balance_reconcile`，按日幂等）；RN 账户页经桥 `DataModule.getBalanceReconcileWarnings` 实时重算并展示横幅，指向既有「校准余额」入口。
+- **并发**：全部余额读改写都在 Room `withTransaction` 内（单进程串行）；账单乐观锁只管 version，余额 RMW 与同事务，无丢更新窗口。金额上限 `MAX_SAFE_MINOR_UNIT` + `checkedAdd/checkedMultiply`，超限抛错即整事务回滚。
+
+### 5.2 统计口径
+
+- 收支统计/趋势/预算（`getBillStatistics`/`getSummary`/趋势/`sumExpenses`）= **账单聚合**口径（income+refund 计收入侧，expense+fee 计支出侧，transfer/repayment/adjustment 不计入）。
+- 净资产/账户余额（`getNetWorth`/`getAccounts`）= **余额字段**口径（`current_balance_minor`，负债取 ABS）。
+- 两套口径靠上述不变式保持一致；漂移的唯一自动发现通道 = B4 抽检。
+
 ## 6. RN 展示与手动确认
 
 事件：落卡/入账 → `PendingChangeHub.emit` → `PendingReminderNotifier`（通知）/ 前台弹窗（`PendingPromptPolicy`，仅 `USER_ASSERTED*` 前缀优先 —— ⚠️ **该优先级当前作用在死码上**：`USER_ASSERTED_REASON` 全仓只有定义无写入点；`PENDING_CONFLICT_REASON_USER_ASSERTED` 仅用于通知过滤前缀匹配）→ RN `ReviewScreen`。
@@ -144,9 +171,9 @@
 | 通知解析 | `PaymentResultNormalizerTest`（跨零点、**P6 业务键族稳定、M3 无时间内容哈希、M6 秒级桶、P16 标签优先**）、`PaymentNotificationConfigTest` | 通知解析语义与键族稳定 |
 | 指纹/敏感 | `VolatileTokenTrackerTest`、`PageFingerprintStabilityTest`、`SensitivePageLatchTest` | 漂移三层、敏感锁存 |
 | 导入 | `ImportMergeTargetTest`、`WechatBillAdapterTest`、`AlipayBillAdapterTest`、`CsvTableReaderTest`、`ImportPerformanceSmokeTest` | 强一致三条件 MERGED、账单文件解析适配、CSV 读取、导入性能（**P9：账户未匹配行转待确认**，不落无账户账单） |
-| 账务 | `CheckoutPaymentAmountToleranceTest`、`PendingConfirmServiceTest`（含 **M4 疑似重复二次确认**） | 金额容差、确认删卡原子 |
+| 账务 | `CheckoutPaymentAmountToleranceTest`、`PendingConfirmServiceTest`（含 **M4 疑似重复二次确认**）、`LedgerRepaymentDirectionTest`（还款/转账双账户方向+删除回滚）、`LedgerEditDeleteBalanceTest`（编辑改账户双边、expense/refund 删除回滚、B2 编辑退款上限）、`BalanceReconcilerTest`（B4 口径含校准差额、校准不误报、审计按日幂等）、`ImportRefundGuardTest`（B1 计数差值查重：同额真分次退款放行、跳过留痕审计；B3 超额转 PENDING）、`ConfirmRefundCapTest`（确认路径退款上限） | 金额容差、确认删卡原子、余额方向/回滚/退款防线/抽检 |
 
-全量：`./gradlew.bat :app:testDebugUnitTest`（基线 366 tests / 0 failures）。
+全量：`./gradlew.bat :app:testDebugUnitTest`（基线 385 tests / 0 failures，2026-11-06 起）。
 
 > 补充：①行为红线的**负向断言清单**（"不创建会话/无 `ensureSession` 日志"等通过判定）见 `docs/qa/golden-path-regression.md`，比本节更细；②排查金额解析可看 **`AmountDiag` 采样日志**（token / dropped 计数），出处 `docs/FIX_TASK_2026-09-29_attribution_pending_dup.md`。
 
