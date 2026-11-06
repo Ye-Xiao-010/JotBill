@@ -411,12 +411,35 @@ internal object PaymentResultParser {
         return null
     }
 
-    /** 原文不落库；哈希前仍需去除独立敏感数字和完整订单号。 */
+    /**
+     * 随帧变化的时间字样（P2）：支付成功页常带「05:59 后自动关闭」「12:30」等
+     * 倒计时/时钟文本，逐帧变化会让同一笔的重复观测得到不同 rawTextHash ——
+     * 「同文本哈希判同一笔」的去重主判据因此失效，页面停留超过 15 秒即双卡
+     * （2026-09-30 ¥2.68 双卡事故的残留形态）。这些词只从哈希输入剥离，
+     * 不参与任何字段解析（occurredAt 提取读的是未剥离的原文）。
+     */
+    private val COUNTDOWN_TEXT_PATTERN = Regex(
+        """(?i)(还剩|剩余|倒计时|countdown)?\s*\d{1,2}\s*[:：]\s*\d{2}(?:\s*[:：]\s*\d{2})?"""
+    )
+    private val CLOCK_TEXT_PATTERN = Regex(
+        """\b(?:[01]?\d|2[0-3])\s*[:：]\s*[0-5]\d(?:\s*[:：]\s*[0-5]\d)?\b"""
+    )
+    private val RELATIVE_TIME_TEXT_PATTERN = Regex(
+        """(?i)(刚刚|今天|昨天|前天|\d+\s*(秒|分钟|小时|天)前)"""
+    )
+
+    /**
+     * 原文不落库；哈希前去除完整订单号、随帧变化的时间字样（P2）与独立敏感数字，
+     * 保证同一笔支付结果页的重复观测得到稳定哈希（跨帧去重主判据）。
+     */
     private fun sanitizeForHash(content: String, orderId: String?): String {
         var sanitized = content
         orderId?.takeIf { it.isNotBlank() }?.let { value ->
             sanitized = sanitized.replace(value, "<order-id>")
         }
+        sanitized = COUNTDOWN_TEXT_PATTERN.replace(sanitized, "<time>")
+        sanitized = CLOCK_TEXT_PATTERN.replace(sanitized, "<time>")
+        sanitized = RELATIVE_TIME_TEXT_PATTERN.replace(sanitized, "<time>")
         return SENSITIVE_NUMBER_PATTERN.replace(sanitized, "<number>")
     }
 

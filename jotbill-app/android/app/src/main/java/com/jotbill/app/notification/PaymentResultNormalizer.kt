@@ -327,6 +327,19 @@ internal object PaymentResultNormalizer {
 
     /** 交易时间匹配正则：HH:mm 或 HH:mm:ss（通知正文常见格式）。 */
     private val TIME_PATTERN = Regex("""(?<!\d)([01]?\d|2[0-3]):([0-5]\d)(?::([0-5]\d))?(?!\d)""")
+
+    /**
+     * 带业务标签的时间（P16）：通知正文常含多个时间（支付时间/到账时间/退款时间…），
+     * 裸正则取「第一个时间」会取错 —— 优先认业务标签紧邻的时间，无标签时才回退
+     * 裸时间。标签词覆盖四条语义路径（支付/退款/转账/手续费）。
+     */
+    private val LABELED_BUSINESS_TIME_PATTERN = Regex(
+        """(?:支付时间|付款时间|交易时间|完成时间|退款时间|到账时间|转账时间|还款时间)""" +
+            """\s*[:：]?\s*(?<!\d)([01]?\d|2[0-3]):([0-5]\d)(?::([0-5]\d))?"""
+    )
+
+    /** P6 业务键族的时间桶宽：同笔业务的重复通知按分钟桶归一为同一键。 */
+    private const val BUSINESS_KEY_TIME_BUCKET_MILLIS = 60_000L
     private val SENSITIVE_NUMBER_PATTERN = Regex("""(?<![\p{L}\p{N}])\d{3,}(?:[.,]\d+)?(?![\p{L}\p{N}])""")
 
     /** 商户名匹配正则 */
@@ -485,10 +498,15 @@ internal object PaymentResultNormalizer {
         // 发生时间：优先正文时间，回退通知时间
         val occurredAt = extractOccurredAt(fullContent, postTime)
 
-        // sourceEventKey：refund- 前缀与支付事件键隔离；同一通知重复到达沿用同一键
+        // sourceEventKey：refund- 前缀与支付事件键隔离。
+        // P6 修复：键族改用**业务字段**（包名+金额+原交易单号+业务时间分钟桶），
+        // 不再混入 notificationKey/notificationId/postTime —— 同一条退款通知被系统
+        // 或应用重发时会拿到新通知 id/新送达时间，旧键族因此失效、重复退款各落一卡。
+        // 业务字段对"同一笔退款"稳定：正文含时间时 occurredAt 由正文解析，重发不变；
+        // 正文无时间时回退 postTime（与旧实现同样不稳，不更差）。
         val sourceEventKey = sha256(
-            "refund-event|$sourcePackage|${notificationKey.orEmpty()}|" +
-                "$notificationId|$postTime|$amountMinor|${orderId.orEmpty()}"
+            "refund-event|$sourcePackage|$amountMinor|${orderId.orEmpty()}|" +
+                occurredAt / BUSINESS_KEY_TIME_BUCKET_MILLIS
         )
 
         val rawTextHash = sha256(
@@ -582,9 +600,14 @@ internal object PaymentResultNormalizer {
 
         val occurredAt = extractOccurredAt(fullContent, postTime)
 
+        // P6 修复：键族改用业务字段（包名+金额+单号+目标账户/收款人提示+业务时间
+        // 分钟桶），不再混入 notificationKey/notificationId/postTime —— 通知重发
+        // 换系统 id/送达时间会让旧键失效，同一笔转账重复落卡。目标提示参与键构成：
+        // 同额不同目标（还招行 vs 还工行）是两笔，不得共键吞并。
         val sourceEventKey = sha256(
-            "transfer-event|$sourcePackage|${notificationKey.orEmpty()}|" +
-                "$notificationId|$postTime|$amountMinor|${orderId.orEmpty()}"
+            "transfer-event|$sourcePackage|$amountMinor|${orderId.orEmpty()}|" +
+                "${targetAccountHint.orEmpty()}|${recipientName.orEmpty()}|" +
+                occurredAt / BUSINESS_KEY_TIME_BUCKET_MILLIS
         )
 
         val rawTextHash = sha256(
@@ -685,9 +708,10 @@ internal object PaymentResultNormalizer {
         val orderId = extractField(fullContent, ORDER_ID_PATTERNS)
 
         // ---- 手续费证据：fee-event 键空间 + fee 语义后缀 ----
+        // P6 修复：键族改用业务字段（原因见 normalizeRefund 同段注释）。
         val feeSourceEventKey = sha256(
-            "fee-event|$sourcePackage|${notificationKey.orEmpty()}|" +
-                "$notificationId|$postTime|$feeAmountMinor|${orderId.orEmpty()}|fee"
+            "fee-event|$sourcePackage|$feeAmountMinor|${orderId.orEmpty()}|fee|" +
+                occurredAt / BUSINESS_KEY_TIME_BUCKET_MILLIS
         )
         val feePart = PaymentEvidenceInput(
             sourcePackage = sourcePackage,
@@ -715,9 +739,10 @@ internal object PaymentResultNormalizer {
         val recipientName = if (isRepayment) null else extractField(fullContent, RECIPIENT_PATTERNS)
 
         // transfer-event 键空间 + main 语义后缀，与纯转账通知键天然区分
+        // P6 修复：键族改用业务字段（原因见 normalizeRefund 同段注释）。
         val mainSourceEventKey = sha256(
-            "transfer-event|$sourcePackage|${notificationKey.orEmpty()}|" +
-                "$notificationId|$postTime|$mainAmountMinor|${orderId.orEmpty()}|main"
+            "transfer-event|$sourcePackage|$mainAmountMinor|${orderId.orEmpty()}|main|" +
+                occurredAt / BUSINESS_KEY_TIME_BUCKET_MILLIS
         )
 
         val mainPart = PaymentEvidenceInput(
@@ -859,10 +884,16 @@ internal object PaymentResultNormalizer {
      * 支持"HH:mm"和"HH:mm:ss"格式（通知正文常见），结合通知时间的日期部分还原时间戳；
      * 正文只有时分时，在通知日期前一天/当天/后一天中选最接近 postTime 的时间，
      * 覆盖跨午夜的双向场景；解析失败时返回通知时间。
+     *
+     * P16：多时间字段并存时**优先带业务标签的时间**（支付时间/退款时间等），
+     * 无标签时间才回退「正文第一个 HH:mm」—— 旧实现直接取第一个时间，
+     * "支付时间 10:00 … 到账时间 10:05" 类通知可能误取后一个无关时间。
      * 无法解析时返回通知时间。
      */
     private fun extractOccurredAt(content: String, postTime: Long): Long {
-        val match = TIME_PATTERN.find(content) ?: return postTime
+        val match = LABELED_BUSINESS_TIME_PATTERN.find(content)
+            ?: TIME_PATTERN.find(content)
+            ?: return postTime
         val hour = match.groupValues[1].toIntOrNull() ?: return postTime
         val minute = match.groupValues[2].toIntOrNull() ?: return postTime
         val second = match.groupValues.getOrNull(3)?.toIntOrNull() ?: 0

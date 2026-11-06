@@ -272,6 +272,50 @@ class AutoBookkeepingEngineTest {
         assertEquals(1, h.sink.records.size)
     }
 
+    /**
+     * P4：同包同额认领窗内，两侧订单号都非空且**不同** ⇒ 客观两笔真单，
+     * 不得按同额指纹吞并；同订单号的重复记录仍被丢弃（幂等语义不回归）。
+     */
+    @Test
+    fun `P4 同额不同订单号的两笔不按指纹吞并`() {
+        val clockValue = mutableMapOf("now" to 1_000_000L)
+        val sink = RecordingSink()
+        val engine = AutoBookkeepingEngine(
+            registryRef = AtomicReference(PageRuleRegistry.fromJsonText(ORDER_ID_REGISTRY_TEXT)),
+            channels = { true },
+            sink = sink,
+            rescanScheduler = ManualScheduler(),
+            clock = { clockValue["now"]!! }
+        )
+
+        fun orderPage(orderId: String) = FakePageNode(
+            null, null,
+            children = listOf(
+                FakePageNode("订单号$orderId", null),
+                FakePageNode("实付12.34元", null)
+            )
+        )
+
+        fun window(id: Int) = AutoBookkeepingEngine.EventSnapshot(
+            eventType = AutoBookkeepingEngine.EVENT_WINDOW_STATE_CHANGED,
+            packageName = "com.test.shop",
+            className = "com.test.Checkout",
+            windowId = id,
+            eventTime = clockValue["now"]!!,
+            notificationText = null,
+            notificationContentDesc = null
+        )
+
+        engine.onEvent(window(1)) { orderPage("ORDER-1") }
+        assertEquals(1, sink.records.size)
+        // P4 护栏：同额但订单号不同 ⇒ 第二笔必须放行（旧实现按同额指纹吞并）
+        engine.onEvent(window(2)) { orderPage("ORDER-2") }
+        assertEquals("不同订单号的两笔不得吞并", 2, sink.records.size)
+        // 回归：同订单号的重复记录仍须按指纹丢弃
+        engine.onEvent(window(3)) { orderPage("ORDER-1") }
+        assertEquals("同订单号的重复记录仍须丢弃", 2, sink.records.size)
+    }
+
     companion object {
         /** 支付宝结果页 / 淘宝收银台（带确认锚点）/ 支付宝通知 三条规则的最小集。 */
         private val TEST_REGISTRY_TEXT = """
@@ -313,6 +357,25 @@ class AutoBookkeepingEngineTest {
                 "locateMaxTraverseCount": 1,
                 "extractPattern": "(\\d+(\\.\\d{1,2})?)元.+?支出",
                 "extractFields": {"amount": 1}
+              }
+            ]
+          }
+        }
+        """.trimIndent()
+
+        /** P4 测试专用：抽取 orderNo + amount 的最小规则集。 */
+        private val ORDER_ID_REGISTRY_TEXT = """
+        {
+          "rules": {
+            "com.test.Checkout": [
+              {
+                "ruleId": 900001,
+                "note": "测试-订单号规则",
+                "locateAttribute": 0,
+                "locateToken": "实付",
+                "locateMaxTraverseCount": 20,
+                "extractPattern": "text=订单号([A-Z0-9\\-]+).+?text=实付(\\d+(\\.\\d{1,2})?)元",
+                "extractFields": {"orderNo": 1, "amount": 2}
               }
             ]
           }

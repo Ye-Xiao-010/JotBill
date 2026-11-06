@@ -79,6 +79,46 @@ class PaymentResultParserTest {
     }
 
     @Test
+    fun countdownAndClockTextDoesNotDestabilizeRawTextHash() {
+        // P2 负向钉：结果页带倒计时/时钟等随帧变化字样时，同一笔的重复观测
+        // 哈希必须稳定 —— 旧实现把这些字样计入哈希，「同文本哈希判同一笔」
+        // 判据失效，页面停留超 15 秒即双卡（2026-09-30 ¥2.68 双卡残留形态）。
+        // 反向边界同时钉住：金额不同的两笔必须仍得到不同哈希（不得误并）。
+        val first = PaymentResultParser.parseResult(
+            pageText = "支付成功 实付 ¥29.90 商户：测试小店 05:59 后自动关闭",
+            sourcePackage = "com.tencent.mm",
+            pageFingerprint = "f".repeat(64),
+            observedAt = observedAt
+        )
+        val second = PaymentResultParser.parseResult(
+            pageText = "支付成功 实付 ¥29.90 商户：测试小店 05:41 后自动关闭",
+            sourcePackage = "com.tencent.mm",
+            pageFingerprint = "f".repeat(64),
+            observedAt = observedAt + 18_000L
+        )
+        val differentAmount = PaymentResultParser.parseResult(
+            pageText = "支付成功 实付 ¥30.90 商户：测试小店 05:59 后自动关闭",
+            sourcePackage = "com.tencent.mm",
+            pageFingerprint = "f".repeat(64),
+            observedAt = observedAt + 18_000L
+        )
+
+        assertTrue(first is PaymentResultParseResult.Success)
+        assertTrue(second is PaymentResultParseResult.Success)
+        assertTrue(differentAmount is PaymentResultParseResult.Success)
+        assertEquals(
+            "仅倒计时不同的同一笔 ⇒ 哈希必须相等",
+            (first as PaymentResultParseResult.Success).evidence.rawTextHash,
+            (second as PaymentResultParseResult.Success).evidence.rawTextHash
+        )
+        assertNotEquals(
+            "金额不同的两笔 ⇒ 哈希必须不等",
+            first.evidence.rawTextHash,
+            (differentAmount as PaymentResultParseResult.Success).evidence.rawTextHash
+        )
+    }
+
+    @Test
     fun failedPaymentPageNeverProducesSuccessEvidence() {
         val result = PaymentResultParser.parseResult(
             pageText = "支付失败 支付成功 实付 ¥12.34",

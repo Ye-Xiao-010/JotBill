@@ -88,8 +88,18 @@ class AutoBookkeepingEngine(
      * 已认领的抽取指纹：同包名+同金额在 [CLAIM_WINDOW_MILLIS] 内视为同一笔，
      * 既有弹窗管线据此让路。窗口取 PaymentTiming.SAME_TXN_WINDOW_MILLIS 同值
      * （15s）：与既有「同额合并」裁定同一时间尺度。
+     *
+     * P4 护栏：[orderId] 参与判重 —— 两侧订单号都非空且**不同**时，订单号客观
+     * 证明是两笔真单（如连付两笔同额），不得按同额指纹吞并第二条（与
+     * RecentPaymentCooldown 的 orderId 护栏同口径）；任一侧缺失时维持原语义。
      */
-    class Claim(val packageName: String, val amountMinor: Long, val ruleId: Int, val at: Long)
+    class Claim(
+        val packageName: String,
+        val amountMinor: Long,
+        val ruleId: Int,
+        val at: Long,
+        val orderId: String? = null
+    )
 
     private val claims = mutableListOf<Claim>()
 
@@ -494,8 +504,12 @@ class AutoBookkeepingEngine(
             // 同包名+同金额在认领窗内的第二条记录（如「结果页规则入账后几秒
             // 支付宝又发支出通知命中通知规则」）直接丢弃 —— 同额 15s 合并
             // 与用户既有裁定同一口径。
+            // P4 护栏：两侧订单号都非空且不同 ⇒ 客观两笔，放行第二条。
+            val recordOrderId = record.fields["orderNo"]?.trim()?.takeIf { it.isNotEmpty() }
             val duplicated = claims.any {
-                it.packageName == record.sourcePackage && it.amountMinor == amountMinor
+                it.packageName == record.sourcePackage && it.amountMinor == amountMinor &&
+                    (it.orderId.isNullOrBlank() || recordOrderId.isNullOrBlank() ||
+                        it.orderId == recordOrderId)
             }
             if (duplicated) {
                 JotBillLog.i(
@@ -508,7 +522,13 @@ class AutoBookkeepingEngine(
         }
         val claimed = sink.onRecordReady(record)
         if (claimed && amountMinor != null && amountMinor > 0) {
-            claims += Claim(record.sourcePackage, amountMinor, record.ruleId, clock())
+            claims += Claim(
+                packageName = record.sourcePackage,
+                amountMinor = amountMinor,
+                ruleId = record.ruleId,
+                at = clock(),
+                orderId = record.fields["orderNo"]?.trim()?.takeIf { it.isNotEmpty() }
+            )
             JotBillLog.i(
                 TAG,
                 "规则记录已交付: ruleId=${record.ruleId}, note=${record.ruleNote}, " +
