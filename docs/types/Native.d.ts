@@ -781,6 +781,10 @@ export interface RuntimeHealth {
   overlayPermissionGranted: boolean;  // 悬浮窗权限
   /** 阶段七 T6：应用是否已被加入电池优化白名单。 */
   batteryOptimizationIgnored: boolean;
+  /** 自动记账后台守护开关是否开启。 */
+  keepAliveEnabled: boolean;
+  /** 后台守护前台服务当前是否运行。 */
+  keepAliveRunning: boolean;
   /** 阶段七 T3：数据库迁移失败回滚发生时间；未发生过为 null。 */
   lastMigrationRecoveredAt?: string | null;
   /** 阶段七 T6：仍处于 RUNNING 的孤儿导入批次数。 */
@@ -1236,6 +1240,43 @@ export interface RuntimeModule {
   getRuntimeHealth(): Promise<RuntimeHealth>;
   /** 通知权限契约变更：打开通知监听专用系统设置页。 */
   openNotificationListenerSettings(): Promise<void>;
+  /** 打开系统电池优化列表，由用户自行选择是否放行后台。 */
+  openBatteryOptimizationSettings(): Promise<void>;
+}
+
+/**
+ * 规则式自动记账设置接口
+ */
+export interface AutoBookkeepingChannelMeta {
+  key: string;
+  label: string;
+  description: string;
+  defaultEnabled: boolean;
+}
+
+export interface AutoBookkeepingSettings {
+  masterEnabled: boolean;
+  keepAliveEnabled: boolean;
+  keepAlivePrompted: boolean;
+  keepAliveRunning: boolean;
+  channels: Record<string, boolean>;
+  channelMeta: AutoBookkeepingChannelMeta[];
+}
+
+export interface AutoBookkeepingRuleStats {
+  keys: number;
+  rules: number;
+  error?: string | null;
+}
+
+export interface AutoBookkeepingModule {
+  getSettings(): Promise<AutoBookkeepingSettings>;
+  setMasterEnabled(enabled: boolean): Promise<void>;
+  setChannelEnabled(channel: string, enabled: boolean): Promise<void>;
+  setKeepAliveEnabled(enabled: boolean): Promise<void>;
+  markKeepAlivePrompted(): Promise<void>;
+  getRuleStats(): Promise<AutoBookkeepingRuleStats>;
+  getServiceRunning(): Promise<boolean>;
 }
 
 /**

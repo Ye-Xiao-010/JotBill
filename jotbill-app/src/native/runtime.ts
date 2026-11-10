@@ -12,6 +12,8 @@ export interface RuntimeHealth {
   notificationEnabled: boolean;
   overlayPermissionGranted: boolean;
   batteryOptimizationIgnored: boolean;
+  keepAliveEnabled: boolean;
+  keepAliveRunning: boolean;
   lastMigrationRecoveredAt?: string | null;
   orphanImportBatches: number;
 }
@@ -21,6 +23,7 @@ export type RuntimeStatus = RuntimeHealth;
 interface RawRuntimeModule {
   getRuntimeHealth(): Promise<string>;
   openNotificationListenerSettings(): Promise<null>;
+  openBatteryOptimizationSettings(): Promise<null>;
 }
 
 function getRawRuntimeModule(): RawRuntimeModule {
@@ -42,6 +45,11 @@ export const nativeRuntime = {
    */
   async openNotificationListenerSettings(): Promise<void> {
     await getRawRuntimeModule().openNotificationListenerSettings();
+  },
+
+  /** 打开系统电池优化列表，由用户自行决定是否放行后台。 */
+  async openBatteryOptimizationSettings(): Promise<void> {
+    await getRawRuntimeModule().openBatteryOptimizationSettings();
   },
 };
 

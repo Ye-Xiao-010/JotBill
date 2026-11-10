@@ -13,6 +13,8 @@ import com.jotbill.app.data.DatabaseMigrationGuard
 import com.jotbill.app.data.JOT_BILL_DATABASE_VERSION
 import com.jotbill.app.data.JotBillDatabase
 import com.jotbill.app.data.JotBillDatabaseProvider
+import com.jotbill.app.keepalive.KeepAliveSettings
+import com.jotbill.app.keepalive.RecognitionKeepAliveService
 import com.jotbill.app.notification.PaymentNotificationService
 import com.jotbill.app.recognition.CheckoutAccessibilityService
 import kotlinx.coroutines.CoroutineScope
@@ -61,6 +63,20 @@ class RuntimeModule(
         }
     }
 
+    /** 打开系统电池优化列表；不直接申请白名单，避免误导与商店政策风险。 */
+    @ReactMethod
+    fun openBatteryOptimizationSettings(promise: Promise) {
+        try {
+            val intent = Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            reactContext.startActivity(intent)
+            promise.resolve(null)
+        } catch (error: Exception) {
+            promise.reject("OPEN_SETTINGS_ERROR", error.message, error)
+        }
+    }
+
     @ReactMethod
     fun getRuntimeHealth(promise: Promise) {
         scope.launch {
@@ -82,6 +98,8 @@ class RuntimeModule(
                     put("notificationEnabled", isNotificationListenerEnabled())
                     put("overlayPermissionGranted", isOverlayPermissionGranted())
                     put("batteryOptimizationIgnored", isIgnoringBatteryOptimizations())
+                    put("keepAliveEnabled", KeepAliveSettings.isEnabled(reactContext))
+                    put("keepAliveRunning", RecognitionKeepAliveService.isRunning)
                     put("orphanImportBatches", database.importBatchDao().getRunning().size)
                 }.toString()
                 withContext(Dispatchers.Main) { promise.resolve(result) }

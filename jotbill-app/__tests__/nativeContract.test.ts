@@ -129,6 +129,8 @@ test('Runtime 模块返回阶段二基础状态摘要', async () => {
     notificationEnabled: false,
     overlayPermissionGranted: false,
     batteryOptimizationIgnored: false,
+    keepAliveEnabled: false,
+    keepAliveRunning: false,
     orphanImportBatches: 0,
   } satisfies RuntimeHealth;
   const getRuntimeHealth = jest.fn().mockResolvedValue(JSON.stringify(status));

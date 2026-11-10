@@ -6,8 +6,9 @@
  * - 渠道开关：支付宝 / 微信支付 / 云闪付 / 银行短信（M6 预留）；
  * - 内置规则规模展示 + 工作原理 + 隐私说明。
  */
-import React from 'react';
+import React, { useCallback, useEffect, useRef } from 'react';
 import {
+  Alert,
   ScrollView,
   StyleSheet,
   Switch,
@@ -55,9 +56,50 @@ export default function AutoBookkeepingScreen() {
     queryFn: nativeAutoBookkeeping.getServiceRunning,
   });
 
-  const invalidate = () => {
+  const invalidate = useCallback(() => {
     void queryClient.invalidateQueries({ queryKey: SETTINGS_QUERY_KEY });
-  };
+  }, [queryClient]);
+
+  const keepAlivePromptShown = useRef(false);
+
+  const requestKeepAlive = useCallback(() => {
+    keepAlivePromptShown.current = true;
+    Alert.alert(
+      '开启后台守护？',
+      '开启后 JotBill 会显示一条低重要性常驻通知，降低最近任务被清理后漏记的概率。\n\n它不会轮询屏幕，也不会定时唤醒；自动记账仍然只在支付事件发生时工作。',
+      [
+        {
+          text: '暂不',
+          style: 'cancel',
+          onPress: () => {
+            void (async () => {
+              await nativeAutoBookkeeping.markKeepAlivePrompted();
+              invalidate();
+            })();
+          },
+        },
+        {
+          text: '开启',
+          onPress: () => {
+            void (async () => {
+              await nativeAutoBookkeeping.markKeepAlivePrompted();
+              await nativeAutoBookkeeping.setKeepAliveEnabled(true);
+              invalidate();
+            })();
+          },
+        },
+      ],
+      { cancelable: false },
+    );
+  }, [invalidate]);
+
+  useEffect(() => {
+    if (keepAlivePromptShown.current) return;
+    const current = settingsQuery.data;
+    if (current?.masterEnabled && !current.keepAlivePrompted) {
+      requestKeepAlive();
+    }
+  }, [requestKeepAlive, settingsQuery.data]);
 
   const masterMutation = useMutation({
     mutationFn: nativeAutoBookkeeping.setMasterEnabled,
@@ -123,12 +165,54 @@ export default function AutoBookkeepingScreen() {
             </View>
             <Switch
               value={masterEnabled}
-              onValueChange={(enabled) => masterMutation.mutate(enabled)}
+              onValueChange={(enabled) => {
+                if (!enabled) {
+                  masterMutation.mutate(false);
+                  return;
+                }
+                masterMutation.mutate(true, {
+                  onSuccess: () => {
+                    if (!settings?.keepAlivePrompted) {
+                      requestKeepAlive();
+                    }
+                  },
+                });
+              }}
               trackColor={{ false: styles._colors.divider, true: styles._colors.primary }}
               thumbColor="#FFFFFF"
             />
           </View>
         </View>
+
+        {masterEnabled ? (
+          <View style={styles.sectionCard}>
+            <View style={styles.masterRow}>
+              <View style={styles.masterText}>
+                <Text style={styles.sectionTitle}>后台守护</Text>
+                <Text style={styles.sectionText}>
+                  显示一条低重要性常驻通知，降低最近任务被清理后漏记的概率。不轮询、不定时唤醒。
+                </Text>
+                {settings?.keepAliveEnabled && !settings.keepAliveRunning ? (
+                  <Text style={[styles.sectionText, { color: styles._colors.error }]}>
+                    守护未运行，请检查通知权限或电池优化设置。
+                  </Text>
+                ) : null}
+              </View>
+              <Switch
+                value={settings?.keepAliveEnabled ?? false}
+                onValueChange={(enabled) => {
+                  void (async () => {
+                    await nativeAutoBookkeeping.markKeepAlivePrompted();
+                    await nativeAutoBookkeeping.setKeepAliveEnabled(enabled);
+                    invalidate();
+                  })();
+                }}
+                trackColor={{ false: styles._colors.divider, true: styles._colors.primary }}
+                thumbColor="#FFFFFF"
+              />
+            </View>
+          </View>
+        ) : null}
 
         <View style={styles.sectionCard}>
           <Text style={styles.sectionTitle}>支付渠道</Text>

@@ -2,10 +2,15 @@ package com.jotbill.app.recognition
 
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.AccessibilityServiceInfo
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.PowerManager
+import androidx.core.content.ContextCompat
 import com.jotbill.app.utils.JotBillLog
 import com.jotbill.app.utils.PaymentTiming
 import android.view.Display
@@ -13,6 +18,7 @@ import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
 import com.jotbill.app.data.JotBillDatabaseProvider
+import com.jotbill.app.keepalive.RecognitionKeepAliveService
 import com.jotbill.app.bookkeeping.AccessibilityPageNode
 import com.jotbill.app.bookkeeping.AutoBookkeeper
 import com.jotbill.app.bookkeeping.AutoBookkeepingEngine
@@ -63,6 +69,9 @@ open class CheckoutAccessibilityService : AccessibilityService() {
         )
         private val SENSITIVE_ASCII_PATTERN = Regex("""(?i)\b(password|pin|otp)\b""")
         private const val STABLE_DELAY_MILLIS = 500L
+
+        /** 弹窗管线内容事件合并窗口；窗口状态事件不受影响。 */
+        private const val CONTENT_EVENT_MERGE_MILLIS = 200L
 
         /** 结算页门禁日志按"包名+拒绝码"的采样间隔。 */
         private const val CHECKOUT_GATE_LOG_INTERVAL_MILLIS = 3_000L
@@ -308,6 +317,42 @@ open class CheckoutAccessibilityService : AccessibilityService() {
     private var serviceConnected = false
     private val aiLifecycleLock = Any()
     private val mainHandler = Handler(Looper.getMainLooper())
+    private val popupEventGate =
+        AccessibilityEventGate(
+            RecognitionPackages.SHOPPING_PACKAGES + RecognitionPackages.PAYMENT_PACKAGES
+        )
+    private val contentEventCoalescer = ContentEventCoalescer()
+    private var pendingPopupContentEvent: AccessibilityEvent? = null
+    private var screenReceiverRegistered = false
+
+    private val popupContentDispatch = Runnable {
+        val event = pendingPopupContentEvent ?: return@Runnable
+        pendingPopupContentEvent = null
+        contentEventCoalescer.onDispatched()
+        try {
+            if (serviceConnected && popupEventGate.screenInteractive) {
+                handlePopupEvent(event)
+            }
+        } finally {
+            event.recycle()
+        }
+    }
+
+    private val screenStateReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            val interactive = try {
+                (getSystemService(Context.POWER_SERVICE) as PowerManager).isInteractive
+            } catch (_: RuntimeException) {
+                true
+            }
+            popupEventGate.screenInteractive = interactive
+            if (!interactive) {
+                cancelPendingPopupContentEvent()
+                sensitivePageLatch.onUnobservableFrame()
+                AccessibilityPageSummaryCollector.resetVolatileTracker()
+            }
+        }
+    }
     private var paymentMatcher: CheckoutPaymentMatcher? = null
     private var matchingScope: CoroutineScope? = null
     private val evidenceFallbackScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -336,7 +381,6 @@ open class CheckoutAccessibilityService : AccessibilityService() {
                 AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED or
                 AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED or
                 AccessibilityEvent.TYPE_VIEW_SCROLLED or
-                AccessibilityEvent.TYPE_VIEW_CLICKED or
                 AccessibilityEvent.TYPE_NOTIFICATION_STATE_CHANGED
         configuredInfo.feedbackType = AccessibilityServiceInfo.FEEDBACK_SPOKEN or
             AccessibilityServiceInfo.FEEDBACK_HAPTIC or
@@ -357,6 +401,13 @@ open class CheckoutAccessibilityService : AccessibilityService() {
         initializePaymentMatcher()
         initializeAutoBookkeeping()
         serviceConnected = true
+        popupEventGate.screenInteractive = try {
+            (getSystemService(Context.POWER_SERVICE) as PowerManager).isInteractive
+        } catch (_: RuntimeException) {
+            true
+        }
+        registerScreenStateReceiver()
+        RecognitionKeepAliveService.refreshNotification(this)
         JotBillLog.i(TAG, "结算页无障碍观察服务已连接")
     }
 
@@ -511,6 +562,19 @@ open class CheckoutAccessibilityService : AccessibilityService() {
         if (!serviceConnected || event == null) {
             return
         }
+        if (
+            !popupEventGate.screenInteractive &&
+            event.eventType != AccessibilityEvent.TYPE_NOTIFICATION_STATE_CHANGED
+        ) {
+            return
+        }
+        val eventPackage = event.packageName?.toString()?.trim().orEmpty()
+        if (
+            event.eventType != AccessibilityEvent.TYPE_NOTIFICATION_STATE_CHANGED &&
+            popupEventGate.decide(eventPackage, lastWindowPackage) == PopupEventDecision.Drop
+        ) {
+            return
+        }
 
         // 规则式自动记账管线先行（mipay 移植）：同步抽取成功即在引擎内登记
         // 认领指纹，下方弹窗管线据此让路。引擎内部吞异常，不影响本服务；
@@ -528,6 +592,78 @@ open class CheckoutAccessibilityService : AccessibilityService() {
             return
         }
 
+        dispatchPopupEvent(event)
+    }
+
+    /**
+     * 窗口状态事件立即处理；内容类事件走 200ms 单槽合并，避免同一页面的
+     * 连续内容变化反复整树采集。通知事件已在入口交给规则引擎。
+     */
+    private fun dispatchPopupEvent(event: AccessibilityEvent) {
+        val eventPackage = event.packageName?.toString()?.trim().orEmpty()
+        if (popupEventGate.decide(eventPackage, lastWindowPackage) == PopupEventDecision.Drop) {
+            return
+        }
+        if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+            cancelPendingPopupContentEvent()
+            handlePopupEvent(event)
+            return
+        }
+        val copy = try {
+            AccessibilityEvent.obtain(event)
+        } catch (_: RuntimeException) {
+            return
+        }
+        pendingPopupContentEvent?.recycle()
+        pendingPopupContentEvent = copy
+        if (contentEventCoalescer.onContentEvent()) {
+            mainHandler.postDelayed(popupContentDispatch, CONTENT_EVENT_MERGE_MILLIS)
+        }
+    }
+
+    private fun cancelPendingPopupContentEvent() {
+        mainHandler.removeCallbacks(popupContentDispatch)
+        pendingPopupContentEvent?.recycle()
+        pendingPopupContentEvent = null
+        contentEventCoalescer.reset()
+    }
+
+    private fun registerScreenStateReceiver() {
+        if (screenReceiverRegistered) return
+        val filter = IntentFilter().apply {
+            addAction(Intent.ACTION_SCREEN_ON)
+            addAction(Intent.ACTION_SCREEN_OFF)
+            addAction(Intent.ACTION_USER_PRESENT)
+        }
+        try {
+            ContextCompat.registerReceiver(
+                this,
+                screenStateReceiver,
+                filter,
+                ContextCompat.RECEIVER_EXPORTED,
+            )
+            screenReceiverRegistered = true
+        } catch (error: RuntimeException) {
+            JotBillLog.w(TAG, "屏幕状态监听注册失败", error)
+        }
+    }
+
+    private fun unregisterScreenStateReceiver() {
+        if (!screenReceiverRegistered) return
+        screenReceiverRegistered = false
+        try {
+            unregisterReceiver(screenStateReceiver)
+        } catch (error: RuntimeException) {
+            JotBillLog.w(TAG, "屏幕状态监听注销失败", error)
+        }
+    }
+
+    private fun releasePopupEventDispatcher() {
+        cancelPendingPopupContentEvent()
+        unregisterScreenStateReceiver()
+    }
+
+    private fun handlePopupEvent(event: AccessibilityEvent) {
         // 部分购物页会发出 packageName 为空的内容变化事件（WebView/系统窗口）。
         // 空包名不代表已经离开购物应用；同时兼容视频通话悬浮窗等第三方窗口事件
         // 与购物应用窗口事件交错到达的真机场景，按活动窗口/事件包名推断归属。
@@ -696,6 +832,7 @@ open class CheckoutAccessibilityService : AccessibilityService() {
     override fun onInterrupt() {
         lastWindowPackage = null
         lastWindowClass = null
+        cancelPendingPopupContentEvent()
         // 服务中断后页面观察不再连续，L3 跨帧易变观察窗口失去意义，
         // 清空防止陈旧观察污染重新连接后的判定。
         AccessibilityPageSummaryCollector.resetVolatileTracker()
@@ -708,12 +845,14 @@ open class CheckoutAccessibilityService : AccessibilityService() {
         serviceConnected = false
         lastWindowPackage = null
         lastWindowClass = null
+        releasePopupEventDispatcher()
         // 重扫兜底的 Handler 挂在主 looper 上，比服务实例活得长：解绑即摘，
         // 否则服务销毁后 runnable 仍会触碰本实例字段。
         paymentRescanHandler.removeCallbacks(paymentRescanRunnable)
         if (activeService === this) {
             activeService = null
         }
+        RecognitionKeepAliveService.refreshNotification(this)
         JotBillLog.i(TAG, "结算页无障碍观察服务已解除绑定")
         return super.onUnbind(intent)
     }
@@ -723,12 +862,14 @@ open class CheckoutAccessibilityService : AccessibilityService() {
         serviceConnected = false
         lastWindowPackage = null
         lastWindowClass = null
+        releasePopupEventDispatcher()
         paymentRescanHandler.removeCallbacks(paymentRescanRunnable)
         shutdownPaymentMatcher()
         evidenceFallbackScope.cancel()
         if (activeService === this) {
             activeService = null
         }
+        RecognitionKeepAliveService.refreshNotification(this)
         JotBillLog.i(TAG, "结算页无障碍观察服务已销毁")
         super.onDestroy()
     }

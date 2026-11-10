@@ -3,7 +3,7 @@ import { RefreshControl, ScrollView, StyleSheet, Text, TouchableOpacity, View } 
 import { useNavigation } from '@react-navigation/native';
 import { Linking } from 'react-native';
 import { useQuery } from '@tanstack/react-query';
-import { Activity, AlertTriangle, Battery, CheckCircle2, ChevronLeft, Database, FileText, Layers3, WalletCards } from 'lucide-react-native';
+import { Activity, CheckCircle2, ChevronLeft, Database, FileText, Layers3, WalletCards } from 'lucide-react-native';
 import { nativeRecognition, nativeRuntime } from '../../native';
 import { borderRadius, borderWidth, spacing } from '../../theme/spacing';
 import { ThemeColors } from '../../theme/colors';
@@ -100,6 +100,16 @@ export default function RuntimeStatusScreen() {
             <Text style={styles.detailValue}>{booleanText(status?.batteryOptimizationIgnored)}</Text>
           </View>
           <View style={styles.detailRow}>
+            <Text style={styles.detailLabel}>后台守护</Text>
+            <Text style={styles.detailValue}>
+              {status?.keepAliveRunning
+                ? '运行中'
+                : status?.keepAliveEnabled
+                  ? '未运行'
+                  : '未开启'}
+            </Text>
+          </View>
+          <View style={styles.detailRow}>
             <Text style={styles.detailLabel}>孤儿导入批次</Text>
             <Text style={styles.detailValue}>{status?.orphanImportBatches ?? '--'}</Text>
           </View>
@@ -128,6 +138,12 @@ export default function RuntimeStatusScreen() {
             <Text style={styles.detailLabel}>悬浮窗/电池优化</Text>
             <TouchableOpacity onPress={() => { void Linking.openSettings(); }}>
               <Text style={styles.linkText}>打开系统设置</Text>
+            </TouchableOpacity>
+          </View>
+          <View style={styles.detailRow}>
+            <Text style={styles.detailLabel}>电池优化列表</Text>
+            <TouchableOpacity onPress={() => { void nativeRuntime.openBatteryOptimizationSettings(); }}>
+              <Text style={styles.linkText}>打开</Text>
             </TouchableOpacity>
           </View>
         </View>

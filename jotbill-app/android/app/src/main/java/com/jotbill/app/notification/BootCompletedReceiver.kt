@@ -4,6 +4,9 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.util.Log
+import com.jotbill.app.bookkeeping.BookkeepingChannels
+import com.jotbill.app.keepalive.KeepAliveSettings
+import com.jotbill.app.keepalive.RecognitionKeepAliveService
 
 /**
  * 开机完成广播接收器
@@ -25,7 +28,14 @@ class BootCompletedReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context?, intent: Intent?) {
         if (intent?.action == Intent.ACTION_BOOT_COMPLETED) {
             Log.i(TAG, "开机完成，通知监听服务将由系统自动启动")
-            
+            if (
+                context != null &&
+                BookkeepingChannels.isMasterEnabled(context) &&
+                KeepAliveSettings.isEnabled(context)
+            ) {
+                RecognitionKeepAliveService.sync(context)
+            }
+
             // NotificationListenerService 由系统管理，无需手动启动
             // 如果用户已授权通知访问权限，系统会自动启动服务
         }

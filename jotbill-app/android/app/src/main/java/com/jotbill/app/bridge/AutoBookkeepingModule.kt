@@ -5,6 +5,8 @@ import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
 import com.jotbill.app.bookkeeping.BookkeepingChannels
+import com.jotbill.app.keepalive.KeepAliveSettings
+import com.jotbill.app.keepalive.RecognitionKeepAliveService
 import com.jotbill.app.utils.JotBillLog
 import org.json.JSONObject
 
@@ -40,6 +42,9 @@ class AutoBookkeepingModule(private val reactContext: ReactApplicationContext) :
             }
             val result = JSONObject()
                 .put("masterEnabled", BookkeepingChannels.isMasterEnabled(reactContext))
+                .put("keepAliveEnabled", KeepAliveSettings.isEnabled(reactContext))
+                .put("keepAlivePrompted", KeepAliveSettings.isPrompted(reactContext))
+                .put("keepAliveRunning", RecognitionKeepAliveService.isRunning)
                 .put("channels", channelsJson)
                 .put("channelMeta", metaJson)
             promise.resolve(result.toString())
@@ -52,6 +57,28 @@ class AutoBookkeepingModule(private val reactContext: ReactApplicationContext) :
     fun setMasterEnabled(enabled: Boolean, promise: Promise) {
         try {
             BookkeepingChannels.setMasterEnabled(reactContext, enabled)
+            RecognitionKeepAliveService.sync(reactContext)
+            promise.resolve(null)
+        } catch (error: Exception) {
+            promise.reject("AUTO_BOOKKEEPING_SET_FAILED", error)
+        }
+    }
+
+    @ReactMethod
+    fun setKeepAliveEnabled(enabled: Boolean, promise: Promise) {
+        try {
+            KeepAliveSettings.setEnabled(reactContext, enabled)
+            RecognitionKeepAliveService.sync(reactContext)
+            promise.resolve(null)
+        } catch (error: Exception) {
+            promise.reject("AUTO_BOOKKEEPING_SET_FAILED", error)
+        }
+    }
+
+    @ReactMethod
+    fun markKeepAlivePrompted(promise: Promise) {
+        try {
+            KeepAliveSettings.markPrompted(reactContext)
             promise.resolve(null)
         } catch (error: Exception) {
             promise.reject("AUTO_BOOKKEEPING_SET_FAILED", error)

@@ -91,6 +91,16 @@
               android:name="android.accessibilityservice"
               android:resource="@xml/checkout_accessibility_service" />
       </service>
+
+      <!-- 自动记账后台守护：低重要性常驻通知，只在用户开启时运行 -->
+      <service
+          android:name=".keepalive.RecognitionKeepAliveService"
+          android:exported="false"
+          android:foregroundServiceType="specialUse">
+          <property
+              android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+              android:value="Keep automatic bookkeeping signal listening active in the background" />
+      </service>
       
       <!-- 自动记账通知撤销动作 -->
       <receiver

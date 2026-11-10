@@ -142,6 +142,8 @@
 录入前查重（P12/M8）：AI 提案与手动录入保存前均经共享工具 `src/lib/billDuplicateCheck.ts` 做「同日同额同向」既有账单检测，命中弹确认（不硬阻断）。
 归并可见性（M-补③）：待确认卡面展示「已归并 N 条信号（同一事实的多处观测）」——数据来自 `appliedRules.mergedSourceEventKeys`（上限 16）+ `mergedSourceEventKeysOverflow`（溢出计数），经 `BridgeDtoMapper.pending` 透出、RN 解析计数，只读展示不改确认语义。
 
+**后台守护（可选）**：`RecognitionKeepAliveService` 是 `specialUse` 前台服务，仅当自动记账总开关与用户开启的后台守护同时为真时运行；显示低重要性常驻通知，不轮询、不持 WakeLock。首次开启自动记账时询问用户，开机广播和打开 App 时同步；用户强行停止应用后无法恢复。
+
 ## 7. 已知限制与死代码（改动前先看）
 
 | 项 | 事实 | 影响 |
@@ -152,7 +154,7 @@
 | 短信口径 | 默认自动入账现金兜底账户（乙口径）；`set_account` 规则命中强制转待确认 | 误报面靠负向测试与文案提示 |
 | 手动重试必然拒绝 | `performUserRetryForSession` 恒返回 `SERVICE_NOT_CONNECTED`（入口壳保留） | 前端入口不可用 |
 | `AI_TRIGGER_ARMED` 死状态 | `CheckoutJourneyState.AI_TRIGGER_ARMED` 枚举与迁移映射保留，生产不可达 | 待随会话链路清理 |
-| 进程保活为零 | 无前台服务（Manifest 权限已声明未用）；杀进程窗口漏采无补偿 | 已知限制 |
+| 保活为可选轻量层 | 后台守护前台服务需用户开启；无 Shizuku/ADB 自愈；强停/系统冻结仍可能漏采 | 已知限制 |
 | 无服务端能力 | 无服务端规则下发、无服务端去重（`litenote-backend` 非重心）；规则来自本地内置 JSON（`bookkeeping_builtin_rules.json`）+ 用户规则 | 规则更新随版本发布 |
 | 支付方式不可见 | 普通消费通知/结果页不暴露"支付方式"字样（实测 grep 零命中），**"微信零钱 vs 绑卡支付"无法区分** —— 微信/支付宝固定映射到对应平台账户或规则账户；`payMethod` 刻意不做 | 账户推断仅短信层可用 |
 | 账户无卡号字段 | `AccountEntity` 无卡号/尾号字段 ⇒ 短信只能按**银行名→账户名**匹配（`AccountInference.inferFromSignal`），同银行多账户命中**转待确认**（`RULE_ACCOUNT_NEEDS_REVIEW`）、不猜测 | 精度受限，唯一命中才映射 |
