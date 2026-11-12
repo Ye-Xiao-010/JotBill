@@ -125,19 +125,10 @@ class PaymentNotificationService : NotificationListenerService() {
      */
     private fun processNotification(sbn: StatusBarNotification) {
         val packageName = sbn.packageName
-        // N-0c：先过内置解析器白名单，再过用户配置（设置页「监听应用」）。
-        // 只做收窄：配置里没有解析规则的包永远不会放行，添加即无效需给用户提示。
+        // 只认内置解析器白名单：设置页的「监听应用/过滤关键词」配置 UI 已下线
+        // （e577c6b），配置的写入方不复存在，继续读取只会让存量旧值静默收窄
+        // 监听范围且用户无从修改。包名边界唯一事实源 = PaymentResultNormalizer。
         if (packageName !in PaymentResultNormalizer.SUPPORTED_PACKAGES) {
-            if (PaymentNotificationConfig.isUnsupportedButConfigured(this, packageName)) {
-                JotBillLog.w(
-                    TAG,
-                    "该应用已在设置页开启监听，但暂无解析规则，不会产生记录: pkg=$packageName"
-                )
-            }
-            return
-        }
-        if (!PaymentNotificationConfig.isAppMonitored(this, packageName)) {
-            JotBillLog.i(TAG, "该应用已在设置页关闭监听，跳过: pkg=$packageName")
             return
         }
 
@@ -251,14 +242,9 @@ class PaymentNotificationService : NotificationListenerService() {
             return
         }
 
-        // 解析为结构化证据输入
-        // N-0c：支付关键词取用户配置，未配置/配置为空时回退内置表（不放大匹配面）。
-        val configuredKeywords = PaymentNotificationConfig.filterKeywords(this)
-        val paymentKeywords = if (configuredKeywords.isNotEmpty()) {
-            configuredKeywords
-        } else {
-            PaymentResultNormalizer.paymentKeywords()
-        }
+        // 解析为结构化证据输入：支付关键词固定用内置表（用户配置 UI 已下线，
+        // 见 processNotification 处说明）。默认值即 PAYMENT_KEYWORDS，显式传入仅为
+        // 保持调用点可读性。
         val evidenceInput = PaymentResultNormalizer.normalize(
             sourcePackage = packageName,
             title = title,
@@ -271,7 +257,7 @@ class PaymentNotificationService : NotificationListenerService() {
             postTime = sbn.postTime,
             notificationKey = sbn.key,
             notificationId = sbn.id,
-            paymentKeywords = paymentKeywords
+            paymentKeywords = PaymentResultNormalizer.paymentKeywords()
         ) ?: run {
             // 非消费通知或金额无效：Sentry 之外落一条 diag（支付宝尤为关键 ——
             // 此前失败零痕迹，无法与"通知没到"区分）。
@@ -401,6 +387,20 @@ class PaymentNotificationService : NotificationListenerService() {
                         .getBySourceEventKey(input.sourceEventKey) != null
                     if (evidenceAlreadyStored) {
                         JotBillLog.i(TAG, "支付证据已由无障碍链路落库，跳过纯通知兜底")
+                        return
+                    }
+                    // 规则引擎（无障碍通知事件）不写 payment_evidence 表，上面的证据表
+                    // 判重看不到它。同包同额已被认领 ⇒ 引擎已自动入账，此处再落卡就是重复。
+                    if (CheckoutAccessibilityService.isPaymentClaimedByBookkeeping(
+                            input.sourcePackage,
+                            input.amountMinor
+                        )
+                    ) {
+                        JotBillLog.i(
+                            TAG,
+                            "同笔支付已被规则引擎认领并入账，跳过纯通知兜底: " +
+                                "pkg=${input.sourcePackage}, amount=${input.amountMinor}"
+                        )
                         return
                     }
                     // N-0a：按真实落库结果记录。此前此处无条件打「已转纯通知待确认」，

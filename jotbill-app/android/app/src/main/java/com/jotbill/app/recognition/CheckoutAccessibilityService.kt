@@ -15,13 +15,11 @@ import android.os.SystemClock
 import androidx.core.content.ContextCompat
 import com.jotbill.app.utils.JotBillLog
 import com.jotbill.app.utils.PaymentTiming
-import android.view.Display
 import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
-import android.view.accessibility.AccessibilityWindowInfo
 import com.jotbill.app.data.JotBillDatabaseProvider
 import com.jotbill.app.keepalive.RecognitionKeepAliveService
 import com.jotbill.app.bookkeeping.AccessibilityPageNode
@@ -31,14 +29,11 @@ import com.jotbill.app.bookkeeping.BookkeepingChannels
 import com.jotbill.app.bookkeeping.PageNode
 import com.jotbill.app.bookkeeping.PageRuleRegistry
 import com.jotbill.app.overlay.PendingConfirmOverlayManager
-import java.time.Instant
 import java.util.concurrent.atomic.AtomicBoolean
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /**
@@ -219,6 +214,21 @@ open class CheckoutAccessibilityService : AccessibilityService() {
          */
         @JvmStatic
         fun isServiceRunning(): Boolean = activeService != null
+
+        /**
+         * 规则引擎是否已在认领窗内认领「同包名 + 同金额」的支付。
+         *
+         * 通知监听侧在落纯通知待确认前查询：规则引擎（无障碍通知事件）已自动入账
+         * 同一笔时，再落一张同额待确认卡就是重复。规则引擎不写 `payment_evidence`
+         * 表，通知侧原有的证据表判重看不到它，故必须显式问一次。
+         *
+         * 服务未存活时返回 false —— 此时规则引擎不可能认领，调用方照常落卡。
+         */
+        @JvmStatic
+        fun isPaymentClaimedByBookkeeping(packageName: String, amountMinor: Long): Boolean {
+            val service = activeService ?: return false
+            return service.bookkeepingEngine?.shouldSuppressPopup(packageName, amountMinor) == true
+        }
 
         /**
          * 通知证据的同进程回退入口 —— 精简版**恒拒绝**。

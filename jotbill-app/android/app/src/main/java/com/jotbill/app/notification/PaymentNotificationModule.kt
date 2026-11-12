@@ -13,10 +13,7 @@ import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
-import com.facebook.react.bridge.ReadableArray
 import com.facebook.react.bridge.WritableArray
-import org.json.JSONArray
-import org.json.JSONObject
 
 /**
  * 支付通知监听 React Native 模块
@@ -174,50 +171,6 @@ class PaymentNotificationModule(
      *     自述"D-20 后不再注册任何接收器"。它们保留至今只是"接口形状"，
      *     而没有 JS 调用方时，形状本身不构成兼容性：删掉后 JS 侧本来也没人调。
      */
-
-    /**
-     * 保存监听应用配置
-     *
-     * @param monitoredApps 监听应用列表
-     * @param filterKeywords 过滤关键词列表
-     * @param promise Promise 对象
-     */
-    @ReactMethod
-    fun saveMonitoringConfig(monitoredApps: ReadableArray, filterKeywords: ReadableArray, promise: Promise) {
-        try {
-            val prefs = reactContext.getSharedPreferences("payment_notification_config", Context.MODE_PRIVATE)
-            val editor = prefs.edit()
-
-            // 保存监听应用列表
-            val appsJson = JSONArray()
-            for (i in 0 until monitoredApps.size()) {
-                val app = monitoredApps.getMap(i)
-                val appJson = JSONObject().apply {
-                    put("packageName", app?.getString("packageName") ?: "")
-                    put("appName", app?.getString("appName") ?: "")
-                    put("enabled", app?.getBoolean("enabled") ?: true)
-                }
-                appsJson.put(appJson)
-            }
-            editor.putString("monitored_apps", appsJson.toString())
-
-            // 保存过滤关键词列表
-            val keywordsJson = JSONArray()
-            for (i in 0 until filterKeywords.size()) {
-                keywordsJson.put(filterKeywords.getString(i))
-            }
-            editor.putString("filter_keywords", keywordsJson.toString())
-
-            editor.apply()
-            // N-0c：写入后使采集路径的配置缓存立即失效，否则新配置要等进程重启才生效。
-            PaymentNotificationConfig.invalidate()
-            promise.resolve(true)
-            Log.i(TAG, "配置已保存: ${appsJson.length()} 个应用, ${keywordsJson.length()} 个关键词")
-        } catch (e: Exception) {
-            Log.e(TAG, "保存配置失败", e)
-            promise.reject("ERROR", "保存配置失败", e)
-        }
-    }
 
     /**
      * React Native 新版事件发射器要求模块提供这两个订阅计数方法。

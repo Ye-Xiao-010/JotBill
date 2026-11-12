@@ -192,6 +192,10 @@ export default function AutoBookkeepingScreen() {
                 <Text style={styles.sectionText}>
                   显示一条低重要性常驻通知，降低最近任务被清理后漏记的概率。不轮询、不定时唤醒。
                 </Text>
+                <Text style={styles.sectionText}>
+                  另有 1×1 不可见窗口随无障碍服务启用而常驻，用于避免系统冻结进程导致漏记；
+                  它不受本开关控制，关闭需在系统设置中停用无障碍服务。
+                </Text>
                 {settings?.keepAliveEnabled && !settings.keepAliveRunning ? (
                   <Text style={[styles.sectionText, { color: styles._colors.error }]}>
                     守护未运行，请检查通知权限或电池优化设置。

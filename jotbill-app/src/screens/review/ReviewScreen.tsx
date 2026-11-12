@@ -1179,6 +1179,16 @@ const CONFLICT_LABELS: Record<string, string> = {
   AI_UNVERIFIED_PAYMENT: '支付结果由截图识别推断，未获得支付凭证，请确认是否已实际支付',
   USER_ASSERTED: '手动截图识别，请核对金额与商户后确认',
   USER_ASSERTED_AMOUNT_MISSING: '手动截图未识别到金额，请补填后确认',
+  // 自动记账 B3：规则抽到金额但账户推断链（用户 set_account 规则 → 银行名/包名映射
+  // → 现金兜底）全程未命中，无法确定账户归属，交用户指定。
+  NO_DEFAULT_ACCOUNT: '未能确定扣款账户，请手动选择账户后确认',
+  // 证据落库与冲突判定链路的既有码（此前未映射，待确认中心直接显示英文原码）。
+  EVIDENCE_AMOUNT_CONFLICT: '支付证据金额与已入账账单不一致，请核对',
+  EVIDENCE_PERSIST_FAILED: '支付证据落库失败，请核对后重试',
+  ORIGINAL_AMBIGUOUS: '退款匹配到多笔原交易，请选择要冲减的原账单',
+  IMPORT_SEMANTIC_UNSAFE: '导入记录语义无法自动判定，请核对后确认',
+  // 候选被用户在待确认中心主动忽略（终态标记，正常不应出现在待处理列表）。
+  USER_IGNORED: '已被用户忽略',
   // N-1：通知来源的证据已解析成功，但这一版不替用户自动入账（自动入账等 N-2 放开）。
   AUTO_COMMIT_DEFERRED: '支付通知已识别，请核对后确认入账',
 };

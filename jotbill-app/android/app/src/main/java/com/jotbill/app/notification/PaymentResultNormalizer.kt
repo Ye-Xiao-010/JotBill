@@ -378,10 +378,10 @@ internal object PaymentResultNormalizer {
         notificationId: Int,
         titleBig: String = "",
         /**
-         * 支付关键词（N-0c）：至少命中一个才视为消费支付。默认内置表；
-         * 由 `PaymentNotificationConfig.filterKeywords` 传入用户配置。
-         * **仅作用于本支付路径** —— 手续费/转账/退款各自的关键词仍是内置表
-         * （设置页文案写的是"识别支付通知的关键词"，与此边界一致）。
+         * 支付关键词：至少命中一个才视为消费支付。默认即内置表
+         * [PAYMENT_KEYWORDS] —— 用户自定义关键词的设置项已下线（配置无写入方），
+         * 保留本参数只为让调用点显式声明口径，不再有外部传入。
+         * **仅作用于本支付路径** —— 手续费/转账/退款各自的关键词仍是内置表。
          * 调用方传入空列表时应自行回退内置表，本函数不放大匹配面。
          */
         paymentKeywords: List<String> = PAYMENT_KEYWORDS

@@ -91,29 +91,6 @@ class PaymentNotificationService {
   }
 
   /**
-   * 保存监听应用配置
-   *
-   * @param monitoredApps 监听应用列表
-   * @param filterKeywords 过滤关键词列表
-   */
-  async saveMonitoringConfig(
-    monitoredApps: Array<{ packageName: string; appName: string; enabled: boolean }>,
-    filterKeywords: string[]
-  ): Promise<boolean> {
-    if (!this.isSupported()) {
-      return false;
-    }
-
-    try {
-      await PaymentNotificationModule.saveMonitoringConfig(monitoredApps, filterKeywords);
-      return true;
-    } catch (error) {
-      console.error('Failed to save monitoring config:', error);
-      return false;
-    }
-  }
-
-  /**
    * 获取已安装应用列表
    *
    * @returns 已安装应用列表

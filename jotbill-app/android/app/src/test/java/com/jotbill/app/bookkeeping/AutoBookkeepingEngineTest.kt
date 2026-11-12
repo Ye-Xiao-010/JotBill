@@ -189,6 +189,28 @@ class AutoBookkeepingEngineTest {
         assertEquals(2, h.sink.records.size)
     }
 
+    /**
+     * 通知监听服务（`PaymentNotificationService`）在落纯通知待确认前，
+     * 通过 `CheckoutAccessibilityService.isPaymentClaimedByBookkeeping` 查本方法。
+     *
+     * 规则引擎不写 `payment_evidence` 表，通知侧原有的证据表判重看不到引擎入账，
+     * 因此「通知规则路径入账后 shouldSuppressPopup 必须为真」是防重复记账的
+     * 唯一依赖 —— 一旦引擎不再为通知来源登记认领，用户会同时看到账单与待确认卡。
+     */
+    @Test
+    fun `通知规则路径入账后同额认领成立供通知监听判重`() {
+        val h = Harness()
+        h.engine.onEvent(h.notificationEvent(text = "消费12.00元，已支出")) { null }
+        assertEquals(1, h.sink.records.size)
+        assertTrue(
+            "通知来源入账必须登记认领，否则通知监听会再落一张重复待确认",
+            h.engine.shouldSuppressPopup("com.eg.android.AlipayGphone", 1200)
+        )
+        assertFalse("不同金额不受影响", h.engine.shouldSuppressPopup("com.eg.android.AlipayGphone", 990))
+        h.clock["now"] = h.clock["now"]!! + 16_000
+        assertFalse("认领窗过期后放行", h.engine.shouldSuppressPopup("com.eg.android.AlipayGphone", 1200))
+    }
+
     @Test
     fun `带确认锚点的规则先挂起确认页到达才交付`() {
         val h = Harness()
