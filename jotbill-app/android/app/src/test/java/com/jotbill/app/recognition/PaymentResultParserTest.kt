@@ -364,4 +364,68 @@ class PaymentResultParserTest {
 
         assertTrue(result is PaymentResultParseResult.NotPaymentResult)
     }
+
+    // ── 非结果页负向回归（2026-10-29 独立审查 P0/P3）────────────────────────
+    // 背景：f39f046 的"跳词表试探"因误把任意含金额页面当结果页而回退（误弹窗）。
+    // 以下用例钉死边界：这些页面在 parseResult（主路径唯一解析器）下必须不产证据。
+    // 成功页样本取自钱迹真机日志（docs/qa/device/2026-10-29-remote-user2/
+    // qianji-bill-logs.txt："支付成功 / 拼多多 / ￥12.80"）。
+
+    @Test
+    fun rejectsWechatChatListWithAmount() {
+        val result = PaymentResultParser.parseResult(
+            pageText = "微信支付 10月28日 20:31 实付 ¥27.13 微信支付凭证",
+            sourcePackage = "com.tencent.mm",
+            pageFingerprint = "f".repeat(64),
+            observedAt = observedAt
+        )
+        assertTrue("聊天列表不应产证据，实际为 $result", result is PaymentResultParseResult.NotPaymentResult)
+    }
+
+    @Test
+    fun rejectsAlipayHomeBalance() {
+        val result = PaymentResultParser.parseResult(
+            pageText = "总资产 ¥12345.67 余额宝 昨日收益 ¥0.52",
+            sourcePackage = "com.eg.android.AlipayGphone",
+            pageFingerprint = "f".repeat(64),
+            observedAt = observedAt
+        )
+        assertTrue("支付宝首页余额不应产证据，实际为 $result", result is PaymentResultParseResult.NotPaymentResult)
+    }
+
+    @Test
+    fun rejectsRedPacketPage() {
+        val result = PaymentResultParser.parseResult(
+            pageText = "恭喜发财 ¥5.00 已存入零钱",
+            sourcePackage = "com.tencent.mm",
+            pageFingerprint = "f".repeat(64),
+            observedAt = observedAt
+        )
+        assertTrue("红包页不应产证据，实际为 $result", result is PaymentResultParseResult.NotPaymentResult)
+    }
+
+    @Test
+    fun rejectsCashierPageBeforeSuccess() {
+        val result = PaymentResultParser.parseResult(
+            pageText = "微信支付 订单金额 ¥30.00 实付 ¥27.13 确认支付",
+            sourcePackage = "com.tencent.mm",
+            pageFingerprint = "f".repeat(64),
+            observedAt = observedAt
+        )
+        assertTrue("收银台页不应产证据，实际为 $result", result is PaymentResultParseResult.NotPaymentResult)
+    }
+
+    @Test
+    fun acceptsActualSuccessPageWithKeyword() {
+        // 钱迹真机成功页原文：20 字符左右、含"支付成功"——主路径词表可命中，
+        // 不需要任何"跳词表"的试探解析器（审查 P0-5 的核心事实）。
+        val result = PaymentResultParser.parseResult(
+            pageText = "支付成功 拼多多 ￥12.80",
+            sourcePackage = "com.tencent.mm",
+            pageFingerprint = "f".repeat(64),
+            observedAt = observedAt
+        )
+        assertTrue("真实成功页应命中，实际为 $result", result is PaymentResultParseResult.Success)
+        assertEquals(1280L, (result as PaymentResultParseResult.Success).evidence.amountMinor)
+    }
 }

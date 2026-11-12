@@ -101,12 +101,27 @@
               android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
               android:value="Keep automatic bookkeeping signal listening active in the background" />
       </service>
-      
+
+      <!--
+          付款确认弹窗期间的短时 specialUse 前台服务（2026-10-29）。
+          HyperOS 3 在支付宝前台会临时收回 SYSTEM_ALERT_WINDOW 并在恢复瞬间
+          把弹窗压到支付应用之下；钱迹在 addView 前拉起 specialUse FGS
+          （UID_VISIBLE）后窗口即可正常上屏。本服务与之对齐，秒级存在，
+          dismissInternal 后立即停止。
+      -->
+      <service
+          android:name=".overlay.PendingOverlayService"
+          android:exported="false"
+          android:foregroundServiceType="specialUse">
+          <property
+              android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+              android:value="payment_confirm_overlay" />
+      </service>
+
       <!-- 自动记账通知撤销动作 -->
       <receiver
           android:name=".bookkeeping.AutoBookkeepingUndoReceiver"
           android:exported="false" />
-      
       <!-- 开机启动接收器（可选） -->
       <receiver
           android:name=".notification.BootCompletedReceiver"

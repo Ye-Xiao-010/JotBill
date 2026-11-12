@@ -165,6 +165,50 @@ class DefaultDataInitializer(
         }
     }
 
+    /**
+     * 老库分类图标一次性迁移：把首启种子（emoji）升级为 lucide 图标名
+     * （2026-10-27，单机版裁定 —— 本地播种器此前种 emoji，`initialized` 短路
+     * 让老库永远拿不到新图标，0a80e72 的 lucide 渲染能力因数据是 emoji 而空转）。
+     *
+     * 单次执行，以设置键 [CATEGORY_ICON_SYNCED_KEY] 标记。判据（三者同时成立才动）：
+     * - id 在默认分类清单内（自定义分类的 emoji 永不触碰）；
+     * - 用户改过名 ⇒ name 不一致 ⇒ 不动（尊重用户数据，跳 ID 不可靠）；
+     * - 当前 icon 与旧种子 emoji **精确相等**（用户若已自选 lucide 名/其他 emoji，
+     *   与旧值不等，同样不动）。
+     *
+     * 子分类未列入：预设子分类的 icon 继承自父分类（播种时复制），父分类更新后
+     * 子分类仍带旧 emoji —— 与父级不一致但无害（回退层正常渲染），不额外扫描。
+     */
+    suspend fun syncDefaultCategoryIcons() {
+        if (database.appSettingDao().get(CATEGORY_ICON_SYNCED_KEY) == INITIALIZED_VALUE) {
+            return
+        }
+        database.withTransaction {
+            if (database.appSettingDao().get(CATEGORY_ICON_SYNCED_KEY) == INITIALIZED_VALUE) {
+                return@withTransaction
+            }
+            var updated = 0
+            for (default in defaultCategories) {
+                val existing = database.categoryDao().getById(default.id) ?: continue
+                val legacyEmoji = LEGACY_CATEGORY_ICONS[default.id] ?: continue
+                if (existing.name == default.name && existing.icon == legacyEmoji) {
+                    database.categoryDao().update(
+                        existing.copy(icon = default.icon, updatedAt = System.currentTimeMillis())
+                    )
+                    updated += 1
+                }
+            }
+            database.appSettingDao().set(
+                AppSettingEntity(
+                    key = CATEGORY_ICON_SYNCED_KEY,
+                    value = INITIALIZED_VALUE,
+                    updatedAt = System.currentTimeMillis()
+                )
+            )
+            android.util.Log.i("DefaultDataInitializer", "默认分类图标迁移完成: updated=$updated")
+        }
+    }
+
     private data class DefaultCategory(
         val id: String,
         val name: String,
@@ -189,30 +233,65 @@ class DefaultDataInitializer(
         const val INITIALIZED_VALUE = "true"
         const val PRESET_CHILDREN_SEEDED_KEY = "preset_children_seeded"
 
+        /** 分类图标一次性迁移标记（[syncDefaultCategoryIcons]）。 */
+        const val CATEGORY_ICON_SYNCED_KEY = "category_icons_synced_to_lucide"
+
+        /**
+         * 旧种子 emoji（迁移前 [defaultCategories] 的 icon 值，按 id 索引）。
+         * 迁移完成后本表与调用点一起保留 —— 二次迁移不可能发生（设置键短路），
+         * 留着是判据取证。
+         */
+        val LEGACY_CATEGORY_ICONS = mapOf(
+            "default-category-expense-food" to "🍜",
+            "default-category-expense-transport" to "🚌",
+            "default-category-expense-shopping" to "🛍️",
+            "default-category-expense-entertainment" to "🎮",
+            "default-category-expense-housing" to "🏠",
+            "default-category-expense-medical" to "💊",
+            "default-category-expense-education" to "📚",
+            "default-category-expense-communication" to "📱",
+            "default-category-expense-daily" to "🧻",
+            "default-category-expense-social" to "🎉",
+            "default-category-expense-travel" to "✈️",
+            "default-category-expense-pet" to "🐾",
+            "default-category-expense-other" to "📦",
+            "default-category-income-salary" to "💰",
+            "default-category-income-part-time" to "💼",
+            "default-category-income-investment" to "📈",
+            "default-category-income-bonus" to "🎁",
+            "default-category-income-red-packet" to "🧧",
+            "default-category-income-refund" to "↩️",
+            "default-category-income-other" to "📦",
+            "default-category-expense-fee" to "🧾"
+        )
+
         // 以文档中的15个分类为基础，补充5个常用分类，保持总数为20个。
+        // icon 统一为 lucide 图标名（2026-10-27 用户裁定，单机版对齐后端种子
+        // 0a80e72 的数据驱动三层图标体系）：RN `CategoryIcon` 与原生弹窗
+        // `PopupIconAssets` 按名字映射渲染矢量图标；匹配不上才回退 emoji 文字。
         val defaultCategories = listOf(
-            DefaultCategory("default-category-expense-food", "餐饮", "expense", "🍜", "#FF6B6B", 0),
-            DefaultCategory("default-category-expense-transport", "交通", "expense", "🚌", "#4ECDC4", 1),
-            DefaultCategory("default-category-expense-shopping", "购物", "expense", "🛍️", "#45B7D1", 2),
-            DefaultCategory("default-category-expense-entertainment", "娱乐", "expense", "🎮", "#96CEB4", 3),
-            DefaultCategory("default-category-expense-housing", "居住", "expense", "🏠", "#98D8C8", 4),
-            DefaultCategory("default-category-expense-medical", "医疗", "expense", "💊", "#F44336", 5),
-            DefaultCategory("default-category-expense-education", "教育", "expense", "📚", "#3F51B5", 6),
-            DefaultCategory("default-category-expense-communication", "通讯", "expense", "📱", "#26A69A", 7),
-            DefaultCategory("default-category-expense-daily", "日用", "expense", "🧻", "#78909C", 8),
-            DefaultCategory("default-category-expense-social", "社交", "expense", "🎉", "#FFCA28", 9),
-            DefaultCategory("default-category-expense-travel", "旅行", "expense", "✈️", "#26C6DA", 10),
-            DefaultCategory("default-category-expense-pet", "宠物", "expense", "🐾", "#66BB6A", 11),
-            DefaultCategory("default-category-expense-other", "其他", "expense", "📦", "#90A4AE", 12),
-            DefaultCategory("default-category-income-salary", "工资", "income", "💰", "#4CAF50", 13),
-            DefaultCategory("default-category-income-part-time", "兼职", "income", "💼", "#7E57C2", 14),
-            DefaultCategory("default-category-income-investment", "理财", "income", "📈", "#009688", 15),
-            DefaultCategory("default-category-income-bonus", "奖金", "income", "🎁", "#FFB300", 16),
-            DefaultCategory("default-category-income-red-packet", "红包", "income", "🧧", "#E91E63", 17),
-            DefaultCategory("default-category-income-refund", "退款", "income", "↩️", "#546E7A", 18),
-            DefaultCategory("default-category-income-other", "其他", "income", "📦", "#2E7D32", 19),
+            DefaultCategory("default-category-expense-food", "餐饮", "expense", "utensils", "#FF6B6B", 0),
+            DefaultCategory("default-category-expense-transport", "交通", "expense", "bus", "#4ECDC4", 1),
+            DefaultCategory("default-category-expense-shopping", "购物", "expense", "shopping-bag", "#45B7D1", 2),
+            DefaultCategory("default-category-expense-entertainment", "娱乐", "expense", "gamepad-2", "#96CEB4", 3),
+            DefaultCategory("default-category-expense-housing", "居住", "expense", "house", "#98D8C8", 4),
+            DefaultCategory("default-category-expense-medical", "医疗", "expense", "pill", "#F44336", 5),
+            DefaultCategory("default-category-expense-education", "教育", "expense", "book-open", "#3F51B5", 6),
+            DefaultCategory("default-category-expense-communication", "通讯", "expense", "smartphone", "#26A69A", 7),
+            DefaultCategory("default-category-expense-daily", "日用", "expense", "shopping-basket", "#78909C", 8),
+            DefaultCategory("default-category-expense-social", "社交", "expense", "party-popper", "#FFCA28", 9),
+            DefaultCategory("default-category-expense-travel", "旅行", "expense", "plane", "#26C6DA", 10),
+            DefaultCategory("default-category-expense-pet", "宠物", "expense", "paw-print", "#66BB6A", 11),
+            DefaultCategory("default-category-expense-other", "其他", "expense", "package", "#90A4AE", 12),
+            DefaultCategory("default-category-income-salary", "工资", "income", "banknote", "#4CAF50", 13),
+            DefaultCategory("default-category-income-part-time", "兼职", "income", "briefcase", "#7E57C2", 14),
+            DefaultCategory("default-category-income-investment", "理财", "income", "trending-up", "#009688", 15),
+            DefaultCategory("default-category-income-bonus", "奖金", "income", "gift", "#FFB300", 16),
+            DefaultCategory("default-category-income-red-packet", "红包", "income", "hand-coins", "#E91E63", 17),
+            DefaultCategory("default-category-income-refund", "退款", "income", "rotate-ccw", "#546E7A", 18),
+            DefaultCategory("default-category-income-other", "其他", "income", "package", "#2E7D32", 19),
             // 阶段五 T4：手续费独立分类（type=fee 计入支出，归属 expense 组）
-            DefaultCategory("default-category-expense-fee", "手续费", "expense", "🧾", "#8D6E63", 20)
+            DefaultCategory("default-category-expense-fee", "手续费", "expense", "receipt", "#8D6E63", 20)
         )
 
         val defaultAccounts = listOf(

@@ -148,6 +148,15 @@ internal fun isNotificationAutoCommitAllowed(): Boolean = false
  */
 internal const val CONFLICT_AUTO_COMMIT_DEFERRED = "AUTO_COMMIT_DEFERRED"
 
+/**
+ * 通知证据落库前等待无障碍通道先产出的宽限期（2026-10-28 D-3 修订引入）。
+ *
+ * HyperOS 2 支付期无障碍死区可达 155s，通知通常比无障碍证据早到 —— 通知服务
+ * 等这么久再按 sourceEventKey 复查，避免同一次支付既落会话证据又落孤儿待确认。
+ * D-3 的"通知整体停用"闸已由 N-1 删除，本常量只剩复查窗口语义。
+ */
+internal const val NOTIFICATION_FALLBACK_GRACE_MILLIS = 8_000L
+
 /** 将支付证据来源收敛为 Native.d.ts 允许的三个小写值。 */
 internal fun normalizePaymentEvidenceSourceType(value: String?): String? =
     when (value?.trim()?.lowercase(Locale.ROOT)) {

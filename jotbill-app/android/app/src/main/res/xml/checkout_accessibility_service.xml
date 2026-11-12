@@ -1,8 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-    这里只声明需要观察的无障碍窗口和节点事件；包名在代码中做资格判断，
-    以便收到离开购物应用的事件并清理待稳定状态。
-    typeNotificationStateChanged 供规则式自动记账（通知锚点 / 二次确认 / M6 短信通道）。
+    包名白名单（2026-10-31 节电）：只投递购物/支付包事件，非白名单事件在系统层
+    过滤、进程零唤醒。包名与 CheckoutPageDetector.DEFAULT_SUPPORTED_* 保持一致
+    （单一事实源在 Kotlin 侧，此 XML 同步声明作系统层兜底 + 文档）。
+    com.android.mms 只发通知事件（银行短信 → 规则引擎 mms 渠道），不属购物/支付包，
+    与 RecognitionPackages.BOOKKEEPING_NOTIFICATION_PACKAGES 保持一致。
+    typeNotificationStateChanged 供规则式自动记账（通知锚点 / 二次确认 / 短信通道）。
+    "离开事件清理"旧约束已随截图链路删除而失效 —— lastWindowPackage 的 fallback
+    路径在白名单下不可达（eventPackage 永远非空），清理仅影响日志不影响判定。
 -->
 <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
     android:accessibilityEventTypes="typeWindowStateChanged|typeWindowContentChanged|typeViewTextChanged|typeViewScrolled|typeNotificationStateChanged"
@@ -11,4 +16,5 @@
     android:canRetrieveWindowContent="true"
     android:canTakeScreenshot="true"
     android:notificationTimeout="100"
+    android:packageNames="com.taobao.taobao,com.tmall.wireless,com.jingdong.app.mall,com.sankuai.meituan,com.xunmeng.pinduoduo,com.sdu.didi.psnger,com.ss.android.ugc.aweme,com.xingin.xhs,com.shizhuang.duapp,com.achievo.vipshop,com.suning.mobile.ebuy,com.tencent.mm,com.eg.android.AlipayGphone,com.unionpay,com.android.mms"
     android:description="@string/accessibility_service_description" />

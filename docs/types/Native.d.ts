@@ -1242,6 +1242,13 @@ export interface RuntimeModule {
   openNotificationListenerSettings(): Promise<void>;
   /** 打开系统电池优化列表，由用户自行选择是否放行后台。 */
   openBatteryOptimizationSettings(): Promise<void>;
+  /**
+   * 打包诊断日志（jotbill-diag.log 与轮转文件 + 设备 meta）并拉起系统分享面板。
+   * @returns zip 文件名。
+   * @throws DIAG_EXPORT_EMPTY 无可导出日志；DIAG_EXPORT_NO_ACTIVITY 无前台 Activity；
+   *   DIAG_EXPORT_SHARE_ERROR / DIAG_EXPORT_ERROR 打包或分享失败。
+   */
+  exportDiagLog(): Promise<string>;
 }
 
 /**

@@ -7,6 +7,7 @@ import android.service.notification.StatusBarNotification
 import com.jotbill.app.data.JotBillDatabaseProvider
 import com.jotbill.app.recognition.CheckoutAccessibilityService
 import com.jotbill.app.recognition.CheckoutPaymentMatcher
+import com.jotbill.app.recognition.NOTIFICATION_FALLBACK_GRACE_MILLIS
 import com.jotbill.app.recognition.FeeExtractor
 import com.jotbill.app.recognition.PaymentNotificationFallbackSignal
 import com.jotbill.app.recognition.RefundLinker
@@ -152,6 +153,19 @@ class PaymentNotificationService : NotificationListenerService() {
         val bigText = extras.getCharSequence(Notification.EXTRA_BIG_TEXT)?.toString() ?: ""
         val tickerText = notification.tickerText?.toString() ?: ""
 
+        // 2026-10-29 观测补强（纯诊断）：支付宝通知"到没到、长什么样"此前完全不可见
+        // —— 解析失败只写 Sentry、不落 diag，导致 0.0.103 的"支付宝零痕迹"无法
+        // 区分"没通知/解析失败/黑窗内"。只记长度与 title 摘要，不记正文。
+        val isAlipay = packageName == PaymentResultNormalizer.ALIPAY_PACKAGE
+        if (isAlipay) {
+            JotBillLog.i(
+                TAG,
+                "支付宝通知到达: title=${title.take(30)}, textLen=${text.length}, " +
+                    "bigTextLen=${bigText.length}, subTextLen=${subText.length}, " +
+                    "summaryLen=${summaryText.length}, tickerLen=${tickerText.length}"
+            )
+        }
+
         // W-3：微信身份闸在分发入口统一过一次，覆盖退款/手续费/转账/支付全部四条路径。
         // 聊天/群/公众号消息与支付通知共用同一个包名，正文里出现「退款」「转账」等词
         // 会走错分支；`normalize` 内另有同源判据作为解析层不变式。
@@ -259,8 +273,15 @@ class PaymentNotificationService : NotificationListenerService() {
             notificationId = sbn.id,
             paymentKeywords = paymentKeywords
         ) ?: run {
-            // 非消费通知或金额无效，只记录非敏感的过滤结果（title 一般为
-            // "微信支付"等平台名，不含金额与订单号，可安全用于诊断格式变化）。
+            // 非消费通知或金额无效：Sentry 之外落一条 diag（支付宝尤为关键 ——
+            // 此前失败零痕迹，无法与"通知没到"区分）。
+            if (isAlipay) {
+                JotBillLog.i(
+                    TAG,
+                    "支付宝通知未通过解析(非消费或金额无效): title=${title.take(30)}, " +
+                        "textLen=${text.length}, bigTextLen=${bigText.length}"
+                )
+            }
             SentryLogger.addBreadcrumb(
                 "通知未通过解析（非消费或金额无效）",
                 data = mapOf(
@@ -287,6 +308,12 @@ class PaymentNotificationService : NotificationListenerService() {
                 "amount=${evidenceInput.amountMinor}, " +
                 "occurredAt=${evidenceInput.occurredAt}"
         )
+        if (isAlipay) {
+            JotBillLog.i(
+                TAG,
+                "支付宝通知解析成功: amount=${evidenceInput.amountMinor}分, title=${title.take(30)}"
+            )
+        }
 
         // 异步落库证据并触发匹配
         scope.launch {
@@ -558,7 +585,15 @@ class PaymentNotificationService : NotificationListenerService() {
     companion object {
         private const val TAG = "PaymentNotificationService"
         private const val FALLBACK_TIMEOUT_MILLIS = 5_000L
-        private const val EVIDENCE_GRACE_MILLIS = 1_000L
+
+        /**
+         * 证据落库复查等待：从 1s 提到 [NOTIFICATION_FALLBACK_GRACE_MILLIS](8s)
+         * （2026-10-28 修订 D-3）。HyperOS 2 支付期无障碍死区可达 155s，通知
+         * 通常比无障碍证据早到 —— 这里等 8s 给主动扫描/漏点事件一个先落库的
+         * 机会；超窗仍查无该 sourceEventKey ⇒ 判定无障碍通道本次失守，
+         * 以 NOTIFICATION_FALLBACK 标记兜底落卡（闸侧豁免，见 CheckoutContract）。
+         */
+        private val EVIDENCE_GRACE_MILLIS = NOTIFICATION_FALLBACK_GRACE_MILLIS
 
         /** N-0b：同 (包名, 标题) 的未命中通知的最小日志间隔。 */
         private const val UNMATCHED_LOG_INTERVAL_MILLIS = 30_000L

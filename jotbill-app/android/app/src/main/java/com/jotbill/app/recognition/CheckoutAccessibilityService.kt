@@ -6,14 +6,19 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.graphics.PixelFormat
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
+import android.os.SystemClock
 import androidx.core.content.ContextCompat
 import com.jotbill.app.utils.JotBillLog
 import com.jotbill.app.utils.PaymentTiming
 import android.view.Display
+import android.view.Gravity
+import android.view.View
+import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
@@ -88,6 +93,68 @@ open class CheckoutAccessibilityService : AccessibilityService() {
         /** 支付结果页重扫兜底（P2-5）：重扫间隔与单次会话上限。 */
         private const val PAYMENT_RESCAN_INTERVAL_MILLIS = 1_000L
         private const val PAYMENT_RESCAN_MAX_COUNT = 8
+
+        /**
+         * 1×1 保活窗边长（像素）。
+         *
+         * HyperOS 3 的 `GreezeManager` 会冻结"只有启用的无障碍服务、没有可见窗口"
+         * 的后台进程：冻结期间既收不到无障碍事件也收不到通知回调（2026-10-29
+         * 远程用户 2 全机日志实测，本应用被冻结 2 分 33 秒，弹窗错过支付成功页）。
+         * 钱迹 / GKD / 小米钱包均以 1×1 无障碍悬浮窗让系统判定 VISIBLE_APP 而免于
+         * 冻结 —— 见 [installKeepAliveWindow]。
+         */
+        private const val KEEP_ALIVE_WINDOW_SIZE_PX = 1
+
+        /** 服务存活心跳周期：冻结自证的时间分辨率。 */
+        private const val SERVICE_HEARTBEAT_INTERVAL_MILLIS = 60_000L
+
+        /** 心跳间隔达到该值即判定进程被挂起/冻结（3 个周期，容忍调度抖动）。 */
+        private const val SERVICE_HEARTBEAT_SUSPECT_FREEZE_MILLIS = 90_000L
+
+        /** 正常存活日志的低频输出间隔 —— 心跳本身 60s 一跳，只在低频时落盘。 */
+        private const val SERVICE_ALIVE_LOG_INTERVAL_MILLIS = 600_000L
+
+        /** pageTextLength 整树遍历的采样间隔（纯诊断字段，不参与判定）。 */
+        private const val PAGE_TEXT_LENGTH_SAMPLE_MILLIS = 5_000L
+
+        /**
+         * 无障碍事件白名单（2026-10-31 节电）：只投递购物/支付包事件，
+         * 非白名单事件在系统层过滤、进程零唤醒（省电最大的一条）。
+         *
+         * 单一事实源是 [CheckoutPageDetector] 的
+         * [DEFAULT_SUPPORTED_SHOPPING_PACKAGES] + [DEFAULT_SUPPORTED_PAYMENT_PACKAGES]，
+         * 此处派生 —— 改包名只改那一处。XML 里同步声明作系统层兜底 + 文档。
+         *
+         * 另加 [RecognitionPackages.BOOKKEEPING_NOTIFICATION_PACKAGES]：银行短信
+         * 只发通知事件、不是购物/支付包，但规则引擎的 mms 渠道依赖它，漏掉即静默失效。
+         *
+         * 对识别精度零影响：非白名单事件本来就被
+         * [resolveEffectiveShoppingPackage] 归属推断后丢弃；
+         * "离开事件清理"旧约束已随截图链路删除而失效（lastWindowPackage 的
+         * fallback 路径在白名单下不可达，清理仅影响日志）。
+         */
+        private val EVENT_PACKAGE_WHITELIST: Array<String> =
+            (DEFAULT_SUPPORTED_SHOPPING_PACKAGES +
+                DEFAULT_SUPPORTED_PAYMENT_PACKAGES +
+                RecognitionPackages.BOOKKEEPING_NOTIFICATION_PACKAGES)
+                .toTypedArray()
+
+        // ── 支付环境主动扫描（2026-10-27，四份远程日志定案 v5）──────────────────
+        // HyperOS 2（Android 16）在支付全程（密码键盘→成功页首帧）抑制无障碍
+        // 事件：实测 75~155 秒"事件死区"（docs/qa/device/2026-10-27-remote-user1/）。
+        // 两个实测漏点（密码键盘确认键的 VIEW_CLICKED / 成功页自发刷新 content-change）
+        // 是否触发取决于系统抑制的瞬时强度，不可依赖。管线是纯事件驱动 ⇒ 死区内
+        // 永不扫描 ⇒ 漏弹（七笔实测 A 档 43%，L1 红线 90%）。
+        // 对策：进入支付包后由独立时钟周期性主动扫 rootInActiveWindow，把
+        // "赌漏点事件"变成"死区主动扫"。证据产出（Success/转账/失败语义）即停；
+        // 离开支付环境（活动根与窗口列表都无支付包）后经宽限窗再停。
+
+        /** 主动扫描周期：兼顾死区响应速度与扫描开销（每轮一次 root 读取 + 窗口列表）。 */
+        private const val PAYMENT_PROACTIVE_SCAN_INTERVAL_MILLIS = 1_500L
+
+        // 总时长上限与宽限窗的口径由 [ProactiveScanPolicy] 单一持有
+        // （MAX_DURATION_MILLIS / LINGER_MILLIS），此处不再写第二份常量 ——
+        // 改一处漏一处会让"该停不停"与"不该停而停"同时出现且无测试兜底。
 
         /**
          * 敏感支付页面的截图禁止锁存窗口。
@@ -250,6 +317,14 @@ open class CheckoutAccessibilityService : AccessibilityService() {
     private var lastWindowPackage: String? = null
     private var lastWindowClass: String? = null
     private var lastObservedEventLogAt = 0L
+
+    /**
+     * 未分类帧的 pageTextLength 采样间隔（2026-10-31 节电）。
+     * 该值只进诊断日志字符串、不参与任何判定 —— 但它是远程排障的主力锚点
+     * （log2 的 397/551 字符帧、log3 的 20 字符成功页全靠它定性），
+     * 不删、只降频：每 [PAGE_TEXT_LENGTH_SAMPLE_MILLIS] 才算一次整树遍历。
+     */
+    private var lastPageTextLengthSampleAt = 0L
     private var lastPaymentWindowScanAt = 0L
 
     // ── 支付结果页重扫兜底（P2-5，2026-10-24 场景审查）──────────────────────
@@ -262,6 +337,17 @@ open class CheckoutAccessibilityService : AccessibilityService() {
     private var paymentRescanWindowClass: String? = null
     private val paymentRescanHandler = android.os.Handler(android.os.Looper.getMainLooper())
     private val paymentRescanRunnable = Runnable { runPaymentResultRescan() }
+
+    // ── 支付环境主动扫描（2026-10-27 v5）：字段与 P2-5 重扫兜底分离。
+    // P2-5 是"帧后短周期"（任一真实事件重置预算、离开支付包即停）——它假设
+    // 事件流活着。主动扫描假设事件流死了：进入支付包启动，事件静默期由它兜底，
+    // 事件活跃时它扫到的与事件路径扫到的是同一棵树（幂等键/三道去重兜住重复）。
+    // **仅主线程访问**（无障碍回调与 Handler 同在主 looper）。
+    private var proactiveScanPackage: String? = null
+    private var proactiveScanStartedAt = 0L
+    private var proactiveScanLastSeenAt = 0L
+    private val proactiveScanHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val proactiveScanRunnable = Runnable { runProactivePaymentScan() }
 
     /**
      * 敏感页锁存（D-9：增加"读到明确非敏感购物页 ×N 帧 ⇒ 提前解除"）。
@@ -315,6 +401,16 @@ open class CheckoutAccessibilityService : AccessibilityService() {
     private val suppressedScreenshotFallbackBlockCount = mutableMapOf<String, Int>()
     @Volatile
     private var serviceConnected = false
+
+    /** 1×1 保活窗（见 [installKeepAliveWindow]）。null = 未安装。 */
+    private var keepAliveView: View? = null
+    private var keepAliveWindowManager: WindowManager? = null
+
+    /** 最近一次心跳的 uptime（见 [serviceHeartbeatRunnable]）。 */
+    private var lastHeartbeatUptime = 0L
+
+    /** 最近一次"服务存活"日志的墙钟时刻；0 = 尚未打过。 */
+    private var lastAliveLogAt = 0L
     private val aiLifecycleLock = Any()
     private val mainHandler = Handler(Looper.getMainLooper())
     private val popupEventGate =
@@ -352,6 +448,55 @@ open class CheckoutAccessibilityService : AccessibilityService() {
                 AccessibilityPageSummaryCollector.resetVolatileTracker()
             }
         }
+    }
+
+    /**
+     * 服务存活心跳（2026-10-29，冻结自证）。
+     *
+     * **为什么需要**：进程被 `GreezeManager` 冻结时，本应用一行日志都写不出来
+     * —— 事后只能看到一段空白，无法区分"被冻结 / 没有事件 / 服务已死"。
+     * 远程用户 2 的那份全机日志里，本应用 23:29:38.612 → 23:32:18.005 完全静默，
+     * 是外部 `GreezeManager` 日志才证明了冻结。
+     *
+     * **判据**：每 60s 跑一跳；用 `SystemClock.uptimeMillis()` 的间隔差判断。
+     * 深度睡眠时 uptime 不走（不会把正常息屏误判成冻结）；进程被冻结时内核
+     * uptime 照走 ⇒ 恢复后第一跳的 gap 就是挂起时长。
+     *
+     * 正常心跳只在每 10 分钟落一行 I 级，避免日志膨胀；异常才打 W。
+     */
+    private val serviceHeartbeatRunnable = object : Runnable {
+        override fun run() {
+            val nowUptime = SystemClock.uptimeMillis()
+            val nowWall = System.currentTimeMillis()
+            val gap = nowUptime - lastHeartbeatUptime
+            lastHeartbeatUptime = nowUptime
+            if (lastAliveLogAt != 0L && gap >= SERVICE_HEARTBEAT_SUSPECT_FREEZE_MILLIS) {
+                JotBillLog.w(
+                    TAG,
+                    "服务心跳异常: gap=${gap}ms（阈值=${SERVICE_HEARTBEAT_SUSPECT_FREEZE_MILLIS}ms）" +
+                        " —— 进程疑似被挂起/冻结, wall=$nowWall"
+                )
+                lastAliveLogAt = nowWall
+            } else if (nowWall - lastAliveLogAt >= SERVICE_ALIVE_LOG_INTERVAL_MILLIS) {
+                lastAliveLogAt = nowWall
+                JotBillLog.i(TAG, "服务存活心跳: uptime=$nowUptime, wall=$nowWall")
+            }
+            mainHandler.removeCallbacks(this)
+            mainHandler.postDelayed(this, SERVICE_HEARTBEAT_INTERVAL_MILLIS)
+        }
+    }
+
+    /** 启动/重置心跳：服务连接时调用，先打一行存活锚点。 */
+    private fun startServiceHeartbeat() {
+        mainHandler.removeCallbacks(serviceHeartbeatRunnable)
+        lastHeartbeatUptime = SystemClock.uptimeMillis()
+        lastAliveLogAt = 0L
+        mainHandler.post(serviceHeartbeatRunnable)
+    }
+
+    /** 停止心跳：解绑/销毁时调用，避免 runnable 触碰已销毁的实例。 */
+    private fun stopServiceHeartbeat() {
+        mainHandler.removeCallbacks(serviceHeartbeatRunnable)
     }
     private var paymentMatcher: CheckoutPaymentMatcher? = null
     private var matchingScope: CoroutineScope? = null
@@ -393,8 +538,9 @@ open class CheckoutAccessibilityService : AccessibilityService() {
             AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS or
             AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS or
             AccessibilityServiceInfo.FLAG_INCLUDE_NOT_IMPORTANT_VIEWS
-        // 不在 XML 中限定包名，才能观察离开购物应用的事件并清理旧页面状态；代码仍会先做白名单资格判断。
-        configuredInfo.packageNames = null
+        // 2026-10-31 节电：事件白名单（系统层过滤非白名单事件，进程零唤醒）。
+        // 旧注释"不限定包名才能观察离开事件"的约束已随截图链路删除而失效。
+        configuredInfo.packageNames = EVENT_PACKAGE_WHITELIST
         serviceInfo = configuredInfo
         AccessibilityPageSummaryCollector.resetVolatileTracker()
         activeService = this
@@ -408,6 +554,8 @@ open class CheckoutAccessibilityService : AccessibilityService() {
         }
         registerScreenStateReceiver()
         RecognitionKeepAliveService.refreshNotification(this)
+        installKeepAliveWindow()
+        startServiceHeartbeat()
         JotBillLog.i(TAG, "结算页无障碍观察服务已连接")
     }
 
@@ -555,7 +703,8 @@ open class CheckoutAccessibilityService : AccessibilityService() {
         if (eventPackage != packageName && eventPackage !in SYSTEM_UI_PACKAGES) {
             return false
         }
-        return false
+        // 自身悬浮层 / 系统 UI 事件，不是真实购物页变化 —— 跳过整树采集。
+        return true
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
@@ -717,6 +866,19 @@ open class CheckoutAccessibilityService : AccessibilityService() {
             lastWindowClass = eventWindowClass
         }
 
+        // 节电：自身悬浮层 / 系统 UI 的误归属事件不驱动整树采集
+        // （2026-10-31 接上原死代码，KDoc 承诺的语义）。
+        // activeRoot 已在上方获取，跳过时必须回收 —— 不回收会每次泄漏一个
+        // AccessibilityNodeInfo（系统节点对象，GC 不回收原生侧）。
+        if (shouldSkipForeignEventCollection(eventPackage, shoppingPackage)) {
+            try {
+                activeRoot?.recycle()
+            } catch (_: RuntimeException) {
+                // 系统节点已回收时无需再次处理。
+            }
+            return
+        }
+
         val eventSource = try {
             event.source
         } catch (_: RuntimeException) {
@@ -843,12 +1005,16 @@ open class CheckoutAccessibilityService : AccessibilityService() {
     /** 真正解除绑定时才断开静态桥接；重新绑定由 onServiceConnected 完整重建。 */
     override fun onUnbind(intent: Intent?): Boolean {
         serviceConnected = false
+        removeKeepAliveWindow()
+        stopServiceHeartbeat()
         lastWindowPackage = null
         lastWindowClass = null
         releasePopupEventDispatcher()
         // 重扫兜底的 Handler 挂在主 looper 上，比服务实例活得长：解绑即摘，
         // 否则服务销毁后 runnable 仍会触碰本实例字段。
         paymentRescanHandler.removeCallbacks(paymentRescanRunnable)
+        proactiveScanHandler.removeCallbacks(proactiveScanRunnable)
+        proactiveScanPackage = null
         if (activeService === this) {
             activeService = null
         }
@@ -860,10 +1026,14 @@ open class CheckoutAccessibilityService : AccessibilityService() {
     override fun onDestroy() {
         JotBillLog.i(TAG, "结算页无障碍观察服务开始销毁: previouslyConnected=$serviceConnected")
         serviceConnected = false
+        removeKeepAliveWindow()
+        stopServiceHeartbeat()
         lastWindowPackage = null
         lastWindowClass = null
         releasePopupEventDispatcher()
         paymentRescanHandler.removeCallbacks(paymentRescanRunnable)
+        proactiveScanHandler.removeCallbacks(proactiveScanRunnable)
+        proactiveScanPackage = null
         shutdownPaymentMatcher()
         evidenceFallbackScope.cancel()
         if (activeService === this) {
@@ -872,6 +1042,97 @@ open class CheckoutAccessibilityService : AccessibilityService() {
         RecognitionKeepAliveService.refreshNotification(this)
         JotBillLog.i(TAG, "结算页无障碍观察服务已销毁")
         super.onDestroy()
+    }
+
+    /**
+     * 安装 1×1 常驻保活窗（2026-10-29，HyperOS GreezeManager 防冻结）。
+     *
+     * **问题**：HyperOS 3 只凭"存在启用的无障碍服务"**不**给进程免冻结 —— 远程
+     * 用户 2 的全机日志（`docs/qa/device/2026-10-29-remote-user2/ANALYSIS.md`）里，
+     * 系统策略对本应用的判定是 `reason=accessibility`，支付交接事件投递后 0.5 秒
+     * 即被 `GreezeManager` 冻结（扫描刚跑到 130ms），此后 2 分 33 秒收不到任何
+     * 无障碍事件与通知回调，付款确认弹窗错过支付成功页。
+     *
+     * **对策**：对齐钱迹 / GKD / 小米钱包的实测做法 —— 服务连接期间常驻一个
+     * 1×1 的 `TYPE_ACCESSIBILITY_OVERLAY` 窗口。窗口只要在屏，系统策略即判
+     * `VISIBLE_APP`（`GreezeManager: Uid ... was show on screen, skip it`），
+     * 进程不再被冻结。窗口为空视图：不可见、不可触摸、不参与无障碍语义。
+     *
+     * 用无障碍悬浮窗而非 `TYPE_APPLICATION_OVERLAY`：后者需要
+     * `SYSTEM_ALERT_WINDOW` 且受"后台弹出界面"限制；前者的 appop 是
+     * `CREATE_ACCESSIBILITY_OVERLAY`，随无障碍服务启用自动授予。
+     *
+     * 幂等：重复调用直接返回。安装失败只记日志，**不得**影响服务主链路
+     * （宁可回到"可能被冻结"，也不能让无障碍服务连不上）。
+     */
+    private fun installKeepAliveWindow() {
+        if (keepAliveView != null) {
+            return
+        }
+        val windowManager = getSystemService(Context.WINDOW_SERVICE) as? WindowManager
+        if (windowManager == null) {
+            JotBillLog.w(TAG, "保活窗放弃: WindowManager 不可用")
+            return
+        }
+        val view = View(this).apply {
+            // 空视图不产生无障碍语义，避免自身事件驱动采集。
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+        }
+        val params = WindowManager.LayoutParams(
+            KEEP_ALIVE_WINDOW_SIZE_PX,
+            KEEP_ALIVE_WINDOW_SIZE_PX,
+            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
+            PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = Gravity.TOP or Gravity.START
+            // 落在状态栏下方第一像素：与钱迹实测帧 [0,169][1,170] 同位。
+            // 不设 FLAG_LAYOUT_IN_SCREEN —— 坐标相对内容区，y=0 即状态栏下沿。
+            x = 0
+            y = 0
+        }
+        // 保活窗被系统摘掉时告警：窗口在屏是免冻结的唯一依据，一旦 detach，
+        // 后续支付又会回到"冻结且零日志"的状态。主动移除时 [keepAliveView]
+        // 已先置空，因此不会误报。
+        view.addOnAttachStateChangeListener(object : View.OnAttachStateChangeListener {
+            override fun onViewAttachedToWindow(v: View) {
+                JotBillLog.i(TAG, "保活窗已附着到窗口")
+            }
+
+            override fun onViewDetachedFromWindow(v: View) {
+                if (keepAliveView === v) {
+                    JotBillLog.w(TAG, "保活窗已脱离窗口(防冻结可能失效)")
+                }
+            }
+        })
+        try {
+            windowManager.addView(view, params)
+            keepAliveView = view
+            keepAliveWindowManager = windowManager
+            JotBillLog.i(TAG, "保活窗已安装: 1x1 TYPE_ACCESSIBILITY_OVERLAY")
+        } catch (error: RuntimeException) {
+            JotBillLog.w(TAG, "保活窗安装失败", error)
+        }
+    }
+
+    /**
+     * 移除 [installKeepAliveWindow] 安装的保活窗。
+     *
+     * `removeView` 对已 detach 的 view 会抛异常（服务解绑与销毁可能先后各调一次），
+     * 因此引用先置空再移除，并对异常容错 —— 移除失败不能影响服务生命周期。
+     */
+    private fun removeKeepAliveWindow() {
+        val view = keepAliveView ?: return
+        keepAliveView = null
+        val windowManager = keepAliveWindowManager
+        keepAliveWindowManager = null
+        try {
+            windowManager?.removeView(view)
+            JotBillLog.i(TAG, "保活窗已移除")
+        } catch (error: RuntimeException) {
+            JotBillLog.w(TAG, "保活窗移除失败", error)
+        }
     }
 
     /**
@@ -1102,6 +1363,9 @@ open class CheckoutAccessibilityService : AccessibilityService() {
     ) {
         paymentRescanCount = 0
         paymentRescanHandler.removeCallbacks(paymentRescanRunnable)
+        // v5：进入支付环境即启动主动扫描时钟 —— 事件活跃时它只是低频旁路
+        // （管线幂等兜住重复），事件静默期它就是唯一的扫描来源。
+        startProactivePaymentScan(paymentPackage)
         scanPaymentResultCore(event, paymentPackage)
     }
 
@@ -1188,10 +1452,17 @@ open class CheckoutAccessibilityService : AccessibilityService() {
                         } catch (_: RuntimeException) {
                             ""
                         }
-                        val pageTextLength = try {
-                            collectPageText(root).length
-                        } catch (_: RuntimeException) {
-                            -1
+                        // 节电：pageTextLength 只进日志不参与判定，每 5s 才算一次
+                        // 整树遍历（高频帧跳过并打 -2 标记，保诊断锚点不丢）。
+                        val pageTextLength = if (observedAt - lastPageTextLengthSampleAt >= PAGE_TEXT_LENGTH_SAMPLE_MILLIS) {
+                            lastPageTextLengthSampleAt = observedAt
+                            try {
+                                collectPageText(root).length
+                            } catch (_: RuntimeException) {
+                                -1
+                            }
+                        } else {
+                            -2 // 采样跳过标记
                         }
                         JotBillLog.i(
                             TAG,
@@ -1240,6 +1511,7 @@ open class CheckoutAccessibilityService : AccessibilityService() {
                                     "收款人=${parseResult.transfer.recipient ?: "未知"}"
                             )
                             val transfer = parseResult.transfer
+                            stopProactivePaymentScan()
                             evidenceFallbackScope.launch {
                                 recordPersonalTransferFromResultPage(transfer, paymentPackage)
                             }
@@ -1254,6 +1526,7 @@ open class CheckoutAccessibilityService : AccessibilityService() {
                             // 的支付落成功卡（摘樱桃误报）。保持 return（改动前行为）。
                             if (parseResult.reason == PaymentResultFailureReason.PAYMENT_FAILED) {
                                 JotBillLog.i(TAG, "支付结果页含失败语义，终止本帧: ${parseResult.reason}")
+                                stopProactivePaymentScan()
                                 return
                             }
                             // 证据不足类（金额/时间解析不出）与 NotPaymentResult 一样
@@ -1282,7 +1555,6 @@ open class CheckoutAccessibilityService : AccessibilityService() {
                         JotBillLog.d(TAG, "支付结果页同一事件已处理，跳过重复解析: ${evidence.sourceEventKey.take(12)}")
                         return
                     }
-
                     // 自动记账互斥（拍板项①）：规则引擎已在认领窗内认领同包名同金额
                     // ⇒ 本帧让路，弹窗/待确认留给规则路径的兜底分支。金额感知避免
                     // 误伤并发第二笔不同金额的支付。
@@ -1298,11 +1570,32 @@ open class CheckoutAccessibilityService : AccessibilityService() {
                         )
                         return
                     }
+
+                    // 2026-10-29 观测补强（纯诊断，零行为变更）：记录证据来自哪个 root。
+                    // 远程支付宝 19.90 事故里成功日志只有金额/长度，无法判定 51 字符
+                    // 证据来自商户页、SystemUI 还是支付宝结果页（v5 的 systemui 结论
+                    // 因此被推翻）。rootPkg/rootClass/rootIndex 让下一份日志可直接归因。
+                    val successRootPkg = try {
+                        root.packageName?.toString().orEmpty()
+                    } catch (_: RuntimeException) {
+                        ""
+                    }
+                    val successRootClass = try {
+                        root.className?.toString()?.substringAfterLast('.') ?: ""
+                    } catch (_: RuntimeException) {
+                        ""
+                    }
                     JotBillLog.i(
                         TAG,
                         "支付结果页解析到证据: 金额=${evidence.amountMinor}分, 状态=${evidence.paymentStatus}, " +
-                            "textLength=${pageText.length}"
+                            "textLength=${pageText.length}, root=${rootIndex + 1}/${roots.size}, " +
+                            "rootPkg=${successRootPkg.ifBlank { "null" }}, " +
+                            "rootClass=${successRootClass.ifBlank { "null" }}, " +
+                            "windowClass=${observation.windowClass.ifBlank { "null" }}"
                     )
+                    // v5：证据已产出，主动扫描时钟使命完成（漏点事件与本时钟扫的是
+                    // 同一棵树，三道去重兜重复；停钟省电防重复触发）。
+                    stopProactivePaymentScan()
 
                     // 匹配器尚未初始化时仍保留证据，避免结果页只记录日志后丢失。
                     val matcher = synchronized(aiLifecycleLock) { paymentMatcher }
@@ -1428,6 +1721,166 @@ open class CheckoutAccessibilityService : AccessibilityService() {
         } finally {
             rescanEvent.recycle()
         }
+    }
+
+    // ── 支付环境主动扫描（2026-10-27 v5）────────────────────────────────────
+
+    /**
+     * 进入支付环境时启动主动扫描时钟（幂等：已在跑则只刷新"最近在支付环境"时间）。
+     *
+     * 调用点：支付包交接被观察到时（真实事件或购物页根已变成支付包）。
+     * 与 P2-5 重扫兜底互补：P2-5 兜"帧内无证据"，本时钟兜"整段无事件"。
+     */
+    private fun startProactivePaymentScan(paymentPackage: String) {
+        val now = System.currentTimeMillis()
+        if (proactiveScanPackage == null) {
+            proactiveScanPackage = paymentPackage
+            proactiveScanStartedAt = now
+            JotBillLog.i(TAG, "支付环境主动扫描启动: pkg=$paymentPackage")
+        } else if (proactiveScanPackage != paymentPackage) {
+            // 换支付包（如微信改道支付宝）就按新环境重开时钟。
+            proactiveScanPackage = paymentPackage
+            proactiveScanStartedAt = now
+            JotBillLog.i(TAG, "支付环境主动扫描切换: pkg=$paymentPackage")
+        }
+        proactiveScanLastSeenAt = now
+        proactiveScanHandler.removeCallbacks(proactiveScanRunnable)
+        proactiveScanHandler.postDelayed(proactiveScanRunnable, PAYMENT_PROACTIVE_SCAN_INTERVAL_MILLIS)
+    }
+
+    /**
+     * 主动扫描执行体：事件静默期周期性扫 `rootInActiveWindow`。
+     *
+     * 停止条件（任一）：
+     * - 证据已产出（[scanPaymentResultCore] 命中 Success/转账/失败语义即提前
+     *   return，本方法感知不到；改由 [stopProactivePaymentScan] 在证据产出点
+     *   显式停钟）；
+     * - 总时长超 [PAYMENT_PROACTIVE_SCAN_MAX_MILLIS]（最坏密码输入+停留场景）；
+     * - 离开支付环境超 [PAYMENT_PROACTIVE_SCAN_LINGER_MILLIS]（活动根与窗口
+     *   列表都见不到支付包 —— 确认键→成功页的切换瞬间活动根短暂为空，宽限
+     *   窗防误停）。
+     *
+     * 活动根仍指向支付包时，合成 content-change 事件走同一扫描管线（敏感
+     * 门禁/三道去重/幂等键全部生效）。空根不扫 —— 密码键盘期 HyperOS 2 的
+     * 支付包窗口可能整窗无文本（2026-10-27 实测支付宝 33 帧全 0 字符），
+     * 空窗扫描只费电不产证据，等漏点事件或窗口恢复。
+     */
+    private fun runProactivePaymentScan() {
+        val paymentPackage = proactiveScanPackage ?: return
+        val now = System.currentTimeMillis()
+        val activeRoot = try {
+            rootInActiveWindow
+        } catch (_: RuntimeException) {
+            null
+        }
+        val rootPackage = try {
+            activeRoot?.packageName?.toString()?.trim().orEmpty()
+        } catch (_: RuntimeException) {
+            ""
+        }
+        // 停止判定收敛到 ProactiveScanPolicy（纯对象，双向用例钉死）。
+        val verdict = ProactiveScanPolicy.verdict(
+            startedAt = proactiveScanStartedAt,
+            lastSeenAt = proactiveScanLastSeenAt,
+            activeRootPackage = rootPackage,
+            now = now,
+            supportsPayment = pageDetector::supportsPaymentPackage
+        )
+        var reschedule = true
+        when (verdict) {
+            ProactiveScanPolicy.Verdict.SCAN -> {
+                proactiveScanLastSeenAt = now
+                val hasText = try {
+                    activeRoot != null && collectPageText(activeRoot).isNotEmpty()
+                } catch (_: RuntimeException) {
+                    false
+                }
+                // 观测盲区填补（2026-10-28 v6）：此前 root 非支付包/窗口空时
+                // 静默 reschedule，「rootInActiveWindow 在支付期指向什么」无法
+                // 从日志判定（A: root 不指收银台 vs B: root 指向但窗口被掏空）。
+                // 每轮打节流现场（8s 窗），下一份日志 A/B 立判。
+                logProactiveScanTick(paymentPackage, rootPackage, hasText)
+                if (hasText) {
+                    val scanEvent = AccessibilityEvent.obtain(AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED)
+                    try {
+                        scanEvent.packageName = paymentPackage
+                        scanPaymentResultCore(scanEvent, paymentPackage)
+                    } finally {
+                        scanEvent.recycle()
+                    }
+                }
+                // 空根不扫（HyperOS 2 支付宝整窗无文本，实测 33 帧全 0 字符），
+                // 但活动根仍指向支付包 ⇒ 维持时钟，等窗口恢复或漏点事件。
+            }
+
+            ProactiveScanPolicy.Verdict.WAIT -> {
+                logProactiveScanTick(paymentPackage, rootPackage, hasText = false)
+            }
+
+            ProactiveScanPolicy.Verdict.STOP_TIMEOUT -> {
+                JotBillLog.i(
+                    TAG,
+                    "支付环境主动扫描停止(超时上限): pkg=$paymentPackage, " +
+                        "elapsed=${now - proactiveScanStartedAt}ms"
+                )
+                stopProactivePaymentScan()
+                reschedule = false
+            }
+
+            ProactiveScanPolicy.Verdict.STOP_LEFT_PAYMENT -> {
+                JotBillLog.i(
+                    TAG,
+                    "支付环境主动扫描停止(已离开支付环境): pkg=$paymentPackage, " +
+                        "silentFor=${now - proactiveScanLastSeenAt}ms"
+                )
+                stopProactivePaymentScan()
+                reschedule = false
+            }
+        }
+        if (activeRoot != null) {
+            // 全分支回收（SCAN 同样）：此前的条件 !SCAN 会让 SCAN 分支每轮
+            // 泄漏一个根节点对象（独立审查 P0-2 实测）。rootInActiveWindow 是
+            // 每次 API 读取的新实例，回收不影响 scanPaymentResultCore 后续
+            // 自己重新读取 —— 与 onAccessibilityEvent finally 回收根节点的
+            // 惯例一致。
+            try {
+                activeRoot.recycle()
+            } catch (_: RuntimeException) {
+            }
+        }
+        if (reschedule) {
+            proactiveScanHandler.postDelayed(
+                proactiveScanRunnable,
+                PAYMENT_PROACTIVE_SCAN_INTERVAL_MILLIS
+            )
+        }
+    }
+
+    // 主动扫描 tick 观测日志：8s 节流 + 状态变化（rootPkg 或空窗标志）即刻打。
+    // 日志样例：支付扫描轮询: pkg=mm, root=mm, text=0 → 「B: root 对但窗口空」
+    //          支付扫描轮询: pkg=mm, root=com.xunmeng.pinduoduo → 「A: root 不指收银台」
+    private var lastProactiveTickLogAt = 0L
+    private var lastProactiveTickLogKey: String? = null
+
+    private fun logProactiveScanTick(pkg: String, rootPackage: String, hasText: Boolean) {
+        val key = "$rootPackage|$hasText"
+        val now = System.currentTimeMillis()
+        if (key != lastProactiveTickLogKey || now - lastProactiveTickLogAt >= 8_000L) {
+            lastProactiveTickLogAt = now
+            lastProactiveTickLogKey = key
+            JotBillLog.i(
+                TAG,
+                "支付扫描轮询: pkg=$pkg, root=${rootPackage.ifBlank { "null" }}, " +
+                    "text=${if (hasText) "nonempty" else "empty"}"
+            )
+        }
+    }
+
+    /** 证据产出点调用：停钟（幂等）。 */
+    private fun stopProactivePaymentScan() {
+        lastProactiveTickLogKey = null
+        proactiveScanHandler.removeCallbacks(proactiveScanRunnable)
+        proactiveScanPackage = null
     }
 
     private suspend fun recordPersonalTransferFromResultPage(

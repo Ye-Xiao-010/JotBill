@@ -76,7 +76,8 @@ object JotBillLog {
      * 在那里做文件 I/O 会造成卡顿甚至 ANR。
      */
     fun init(context: Context) {
-        // 所有构建一律落盘（2026-10-25）：release 出现"弹窗未出"类问题时必须有日志可查，
+        // 所有构建一律落盘（2026-10-25）：release 出现"弹窗未出"类问题时必须有日志可查
+        // （当日 clean 安装后微信/支付宝双 miss，因 debug-only 落盘完全无证据）。
         // 文件增长由 MAX_BYTES 旋转兜底（10MB × 2）。
         val dir = context.getExternalFilesDir(null) ?: return
         dir.mkdirs()

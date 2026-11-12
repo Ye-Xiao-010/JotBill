@@ -76,4 +76,16 @@ internal object RecognitionPackages {
         "com.tencent.mm",
         "com.eg.android.AlipayGphone"
     )
+
+    /**
+     * 规则引擎的**通知事件来源包**，不参与识别层采集（不是购物/支付包）。
+     *
+     * 银行短信（[com.jotbill.app.bookkeeping.BookkeepingChannels] 的 mms 渠道）经
+     * 无障碍 `TYPE_NOTIFICATION_STATE_CHANGED` 投递给规则引擎；无障碍事件白名单
+     * 是系统层过滤，漏掉本集合会让短信渠道静默失效。页面事件不会来自这些包，
+     * 引擎侧 `channels.shouldProcess` 仍是第二道闸。
+     */
+    val BOOKKEEPING_NOTIFICATION_PACKAGES: Set<String> = setOf(
+        "com.android.mms"
+    )
 }

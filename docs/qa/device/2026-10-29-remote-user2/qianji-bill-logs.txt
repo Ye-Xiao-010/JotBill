@@ -1,0 +1,99 @@
+钱迹内部日志两条（用户提供，原样存档，只增不改）
+设备：Xiaomi 15 Ultra / HyperOS 3.0.314.0.WOACNXM / 钱迹 v4.5.4
+时间：2026-10-28 23:26、23:29
+来源：微信聊天文件 bugreport-2026-10-28-233145 附带
+说明：这两条是钱迹自己的“自动记账”结果页日志，用于与全机日志
+      （bugreport-xuanyuan-BP2A.250605.031.A3-2026-10-28-23-31-45.txt）
+      的 GreezeManager 时间线对齐。分析见同目录 ANALYSIS.md §2/§8。
+
+================================================================
+[1] 23:29:45 · 拼多多内微信支付 12.80（钱迹识别成功）
+================================================================
+
+【基础信息】
+日志ID: 1793201387930_6604993f-a264-4e34-bfcf-5a1cab08117f
+日志时间: 2026-10-28 23:29
+动作: 保存
+账单ID: 1793201387924149209
+匹配模式: 本地识别
+
+
+【页面原始文本】
+支付成功
+拼多多
+￥12.80
+
+
+【最终保存的账单（数据库）】
+金额: 12.8
+分类: 日用品
+资产1: -
+资产2: -
+备注: 拼多多
+时间: Wed Oct 28 23:29:45 GMT+08:00 2026
+类型: 0
+
+
+【调试信息】
+systemInfo: Xiaomi 36
+
+[billLog]
+BillInfo(sourceApp=WeChat, from=WeChatPaySuccess, amount=12.8, type=0, description=拼多多, timeInMillSec=0, timeStr=null, outAsset=null, inAsset=null, merchantName=null, fee=0.0, screenshotFilePath=/data/user/0/com.mutangtech.qianji/cache/shot_1793201385035.jpg, nodeCount=3, outAssetMatcher=null, inAssetMatcher=null)
+
+[nodeInfo]
+有效节点信息 (共3个):
+[6] android.view.View  ContentDesc="支付成功"
+[7] android.view.View  ContentDesc="拼多多"
+[8] android.view.View  ContentDesc="￥12.80"
+
+================================================================
+[2] 23:26:47 · 支付宝 2.60（钱迹识别成功）
+================================================================
+
+【基础信息】
+日志ID: 1793201216955_338f7278-1ead-4ea1-b967-00bec6c07836
+日志时间: 2026-10-28 23:26
+动作: 保存
+账单ID: 1793201216951198876
+匹配模式: 本地识别
+
+
+【页面原始文本】
+支付成功￥2.60
+支付成功
+2.60
+拼多多平台商户
+￥2.60
+付款方式
+邮储银行储蓄卡(2910)
+完成
+
+
+【最终保存的账单（数据库）】
+金额: 2.6
+分类: 日用品
+资产1: -
+资产2: -
+备注: 拼多多平台商户
+时间: Wed Oct 28 23:26:47 GMT+08:00 2026
+类型: 0
+
+
+【调试信息】
+systemInfo: Xiaomi 36
+
+[billLog]
+BillInfo(sourceApp=AliPay, from=AlipayPaySuccess, amount=2.6, type=0, description=拼多多平台商户, timeInMillSec=0, timeStr=null, outAsset=邮储银行储蓄卡(2910), inAsset=null, merchantName=null, fee=0.0, screenshotFilePath=/data/user/0/com.mutangtech.qianji/cache/shot_1793201207030.jpg, nodeCount=10, outAssetMatcher=null, inAssetMatcher=null)
+
+[nodeInfo]
+有效节点信息 (共10个):
+[23] android.widget.FrameLayout  ContentDesc="支付成功￥2.60"
+[26] android.widget.TextView Text="支付成功"
+[30] android.widget.TextView Text="2.60"
+[35] android.widget.TextView Text="拼多多平台商户"
+[36] android.widget.TextView Text="￥2.60"
+[39] android.widget.TextView Text="付款方式"
+[42] android.widget.TextView Text="邮储银行储蓄卡(2910)"
+[77] android.widget.TextView Text="完成"
+[87] android.widget.FrameLayout  ContentDesc="完成"
+[92] android.widget.TextView Text="完成"  ViewId=com.alipay.android.app:id/nav_right_textview

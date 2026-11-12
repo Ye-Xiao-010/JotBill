@@ -106,9 +106,9 @@ object SentryLogger {
                 // 设置发布版本（从 BuildConfig 获取）
                 options.release = "${context.packageName}@${com.jotbill.app.BuildConfig.VERSION_NAME}"
 
-                // 设置采样率（1.0 = 100%，0.5 = 50%）
-                // 生产环境建议降低采样率以节省配额
-                options.tracesSampleRate = if (environment == "production") 0.2 else 1.0
+                // 2026-10-31 节电优化：生产关性能追踪（纯遥测，与识别链路无关），
+                // 崩溃上报保留。调试构建仍 100% 采样便于本地排查。
+                options.tracesSampleRate = if (environment == "production") 0.0 else 1.0
 
                 // 启用自动面包屑收集
                 options.isEnableAutoSessionTracking = true

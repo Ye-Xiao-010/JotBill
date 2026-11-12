@@ -49,6 +49,8 @@ object JotBillDatabaseProvider {
                 initializer.initializeIfFirstRun()
                 // 批 6:预设子分类单次播种(老库升级也生效,用户删除后不复活)
                 initializer.ensurePresetSubCategories()
+                // 2026-10-27:老库默认分类图标 emoji→lucide 一次性迁移(自定义分类不触碰)
+                initializer.syncDefaultCategoryIcons()
             }
             database!!
         } catch (error: Exception) {

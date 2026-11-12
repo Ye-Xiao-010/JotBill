@@ -1,0 +1,4 @@
+exportedAt=20261027-215043
+device=Xiaomi 25019PNF3C
+sdk=36
+app=0.0.99(95)

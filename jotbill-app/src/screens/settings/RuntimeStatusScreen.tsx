@@ -1,10 +1,9 @@
-import React, { useCallback } from 'react';
-import { RefreshControl, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import React, { useCallback, useState } from 'react';
+import { Alert, RefreshControl, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
-import { Linking } from 'react-native';
 import { useQuery } from '@tanstack/react-query';
 import { Activity, CheckCircle2, ChevronLeft, Database, FileText, Layers3, WalletCards } from 'lucide-react-native';
-import { nativeRecognition, nativeRuntime } from '../../native';
+import { nativeRuntime } from '../../native';
 import { borderRadius, borderWidth, spacing } from '../../theme/spacing';
 import { ThemeColors } from '../../theme/colors';
 import { useStyles } from '../../hooks';
@@ -26,6 +25,7 @@ function formatTime(value?: string): string {
 export default function RuntimeStatusScreen() {
   const navigation = useNavigation();
   const styles = useStyles(createStyles);
+  const [exporting, setExporting] = useState(false);
   const query = useQuery({
     queryKey: STATUS_QUERY_KEY,
     queryFn: () => nativeRuntime.getRuntimeHealth(),
@@ -34,6 +34,45 @@ export default function RuntimeStatusScreen() {
   const onRefresh = useCallback(async () => {
     await query.refetch();
   }, [query]);
+
+  /**
+   * 导出诊断日志（打包 zip → 系统分享面板，用户可直接在微信/QQ 转发）。
+   * 弹窗不出现类问题（如门禁挂起/事件断流）靠此日志归因，见 DiagLogExporter。
+   */
+  const onExportDiagLog = useCallback(() => {
+    Alert.alert(
+      '导出诊断日志',
+      '将把运行日志打包并通过系统分享面板发送。日志包含金额等记账数据，不含密码（敏感页零提取）。',
+      [
+        { text: '取消', style: 'cancel' },
+        {
+          text: '导出',
+          onPress: async () => {
+            if (exporting) return;
+            setExporting(true);
+            try {
+              const fileName = await nativeRuntime.exportDiagLog();
+              Alert.alert('导出完成', `已生成 ${fileName}，请在分享面板选择发送方式。`);
+            } catch (error) {
+              // reject(code, message) 在 JS 侧 Error 上 code 与 message 是两个独立
+              // 属性（RN PromiseImpl 把 WritableMap Object.assign 到 error 上），
+              // message 只有中文文案 —— 判 code，不判 message 内容。
+              const code = (error as { code?: string })?.code ?? '';
+              const message = error instanceof Error ? error.message : String(error);
+              const friendly = code === 'DIAG_EXPORT_EMPTY'
+                ? '暂无诊断日志可导出，请先使用一段时间后再试。'
+                : code === 'DIAG_EXPORT_NO_ACTIVITY'
+                  ? '请在应用内重试（分享面板需要前台界面）。'
+                  : `导出失败：${message ?? '未知错误'}`;
+              Alert.alert(code === 'DIAG_EXPORT_EMPTY' ? '暂无可导出' : '导出失败', friendly);
+            } finally {
+              setExporting(false);
+            }
+          },
+        },
+      ],
+    );
+  }, [exporting]);
 
   const status = query.data;
   const rows = [
@@ -121,23 +160,13 @@ export default function RuntimeStatusScreen() {
           ) : null}
         </View>
         <View style={styles.detailCard}>
-          <Text style={styles.detailTitle}>重新授权</Text>
+          <Text style={styles.detailTitle}>诊断</Text>
           <View style={styles.detailRow}>
-            <Text style={styles.detailLabel}>通知监听设置</Text>
-            <TouchableOpacity onPress={() => { void nativeRuntime.openNotificationListenerSettings(); }}>
-              <Text style={styles.linkText}>打开</Text>
-            </TouchableOpacity>
-          </View>
-          <View style={styles.detailRow}>
-            <Text style={styles.detailLabel}>无障碍服务设置</Text>
-            <TouchableOpacity onPress={() => { void nativeRecognition.openAccessibilitySettings(); }}>
-              <Text style={styles.linkText}>打开</Text>
-            </TouchableOpacity>
-          </View>
-          <View style={styles.detailRow}>
-            <Text style={styles.detailLabel}>悬浮窗/电池优化</Text>
-            <TouchableOpacity onPress={() => { void Linking.openSettings(); }}>
-              <Text style={styles.linkText}>打开系统设置</Text>
+            <Text style={styles.detailLabel}>诊断日志（排障用）</Text>
+            <TouchableOpacity onPress={onExportDiagLog} disabled={exporting}>
+              <Text style={[styles.linkText, exporting && styles.linkTextDisabled]}>
+                {exporting ? '导出中…' : '导出'}
+              </Text>
             </TouchableOpacity>
           </View>
           <View style={styles.detailRow}>
@@ -175,6 +204,7 @@ const createStyles = (colors: ThemeColors) => ({
     detailLabel: { fontSize: 13, color: colors.textSecondary },
     detailValue: { flexShrink: 1, fontSize: 13, fontWeight: '700', color: colors.textPrimary, textAlign: 'right' },
     linkText: { fontSize: 13, fontWeight: '800', color: colors.primary },
+    linkTextDisabled: { color: colors.textSecondary },
   }),
   _colors: colors,
 });
