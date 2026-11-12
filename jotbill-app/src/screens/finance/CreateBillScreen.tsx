@@ -14,23 +14,20 @@ import { Text } from 'react-native';
 import { Toast } from '../../components';
 import { AddCategoryModal, ConfirmModal } from '../../components/modals';
 import CategoryIcon from '../../components/business/CategoryIcon';
+import { DEFAULT_CATEGORIES } from '../../constants/app';
 import { useToast, useCategories, useStyles } from '../../hooks';
 import { nativeData, type Account, type Bill, type Category } from '../../native';
 import { invalidateCache } from '../../lib/queryClient';
 import { findDuplicateBills } from '../../lib/billDuplicateCheck';
 import { ThemeColors } from '../../theme/colors';
-import { spacing, borderRadius, borderWidth, shadow } from '../../theme';
+import { spacing, borderRadius, borderWidth, shadow, typography } from '../../theme';
 
-// 固定分类列表
-const FIXED_CATEGORIES = [
-  { icon: '🍽️', name: '餐饮' },
-  { icon: '🚗', name: '交通' },
-  { icon: '🛍️', name: '购物' },
-  { icon: '🏠', name: '居住' },
-  { icon: '🎮', name: '娱乐' },
-  { icon: '💊', name: '医疗' },
-  { icon: '📚', name: '教育' },
-];
+
+// 固定分类列表（图标统一出自 constants/app.ts 的 DEFAULT_CATEGORIES）
+const FIXED_CATEGORIES = DEFAULT_CATEGORIES.EXPENSE.map(({ icon, name }) => ({
+  icon,
+  name,
+}));
 
 /** 阶段五 T7：手动表单支持的交易类型（转账/还款需要双账户，退款/手续费走待确认链路）。 */
 type BillFormType = 'expense' | 'income' | 'transfer' | 'repayment';
@@ -716,7 +713,7 @@ const createStyles = (colors: ThemeColors) => ({
     currencySymbol: {
       fontSize: 28,
       fontWeight: '800',
-      fontFamily: 'Courier',
+      fontFamily: typography.fontFamily.mono,
       color: colors.textPrimary,
       marginRight: spacing.sm,
     },
@@ -724,7 +721,7 @@ const createStyles = (colors: ThemeColors) => ({
       flex: 1,
       fontSize: 28,
       fontWeight: '800',
-      fontFamily: 'Courier',
+      fontFamily: typography.fontFamily.mono,
       color: colors.textPrimary,
       padding: 0,
     },

@@ -8,6 +8,7 @@ import { LineChart } from 'react-native-gifted-charts';
 import { ThemeColors } from '../../theme/colors';
 import { borderRadius, borderWidth, spacing, shadow } from '../../theme/spacing';
 import { useStyles } from '../../hooks';
+import { typography } from '../../theme';
 
 interface AssetTrendChartProps {
   data: Array<{ month: string; value: number }>;
@@ -68,7 +69,7 @@ export default function AssetTrendChart({ data, dateRange }: AssetTrendChartProp
           yAxisTextStyle={{
             color: styles._colors.textTertiary,
             fontSize: 10,
-            fontFamily: 'Courier',
+            fontFamily: typography.fontFamily.mono,
           }}
           hideRules
           noOfSections={4}

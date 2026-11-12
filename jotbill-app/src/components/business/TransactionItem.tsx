@@ -7,8 +7,10 @@ import { View, Text, StyleSheet } from 'react-native';
 import { ThemeColors } from '../../theme/colors';
 import { borderRadius, borderWidth, spacing, shadow } from '../../theme/spacing';
 import { useStyles } from '../../hooks';
+import { formatSignedCurrency } from '../../utils/format';
 import CategoryIcon from './CategoryIcon';
 import BrutalPressable from '../ui/BrutalPressable';
+import { typography } from '../../theme';
 
 export interface TransactionItemProps {
   id: number;
@@ -39,7 +41,7 @@ export default function TransactionItem({
     <View style={styles.inner}>
       <View style={[
         styles.iconContainer,
-        { backgroundColor: isIncome ? styles._colors.success : styles._colors.accent },
+        { backgroundColor: isIncome ? styles._colors.income : styles._colors.expense },
       ]}>
         <CategoryIcon
           icon={categoryIcon}
@@ -59,7 +61,7 @@ export default function TransactionItem({
             isIncome ? styles.incomeBadge : styles.expenseBadge,
           ]}>
             <Text style={[styles.amount, isIncome ? styles.incomeAmount : styles.expenseAmount]}>
-              {isIncome ? '+' : '-'}¥{Math.abs(amount).toFixed(2)}
+              {formatSignedCurrency(amount, isIncome)}
             </Text>
           </View>
         </View>
@@ -143,21 +145,21 @@ const createStyles = (colors: ThemeColors) => ({
       paddingVertical: 2,
     },
     incomeBadge: {
-      backgroundColor: '#DCFCE7',
+      backgroundColor: colors.incomeLight,
     },
     expenseBadge: {
-      backgroundColor: '#FEE2E2',
+      backgroundColor: colors.expenseLight,
     },
     amount: {
       fontSize: 15,
       fontWeight: '800',
-      fontFamily: 'Courier',
+      fontFamily: typography.fontFamily.mono,
     },
     incomeAmount: {
-      color: '#16A34A',
+      color: colors.incomeStrong,
     },
     expenseAmount: {
-      color: '#DC2626',
+      color: colors.expenseStrong,
     },
     subRow: {
       flexDirection: 'row',
@@ -175,7 +177,7 @@ const createStyles = (colors: ThemeColors) => ({
       fontSize: 12,
       fontWeight: '500',
       color: colors.textTertiary,
-      fontFamily: 'Courier',
+      fontFamily: typography.fontFamily.mono,
     },
   }),
   _colors: colors,

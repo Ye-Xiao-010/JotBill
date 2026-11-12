@@ -7,6 +7,8 @@ import { View, Text, TouchableOpacity, FlatList, StyleSheet } from 'react-native
 import { ThemeColors } from '../../theme/colors';
 import { borderRadius, borderWidth, spacing, shadow } from '../../theme/spacing';
 import { useStyles } from '../../hooks';
+import { formatNumber } from '../../utils/format';
+import { typography } from '../../theme';
 
 interface MonthSummary {
   month: number;
@@ -38,13 +40,13 @@ export default function MonthlySummaryList({ data, onMonthPress }: MonthlySummar
           <View style={styles.amountCol}>
             <Text style={styles.amountLabel}>收入</Text>
             <Text style={styles.incomeText}>
-              {item.income > 0 ? `+${item.income.toFixed(2)}` : '0.00'}
+              {item.income > 0 ? `+${formatNumber(item.income, 2)}` : '0.00'}
             </Text>
           </View>
           <View style={styles.amountCol}>
             <Text style={styles.amountLabel}>支出</Text>
             <Text style={styles.expenseText}>
-              {item.expense > 0 ? `-${item.expense.toFixed(2)}` : '0.00'}
+              {item.expense > 0 ? `-${formatNumber(item.expense, 2)}` : '0.00'}
             </Text>
           </View>
           <View style={styles.amountCol}>
@@ -55,7 +57,7 @@ export default function MonthlySummaryList({ data, onMonthPress }: MonthlySummar
                 { color: net >= 0 ? styles._colors.income : styles._colors.expense },
               ]}
             >
-              {net >= 0 ? '+' : ''}{net.toFixed(2)}
+              {net >= 0 ? '+' : ''}{formatNumber(net, 2)}
             </Text>
           </View>
         </View>
@@ -118,19 +120,19 @@ const createStyles = (colors: ThemeColors) => ({
     incomeText: {
       fontSize: 12,
       fontWeight: '700',
-      fontFamily: 'Courier',
+      fontFamily: typography.fontFamily.mono,
       color: colors.income,
     },
     expenseText: {
       fontSize: 12,
       fontWeight: '700',
-      fontFamily: 'Courier',
+      fontFamily: typography.fontFamily.mono,
       color: colors.expense,
     },
     netText: {
       fontSize: 13,
       fontWeight: '800',
-      fontFamily: 'Courier',
+      fontFamily: typography.fontFamily.mono,
     },
   }),
   _colors: colors,

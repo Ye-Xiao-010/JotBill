@@ -15,6 +15,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import { useQueryClient } from '@tanstack/react-query';
 import { AddCategoryModal } from '../../components/modals/AddCategoryModal';
 import CategoryIcon from '../../components/business/CategoryIcon';
+import QueryErrorBanner from '../../components/ui/QueryErrorBanner';
 import { useToast, useStyles } from '../../hooks';
 import { useAlert } from '../../providers';
 import { nativeData, type Category } from '../../native';
@@ -30,6 +31,8 @@ const CategoryManageScreen: React.FC = () => {
 
   const [categories, setCategories] = useState<Category[]>([]);
   const [loading, setLoading] = useState(false);
+  /** 加载失败信息；非空时渲染失败态而非空列表 */
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [selectedType, setSelectedType] = useState<'expense' | 'income'>('expense');
   const [showAddModal, setShowAddModal] = useState(false);
   const [selectedCategory, setSelectedCategory] = useState<Category | null>(null);
@@ -41,7 +44,9 @@ const CategoryManageScreen: React.FC = () => {
     try {
       setLoading(true);
       setCategories(await nativeData.getCategories(selectedType));
+      setLoadError(null);
     } catch (error: any) {
+      setLoadError(error?.message || '加载分类失败');
       showError(error.message || '加载分类失败');
     } finally {
       setLoading(false);
@@ -160,6 +165,14 @@ const CategoryManageScreen: React.FC = () => {
             <ActivityIndicator size="large" color={styles._colors.primary} />
             <Text style={styles.loadingText}>加载中...</Text>
           </View>
+        ) : loadError ? (
+          // 失败态与空态分离：加载失败不能渲染成空分类列表
+          <QueryErrorBanner
+            error={loadError}
+            title="分类加载失败"
+            hint="这不代表你没有分类数据"
+            onRetry={() => void fetchCategories()}
+          />
         ) : (
           <>
             <View style={styles.section}>

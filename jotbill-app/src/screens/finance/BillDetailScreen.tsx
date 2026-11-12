@@ -17,9 +17,12 @@ import { borderRadius, borderWidth, spacing, shadow } from '../../theme/spacing'
 import { nativeData, type Bill, type Category } from '../../native';
 import { invalidateCache } from '../../lib/queryClient';
 import { formatPlatform } from '../../utils/platform';
+import { formatCurrency } from '../../utils/format';
 import { useStyles } from '../../hooks';
 import CategoryIcon from '../../components/business/CategoryIcon';
+import QueryErrorBanner from '../../components/ui/QueryErrorBanner';
 import { useAlert } from '../../providers';
+import { typography } from '../../theme';
 
 export default function BillDetailScreen() {
   const navigation = useNavigation();
@@ -33,6 +36,8 @@ export default function BillDetailScreen() {
   const [category, setCategory] = useState<Category | null>(null);
   const [loading, setLoading] = useState(true);
   const [deleting, setDeleting] = useState(false);
+  /** 加载失败信息；非空时渲染失败态而非"账单不存在" */
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const fetchBill = useCallback(async () => {
     try {
@@ -45,8 +50,10 @@ export default function BillDetailScreen() {
         : 'expense';
       const categories = await nativeData.getCategories(categoryType);
       setCategory(categories.find(item => item.id === loadedBill.categoryId) || null);
+      setLoadError(null);
     } catch (error) {
       console.error('Failed to fetch bill:', error);
+      setLoadError(error instanceof Error ? error.message : '获取账单详情失败');
       alert('错误', '获取账单详情失败');
     } finally {
       setLoading(false);
@@ -113,6 +120,20 @@ export default function BillDetailScreen() {
   }
 
   if (!bill) {
+    // 失败态与空态分离：加载失败给重试入口，成功但无数据才显示"账单不存在"
+    if (loadError) {
+      return (
+        <View style={styles.loadingContainer}>
+          <QueryErrorBanner
+            error={loadError}
+            title="账单详情加载失败"
+            hint="这不代表这条账单不存在"
+            onRetry={fetchBill}
+            style={styles.errorBanner}
+          />
+        </View>
+      );
+    }
     return (
       <View style={styles.loadingContainer}>
         <Text style={styles.errorText}>账单不存在</Text>
@@ -148,8 +169,13 @@ export default function BillDetailScreen() {
           <Text style={[styles.typeBadge, { backgroundColor: isPositive ? styles._colors.income + '20' : styles._colors.expense + '20', color: amountColor }]}>
             {typeLabel}
           </Text>
-          <Text style={[styles.amount, { color: amountColor }]}>
-            ¥ {(bill.amountMinor / 100).toFixed(2)}
+          <Text
+            style={[styles.amount, { color: amountColor }]}
+            numberOfLines={1}
+            adjustsFontSizeToFit
+            minimumFontScale={0.6}
+          >
+            {formatCurrency(bill.amountMinor / 100)}
           </Text>
           <Text style={styles.categoryLabel}>{category?.name || '未分类'}</Text>
         </View>
@@ -232,6 +258,10 @@ const createStyles = (colors: ThemeColors) => ({
       fontWeight: '700',
       color: colors.textTertiary,
     },
+    errorBanner: {
+      margin: 0,
+      width: '100%',
+    },
     scrollView: {
       flex: 1,
     },
@@ -277,7 +307,7 @@ const createStyles = (colors: ThemeColors) => ({
     amount: {
       fontSize: 40,
       fontWeight: '800',
-      fontFamily: 'Courier',
+      fontFamily: typography.fontFamily.mono,
       letterSpacing: -1,
       marginBottom: spacing.sm,
     },
@@ -323,7 +353,7 @@ const createStyles = (colors: ThemeColors) => ({
     detailValueCourier: {
       fontSize: 14,
       fontWeight: '700',
-      fontFamily: 'Courier',
+      fontFamily: typography.fontFamily.mono,
       color: colors.textPrimary,
     },
     divider: {
@@ -357,7 +387,7 @@ const createStyles = (colors: ThemeColors) => ({
     editButtonText: {
       fontSize: 16,
       fontWeight: '800',
-      color: '#FFFFFF',
+      color: colors.onPrimary,
     },
     deleteButton: {
       flex: 1,

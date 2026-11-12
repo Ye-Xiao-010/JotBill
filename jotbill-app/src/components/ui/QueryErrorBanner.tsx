@@ -149,7 +149,7 @@ const createStyles = (colors: ThemeColors) => ({
     buttonText: {
       fontSize: 13,
       fontWeight: '800',
-      color: '#FFFFFF',
+      color: colors.onPrimary,
     },
   }),
   _colors: colors,

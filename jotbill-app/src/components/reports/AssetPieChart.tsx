@@ -5,10 +5,12 @@
 import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import { PieChart } from 'react-native-gifted-charts';
+import { formatCurrency } from '../../utils/format';
 import { ThemeColors } from '../../theme/colors';
 import { borderRadius, borderWidth, spacing, shadow } from '../../theme/spacing';
 import { useStyles } from '../../hooks';
 import type { AccountType } from '../../types/account';
+import { typography } from '../../theme';
 
 const ACCOUNT_TYPE_LABELS: Record<AccountType, string> = {
   bank_card: '银行卡',
@@ -92,7 +94,7 @@ export default function AssetPieChart({ data }: AssetPieChartProps) {
               <View style={[styles.legendDot, { backgroundColor: getColor(g.type) }]} />
               <Text style={styles.legendLabel}>{ACCOUNT_TYPE_LABELS[g.type]}</Text>
               <Text style={styles.legendValue}>
-                ¥{g.value.toFixed(2)}
+                {formatCurrency(g.value)}
               </Text>
             </View>
           ))}
@@ -130,7 +132,7 @@ const createStyles = (colors: ThemeColors) => ({
     centerAmount: {
       fontSize: 14,
       fontWeight: '800',
-      fontFamily: 'Courier',
+      fontFamily: typography.fontFamily.mono,
       color: colors.textPrimary,
     },
     centerText: {
@@ -164,7 +166,7 @@ const createStyles = (colors: ThemeColors) => ({
     legendValue: {
       fontSize: 12,
       fontWeight: '700',
-      fontFamily: 'Courier',
+      fontFamily: typography.fontFamily.mono,
       color: colors.textPrimary,
     },
     emptyContainer: {

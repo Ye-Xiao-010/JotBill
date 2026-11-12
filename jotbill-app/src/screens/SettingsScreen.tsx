@@ -26,10 +26,11 @@ import {
   Tags,
   ChevronRight,
 } from 'lucide-react-native';
-import { ThemeColors } from '../theme/colors';
-import { spacing, borderRadius, borderWidth, shadow } from '../theme';
+import { ThemeColors, themes, THEME_LABELS, type ThemeName } from '../theme/colors';
+import { spacing, borderRadius, borderWidth, shadow, typography } from '../theme';
 import { useStyles } from '../hooks';
 import { useTheme } from '../providers';
+
 
 interface SettingsScreenProps {
   navigation?: any;
@@ -77,7 +78,7 @@ const ICON_CANDY_COLORS: Record<string, string> = {
 };
 
 export default function SettingsScreen({ navigation }: SettingsScreenProps) {
-  const { isDark, toggleTheme } = useTheme();
+  const { isDark, toggleTheme, colors, themeName, setThemeName } = useTheme();
   const styles = useStyles(createStyles);
 
   const iconMap: Record<string, React.FC<{ size: number; color: string }>> = {
@@ -154,7 +155,7 @@ export default function SettingsScreen({ navigation }: SettingsScreenProps) {
         <View style={styles.userInfo}>
           <View style={styles.avatarContainer}>
             <View style={styles.avatarPlaceholder}>
-              <Wallet size={32} color={styles._colors.primary} />
+              <Wallet size={32} color={colors.primary} />
             </View>
           </View>
           <View style={styles.userDetails}>
@@ -171,21 +172,21 @@ export default function SettingsScreen({ navigation }: SettingsScreenProps) {
             <View style={styles.groupItems}>
               {group.items.map((item) => {
                 const IconComponent = iconMap[item.icon];
-                const candyColor = ICON_CANDY_COLORS[item.icon] || styles._colors.accent;
+                const candyColor = ICON_CANDY_COLORS[item.icon] || colors.accent;
                 return (
                 <View key={item.id}>
                   {item.isSwitch ? (
                     <View style={styles.settingItem}>
                       <View style={styles.settingLeft}>
                         <View style={[styles.iconContainer, { backgroundColor: candyColor }]}>
-                          {IconComponent && <IconComponent size={20} color={styles._colors.stroke} />}
+                          {IconComponent && <IconComponent size={20} color={colors.stroke} />}
                         </View>
                         <Text style={styles.settingLabel}>{item.label}</Text>
                       </View>
                       <Switch
                         value={item.value}
                         onValueChange={item.onValueChange}
-                        trackColor={{ false: styles._colors.divider, true: styles._colors.primary }}
+                        trackColor={{ false: colors.divider, true: colors.primary }}
                         thumbColor="#FFFFFF"
                       />
                     </View>
@@ -197,11 +198,11 @@ export default function SettingsScreen({ navigation }: SettingsScreenProps) {
                     >
                       <View style={styles.settingLeft}>
                         <View style={[styles.iconContainer, { backgroundColor: candyColor }]}>
-                          {IconComponent && <IconComponent size={20} color={styles._colors.stroke} />}
+                          {IconComponent && <IconComponent size={20} color={colors.stroke} />}
                         </View>
                         <Text style={styles.settingLabel}>{item.label}</Text>
                       </View>
-                      <ChevronRight size={20} color={styles._colors.textTertiary} strokeWidth={2.5} />
+                      <ChevronRight size={20} color={colors.textTertiary} strokeWidth={2.5} />
                     </TouchableOpacity>
                   )}
                 </View>
@@ -209,6 +210,43 @@ export default function SettingsScreen({ navigation }: SettingsScreenProps) {
             </View>
           </View>
         ))}
+
+        {/* 主题选择：色块预览 + 名称，切换即时生效并持久化 */}
+        <View style={styles.settingGroup}>
+          <Text style={styles.groupTitle}>🎨 主题风格</Text>
+          <View style={styles.themeGrid}>
+            {(Object.keys(themes) as ThemeName[]).map(name => {
+              const preview = themes[name].light;
+              const active = name === themeName;
+              return (
+                <TouchableOpacity
+                  key={name}
+                  style={[styles.themeCard, active && styles.themeCardActive]}
+                  onPress={() => setThemeName(name)}
+                  activeOpacity={0.8}
+                  accessibilityLabel={`主题 ${THEME_LABELS[name]}${active ? '，当前使用中' : ''}`}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: active }}
+                >
+                  <View style={styles.themeSwatches}>
+                    <View style={[styles.themeSwatch, { backgroundColor: preview.primary }]} />
+                    <View style={[styles.themeSwatch, { backgroundColor: preview.accent }]} />
+                    <View
+                      style={[
+                        styles.themeSwatch,
+                        { backgroundColor: preview.background },
+                        styles.themeSwatchBordered,
+                      ]}
+                    />
+                  </View>
+                  <Text style={styles.themeName}>
+                    {THEME_LABELS[name]}{active ? ' ✓' : ''}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        </View>
 
         <View style={styles.versionInfo}>
           <Text style={styles.versionText}>猫猫招财</Text>
@@ -290,6 +328,44 @@ const createStyles = (colors: ThemeColors) => ({
     groupItems: {
       gap: spacing.sm,
     },
+    themeGrid: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      gap: spacing.sm,
+    },
+    themeCard: {
+      flexBasis: '48%',
+      backgroundColor: colors.surface,
+      borderRadius: borderRadius.card,
+      borderWidth: borderWidth.thin,
+      borderColor: colors.stroke,
+      padding: spacing.md,
+      minHeight: 44,
+    },
+    themeCardActive: {
+      borderWidth: borderWidth.medium,
+      borderColor: colors.primary,
+      ...shadow.small,
+    },
+    themeSwatches: {
+      flexDirection: 'row',
+      gap: spacing.xs,
+      marginBottom: spacing.sm,
+    },
+    themeSwatch: {
+      width: 24,
+      height: 24,
+      borderRadius: borderRadius.small,
+    },
+    themeSwatchBordered: {
+      borderWidth: borderWidth.hairline,
+      borderColor: colors.divider,
+    },
+    themeName: {
+      fontSize: 14,
+      fontWeight: '700',
+      color: colors.textPrimary,
+    },
     settingItem: {
       flexDirection: 'row',
       alignItems: 'center',
@@ -330,16 +406,15 @@ const createStyles = (colors: ThemeColors) => ({
     versionText: {
       fontSize: 12,
       fontWeight: '600',
-      fontFamily: 'Courier',
+      fontFamily: typography.fontFamily.mono,
       color: colors.textTertiary,
     },
     copyrightText: {
       fontSize: 12,
       fontWeight: '600',
-      fontFamily: 'Courier',
+      fontFamily: typography.fontFamily.mono,
       color: colors.textTertiary,
       marginTop: 4,
     },
   }),
-  _colors: colors,
 });

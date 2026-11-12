@@ -11,8 +11,9 @@ import {
 } from 'react-native';
 import Svg, { Circle, Path, G, Text as SvgText } from 'react-native-svg';
 import { ThemeColors } from '../../theme/colors';
-import { spacing, borderRadius, borderWidth } from '../../theme';
+import { spacing, borderRadius, borderWidth, typography } from '../../theme';
 import { useStyles } from '../../hooks';
+
 
 interface PieChartData {
   value: number;
@@ -210,7 +211,7 @@ const createStyles = (colors: ThemeColors) => ({
       fontSize: 13,
       fontWeight: '700',
       color: colors.textSecondary,
-      fontFamily: 'Courier',
+      fontFamily: typography.fontFamily.mono,
     },
   }),
   _colors: colors,

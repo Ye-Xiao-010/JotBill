@@ -37,18 +37,12 @@ export function DashboardSkeleton() {
         <View style={styles.overviewDivider} />
         <View style={styles.overviewStats}>
           <View style={styles.statBlock}>
-            <Skeleton width={32} height={32} borderRadius={8} style={{ backgroundColor: 'rgba(255,255,255,0.2)' }} />
-            <View>
-              <Skeleton width={40} height={11} borderRadius={3} style={{ backgroundColor: 'rgba(255,255,255,0.2)' }} />
-              <Skeleton width={80} height={16} borderRadius={4} style={{ marginTop: 4, backgroundColor: 'rgba(255,255,255,0.2)' }} />
-            </View>
+            <Skeleton width={56} height={12} borderRadius={3} style={{ backgroundColor: 'rgba(255,255,255,0.2)' }} />
+            <Skeleton width={100} height={17} borderRadius={4} style={{ marginTop: 8, backgroundColor: 'rgba(255,255,255,0.2)' }} />
           </View>
           <View style={styles.statBlock}>
-            <Skeleton width={32} height={32} borderRadius={8} style={{ backgroundColor: 'rgba(255,255,255,0.2)' }} />
-            <View>
-              <Skeleton width={40} height={11} borderRadius={3} style={{ backgroundColor: 'rgba(255,255,255,0.2)' }} />
-              <Skeleton width={80} height={16} borderRadius={4} style={{ marginTop: 4, backgroundColor: 'rgba(255,255,255,0.2)' }} />
-            </View>
+            <Skeleton width={56} height={12} borderRadius={3} style={{ backgroundColor: 'rgba(255,255,255,0.2)' }} />
+            <Skeleton width={100} height={17} borderRadius={4} style={{ marginTop: 8, backgroundColor: 'rgba(255,255,255,0.2)' }} />
           </View>
         </View>
       </View>
@@ -119,13 +113,13 @@ const createStyles = (colors: ThemeColors) => ({
       marginBottom: spacing.xxl,
     },
     overviewCard: {
-      backgroundColor: colors.primary,
+      backgroundColor: colors.primaryDark,
       borderRadius: borderRadius.card,
-      borderWidth: borderWidth.thick,
+      borderWidth: borderWidth.thin,
       borderColor: colors.stroke,
       padding: spacing.xl,
       marginBottom: spacing.xxl,
-      ...shadow.large,
+      ...shadow.soft,
     },
     overviewHeader: {
       flexDirection: 'row',
@@ -143,23 +137,15 @@ const createStyles = (colors: ThemeColors) => ({
     },
     statBlock: {
       flex: 1,
-      flexDirection: 'row',
-      alignItems: 'center',
-      gap: spacing.sm,
-      backgroundColor: 'rgba(0, 0, 0, 0.15)',
-      borderRadius: borderRadius.medium,
-      padding: spacing.md,
-      borderWidth: borderWidth.thin,
-      borderColor: 'rgba(255, 255, 255, 0.2)',
     },
     budgetCard: {
       backgroundColor: colors.surface,
       borderRadius: borderRadius.card,
-      borderWidth: borderWidth.medium,
+      borderWidth: borderWidth.thin,
       borderColor: colors.stroke,
       padding: spacing.lg,
       marginBottom: spacing.xxl,
-      ...shadow.medium,
+      ...shadow.soft,
     },
     budgetHeader: {
       flexDirection: 'row',
@@ -204,15 +190,15 @@ const createStyles = (colors: ThemeColors) => ({
       paddingVertical: spacing.xs,
     },
     transactionList: {
-      gap: spacing.md,
+      backgroundColor: colors.surface,
+      borderRadius: borderRadius.card,
+      borderWidth: borderWidth.hairline,
+      borderColor: colors.divider,
+      overflow: 'hidden',
     },
     transactionItem: {
       backgroundColor: colors.surface,
-      borderRadius: borderRadius.card,
-      borderWidth: borderWidth.medium,
-      borderColor: colors.stroke,
       padding: spacing.md,
-      ...shadow.small,
     },
     transactionContent: {
       flexDirection: 'row',

@@ -28,6 +28,7 @@ export const borderRadius = {
 
 // Neo-Brutalism 描边宽度
 export const borderWidth = {
+  hairline: 1,
   thin: 2,
   medium: 3,
   thick: 4,
@@ -35,6 +36,14 @@ export const borderWidth = {
 
 // Neo-Brutalism 核心: 实心偏移阴影（无模糊）
 export const shadow = {
+  // 轻量化积木风：保留偏移感，但降低视觉重量
+  soft: {
+    shadowColor: '#1A1A1A',
+    shadowOffset: { width: 2, height: 2 },
+    shadowOpacity: 0.18,
+    shadowRadius: 0,
+    elevation: 2,
+  },
   small: {
     shadowColor: '#1A1A1A',
     shadowOffset: { width: 3, height: 3 },

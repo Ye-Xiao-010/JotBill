@@ -8,6 +8,7 @@ import { borderRadius, borderWidth, spacing } from '../../theme/spacing';
 import { ThemeColors } from '../../theme/colors';
 import { useStyles } from '../../hooks';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { typography } from '../../theme';
 
 const STATUS_QUERY_KEY = ['runtime-status'] as const;
 
@@ -196,7 +197,7 @@ const createStyles = (colors: ThemeColors) => ({
     healthMeta: { marginTop: 4, fontSize: 12, color: colors.textSecondary },
     grid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.md },
     statCard: { width: '47%', minHeight: 112, padding: spacing.md, justifyContent: 'space-between', backgroundColor: colors.surface, borderWidth: borderWidth.thin, borderColor: colors.stroke, borderRadius: borderRadius.card },
-    statValue: { fontSize: 26, fontWeight: '900', color: colors.textPrimary, fontFamily: 'Courier' },
+    statValue: { fontSize: 26, fontWeight: '900', color: colors.textPrimary, fontFamily: typography.fontFamily.mono },
     statLabel: { fontSize: 12, fontWeight: '700', color: colors.textSecondary },
     detailCard: { padding: spacing.lg, backgroundColor: colors.surface, borderWidth: borderWidth.thin, borderColor: colors.stroke, borderRadius: borderRadius.card },
     detailTitle: { marginBottom: spacing.md, fontSize: 16, fontWeight: '800', color: colors.textPrimary },

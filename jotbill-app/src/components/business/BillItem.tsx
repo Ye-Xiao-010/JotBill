@@ -10,8 +10,10 @@ import {
   StyleSheet,
 } from 'react-native';
 import { ThemeColors } from '../../theme/colors';
-import { spacing, borderRadius, borderWidth } from '../../theme';
+import { spacing, borderRadius, borderWidth, typography } from '../../theme';
 import { useStyles } from '../../hooks';
+import { formatSignedCurrency } from '../../utils/format';
+
 
 export interface BillData {
   id: string;
@@ -46,7 +48,7 @@ const BillItem: React.FC<BillItemProps> = ({ bill, onPress }) => {
       <View style={styles.leftSection}>
         <View style={[
           styles.iconContainer,
-          { backgroundColor: isIncome ? styles._colors.success : styles._colors.accent },
+          { backgroundColor: isIncome ? styles._colors.income : styles._colors.expense },
         ]}>
           <Text style={styles.icon}>{bill.icon}</Text>
         </View>
@@ -66,7 +68,7 @@ const BillItem: React.FC<BillItemProps> = ({ bill, onPress }) => {
         isIncome ? styles.incomeBadge : styles.expenseBadge,
       ]}>
         <Text style={[styles.amount, isIncome ? styles.incomeAmount : styles.expenseAmount]}>
-          {isIncome ? '+' : '-'}¥{Math.abs(bill.amount).toFixed(2)}
+          {formatSignedCurrency(bill.amount, isIncome)}
         </Text>
       </View>
     </TouchableOpacity>
@@ -119,7 +121,7 @@ const createStyles = (colors: ThemeColors) => ({
       fontSize: 12,
       fontWeight: '500',
       color: colors.textTertiary,
-      fontFamily: 'Courier',
+      fontFamily: typography.fontFamily.mono,
       marginBottom: 2,
     },
     description: {
@@ -135,21 +137,21 @@ const createStyles = (colors: ThemeColors) => ({
       paddingVertical: spacing.xs,
     },
     incomeBadge: {
-      backgroundColor: '#DCFCE7',
+      backgroundColor: colors.incomeLight,
     },
     expenseBadge: {
-      backgroundColor: '#FEE2E2',
+      backgroundColor: colors.expenseLight,
     },
     amount: {
       fontSize: 15,
       fontWeight: '800',
-      fontFamily: 'Courier',
+      fontFamily: typography.fontFamily.mono,
     },
     incomeAmount: {
-      color: '#16A34A',
+      color: colors.incomeStrong,
     },
     expenseAmount: {
-      color: '#DC2626',
+      color: colors.expenseStrong,
     },
   }),
   _colors: colors,

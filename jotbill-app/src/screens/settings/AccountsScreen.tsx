@@ -25,6 +25,7 @@ import { borderRadius, borderWidth, shadow, spacing } from '../../theme/spacing'
 import { ThemeColors } from '../../theme/colors';
 import { useStyles } from '../../hooks';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { typography } from '../../theme';
 
 interface AccountOption {
   label: string;
@@ -451,7 +452,7 @@ const createStyles = (colors: ThemeColors) => ({
       ...shadow.small,
     },
     summaryLabel: { fontSize: 14, fontWeight: '700', color: colors.textSecondary },
-    summaryAmount: { marginTop: spacing.xs, fontSize: 30, fontWeight: '900', color: colors.textPrimary, fontFamily: 'Courier' },
+    summaryAmount: { marginTop: spacing.xs, fontSize: 30, fontWeight: '900', color: colors.textPrimary, fontFamily: typography.fontFamily.mono },
     summaryRow: { flexDirection: 'row', justifyContent: 'space-between', marginTop: spacing.md },
     summaryMeta: { fontSize: 13, fontWeight: '700', color: colors.textSecondary },
     // B4：余额不一致提示横幅（沿用积木风卡片，语义色 error）
@@ -488,7 +489,7 @@ const createStyles = (colors: ThemeColors) => ({
     accountMain: { flex: 1 },
     accountName: { fontSize: 16, fontWeight: '800', color: colors.textPrimary },
     accountType: { marginTop: 3, fontSize: 12, fontWeight: '600', color: colors.textSecondary },
-    accountBalance: { fontSize: 16, fontWeight: '800', color: colors.success, fontFamily: 'Courier' },
+    accountBalance: { fontSize: 16, fontWeight: '800', color: colors.success, fontFamily: typography.fontFamily.mono },
     liabilityText: { color: colors.error },
     accountActions: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.md },
     actionButton: {

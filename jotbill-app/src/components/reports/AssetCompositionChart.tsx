@@ -9,6 +9,7 @@ import { ThemeColors } from '../../theme/colors';
 import { borderRadius, borderWidth, spacing, shadow } from '../../theme/spacing';
 import { useStyles } from '../../hooks';
 import type { ReportCategoryStatistic as CategoryStatistic } from '../../utils/nativeStatistics';
+import { typography } from '../../theme';
 
 const PIE_COLORS = [
   '#0052FF', '#FF6B35', '#00C853', '#FF3D00',
@@ -178,7 +179,7 @@ const createStyles = (colors: ThemeColors) => ({
     centerAmount: {
       fontSize: 13,
       fontWeight: '800',
-      fontFamily: 'Courier',
+      fontFamily: typography.fontFamily.mono,
       color: colors.textPrimary,
     },
     centerText: {
@@ -219,7 +220,7 @@ const createStyles = (colors: ThemeColors) => ({
     legendAmount: {
       fontSize: 12,
       fontWeight: '700',
-      fontFamily: 'Courier',
+      fontFamily: typography.fontFamily.mono,
       color: colors.textPrimary,
       marginRight: 6,
     },

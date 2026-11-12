@@ -37,6 +37,8 @@ import { aiService } from '../../services/ai';
 import { audioRecorderService } from '../../services/audio/audioRecorderService';
 import type { RecordingProgress } from '../../services/audio/audioRecorderService';
 import { nativeData, type Account, type Category } from '../../native';
+import { getCategoryIcon as getDefaultCategoryIcon } from '../../constants/app';
+import { formatCurrency, formatSignedCurrency } from '../../utils/format';
 import { Skeleton, SkeletonCircle } from '../../components/skeleton/Skeleton';
 import type { ParsedBill, AIModelConfig, ChatSession } from '../../types/ai';
 import { ProviderIcon } from '../../components/icons';
@@ -45,6 +47,7 @@ import storage from '../../utils/storage';
 import { invalidateCache } from '../../lib/queryClient';
 import { findDuplicateBills } from '../../lib/billDuplicateCheck';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { typography } from '../../theme';
 
 const SIDEBAR_WIDTH = Dimensions.get('window').width * 0.78;
 const WELCOME_MESSAGE = '你好！我是你的 AI 助手，可以帮你：\n\n📝 整理待确认账单 — “午餐花了35元”\n🔍 查账 — “今天记了什么”\n📊 统计 — “这个月花了多少”\n📷 识别账单图片\n💬 闲聊 — 随便聊什么都行\n\nAI 不会直接删除或修改账单。';
@@ -515,7 +518,7 @@ function BillCard({ bill, onEdit, onDelete, colors }: BillCardProps) {
               isExpense ? billCardStyles.expenseAmount : billCardStyles.incomeAmount,
             ]}
           >
-            {isExpense ? '-' : '+'}¥{bill.amount.toFixed(2)}
+            {formatSignedCurrency(Number(bill.amount), !isExpense)}
           </Text>
         </View>
       </View>
@@ -1834,21 +1837,9 @@ export default function AIChatScreen() {
     }
   };
 
-  const getCategoryIcon = (categoryName: string): string => {
-    const iconMap: Record<string, string> = {
-      餐饮: '🍽️',
-      交通: '🚗',
-      购物: '🛍️',
-      居住: '🏠',
-      娱乐: '🎮',
-      医疗: '💊',
-      教育: '📚',
-      工资: '💵',
-      理财: '📈',
-      其他: '📦',
-    };
-    return iconMap[categoryName] || '📦';
-  };
+  /** 分类名 → 图标：统一走 constants/app.ts 的 DEFAULT_CATEGORIES 查找 */
+  const getCategoryIcon = (categoryName: string): string =>
+    getDefaultCategoryIcon(categoryName, '📦');
 
   /**
    * 把 LLM 给的分类名映射到本地分类 ID。
@@ -2146,9 +2137,9 @@ export default function AIChatScreen() {
                       <Text style={toolCardStyles.billDesc} numberOfLines={1}>{bill.description || '-'}</Text>
                       <Text style={[
                         toolCardStyles.billAmount,
-                        { color: bill.type === 'expense' ? '#FF5722' : '#4CAF50' },
+                        { color: bill.type === 'expense' ? styles._colors.expense : styles._colors.income },
                       ]}>
-                        {bill.type === 'expense' ? '-' : '+'}¥{Number(bill.amount).toFixed(2)}
+                        {formatSignedCurrency(Number(bill.amount), bill.type !== 'expense')}
                       </Text>
                     </View>
                   ))}
@@ -2173,20 +2164,20 @@ export default function AIChatScreen() {
               <View style={toolCardStyles.statsContainer}>
                 <View style={toolCardStyles.statsRow}>
                   <Text style={toolCardStyles.statsLabel}>总支出</Text>
-                  <Text style={[toolCardStyles.statsValue, { color: '#FF5722' }]}>
-                    ¥{Number(stats.totalExpense || 0).toFixed(2)}
+                  <Text style={[toolCardStyles.statsValue, { color: styles._colors.expense }]}>
+                    {formatCurrency(Number(stats.totalExpense || 0))}
                   </Text>
                 </View>
                 <View style={toolCardStyles.statsRow}>
                   <Text style={toolCardStyles.statsLabel}>总收入</Text>
-                  <Text style={[toolCardStyles.statsValue, { color: '#4CAF50' }]}>
-                    ¥{Number(stats.totalIncome || 0).toFixed(2)}
+                  <Text style={[toolCardStyles.statsValue, { color: styles._colors.income }]}>
+                    {formatCurrency(Number(stats.totalIncome || 0))}
                   </Text>
                 </View>
                 <View style={[toolCardStyles.statsRow, { borderBottomWidth: 0 }]}>
                   <Text style={toolCardStyles.statsLabel}>结余</Text>
                   <Text style={[toolCardStyles.statsValue, { fontWeight: '700' }]}>
-                    ¥{(Number(stats.totalIncome || 0) - Number(stats.totalExpense || 0)).toFixed(2)}
+                    {formatCurrency(Number(stats.totalIncome || 0) - Number(stats.totalExpense || 0))}
                   </Text>
                 </View>
               </View>
@@ -2868,7 +2859,7 @@ const createStyles = (colors: ThemeColors) => ({
       alignSelf: 'flex-end',
       fontSize: 11,
       fontWeight: '800',
-      fontFamily: 'Courier',
+      fontFamily: typography.fontFamily.mono,
       color: colors.textTertiary,
       marginBottom: 2,
     },
@@ -3142,7 +3133,7 @@ const sidebarStyles = StyleSheet.create({
   groupTitle: {
     fontSize: 12,
     fontWeight: '700',
-    fontFamily: 'Courier',
+    fontFamily: typography.fontFamily.mono,
     paddingHorizontal: spacing.sm,
     paddingTop: spacing.md,
     paddingBottom: spacing.xs,

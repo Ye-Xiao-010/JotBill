@@ -7,6 +7,7 @@ import { View, Text, StyleSheet } from 'react-native';
 import { ThemeColors } from '../../theme/colors';
 import { borderRadius, spacing } from '../../theme/spacing';
 import { useStyles } from '../../hooks';
+import { typography } from '../../theme';
 
 export interface ProgressBarProps {
   progress: number; // 0-100
@@ -93,7 +94,7 @@ const createStyles = (colors: ThemeColors) => ({
       fontSize: 12,
       fontWeight: '800',
       minWidth: 36,
-      fontFamily: 'Courier',
+      fontFamily: typography.fontFamily.mono,
     },
   }),
   _colors: colors,

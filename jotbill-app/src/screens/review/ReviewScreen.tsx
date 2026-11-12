@@ -42,11 +42,13 @@ import {
 } from '../../native';
 import { invalidateCache, QUERY_KEYS } from '../../lib/queryClient';
 import { formatPlatform } from '../../utils/platform';
+import { formatCurrency } from '../../utils/format';
 import { useAlert } from '../../providers';
 import { borderRadius, borderWidth, spacing } from '../../theme/spacing';
 import { ThemeColors } from '../../theme/colors';
 import { useStyles } from '../../hooks';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { typography } from '../../theme';
 
 const PENDING_QUERY_KEY = QUERY_KEYS.recognition.pending;
 const STATUS_QUERY_KEY = QUERY_KEYS.recognition.status;
@@ -114,7 +116,7 @@ export default function ReviewScreen() {
       if (merged) {
         alert(
           '已并入既有账单',
-          `该笔支付此前已记过账（¥${((bill.amountMinor ?? 0) / 100).toFixed(2)}），本次修改未生效。如需调整，请到账单列表修改那条账单。`,
+          `该笔支付此前已记过账（${formatCurrency((bill.amountMinor ?? 0) / 100)}），本次修改未生效。如需调整，请到账单列表修改那条账单。`,
         );
       }
     },
@@ -678,7 +680,7 @@ function PendingCard({
           disabled={isConfirming || isIgnoring || isAiFailedPlaceholder}
           activeOpacity={0.85}
         >
-          <Check size={16} color="#FFFFFF" />
+          <Check size={16} color={colors.onPrimary} />
           <Text style={styles.confirmButtonText}>
             {isAiFailedPlaceholder
               ? '识别失败，请重试'
@@ -974,7 +976,7 @@ function PendingEditPanel({ pending, submitting, onCancel, onSubmit }: PendingEd
               onPress={() => setOriginalBillId(bill.id)}
             >
               <Text style={styles.refundBillAmount}>
-                ¥{(bill.amountMinor / 100).toFixed(2)}
+                {formatCurrency(bill.amountMinor / 100)}
               </Text>
               <Text style={styles.refundBillText} numberOfLines={1}>
                 {bill.description ?? bill.merchant ?? bill.orderId ?? bill.id}
@@ -1168,6 +1170,9 @@ const CONFLICT_LABELS: Record<string, string> = {
   // 阶段五 T2/T3/T4/T6 新增冲突码
   ACCOUNT_UNRESOLVED: '账户无法自动判定，请手动选择账户与目标账户',
   RULE_FORCED_REVIEW: '命中转待确认规则，需人工确认',
+  // B3 银行短信渠道：短信命中用户自建 set_account 规则 ⇒ 账户由规则指定、强制人工核对
+  //（口径对齐 docs/CURRENT_SYSTEM.md 冲突码表；仅 mms 渠道产生）
+  RULE_ACCOUNT_NEEDS_REVIEW: '短信命中账户规则，账户由规则指定，请核对后确认',
   SUSPECTED_DUPLICATE: '疑似重复交易（同金额/时间/账户/商户相近），请核对后再确认',
   DEDUP_CHECK_FAILED: '去重检查异常，请人工核对是否重复',
   FEE_AMOUNT_UNPARSED: '手续费金额解析失败，请补填金额',
@@ -1360,7 +1365,7 @@ const createStyles = (colors: ThemeColors) => ({
       fontSize: 22,
       fontWeight: '900',
       color: colors.textPrimary,
-      fontFamily: 'Courier',
+      fontFamily: typography.fontFamily.mono,
     },
     metricValueSmall: {
       fontSize: 15,
@@ -1422,7 +1427,7 @@ const createStyles = (colors: ThemeColors) => ({
       fontSize: 22,
       fontWeight: '900',
       color: colors.textPrimary,
-      fontFamily: 'Courier',
+      fontFamily: typography.fontFamily.mono,
     },
     pendingTime: {
       fontSize: 12,
@@ -1526,7 +1531,7 @@ const createStyles = (colors: ThemeColors) => ({
       fontSize: 12,
       fontWeight: '800',
       color: colors.textPrimary,
-      fontFamily: 'Courier',
+      fontFamily: typography.fontFamily.mono,
     },
     evidenceOrder: {
       flex: 1,
@@ -1573,7 +1578,7 @@ const createStyles = (colors: ThemeColors) => ({
     confirmButtonText: {
       fontSize: 13,
       fontWeight: '800',
-      color: '#FFFFFF',
+      color: colors.onPrimary,
     },
     retryButton: {
       flex: 1,
@@ -1686,7 +1691,7 @@ const createStyles = (colors: ThemeColors) => ({
       fontSize: 12,
       fontWeight: '800',
       color: colors.textPrimary,
-      fontFamily: 'Courier',
+      fontFamily: typography.fontFamily.mono,
     },
     refundBillText: {
       flex: 1,
@@ -1750,7 +1755,7 @@ const createStyles = (colors: ThemeColors) => ({
     editConfirmButtonText: {
       fontSize: 13,
       fontWeight: '800',
-      color: '#FFFFFF',
+      color: colors.onPrimary,
     },
   }),
   _colors: colors,

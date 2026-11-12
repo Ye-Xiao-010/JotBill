@@ -7,7 +7,9 @@ import React, { memo } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import { ThemeColors } from '../../theme/colors';
 import { borderRadius, borderWidth, spacing } from '../../theme/spacing';
+import { formatNumber } from '../../utils/format';
 import { useStyles } from '../../hooks';
+import { typography } from '../../theme';
 
 interface GridCellProps {
   label: string;
@@ -24,7 +26,7 @@ interface GridCellProps {
 const formatAmount = (val: number) => {
   if (val === 0) return '';
   if (val >= 10000) return `${(val / 10000).toFixed(1)}w`;
-  return val.toFixed(2);
+  return formatNumber(val, 2);
 };
 
 function GridCell({
@@ -125,13 +127,13 @@ const createStyles = (colors: ThemeColors) => ({
     incomeText: {
       fontSize: 9,
       fontWeight: '700',
-      fontFamily: 'Courier',
+      fontFamily: typography.fontFamily.mono,
       color: colors.income,
     },
     expenseText: {
       fontSize: 9,
       fontWeight: '700',
-      fontFamily: 'Courier',
+      fontFamily: typography.fontFamily.mono,
       color: colors.expense,
     },
     zeroAmount: {

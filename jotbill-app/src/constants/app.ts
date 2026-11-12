@@ -27,6 +27,23 @@ export const DEFAULT_CATEGORIES = {
   ],
 } as const;
 
+// 分类名 → 默认图标/颜色的统一查找（由 DEFAULT_CATEGORIES 生成，全 app 单一出处；
+// 此前 Dashboard/AIChat/CreateBill 各持一份映射且互相矛盾，如餐饮 ☕ vs 🍽️）
+const CATEGORY_ENTRIES = [
+  ...DEFAULT_CATEGORIES.EXPENSE,
+  ...DEFAULT_CATEGORIES.INCOME,
+] as const;
+
+/** 按分类名取默认图标；未知名返回 fallback */
+export function getCategoryIcon(name?: string, fallback: string = '📝'): string {
+  return CATEGORY_ENTRIES.find(c => c.name === name)?.icon ?? fallback;
+}
+
+/** 按分类名取默认色块颜色；未知名返回 fallback */
+export function getCategoryColor(name?: string, fallback: string = '#E5E5E5'): string {
+  return CATEGORY_ENTRIES.find(c => c.name === name)?.color ?? fallback;
+}
+
 // 应用主题色
 export const THEME_COLORS = {
   PRIMARY: '#4A90E2',

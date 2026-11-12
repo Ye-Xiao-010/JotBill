@@ -21,6 +21,7 @@ import { useChatSessions } from '../../hooks/useChatSessions';
 import { aiService } from '../../services/ai';
 import type { ChatSession } from '../../types/ai';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { typography } from '../../theme';
 
 export default function AIChatSessionsScreen() {
   const styles = useStyles(createStyles);
@@ -315,7 +316,7 @@ const createStyles = (colors: ThemeColors) => ({
     sessionMeta: {
       fontSize: 12,
       fontWeight: '600',
-      fontFamily: 'Courier',
+      fontFamily: typography.fontFamily.mono,
       color: colors.textTertiary,
     },
     sessionActions: {

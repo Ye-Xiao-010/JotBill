@@ -7,6 +7,7 @@ import {
   View,
   Text,
   ScrollView,
+  SectionList,
   RefreshControl,
   TouchableOpacity,
   StyleSheet,
@@ -19,18 +20,21 @@ import {
 } from '@react-navigation/native';
 import { useQuery } from '@tanstack/react-query';
 import { BillItem } from '../../components';
+import QueryErrorBanner from '../../components/ui/QueryErrorBanner';
 import { useToast, useStyles } from '../../hooks';
 import { nativeData, type Category } from '../../native';
 import { CACHE_TIME, GC_TIME, QUERY_KEYS } from '../../lib/queryClient';
 import { formatPlatform } from '../../utils/platform';
+import { formatCurrency } from '../../utils/format';
 import { ThemeColors } from '../../theme/colors';
-import { spacing, borderRadius, borderWidth } from '../../theme';
+import { spacing, borderRadius, borderWidth, typography } from '../../theme';
 import {
   getCurrentMonthRange,
   getLastMonthRange,
   formatMonthDisplay,
 } from '../../utils/date';
 import type { Bill, BillFilter } from '../../native';
+
 
 const AllBillsScreen: React.FC = () => {
   const navigation = useNavigation<any>();
@@ -47,6 +51,8 @@ const AllBillsScreen: React.FC = () => {
   );
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  /** 加载失败信息；非空时渲染失败态而非"暂无账单"空态 */
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [filter, setFilter] = useState<'all' | 'income' | 'expense'>(
     routeParams?.initialFilter || 'all',
   );
@@ -106,7 +112,9 @@ const AllBillsScreen: React.FC = () => {
           page += 1;
         }
         groupBillsByMonth(bills);
+        setLoadError(null);
       } catch (error: any) {
+        setLoadError(error?.message || '加载账单失败');
         showError(error.message || '加载账单失败');
       } finally {
         setLoading(false);
@@ -128,7 +136,7 @@ const AllBillsScreen: React.FC = () => {
     setGroupedBills(grouped);
   };
 
-  const calculateMonthTotal = (monthBills: Bill[]) => {
+  const calculateMonthTotal = useCallback((monthBills: Bill[]) => {
     // 口径与原生统计一致（BillDao.getSummary）：income/refund 计入、expense/fee 计出，
     // 转账/还款/调整不参与收支，否则一笔 5000 转账会让月合计虚减 5000。
     return monthBills.reduce((total, bill) => {
@@ -137,7 +145,7 @@ const AllBillsScreen: React.FC = () => {
       if (bill.type === 'expense' || bill.type === 'fee') return total - amount;
       return total;
     }, 0);
-  };
+  }, []);
 
   useFocusEffect(
     useCallback(() => {
@@ -155,6 +163,17 @@ const AllBillsScreen: React.FC = () => {
   const handleRefresh = () => {
     fetchBills(true);
   };
+
+  /** 按月分组为 SectionList sections；月合计口径与原生统计一致 */
+  const sections = useMemo(
+    () =>
+      Object.entries(groupedBills).map(([month, monthBills]) => ({
+        title: month,
+        total: calculateMonthTotal(monthBills),
+        data: monthBills,
+      })),
+    [groupedBills, calculateMonthTotal],
+  );
 
   return (
     <View style={styles.container}>
@@ -244,88 +263,90 @@ const AllBillsScreen: React.FC = () => {
         </ScrollView>
       </View>
 
-      {/* 账单列表 */}
-      <ScrollView
-        style={styles.scrollView}
-        showsVerticalScrollIndicator={false}
-        refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} />
-        }
-      >
-        {loading && !refreshing ? (
-          <View style={styles.loadingContainer}>
-            <ActivityIndicator size="large" color={styles._colors.primary} />
-            <Text style={styles.loadingText}>加载中...</Text>
-          </View>
-        ) : Object.keys(groupedBills).length === 0 ? (
-          <View style={styles.emptyContainer}>
-            <Text style={styles.emptyIcon}>📋</Text>
-            <Text style={styles.emptyText}>暂无账单记录</Text>
-          </View>
-        ) : (
-          Object.entries(groupedBills).map(([month, monthBills]) => {
-            const monthTotal = calculateMonthTotal(monthBills);
+      {/* 账单列表：SectionList 虚拟化，避免长账单 ScrollView+map 全量渲染 */}
+      {loading && !refreshing ? (
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color={styles._colors.primary} />
+          <Text style={styles.loadingText}>加载中...</Text>
+        </View>
+      ) : (
+        <SectionList
+          style={styles.scrollView}
+          sections={sections}
+          keyExtractor={item => String(item.id)}
+          showsVerticalScrollIndicator={false}
+          stickySectionHeadersEnabled={false}
+          refreshControl={
+            <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} />
+          }
+          renderSectionHeader={({ section }) => (
+            <View style={styles.monthHeader}>
+              <Text style={styles.monthTitle}>{section.title}</Text>
+              <Text
+                style={[
+                  styles.monthTotal,
+                  {
+                    color:
+                      section.total >= 0
+                        ? styles._colors.income
+                        : styles._colors.expense,
+                  },
+                ]}
+              >
+                {formatCurrency(Math.abs(section.total))}
+              </Text>
+            </View>
+          )}
+          renderSectionFooter={() => <View style={styles.monthSection} />}
+          renderItem={({ item: rawBill }) => {
+            const category = rawBill.categoryId
+              ? categoryById.get(rawBill.categoryId)
+              : undefined;
+            const bill = {
+              ...rawBill,
+              merchant: rawBill.merchant || category?.name,
+            };
 
             return (
-              <View key={month} style={styles.monthSection}>
-                <View style={styles.monthHeader}>
-                  <Text style={styles.monthTitle}>{month}</Text>
-                  <Text
-                    style={[
-                      styles.monthTotal,
-                      {
-                        color:
-                          monthTotal >= 0
-                            ? styles._colors.income
-                            : styles._colors.expense,
-                      },
-                    ]}
-                  >
-                    ¥{Math.abs(monthTotal).toFixed(2)}
-                  </Text>
-                </View>
-
-                <View style={styles.billList}>
-                  {monthBills.map(rawBill => {
-                    const category = rawBill.categoryId
-                      ? categoryById.get(rawBill.categoryId)
-                      : undefined;
-                    const bill = {
-                      ...rawBill,
-                      merchant: rawBill.merchant || category?.name,
-                    };
-
-                    return (
-                      <BillItem
-                        key={bill.id}
-                        bill={{
-                          id: bill.id.toString(),
-                          category:
-                            bill.merchant ||
-                            bill.productDescription ||
-                            formatPlatform(bill.platform) ||
-                            '未分类',
-                          amount: bill.amountMinor / 100,
-                          type:
-                            bill.type === 'income' || bill.type === 'refund'
-                              ? 'income'
-                              : 'expense',
-                          date: new Date(bill.occurredAt).toLocaleString(
-                            'zh-CN',
-                          ),
-                          description: bill.description,
-                          icon: category?.icon || '📝',
-                        }}
-                        onPress={() => handleBillPress(rawBill)}
-                      />
-                    );
-                  })}
-                </View>
-              </View>
+              <BillItem
+                bill={{
+                  id: bill.id.toString(),
+                  category:
+                    bill.merchant ||
+                    bill.productDescription ||
+                    formatPlatform(bill.platform) ||
+                    '未分类',
+                  amount: bill.amountMinor / 100,
+                  type:
+                    bill.type === 'income' || bill.type === 'refund'
+                      ? 'income'
+                      : 'expense',
+                  date: new Date(bill.occurredAt).toLocaleString('zh-CN'),
+                  description: bill.description,
+                  icon: category?.icon || '📝',
+                }}
+                onPress={() => handleBillPress(rawBill)}
+              />
             );
-          })
-        )}
-      </ScrollView>
+          }}
+          ListEmptyComponent={
+            loadError ? (
+              // 失败态与空态分离：加载失败不能渲染成"暂无账单记录"
+              <QueryErrorBanner
+                error={loadError}
+                title="账单加载失败"
+                hint="这不代表你没有账单记录"
+                onRetry={() => fetchBills(true)}
+              />
+            ) : (
+              <View style={styles.emptyContainer}>
+                <Text style={styles.emptyIcon}>📋</Text>
+                <Text style={styles.emptyText}>暂无账单记录</Text>
+              </View>
+            )
+          }
+        />
+      )}
     </View>
   );
 };
@@ -358,7 +379,7 @@ const createStyles = (colors: ThemeColors) => ({
       color: colors.textSecondary,
       fontWeight: '700',
     },
-    filterTextActive: { color: '#FFFFFF', fontWeight: '800' },
+    filterTextActive: { color: colors.onPrimary, fontWeight: '800' },
     scrollView: { flex: 1 },
     monthSection: { marginBottom: spacing.md },
     monthHeader: {
@@ -379,9 +400,8 @@ const createStyles = (colors: ThemeColors) => ({
     monthTotal: {
       fontSize: 15,
       fontWeight: '800',
-      fontFamily: 'Courier',
+      fontFamily: typography.fontFamily.mono,
     },
-    billList: { backgroundColor: colors.background },
     loadingContainer: {
       flex: 1,
       justifyContent: 'center',
