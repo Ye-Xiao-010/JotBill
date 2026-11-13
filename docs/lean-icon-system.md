@@ -21,12 +21,15 @@ emoji 文字（本地首启种子 / 用户自建数据，原样渲染）
 
 | 层 | 数据 | 渲染 |
 |---|---|---|
-| lucide | 后端种子 13 枚（`0a80e72`）：utensils / bus / shopping-bag / gamepad-2 / pill / book-open / house / circle-ellipsis / banknote / trophy / chart-line / laptop / circle-dollar-sign | 原生 `ic_lucide_*` vector drawable（PopupIconAssets 按 icon 名映射）；RN `CategoryIcon` 组件 |
-| emoji | Android 本地首启种子（`DefaultDataInitializer`）与自定义分类 | 原样文字 |
+| lucide | 后端种子 13 枚（`0a80e72`）+ Android 本地种子 21 枚（`aa0e103`，新增 12 枚：smartphone / shopping-basket / party-popper / plane / paw-print / package / briefcase / trending-up / gift / hand-coins / rotate-ccw / receipt） | 原生 `ic_lucide_*` vector drawable（PopupIconAssets 按 icon 名映射）；RN `CategoryIcon` 组件 |
+| emoji | 自定义分类 / 用户自选图标，或图标名未命中映射的旧数据 | 原样文字 |
 
-**注意**：两套种子并存 —— 后端（litenote-backend，lucide 名）与 Android 本地（emoji）。
-用户执行 `prisma db push` + 重跑 `POST /categories/init-defaults` 并同步后，App 内分类
-icon 变为 lucide 名，原生弹窗自动升级为矢量图标；此前弹窗显示 emoji（现状不变）。
+**迁移注（2026-11-13）**：Android 本地首启种子已改为 lucide 名；老库在数据库打开时依次执行
+`syncDefaultCategoryIcons()`（父分类）与 `syncPresetSubCategoryIcons()`（预设子分类）。
+前者的判据是「默认 id + 未改名 + icon 仍等于旧种子 emoji」，后者只处理
+`{父id}-preset-{原名}` 且名称/图标未被用户改动的子分类；自定义、改名、自选图标一律不动。
+两项迁移各由设置键短路，只执行一次。此前"本地种子仍是 emoji、需后端 init-defaults 同步"
+的说明已失效，保留于此作为沿革。
 
 ## 三、账户图标
 

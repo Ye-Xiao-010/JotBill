@@ -33,12 +33,14 @@ async function fetchDashboardData(month: string): Promise<DashboardData> {
   const monthStartStr = formatDate(startOfMonth);
 
   // 并行获取统计数据和最近账单
+  // 近期交易在首页按天分组展示，拉 30 条才能覆盖多个完整日组；
+  // 真正展示的日组数/条目数由 dashboard 侧 limitBillDayGroups 再截断。
   const [statistics, bills] = await Promise.all([
     nativeData.getBillStatistics({
       startDate: monthStartStr,
       endDate: todayStr,
     }),
-    nativeData.getBills({ limit: 10 }),
+    nativeData.getBills({ limit: 30 }),
   ]);
 
   const monthIncome = (statistics.totalIncome || 0) / 100;

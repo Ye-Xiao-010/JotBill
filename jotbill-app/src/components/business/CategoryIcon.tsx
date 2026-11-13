@@ -19,11 +19,25 @@ import {
   ChartLine,
   Laptop,
   CircleDollarSign,
+  Smartphone,
+  ShoppingBasket,
+  PartyPopper,
+  Plane,
+  PawPrint,
+  Package,
+  Briefcase,
+  TrendingUp,
+  Gift,
+  HandCoins,
+  RotateCcw,
+  Receipt,
   type LucideIcon,
 } from 'lucide-react-native';
 import { useTheme } from '../../providers';
 
-/** 后端默认分类使用的 lucide 图标名 → 组件映射（key 与数据库 icon 字段一致） */
+/** 默认分类的 lucide 图标名 → 组件映射（key 与数据库 icon 字段一致）。
+ * 2026-10-27 起本地种子（DefaultDataInitializer）与后端种子共用本表：
+ * 前 13 个来自后端种子（0a80e72），其余为本地特有分类新增。 */
 export const CATEGORY_LUCIDE_ICONS: { [key: string]: LucideIcon } = {
   utensils: Utensils,
   bus: Bus,
@@ -38,6 +52,18 @@ export const CATEGORY_LUCIDE_ICONS: { [key: string]: LucideIcon } = {
   'chart-line': ChartLine,
   laptop: Laptop,
   'circle-dollar-sign': CircleDollarSign,
+  smartphone: Smartphone,
+  'shopping-basket': ShoppingBasket,
+  'party-popper': PartyPopper,
+  plane: Plane,
+  'paw-print': PawPrint,
+  package: Package,
+  briefcase: Briefcase,
+  'trending-up': TrendingUp,
+  gift: Gift,
+  'hand-coins': HandCoins,
+  'rotate-ccw': RotateCcw,
+  receipt: Receipt,
 };
 
 /** 是否为可渲染的 lucide 图标名；false = 按 emoji 文本处理 */

@@ -51,7 +51,7 @@ export const nativePendingReminder = {
       permission as unknown as Parameters<typeof PermissionsAndroid.request>[0],
       {
         title: '待确认提醒',
-        message: '允许 JotBill 在有新的待确认交易时发送系统通知',
+        message: '允许猫猫招财在有新的待确认交易时发送系统通知',
         buttonPositive: '允许',
         buttonNegative: '拒绝',
       },

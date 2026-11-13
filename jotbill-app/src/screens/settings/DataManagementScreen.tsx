@@ -315,7 +315,7 @@ export default function DataManagementScreen() {
           {creatingBackup ? <ActivityIndicator color={styles._colors.primary} /> : <Archive size={24} color={styles._colors.primary} />}
           <View style={styles.actionMain}>
             <Text style={styles.actionTitle}>创建本地备份</Text>
-            <Text style={styles.actionText}>生成带版本、来源和摘要校验的 JotBill JSON 备份。</Text>
+            <Text style={styles.actionText}>生成带版本、来源和摘要校验的 JSON 备份。</Text>
           </View>
         </TouchableOpacity>
 
