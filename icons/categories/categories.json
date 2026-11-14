@@ -1,0 +1,23 @@
+[
+  { "categoryId": "default-category-expense-food", "name": "餐饮", "type": "expense", "code": "food", "lucide": "utensils", "fluent": "steaming-bowl" },
+  { "categoryId": "default-category-expense-transport", "name": "交通", "type": "expense", "code": "transport", "lucide": "bus", "fluent": "bus" },
+  { "categoryId": "default-category-expense-shopping", "name": "购物", "type": "expense", "code": "shopping", "lucide": "shopping-bag", "fluent": "shopping-bags" },
+  { "categoryId": "default-category-expense-entertainment", "name": "娱乐", "type": "expense", "code": "entertainment", "lucide": "gamepad-2", "fluent": "video-game" },
+  { "categoryId": "default-category-expense-housing", "name": "居住", "type": "expense", "code": "housing", "lucide": "house", "fluent": "house" },
+  { "categoryId": "default-category-expense-medical", "name": "医疗", "type": "expense", "code": "medical", "lucide": "pill", "fluent": "pill" },
+  { "categoryId": "default-category-expense-education", "name": "教育", "type": "expense", "code": "education", "lucide": "book-open", "fluent": "books" },
+  { "categoryId": "default-category-expense-communication", "name": "通讯", "type": "expense", "code": "communication", "lucide": "smartphone", "fluent": "mobile-phone" },
+  { "categoryId": "default-category-expense-daily", "name": "日用", "type": "expense", "code": "daily", "lucide": "shopping-basket", "fluent": "roll-of-paper" },
+  { "categoryId": "default-category-expense-social", "name": "社交", "type": "expense", "code": "social", "lucide": "party-popper", "fluent": "party-popper" },
+  { "categoryId": "default-category-expense-travel", "name": "旅行", "type": "expense", "code": "travel", "lucide": "plane", "fluent": "airplane" },
+  { "categoryId": "default-category-expense-pet", "name": "宠物", "type": "expense", "code": "pet", "lucide": "paw-print", "fluent": "paw-prints" },
+  { "categoryId": "default-category-expense-other", "name": "其他", "type": "expense", "code": "other", "lucide": "package", "fluent": "package" },
+  { "categoryId": "default-category-income-salary", "name": "工资", "type": "income", "code": "salary", "lucide": "banknote", "fluent": "money-bag" },
+  { "categoryId": "default-category-income-part-time", "name": "兼职", "type": "income", "code": "part-time", "lucide": "briefcase", "fluent": "briefcase" },
+  { "categoryId": "default-category-income-investment", "name": "理财", "type": "income", "code": "investment", "lucide": "trending-up", "fluent": "chart-increasing" },
+  { "categoryId": "default-category-income-bonus", "name": "奖金", "type": "income", "code": "bonus", "lucide": "gift", "fluent": "wrapped-gift" },
+  { "categoryId": "default-category-income-red-packet", "name": "红包", "type": "income", "code": "red-packet", "lucide": "hand-coins", "fluent": "red-envelope" },
+  { "categoryId": "default-category-income-refund", "name": "退款", "type": "income", "code": "refund", "lucide": "rotate-ccw", "fluent": "right-arrow-curving-left" },
+  { "categoryId": "default-category-income-other", "name": "其他", "type": "income", "code": "other", "lucide": "package", "fluent": "package" },
+  { "categoryId": "default-category-expense-fee", "name": "手续费", "type": "expense", "code": "fee", "lucide": "receipt", "fluent": "receipt" }
+]
