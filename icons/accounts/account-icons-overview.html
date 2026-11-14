@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<style>
+  * { box-sizing: border-box; }
+  body { margin:0; padding:34px 38px 26px; background:#FDFBF7; color:#1A1A1A;
+    font-family:"Microsoft YaHei","PingFang SC","Segoe UI",sans-serif; }
+  .kicker { font-size:12px; font-weight:700; letter-spacing:1px; color:#666; }
+  h1 { margin:8px 0 6px; font-size:30px; font-weight:900; letter-spacing:-0.5px; }
+  .sub { font-size:14px; color:#666; margin-bottom:22px; }
+  .grid { display:grid; grid-template-columns:repeat(3,1fr); gap:16px; }
+  .card { background:#fff; border:2px solid #1A1A1A; border-radius:16px; padding:18px;
+    box-shadow:3px 3px 0 #1A1A1A; }
+  .row { display:flex; align-items:center; gap:14px; }
+  .iconBox { width:60px; height:60px; flex:0 0 60px; border:2px solid #1A1A1A;
+    border-radius:14px; display:flex; align-items:center; justify-content:center; }
+  .name { font-size:15px; font-weight:800; }
+  .meta { font-size:12px; color:#666; margin-top:3px; }
+  .tag { display:inline-block; margin-top:12px; padding:3px 8px; border:1px solid #1A1A1A;
+    border-radius:8px; font-size:11px; font-weight:700; background:#FFF3C4; }
+  .tag.brand { background:#E7F7EF; } .tag.lucide { background:#E6F0FF; } .tag.emoji { background:#FFE8CC; }
+  .footer { margin-top:22px; padding:14px 16px; border:1px dashed #A3A3A3; border-radius:14px;
+    font-size:12px; line-height:1.7; color:#666; background:#fff; }
+  .footer b { color:#1A1A1A; }
+  svg { display:block; }
+</style>
+</head>
+<body>
+  <div class="kicker">ACCOUNT ICONS · JOTBILL / 猫猫招财</div>
+  <h1>账户图标</h1>
+  <div class="sub">与原生支付确认弹窗使用同一套资产：品牌优先 → lucide 线性 → emoji 回退</div>
+  <div class="grid">
+    <div class="card"><div class="row"><div class="iconBox" style="background:#E7F7EF">
+      <svg width="44" height="44" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M8.691 2.188C3.891 2.188 0 5.476 0 9.53c0 2.212 1.17 4.203 3.002 5.55a.59.59 0 0 1 .213.665l-.39 1.48c-.019.07-.048.141-.048.213 0 .163.13.295.29.295a.326.326 0 0 0 .167-.054l1.903-1.114a.864.864 0 0 1 .717-.098 10.16 10.16 0 0 0 2.837.403c.276 0 .543-.027.811-.05-.857-2.578.157-4.972 1.932-6.446 1.703-1.415 3.882-1.98 5.853-1.838-.576-3.583-4.196-6.348-8.596-6.348zM5.785 5.991c.642 0 1.162.529 1.162 1.18a1.17 1.17 0 0 1-1.162 1.178A1.17 1.17 0 0 1 4.623 7.17c0-.651.52-1.18 1.162-1.18zm5.813 0c.642 0 1.162.529 1.162 1.18a1.17 1.17 0 0 1-1.162 1.178 1.17 1.17 0 0 1-1.162-1.178c0-.651.52-1.18 1.162-1.18zm5.34 2.867c-1.797-.052-3.746.512-5.28 1.786-1.72 1.428-2.687 3.72-1.78 6.22.942 2.453 3.666 4.229 6.884 4.229.826 0 1.622-.12 2.361-.336a.722.722 0 0 1 .598.082l1.584.926a.272.272 0 0 0 .14.047c.134 0 .24-.111.24-.247 0-.06-.023-.12-.038-.177l-.327-1.233a.582.582 0 0 1-.023-.156.49.49 0 0 1 .201-.398C23.024 18.48 24 16.82 24 14.98c0-3.21-2.931-5.837-6.656-6.088V8.89c-.135-.01-.27-.027-.407-.03zm-2.53 3.274c.535 0 .969.44.969.982a.976.976 0 0 1-.969.983.976.976 0 0 1-.969-.983c0-.542.434-.982.97-.982zm4.844 0c.535 0 .969.44.969.982a.976.976 0 0 1-.969.983.976.976 0 0 1-.969-.983c0-.542.434-.982.969-.982z" fill="#07C160"/></svg>
+    </div><div><div class="name">微信零钱</div><div class="meta">default-account-wechat</div></div></div>
+    <span class="tag brand">品牌图标 · #07C160</span></div>
+
+    <div class="card"><div class="row"><div class="iconBox" style="background:#E6F0FF">
+      <svg width="44" height="44" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M19.695 15.07c3.426 1.158 4.203 1.22 4.203 1.22V3.846c0-2.124-1.705-3.845-3.81-3.845H3.914C1.808.001.102 1.722.102 3.846v16.31c0 2.123 1.706 3.845 3.813 3.845h16.173c2.105 0 3.81-1.722 3.81-3.845v-.157s-6.19-2.602-9.315-4.119c-2.096 2.602-4.8 4.181-7.607 4.181-4.75 0-6.361-4.19-4.112-6.949.49-.602 1.324-1.175 2.617-1.497 2.025-.502 5.247.313 8.266 1.317a16.796 16.796 0 0 0 1.341-3.302H5.781v-.952h4.799V6.975H4.77v-.953h5.81V3.591s0-.409.411-.409h2.347v2.84h5.744v.951h-5.744v1.704h4.69a19.453 19.453 0 0 1-1.986 5.06c1.424.52 2.702 1.011 3.654 1.333m-13.81-2.032c-.596.06-1.71.325-2.321.869-1.83 1.608-.735 4.55 2.968 4.55 2.151 0 4.301-1.388 5.99-3.61-2.403-1.182-4.438-2.028-6.637-1.809" fill="#1677FF"/></svg>
+    </div><div><div class="name">支付宝</div><div class="meta">default-account-alipay</div></div></div>
+    <span class="tag brand">品牌图标 · #1677FF</span></div>
+
+    <div class="card"><div class="row"><div class="iconBox" style="background:#FFF3C4">
+      <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="#1A1A1A" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" xmlns="http://www.w3.org/2000/svg"><path d="M4.0,6.0h16.0a2.0,2.0 0 0 1 2.0,2.0v8.0a2.0,2.0 0 0 1 -2.0,2.0h-16.0a2.0,2.0 0 0 1 -2.0,-2.0v-8.0a2.0,2.0 0 0 1 2.0,-2.0z"/><path d="M12,12m-2,0a2,2 0 1,0 4.0,0a2,2 0 1,0 -4.0,0"/><path d="M6 12h.01M18 12h.01"/></svg>
+    </div><div><div class="name">现金</div><div class="meta">subtype: cash</div></div></div>
+    <span class="tag lucide">lucide · banknote</span></div>
+
+    <div class="card"><div class="row"><div class="iconBox" style="background:#E9E3FF">
+      <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="#1A1A1A" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" xmlns="http://www.w3.org/2000/svg"><path d="M19 7V4a1 1 0 0 0-1-1H5a2 2 0 0 0 0 4h15a1 1 0 0 1 1 1v4h-3a2 2 0 0 0 0 4h3a1 1 0 0 0 1-1v-2a1 1 0 0 0-1-1"/><path d="M3 5v14a2 2 0 0 0 2 2h15a1 1 0 0 0 1-1v-4"/></svg>
+    </div><div><div class="name">电子钱包</div><div class="meta">subtype: e_wallet</div></div></div>
+    <span class="tag lucide">lucide · wallet</span></div>
+
+    <div class="card"><div class="row"><div class="iconBox" style="background:#FFE3E3">
+      <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="#1A1A1A" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" xmlns="http://www.w3.org/2000/svg"><path d="M4.0,5.0h16.0a2.0,2.0 0 0 1 2.0,2.0v10.0a2.0,2.0 0 0 1 -2.0,2.0h-16.0a2.0,2.0 0 0 1 -2.0,-2.0v-10.0a2.0,2.0 0 0 1 2.0,-2.0z"/><path d="M2,10L22,10"/></svg>
+    </div><div><div class="name">信用卡</div><div class="meta">subtype: credit_card</div></div></div>
+    <span class="tag lucide">lucide · credit-card</span></div>
+
+    <div class="card"><div class="row"><div class="iconBox" style="background:#FFE8CC; font-size:30px; line-height:1;">💵</div>
+      <div><div class="name">自定义账户</div><div class="meta">icon 字段存 emoji</div></div></div>
+    <span class="tag emoji">emoji 回退</span></div>
+  </div>
+  <div class="footer"><b>接入状态：</b>这套账户图标目前用于原生「支付确认弹窗」的账户 chip。RN 账户管理页目前所有账户统一显示 CreditCard 线性图标；记账页账户选择区尚未接入图标。品牌图标颜色烘焙在资源里，不随选中态变色；lucide 图标跟随文字色着色。</div>
+</body>
+</html>

@@ -53,6 +53,18 @@ class CategoryIconSyncTest {
         isDefault = true, sortOrder = 0, createdAt = 1L, updatedAt = 1L
     )
 
+    private fun childCategory(
+        id: String,
+        name: String,
+        icon: String?,
+        parentId: String,
+        isDefault: Boolean = true
+    ) = CategoryEntity(
+        id = id, name = name, type = "expense", icon = icon, color = null,
+        isDefault = isDefault, sortOrder = 100, createdAt = 1L, updatedAt = 1L,
+        parentId = parentId
+    )
+
     @Test
     fun migratesLegacyEmojiToLucideName() = runBlocking {
         database.categoryDao().insertIgnore(
@@ -128,6 +140,93 @@ class CategoryIconSyncTest {
         assertTrue(
             "首启种子不应再产 emoji，实际含: ${all.filter { (it.icon?.firstOrNull()?.code ?: 0) > 0x7F }.map { "${it.name}:${it.icon}" }}",
             all.none { (it.icon?.firstOrNull()?.code ?: 0) > 0x7F }
+        )
+    }
+
+    @Test
+    fun presetChildFollowsMigratedParentIcon() = runBlocking {
+        val dao = database.categoryDao()
+        dao.insertIgnore(category("default-category-expense-food", "餐饮", "utensils"))
+        dao.insertIgnore(
+            childCategory(
+                id = "default-category-expense-food-preset-正餐",
+                name = "正餐",
+                icon = "🍜",
+                parentId = "default-category-expense-food"
+            )
+        )
+
+        DefaultDataInitializer(database).syncPresetSubCategoryIcons()
+
+        assertEquals(
+            "utensils",
+            dao.getById("default-category-expense-food-preset-正餐")?.icon
+        )
+    }
+
+    @Test
+    fun leavesRenamedCustomAndUserIconChildrenAlone() = runBlocking {
+        val dao = database.categoryDao()
+        dao.insertIgnore(category("default-category-expense-food", "餐饮", "utensils"))
+        // 改名：ID 仍是预设 ID，但 name 与 ID 反推值不同 ⇒ 不动
+        dao.insertIgnore(
+            childCategory(
+                id = "default-category-expense-food-preset-正餐",
+                name = "我的午餐",
+                icon = "🍜",
+                parentId = "default-category-expense-food"
+            )
+        )
+        // 自定义子分类：非预设 ID ⇒ 不动
+        dao.insertIgnore(
+            childCategory(
+                id = "custom-child-lunch",
+                name = "外卖",
+                icon = "🍜",
+                parentId = "default-category-expense-food"
+            )
+        )
+        // 用户自选图标：≠ 旧父级 emoji ⇒ 不动
+        dao.insertIgnore(
+            childCategory(
+                id = "default-category-expense-food-preset-外卖",
+                name = "外卖",
+                icon = "🍱",
+                parentId = "default-category-expense-food"
+            )
+        )
+
+        DefaultDataInitializer(database).syncPresetSubCategoryIcons()
+
+        assertEquals("🍜", dao.getById("default-category-expense-food-preset-正餐")?.icon)
+        assertEquals("🍜", dao.getById("custom-child-lunch")?.icon)
+        assertEquals("🍱", dao.getById("default-category-expense-food-preset-外卖")?.icon)
+    }
+
+    @Test
+    fun presetChildSyncRunsOnlyOnce() = runBlocking {
+        val dao = database.categoryDao()
+        dao.insertIgnore(category("default-category-expense-food", "餐饮", "utensils"))
+        dao.insertIgnore(
+            childCategory(
+                id = "default-category-expense-food-preset-正餐",
+                name = "正餐",
+                icon = "🍜",
+                parentId = "default-category-expense-food"
+            )
+        )
+        val initializer = DefaultDataInitializer(database)
+        initializer.syncPresetSubCategoryIcons()
+
+        // 模拟迁移后用户改回 emoji：第二次执行不得再次改写
+        val child = dao.getById("default-category-expense-food-preset-正餐")!!
+        dao.update(child.copy(icon = "🍜"))
+        initializer.syncPresetSubCategoryIcons()
+
+        assertEquals("🍜", dao.getById("default-category-expense-food-preset-正餐")?.icon)
+        assertEquals(
+            "true",
+            database.appSettingDao().get("preset_child_icons_synced_to_lucide")
         )
     }
 }

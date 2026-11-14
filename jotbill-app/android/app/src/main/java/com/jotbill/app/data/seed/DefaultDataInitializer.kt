@@ -176,8 +176,7 @@ class DefaultDataInitializer(
      * - 当前 icon 与旧种子 emoji **精确相等**（用户若已自选 lucide 名/其他 emoji，
      *   与旧值不等，同样不动）。
      *
-     * 子分类未列入：预设子分类的 icon 继承自父分类（播种时复制），父分类更新后
-     * 子分类仍带旧 emoji —— 与父级不一致但无害（回退层正常渲染），不额外扫描。
+     * 子分类由 [syncPresetSubCategoryIcons] 单独处理（父级迁移完成后随父升级）。
      */
     suspend fun syncDefaultCategoryIcons() {
         if (database.appSettingDao().get(CATEGORY_ICON_SYNCED_KEY) == INITIALIZED_VALUE) {
@@ -209,6 +208,70 @@ class DefaultDataInitializer(
         }
     }
 
+    /**
+     * 预设子分类图标随父级升级（2026-11-13）：
+     * `ensurePresetSubCategories` 播种时复制父分类 icon；父分类 emoji→lucide 后，
+     * 子分类仍带旧 emoji，导致按子分类记账的流水图标与选择器不一致。
+     *
+     * 判据（全部成立才动）：
+     * - id 形如 `{父id}-preset-{原名}` 且 name 未被改（改名视为用户自定义）；
+     * - isDefault 且 parentId 指向默认父分类；
+     * - 当前 icon 精确等于旧种子 emoji（用户自选过图标则不等，跳过）；
+     * - 父分类已迁移为 lucide（父级仍为旧 emoji 时不同步）。
+     * 设置键 [PRESET_CHILD_ICON_SYNCED_KEY] 保证只跑一次。
+     */
+    suspend fun syncPresetSubCategoryIcons() {
+        if (database.appSettingDao().get(PRESET_CHILD_ICON_SYNCED_KEY) == INITIALIZED_VALUE) {
+            return
+        }
+        database.withTransaction {
+            if (database.appSettingDao().get(PRESET_CHILD_ICON_SYNCED_KEY) == INITIALIZED_VALUE) {
+                return@withTransaction
+            }
+            var updated = 0
+            for (default in defaultCategories) {
+                val parent = database.categoryDao().getById(default.id) ?: continue
+                val parentIcon = parent.icon ?: continue
+                val legacyEmoji = LEGACY_CATEGORY_ICONS[default.id] ?: continue
+                // 父级尚未迁移（仍是旧 emoji）时不同步，避免把子分类改成空值/旧值
+                if (parentIcon == legacyEmoji) {
+                    continue
+                }
+                val prefix = "${default.id}-preset-"
+                for (child in database.categoryDao().getChildren(default.id)) {
+                    if (!child.isDefault || child.parentId != default.id) {
+                        continue
+                    }
+                    if (!child.id.startsWith(prefix)) {
+                        continue
+                    }
+                    // 用户改过名 ⇒ 视为自定义，不动（ID 不改名，可反推种子名）
+                    if (child.name != child.id.removePrefix(prefix)) {
+                        continue
+                    }
+                    if (child.icon != legacyEmoji) {
+                        continue
+                    }
+                    database.categoryDao().update(
+                        child.copy(icon = parentIcon, updatedAt = System.currentTimeMillis())
+                    )
+                    updated += 1
+                }
+            }
+            database.appSettingDao().set(
+                AppSettingEntity(
+                    key = PRESET_CHILD_ICON_SYNCED_KEY,
+                    value = INITIALIZED_VALUE,
+                    updatedAt = System.currentTimeMillis()
+                )
+            )
+            android.util.Log.i(
+                "DefaultDataInitializer",
+                "预设子分类图标迁移完成: updated=$updated"
+            )
+        }
+    }
+
     private data class DefaultCategory(
         val id: String,
         val name: String,
@@ -235,6 +298,9 @@ class DefaultDataInitializer(
 
         /** 分类图标一次性迁移标记（[syncDefaultCategoryIcons]）。 */
         const val CATEGORY_ICON_SYNCED_KEY = "category_icons_synced_to_lucide"
+
+        /** 预设子分类图标一次性迁移标记（[syncPresetSubCategoryIcons]）。 */
+        const val PRESET_CHILD_ICON_SYNCED_KEY = "preset_child_icons_synced_to_lucide"
 
         /**
          * 旧种子 emoji（迁移前 [defaultCategories] 的 icon 值，按 id 索引）。

@@ -9,7 +9,11 @@ import { borderRadius, borderWidth, spacing, shadow } from '../../theme/spacing'
 import { useStyles } from '../../hooks';
 import { Skeleton, SkeletonText } from './Skeleton';
 
-export function DashboardSkeleton() {
+export function DashboardSkeleton({
+  showBudgetCard = false,
+}: {
+  showBudgetCard?: boolean;
+}) {
   const styles = useStyles(createStyles);
 
   return (
@@ -47,24 +51,26 @@ export function DashboardSkeleton() {
         </View>
       </View>
 
-      {/* Budget Card */}
-      <View style={styles.budgetCard}>
-        <View style={styles.budgetHeader}>
-          <SkeletonText width={100} height={20} />
-          <View style={styles.percentBadge}>
-            <Skeleton width={40} height={14} borderRadius={4} />
+      {/* Budget Card：与首页实际开关保持一致，关闭时不占位 */}
+      {showBudgetCard ? (
+        <View style={styles.budgetCard}>
+          <View style={styles.budgetHeader}>
+            <SkeletonText width={100} height={20} />
+            <View style={styles.percentBadge}>
+              <Skeleton width={40} height={14} borderRadius={4} />
+            </View>
+          </View>
+          <View style={styles.progressContainer}>
+            <Skeleton width={'100%'} height={16} borderRadius={4} />
+          </View>
+          <View style={styles.budgetLabels}>
+            <SkeletonText width={80} height={12} />
+            <SkeletonText width={80} height={12} />
           </View>
         </View>
-        <View style={styles.progressContainer}>
-          <Skeleton width={'100%'} height={16} borderRadius={4} />
-        </View>
-        <View style={styles.budgetLabels}>
-          <SkeletonText width={80} height={12} />
-          <SkeletonText width={80} height={12} />
-        </View>
-      </View>
+      ) : null}
 
-      {/* Recent Transactions */}
+      {/* Recent Transactions：按天分组的骨架构型 */}
       <View style={styles.section}>
         <View style={styles.sectionHeader}>
           <SkeletonText width={100} height={20} />
@@ -72,24 +78,41 @@ export function DashboardSkeleton() {
             <Skeleton width={60} height={14} borderRadius={4} />
           </View>
         </View>
-        <View style={styles.transactionList}>
-          {[1, 2, 3].map(i => (
-            <View key={i} style={styles.transactionItem}>
-              <View style={styles.transactionContent}>
-                <View style={styles.transactionLeft}>
-                  <Skeleton width={48} height={48} borderRadius={12} />
-                  <View style={styles.transactionInfo}>
-                    <SkeletonText width={100} height={15} />
-                    <SkeletonText width={140} height={12} style={{ marginTop: 8 }} />
+        {[3, 2].map((rowCount, groupIndex) => (
+          <View key={groupIndex} style={styles.dayGroup}>
+            <View style={styles.dayHeader}>
+              <View style={styles.dayHeaderLeft}>
+                <Skeleton width={38} height={20} borderRadius={6} />
+                <SkeletonText width={64} height={14} />
+              </View>
+              <SkeletonText width={72} height={12} />
+            </View>
+            <View style={styles.transactionList}>
+              {Array.from({ length: rowCount }).map((_, rowIndex) => (
+                <View
+                  key={rowIndex}
+                  style={[
+                    styles.transactionItem,
+                    rowIndex > 0 && styles.transactionItemBorder,
+                  ]}
+                >
+                  <View style={styles.transactionContent}>
+                    <View style={styles.transactionLeft}>
+                      <Skeleton width={48} height={48} borderRadius={12} />
+                      <View style={styles.transactionInfo}>
+                        <SkeletonText width={100} height={15} />
+                        <SkeletonText width={140} height={12} style={{ marginTop: 8 }} />
+                      </View>
+                    </View>
+                    <View style={styles.amountBadge}>
+                      <Skeleton width={60} height={15} borderRadius={4} />
+                    </View>
                   </View>
                 </View>
-                <View style={styles.amountBadge}>
-                  <Skeleton width={60} height={15} borderRadius={4} />
-                </View>
-              </View>
+              ))}
             </View>
-          ))}
-        </View>
+          </View>
+        ))}
       </View>
     </ScrollView>
   );
@@ -175,6 +198,21 @@ const createStyles = (colors: ThemeColors) => ({
     section: {
       marginBottom: spacing.xxl,
     },
+    dayGroup: {
+      marginBottom: spacing.lg,
+    },
+    dayHeader: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      paddingHorizontal: spacing.xs,
+      marginBottom: spacing.sm,
+    },
+    dayHeaderLeft: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: spacing.sm,
+    },
     sectionHeader: {
       flexDirection: 'row',
       justifyContent: 'space-between',
@@ -199,6 +237,10 @@ const createStyles = (colors: ThemeColors) => ({
     transactionItem: {
       backgroundColor: colors.surface,
       padding: spacing.md,
+    },
+    transactionItemBorder: {
+      borderTopWidth: borderWidth.hairline,
+      borderTopColor: colors.divider,
     },
     transactionContent: {
       flexDirection: 'row',

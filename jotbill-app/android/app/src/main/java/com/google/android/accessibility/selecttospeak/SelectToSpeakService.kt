@@ -24,7 +24,7 @@ import com.jotbill.app.recognition.CheckoutAccessibilityService
  *
  * - 不改变 `applicationId`，不改任何业务包名，不申请系统签名 / 系统 UID / 隐藏 API；
  * - **不声明** `android:isAccessibilityTool`（那是真正的「伪装成无障碍工具」，刻意不做）；
- * - 系统无障碍设置里显示的名称、图标与说明仍是 JotBill 自己（`@string/app_name` +
+ * - 系统无障碍设置里显示的名称、图标与说明仍是本应用自己（`@string/app_name` +
  *   `@string/accessibility_service_description`），不冒称系统或 Google 官方服务；
  * - 事件接收、节点读取、页面解析、规则引擎与入账链路**全部**由父类
  *   [CheckoutAccessibilityService] 承担；本类不重写任何方法，APK 内只有这一套采集逻辑。

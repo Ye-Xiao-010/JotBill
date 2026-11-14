@@ -51,6 +51,8 @@ object JotBillDatabaseProvider {
                 initializer.ensurePresetSubCategories()
                 // 2026-10-27:老库默认分类图标 emoji→lucide 一次性迁移(自定义分类不触碰)
                 initializer.syncDefaultCategoryIcons()
+                // 2026-11-13:预设子分类图标随父级升级(自定义/改名/自选图标不动)
+                initializer.syncPresetSubCategoryIcons()
             }
             database!!
         } catch (error: Exception) {

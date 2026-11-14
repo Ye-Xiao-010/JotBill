@@ -1,6 +1,7 @@
 /**
  * Dashboard 首页 - 轻量化 Neo-Brutalism 风格
- * 保留暖白、积木色块与偏移阴影，集中强调本月支出和预算进度。
+ * 保留暖白、积木色块与偏移阴影，集中强调本月支出和近期交易。
+ * 近期交易按天分组展示；预算与目标卡片默认隐藏，由「设置 → 显示」开关控制。
  */
 import React, { useCallback, useMemo, useState } from 'react';
 import {
@@ -25,11 +26,12 @@ import { ProgressBar, QueryErrorBanner } from '../../components/ui';
 import { DashboardSkeleton } from '../../components/skeleton';
 import CategoryIcon from '../../components/business/CategoryIcon';
 import { useDashboard, useStyles } from '../../hooks';
-import { useTheme } from '../../providers';
+import { useDisplayPreferences, useTheme } from '../../providers';
 import { nativeData, nativeRecognition } from '../../native';
 import { formatPlatform } from '../../utils/platform';
-import { formatCurrency, formatSignedCurrency } from '../../utils/format';
+import { formatCurrency, formatSignedCurrency, formatTime } from '../../utils/format';
 import { getCategoryIcon, getCategoryColor } from '../../constants/app';
+import { groupBillsByDay, limitBillDayGroups, type BillDayGroup } from '../../utils/billGroups';
 import { CACHE_TIME, GC_TIME, QUERY_KEYS } from '../../lib/queryClient';
 import type {
   Bill,
@@ -57,6 +59,221 @@ interface ProgressCardItem {
 interface GoalProgress extends FinancialGoal {
   progress: number;
   isCompleted: boolean;
+}
+
+const WEEKDAY_LABELS = [
+  '周日',
+  '周一',
+  '周二',
+  '周三',
+  '周四',
+  '周五',
+  '周六',
+] as const;
+
+interface DayLabel {
+  badge: string;
+  dateText: string;
+  isToday: boolean;
+  isYesterday: boolean;
+}
+
+function startOfLocalDayTimestamp(date: Date): number {
+  return new Date(
+    date.getFullYear(),
+    date.getMonth(),
+    date.getDate(),
+  ).getTime();
+}
+
+/** 今天 / 昨天 / 周几；跨年时补出年份，避免旧账被误读成今年 */
+function getDayLabel(date: Date | null): DayLabel {
+  if (!date) {
+    return {
+      badge: '—',
+      dateText: '日期未知',
+      isToday: false,
+      isYesterday: false,
+    };
+  }
+
+  const now = new Date();
+  const dayDiff = Math.round(
+    (startOfLocalDayTimestamp(now) - startOfLocalDayTimestamp(date)) / 86400000,
+  );
+  const dateText =
+    date.getFullYear() === now.getFullYear()
+      ? `${date.getMonth() + 1}月${date.getDate()}日`
+      : `${date.getFullYear()}年${date.getMonth() + 1}月${date.getDate()}日`;
+
+  if (dayDiff === 0) {
+    return { badge: '今天', dateText, isToday: true, isYesterday: false };
+  }
+  if (dayDiff === 1) {
+    return { badge: '昨天', dateText, isToday: false, isYesterday: true };
+  }
+  return {
+    badge: WEEKDAY_LABELS[date.getDay()],
+    dateText,
+    isToday: false,
+    isYesterday: false,
+  };
+}
+
+/** 单个日组：日期标头（含当日收支小计）+ 当天交易卡片 */
+function DayTradeGroup({
+  group,
+  categoryById,
+  styles,
+  onPressBill,
+}: {
+  group: BillDayGroup;
+  categoryById: Map<string, Category>;
+  styles: any;
+  onPressBill: (bill: Bill) => void;
+}) {
+  const label = getDayLabel(group.date);
+  const summaryLabel = [
+    group.date
+      ? label.isToday
+        ? '今天'
+        : label.isYesterday
+          ? '昨天'
+          : label.badge
+      : '日期未知',
+    group.date ? label.dateText : '',
+    group.expenseMinor > 0
+      ? `支出 ${formatCurrency(group.expenseMinor / 100)}`
+      : '',
+    group.incomeMinor > 0
+      ? `收入 ${formatCurrency(group.incomeMinor / 100)}`
+      : '',
+  ]
+    .filter(Boolean)
+    .join('，');
+
+  return (
+    <View style={styles.dayGroup}>
+      <View
+        style={styles.dayHeader}
+        accessible
+        accessibilityRole="header"
+        accessibilityLabel={summaryLabel}
+      >
+        <View style={styles.dayHeaderLeft}>
+          <View
+            style={[
+              styles.dayBadge,
+              label.isToday && styles.dayBadgeToday,
+              label.isYesterday && styles.dayBadgeYesterday,
+            ]}
+          >
+            <Text style={styles.dayBadgeText}>{label.badge}</Text>
+          </View>
+          <Text style={styles.dayDate} numberOfLines={1}>
+            {label.dateText}
+          </Text>
+        </View>
+        <View style={styles.dayTotals}>
+          {group.expenseMinor > 0 ? (
+            <Text style={styles.dayExpenseTotal} numberOfLines={1}>
+              支 {formatCurrency(group.expenseMinor / 100)}
+            </Text>
+          ) : null}
+          {group.incomeMinor > 0 ? (
+            <Text style={styles.dayIncomeTotal} numberOfLines={1}>
+              收 {formatCurrency(group.incomeMinor / 100)}
+            </Text>
+          ) : null}
+        </View>
+      </View>
+
+      <View style={styles.dayCard}>
+        {group.bills.map((bill, index) => {
+          const category = bill.categoryId
+            ? categoryById.get(bill.categoryId)
+            : undefined;
+          const categoryName =
+            category?.name ||
+            bill.merchant ||
+            bill.productDescription ||
+            formatPlatform(bill.platform) ||
+            '未分类';
+          const categoryIcon =
+            category?.icon || getCategoryIcon(category?.name);
+          const isIncome =
+            bill.type === 'income' || bill.type === 'refund';
+          const description =
+            bill.description ||
+            bill.merchant ||
+            bill.productDescription ||
+            categoryName;
+          // 时间已在日组内，元信息只保留「时间 · 平台」；
+          // 平台缺失且分类与标题不同时补分类，避免出现「正餐 / 03:23 · 正餐」这类重复。
+          const time = formatTime(bill.occurredAt);
+          const timeLabel = time && time !== '00:00' ? time : '';
+          const platformLabel = formatPlatform(bill.platform);
+          const metaParts = [timeLabel, platformLabel];
+          if (!platformLabel && categoryName !== description) {
+            metaParts.push(categoryName);
+          }
+          const meta = metaParts.filter(Boolean).join(' · ');
+
+          return (
+            <TouchableOpacity
+              key={bill.id}
+              style={[
+                styles.transactionItem,
+                index > 0 && styles.transactionItemBorder,
+              ]}
+              onPress={() => onPressBill(bill)}
+              activeOpacity={0.72}
+              accessibilityLabel={`${description} ${formatSignedCurrency(
+                bill.amountMinor / 100,
+                isIncome,
+              )}`}
+              accessibilityRole="button"
+            >
+              <View style={styles.transactionLeft}>
+                <View
+                  style={[
+                    styles.transactionIcon,
+                    {
+                      backgroundColor: getCategoryColor(category?.name),
+                    },
+                  ]}
+                >
+                  <CategoryIcon
+                    icon={categoryIcon}
+                    size={21}
+                    emojiStyle={styles.transactionIconText}
+                  />
+                </View>
+                <View style={styles.transactionInfo}>
+                  <Text style={styles.transactionTitle} numberOfLines={1}>
+                    {description}
+                  </Text>
+                  {meta ? (
+                    <Text style={styles.transactionMeta} numberOfLines={1}>
+                      {meta}
+                    </Text>
+                  ) : null}
+                </View>
+              </View>
+              <Text
+                style={[
+                  styles.transactionAmount,
+                  isIncome ? styles.incomeAmount : styles.expenseAmount,
+                ]}
+              >
+                {formatSignedCurrency(bill.amountMinor / 100, isIncome)}
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+    </View>
+  );
 }
 
 /** 横向分页展示预算与目标，页码和圆点明确提示还有更多卡片。 */
@@ -169,6 +386,12 @@ export default function DashboardScreen() {
   const navigation = useNavigation();
   const styles = useStyles(createStyles);
   const { colors } = useTheme();
+  // 预算与目标卡片默认关闭；偏好读取完成后才允许发起预算/目标请求
+  const {
+    showDashboardBudget,
+    isLoaded: isDisplayPrefsLoaded,
+  } = useDisplayPreferences();
+  const budgetEnabled = isDisplayPrefsLoaded && showDashboardBudget;
   const {
     recentBills,
     monthIncome,
@@ -214,6 +437,7 @@ export default function DashboardScreen() {
   } = useQuery({
     queryKey: QUERY_KEYS.budgetProgress,
     queryFn: () => nativeData.getBudgetProgress(),
+    enabled: budgetEnabled,
   });
 
   const {
@@ -238,6 +462,7 @@ export default function DashboardScreen() {
         };
       });
     },
+    enabled: budgetEnabled,
   });
 
   const progressCards: ProgressCardItem[] = useMemo(() => {
@@ -281,13 +506,24 @@ export default function DashboardScreen() {
     return cards;
   }, [budgetProgressData, goalProgressData, colors]);
 
+  // 按本地日期分组（30 条原始数据 → 最多 4 个完整日组 / 12 笔）
+  const {
+    groups: recentDayGroups,
+    hasMore: hasMoreRecentBills,
+  } = useMemo(() => limitBillDayGroups(groupBillsByDay(recentBills)), [recentBills]);
+
   const currentDate = new Date();
   const monthName = `${currentDate.getMonth() + 1}月账本`;
   const yearName = `${currentDate.getFullYear()}`;
 
   const onRefresh = useCallback(async () => {
-    await Promise.all([refetch(), refetchBudgets(), refetchGoals()]);
-  }, [refetch, refetchBudgets, refetchGoals]);
+    const tasks: Promise<unknown>[] = [refetch()];
+    // 预算卡片关闭时不触发预算/目标请求，避免无谓的原生桥接开销
+    if (budgetEnabled) {
+      tasks.push(refetchBudgets(), refetchGoals());
+    }
+    await Promise.all(tasks);
+  }, [refetch, refetchBudgets, refetchGoals, budgetEnabled]);
 
   const handleAddBill = () => {
     navigation.navigate('CreateBill' as never);
@@ -313,7 +549,7 @@ export default function DashboardScreen() {
   };
 
   if (isLoading) {
-    return <DashboardSkeleton />;
+    return <DashboardSkeleton showBudgetCard={budgetEnabled} />;
   }
 
   return (
@@ -407,38 +643,41 @@ export default function DashboardScreen() {
         </View>
       </View>
 
-      {progressCards.length > 0 ? (
-        <ProgressCardCarousel
-          cards={progressCards}
-          styles={styles}
-          colors={colors}
-        />
-      ) : isBudgetsError || isGoalsError ? (
-        <QueryErrorBanner
-          error={budgetsError ?? goalsError}
-          title="预算与目标加载失败"
-          onRetry={() => {
-            refetchBudgets();
-            refetchGoals();
-          }}
-          style={styles.errorBanner}
-        />
-      ) : isBudgetsLoading || isGoalsLoading ? (
-        // 加载中占位：固定高度，避免数据到达后整段下移跳动
-        <View style={styles.progressLoadingPlaceholder} />
-      ) : (
-        <TouchableOpacity
-          style={styles.progressEmptyCard}
-          onPress={() => navigation.navigate('FinancialGoals' as never)}
-          activeOpacity={0.8}
-        >
-          <Text style={styles.progressEmptyIcon}>📊</Text>
-          <Text style={styles.progressEmptyText}>
-            设置预算或财务目标来追踪进度
-          </Text>
-          <Text style={styles.progressEmptyHint}>点击前往设置 →</Text>
-        </TouchableOpacity>
-      )}
+      {/* 预算与目标：默认隐藏，仅在「设置 → 显示」开启后渲染并请求数据 */}
+      {budgetEnabled ? (
+        progressCards.length > 0 ? (
+          <ProgressCardCarousel
+            cards={progressCards}
+            styles={styles}
+            colors={colors}
+          />
+        ) : isBudgetsError || isGoalsError ? (
+          <QueryErrorBanner
+            error={budgetsError ?? goalsError}
+            title="预算与目标加载失败"
+            onRetry={() => {
+              refetchBudgets();
+              refetchGoals();
+            }}
+            style={styles.errorBanner}
+          />
+        ) : isBudgetsLoading || isGoalsLoading ? (
+          // 加载中占位：固定高度，避免数据到达后整段下移跳动
+          <View style={styles.progressLoadingPlaceholder} />
+        ) : (
+          <TouchableOpacity
+            style={styles.progressEmptyCard}
+            onPress={() => navigation.navigate('FinancialGoals' as never)}
+            activeOpacity={0.8}
+          >
+            <Text style={styles.progressEmptyIcon}>📊</Text>
+            <Text style={styles.progressEmptyText}>
+              设置预算或财务目标来追踪进度
+            </Text>
+            <Text style={styles.progressEmptyHint}>点击前往设置 →</Text>
+          </TouchableOpacity>
+        )
+      ) : null}
 
       <View style={styles.section}>
         <View style={styles.sectionHeader}>
@@ -455,94 +694,28 @@ export default function DashboardScreen() {
         </View>
 
         {recentBills.length > 0 ? (
-          <View style={styles.transactionList}>
-            {recentBills.slice(0, 5).map((rawBill, index) => {
-              const category = rawBill.categoryId
-                ? categoryById.get(rawBill.categoryId)
-                : undefined;
-              const categoryName =
-                category?.name ||
-                rawBill.merchant ||
-                rawBill.productDescription ||
-                formatPlatform(rawBill.platform) ||
-                '未分类';
-              const categoryIcon =
-                category?.icon || getCategoryIcon(category?.name);
-              const bill = {
-                ...rawBill,
-                description:
-                  rawBill.description ||
-                  rawBill.merchant ||
-                  rawBill.productDescription ||
-                  categoryName,
-                platform: formatPlatform(rawBill.platform) || categoryName,
-              };
-
-              return (
-                <TouchableOpacity
-                  key={bill.id}
-                  style={[
-                    styles.transactionItem,
-                    index > 0 && styles.transactionItemBorder,
-                  ]}
-                  onPress={() => handleViewBillDetail(bill)}
-                  activeOpacity={0.72}
-                  accessibilityLabel={`${bill.description} ${formatSignedCurrency(
-                    bill.amountMinor / 100,
-                    bill.type === 'income' || bill.type === 'refund',
-                  )}`}
-                  accessibilityRole="button"
-                >
-                  <View style={styles.transactionLeft}>
-                    <View
-                      style={[
-                        styles.transactionIcon,
-                        {
-                          backgroundColor: getCategoryColor(
-                            category?.name,
-                          ),
-                        },
-                      ]}
-                    >
-                      <CategoryIcon
-                        icon={categoryIcon}
-                        size={21}
-                        emojiStyle={styles.transactionIconText}
-                      />
-                    </View>
-                    <View style={styles.transactionInfo}>
-                      <Text style={styles.transactionTitle} numberOfLines={1}>
-                        {bill.description ||
-                          bill.merchant ||
-                          bill.productDescription ||
-                          '未分类'}
-                      </Text>
-                      <Text style={styles.transactionMeta} numberOfLines={1}>
-                        {new Date(bill.occurredAt).toLocaleDateString('zh-CN', {
-                          month: 'short',
-                          day: 'numeric',
-                        })}{' '}
-                        · {formatPlatform(bill.platform) || '未分类'}
-                      </Text>
-                    </View>
-                  </View>
-                  <Text
-                    style={[
-                      styles.transactionAmount,
-                      bill.type === 'income' || bill.type === 'refund'
-                        ? styles.incomeAmount
-                        : styles.expenseAmount,
-                    ]}
-                  >
-                    {formatSignedCurrency(
-                      bill.amountMinor / 100,
-                      bill.type === 'income' || bill.type === 'refund',
-                    )}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
+          <>
+            {recentDayGroups.map(group => (
+              <DayTradeGroup
+                key={group.dateKey}
+                group={group}
+                categoryById={categoryById}
+                styles={styles}
+                onPressBill={handleViewBillDetail}
+              />
+            ))}
+            {hasMoreRecentBills ? (
+              <TouchableOpacity
+                style={styles.moreDaysButton}
+                onPress={handleViewAllBills}
+                activeOpacity={0.75}
+                accessibilityLabel="查看更早的交易"
+                accessibilityRole="button"
+              >
+                <Text style={styles.moreDaysText}>查看更早的交易 →</Text>
+              </TouchableOpacity>
+            ) : null}
+          </>
         ) : isDashboardError ? (
           // 主查询失败时顶部已有警示条，这里不再显示「暂无交易记录」空态
           null
@@ -864,7 +1037,69 @@ const createStyles = (colors: ThemeColors) => ({
       fontWeight: '700',
       color: colors.primary,
     },
-    transactionList: {
+    dayGroup: {
+      marginBottom: spacing.lg,
+    },
+    dayHeader: {
+      flexDirection: 'row',
+      alignItems: 'flex-end',
+      justifyContent: 'space-between',
+      gap: spacing.sm,
+      paddingHorizontal: spacing.xs,
+      marginBottom: spacing.sm,
+    },
+    dayHeaderLeft: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: spacing.sm,
+      flexShrink: 1,
+    },
+    dayBadge: {
+      minWidth: 38,
+      paddingHorizontal: spacing.sm,
+      paddingVertical: 3,
+      borderRadius: borderRadius.small,
+      borderWidth: borderWidth.hairline,
+      borderColor: colors.stroke,
+      backgroundColor: colors.surfaceMuted,
+      alignItems: 'center',
+    },
+    dayBadgeToday: {
+      backgroundColor: colors.accent,
+    },
+    dayBadgeYesterday: {
+      backgroundColor: colors.primaryLight,
+    },
+    dayBadgeText: {
+      fontSize: 11,
+      fontWeight: '800',
+      color: colors.textPrimary,
+      letterSpacing: 0.2,
+    },
+    dayDate: {
+      fontSize: 14,
+      fontWeight: '700',
+      color: colors.textPrimary,
+      fontVariant: ['tabular-nums'],
+    },
+    dayTotals: {
+      alignItems: 'flex-end',
+      gap: 1,
+      flexShrink: 0,
+    },
+    dayExpenseTotal: {
+      fontSize: 12,
+      fontWeight: '700',
+      color: colors.expense,
+      fontVariant: ['tabular-nums'],
+    },
+    dayIncomeTotal: {
+      fontSize: 11,
+      fontWeight: '600',
+      color: colors.income,
+      fontVariant: ['tabular-nums'],
+    },
+    dayCard: {
       backgroundColor: colors.surface,
       borderRadius: borderRadius.card,
       borderWidth: borderWidth.hairline,
@@ -925,6 +1160,22 @@ const createStyles = (colors: ThemeColors) => ({
     },
     expenseAmount: {
       color: colors.expense,
+    },
+    moreDaysButton: {
+      alignItems: 'center',
+      justifyContent: 'center',
+      minHeight: 44,
+      paddingVertical: spacing.md,
+      borderRadius: borderRadius.card,
+      borderWidth: borderWidth.hairline,
+      borderColor: colors.strokeLight,
+      borderStyle: 'dashed',
+      backgroundColor: colors.surface,
+    },
+    moreDaysText: {
+      fontSize: 13,
+      fontWeight: '700',
+      color: colors.primary,
     },
     emptyState: {
       alignItems: 'center',

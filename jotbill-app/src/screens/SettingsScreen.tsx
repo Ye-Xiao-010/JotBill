@@ -25,22 +25,42 @@ import {
   ShieldCheck,
   Tags,
   ChevronRight,
+  Zap,
 } from 'lucide-react-native';
 import { ThemeColors, themes, THEME_LABELS, type ThemeName } from '../theme/colors';
 import { spacing, borderRadius, borderWidth, shadow, typography } from '../theme';
 import { useStyles } from '../hooks';
-import { useTheme } from '../providers';
+import { useDisplayPreferences, useTheme } from '../providers';
 
 
 interface SettingsScreenProps {
   navigation?: any;
 }
 
+// 设置图标键：与下面的 iconMap / ICON_CANDY_COLORS 强绑定，
+// 新增设置项时漏配图标会直接编译报错（此前「自动记账」就因键名漂移变成空白方块）。
+type SettingsIconKey =
+  | 'accounts'
+  | 'category'
+  | 'wallet'
+  | 'flag'
+  | 'netWorth'
+  | 'review'
+  | 'autoBookkeeping'
+  | 'permissions'
+  | 'ai'
+  | 'runtime'
+  | 'data'
+  | 'rules'
+  | 'moon';
+
 // 设置项类型定义
 interface BaseSettingItem {
   id: string;
   label: string;
-  icon: string;
+  icon: SettingsIconKey;
+  /** 可选副标题：解释开关/入口的作用，帮助用户判断是否要改 */
+  description?: string;
 }
 
 interface PressableSettingItem extends BaseSettingItem {
@@ -62,16 +82,17 @@ interface SettingGroup {
 }
 
 // 糖果色图标背景映射
-const ICON_CANDY_COLORS: Record<string, string> = {
+const ICON_CANDY_COLORS: Record<SettingsIconKey, string> = {
   accounts: '#A5D8FF',
   category: '#FFE8CC',
   wallet: '#FFD93D',
   flag: '#FF90B3',
   netWorth: '#96F2D7',
   review: '#FFC9DE',
-  runtime: '#B2F2BB',
+  autoBookkeeping: '#99E9F2',
   permissions: '#B5E8DC',
   ai: '#D0BFFF',
+  runtime: '#B2F2BB',
   data: '#FFD8A8',
   rules: '#D3F9D8',
   moon: '#C5A3FF',
@@ -79,18 +100,26 @@ const ICON_CANDY_COLORS: Record<string, string> = {
 
 export default function SettingsScreen({ navigation }: SettingsScreenProps) {
   const { isDark, toggleTheme, colors, themeName, setThemeName } = useTheme();
+  const {
+    showDashboardBudget,
+    setShowDashboardBudget,
+  } = useDisplayPreferences();
   const styles = useStyles(createStyles);
 
-  const iconMap: Record<string, React.FC<{ size: number; color: string }>> = {
+  const iconMap: Record<
+    SettingsIconKey,
+    React.FC<{ size: number; color: string }>
+  > = {
     accounts: CreditCard,
     category: Tags,
     wallet: Wallet,
     flag: Flag,
     netWorth: Wallet,
     review: Bell,
-    runtime: Activity,
+    autoBookkeeping: Zap,
     permissions: ShieldCheck,
     ai: Bot,
+    runtime: Activity,
     data: Database,
     rules: ListFilter,
     moon: Moon,
@@ -111,7 +140,7 @@ export default function SettingsScreen({ navigation }: SettingsScreenProps) {
       title: '🧩 识别与自动化',
       items: [
         { id: 'review', label: '待确认中心', icon: 'review', onPress: () => navigation?.navigate('Review') },
-        { id: 'auto-bookkeeping', label: '自动记账', icon: 'accessibility', onPress: () => navigation?.navigate('AutoBookkeeping') },
+        { id: 'auto-bookkeeping', label: '自动记账', icon: 'autoBookkeeping', onPress: () => navigation?.navigate('AutoBookkeeping') },
         { id: 'runtime-status', label: '运行状态', icon: 'runtime', onPress: () => navigation?.navigate('RuntimeStatus') },
       ],
     },
@@ -144,6 +173,15 @@ export default function SettingsScreen({ navigation }: SettingsScreenProps) {
           isSwitch: true,
           value: isDark,
           onValueChange: toggleTheme,
+        },
+        {
+          id: 'dashboard-budget',
+          label: '首页预算与目标',
+          description: '显示预算进度和财务目标卡片',
+          icon: 'wallet',
+          isSwitch: true,
+          value: showDashboardBudget,
+          onValueChange: setShowDashboardBudget,
         },
       ],
     },
@@ -181,13 +219,19 @@ export default function SettingsScreen({ navigation }: SettingsScreenProps) {
                         <View style={[styles.iconContainer, { backgroundColor: candyColor }]}>
                           {IconComponent && <IconComponent size={20} color={colors.stroke} />}
                         </View>
-                        <Text style={styles.settingLabel}>{item.label}</Text>
+                        <View style={styles.settingTextBlock}>
+                          <Text style={styles.settingLabel}>{item.label}</Text>
+                          {item.description ? (
+                            <Text style={styles.settingDescription}>{item.description}</Text>
+                          ) : null}
+                        </View>
                       </View>
                       <Switch
                         value={item.value}
                         onValueChange={item.onValueChange}
                         trackColor={{ false: colors.divider, true: colors.primary }}
                         thumbColor="#FFFFFF"
+                        accessibilityLabel={item.label}
                       />
                     </View>
                   ) : (
@@ -200,7 +244,12 @@ export default function SettingsScreen({ navigation }: SettingsScreenProps) {
                         <View style={[styles.iconContainer, { backgroundColor: candyColor }]}>
                           {IconComponent && <IconComponent size={20} color={colors.stroke} />}
                         </View>
-                        <Text style={styles.settingLabel}>{item.label}</Text>
+                        <View style={styles.settingTextBlock}>
+                          <Text style={styles.settingLabel}>{item.label}</Text>
+                          {item.description ? (
+                            <Text style={styles.settingDescription}>{item.description}</Text>
+                          ) : null}
+                        </View>
                       </View>
                       <ChevronRight size={20} color={colors.textTertiary} strokeWidth={2.5} />
                     </TouchableOpacity>
@@ -397,6 +446,17 @@ const createStyles = (colors: ThemeColors) => ({
       fontSize: 15,
       fontWeight: '700',
       color: colors.textPrimary,
+    },
+    settingTextBlock: {
+      flex: 1,
+      justifyContent: 'center',
+      gap: 2,
+    },
+    settingDescription: {
+      fontSize: 12,
+      fontWeight: '500',
+      color: colors.textTertiary,
+      lineHeight: 16,
     },
     versionInfo: {
       alignItems: 'center',
