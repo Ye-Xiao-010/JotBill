@@ -14,6 +14,8 @@ import { Text } from 'react-native';
 import { Toast } from '../../components';
 import { AddCategoryModal, ConfirmModal } from '../../components/modals';
 import CategoryIcon from '../../components/business/CategoryIcon';
+import AccountIcon from '../../components/business/AccountIcon';
+import { accountDisplayName, resolveAccountIcon } from '../../constants/accountIcons';
 import { DEFAULT_CATEGORIES } from '../../constants/app';
 import { useToast, useCategories, useStyles } from '../../hooks';
 import { nativeData, type Account, type Bill, type Category } from '../../native';
@@ -443,11 +445,14 @@ const CreateBillScreen: React.FC<CreateBillScreenProps> = ({ navigation, route }
                     ]}
                     onPress={() => setSelectedAccountId(account.id)}
                   >
+                    <AccountIcon
+                      icon={account.icon}
+                      name={account.name}
+                      subtype={account.subtype}
+                      size={18}
+                    />
                     <Text style={styles.accountOptionName} numberOfLines={1}>
-                      {account.name}
-                    </Text>
-                    <Text style={styles.accountOptionType}>
-                      {account.kind === 'liability' ? '负债' : '资产'}
+                      {accountDisplayName(account.name, resolveAccountIcon(account.icon, account.name))}
                     </Text>
                   </TouchableOpacity>
                 ))}
@@ -471,11 +476,14 @@ const CreateBillScreen: React.FC<CreateBillScreenProps> = ({ navigation, route }
                     ]}
                     onPress={() => setSelectedTargetAccountId(account.id)}
                   >
+                    <AccountIcon
+                      icon={account.icon}
+                      name={account.name}
+                      subtype={account.subtype}
+                      size={18}
+                    />
                     <Text style={styles.accountOptionName} numberOfLines={1}>
-                      {account.name}
-                    </Text>
-                    <Text style={styles.accountOptionType}>
-                      {account.kind === 'liability' ? '负债' : '资产'}
+                      {accountDisplayName(account.name, resolveAccountIcon(account.icon, account.name))}
                     </Text>
                   </TouchableOpacity>
                 ))}
@@ -740,12 +748,14 @@ const createStyles = (colors: ThemeColors) => ({
       accountGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
       accountOption: {
         width: '48%',
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: spacing.sm,
         padding: spacing.md,
         borderRadius: borderRadius.small,
         borderWidth: borderWidth.thin,
         borderColor: colors.stroke,
         backgroundColor: colors.surface,
-        gap: spacing.xs,
       },
       accountOptionSelected: {
         backgroundColor: colors.accent,

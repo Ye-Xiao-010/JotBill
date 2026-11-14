@@ -121,7 +121,8 @@ export interface AccountInput {
   kind?: Account['kind'];
   initialBalanceMinor?: number;
   currency?: string;
-  icon?: string;
+  /** `bank:<code>` / `brand:<code>` 显式指定；null 清空（回到名称自动匹配） */
+  icon?: string | null;
   color?: string;
   sortOrder?: number;
 }

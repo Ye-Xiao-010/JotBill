@@ -1607,9 +1607,14 @@ internal object PendingConfirmOverlayManager {
                 val density = app.resources.displayMetrics.density
                 accounts.forEach { account ->
                     val chip = TextView(app).apply {
-                        // 品牌图标（微信/支付宝，固定品牌色）/ subtype 线性 lucide 优先；
+                        // 银行徽标 / 品牌图标（微信/支付宝）/ subtype 线性 lucide 优先；
                         // emoji（自定义账户）维持原文字渲染。同 createCategoryView 的双模设计。
-                        val iconRes = PopupIconAssets.forAccount(account.id, account.name, account.subtype)
+                        val iconRes = PopupIconAssets.forAccount(
+                            account.id,
+                            account.name,
+                            account.subtype,
+                            account.icon
+                        )
                         if (iconRes != null) {
                             text = account.name
                             tag = iconRes

@@ -58,6 +58,61 @@ internal object PopupIconAssets {
         "credit_card" to R.drawable.ic_lucide_credit_card
     )
 
+    /** 银行 code → 方形徽标（与 `icons/banks/banks.json` 的 code 一致，96px PNG）。 */
+    private val bankIconsByCode = mapOf(
+        "icbc" to R.drawable.ic_bank_icbc,
+        "ccb" to R.drawable.ic_bank_ccb,
+        "abchina" to R.drawable.ic_bank_abchina,
+        "boc" to R.drawable.ic_bank_boc,
+        "bankcomm" to R.drawable.ic_bank_bankcomm,
+        "psbc" to R.drawable.ic_bank_psbc,
+        "cmbchina" to R.drawable.ic_bank_cmbchina,
+        "citicbank" to R.drawable.ic_bank_citicbank,
+        "spdb" to R.drawable.ic_bank_spdb,
+        "cmbc" to R.drawable.ic_bank_cmbc,
+        "cib" to R.drawable.ic_bank_cib,
+        "cebbank" to R.drawable.ic_bank_cebbank,
+        "hxb" to R.drawable.ic_bank_hxb,
+        "cgbchina" to R.drawable.ic_bank_cgbchina,
+        "pingan" to R.drawable.ic_bank_pingan,
+        "cbhb" to R.drawable.ic_bank_cbhb,
+        "hfbank" to R.drawable.ic_bank_hfbank,
+        "czbank" to R.drawable.ic_bank_czbank,
+        "bankofbeijing" to R.drawable.ic_bank_bankofbeijing,
+        "bosc" to R.drawable.ic_bank_bosc,
+        "jsbchina" to R.drawable.ic_bank_jsbchina,
+        "nbcb" to R.drawable.ic_bank_nbcb,
+        "njcb" to R.drawable.ic_bank_njcb
+    )
+
+    /** 银行名称/别名 → code（与 banks.json 同源；含匹配时按最长别名优先，
+     *  避免「中国银行」抢先命中「中国工商银行」这类子串冲突）。 */
+    private val bankNameAliases: List<Pair<String, String>> = listOf(
+        "中国工商银行" to "icbc", "工商银行" to "icbc", "工行" to "icbc",
+        "中国建设银行" to "ccb", "建设银行" to "ccb", "建行" to "ccb",
+        "中国农业银行" to "abchina", "农业银行" to "abchina", "农行" to "abchina",
+        "中国银行" to "boc", "中行" to "boc",
+        "交通银行" to "bankcomm", "交行" to "bankcomm",
+        "中国邮政储蓄银行" to "psbc", "邮政储蓄银行" to "psbc", "邮储银行" to "psbc", "邮储" to "psbc",
+        "招商银行" to "cmbchina", "招行" to "cmbchina",
+        "中信银行" to "citicbank", "中信" to "citicbank",
+        "上海浦东发展银行" to "spdb", "浦发银行" to "spdb", "浦发" to "spdb",
+        "中国民生银行" to "cmbc", "民生银行" to "cmbc", "民生" to "cmbc",
+        "兴业银行" to "cib", "兴业" to "cib",
+        "中国光大银行" to "cebbank", "光大银行" to "cebbank", "光大" to "cebbank",
+        "华夏银行" to "hxb", "华夏" to "hxb",
+        "广发银行" to "cgbchina", "广发" to "cgbchina",
+        "平安银行" to "pingan", "平安" to "pingan",
+        "渤海银行" to "cbhb", "渤海" to "cbhb",
+        "恒丰银行" to "hfbank", "恒丰" to "hfbank",
+        "浙商银行" to "czbank", "浙商" to "czbank",
+        "北京银行" to "bankofbeijing",
+        "上海银行" to "bosc",
+        "江苏银行" to "jsbchina",
+        "宁波银行" to "nbcb",
+        "南京银行" to "njcb"
+    ).sortedByDescending { it.first.length }
+
     private val brandIconsById = mapOf(
         "default-account-wechat" to R.drawable.ic_brand_wechat,
         "default-account-alipay" to R.drawable.ic_brand_alipay
@@ -68,30 +123,59 @@ internal object PopupIconAssets {
         "支付宝" to R.drawable.ic_brand_alipay
     )
 
-    private val brandDrawables = brandIconsById.values.toSet()
+    /** 位图类资源（品牌色/银行徽标已烘焙）不着色；只有线性 lucide 跟随文字色。 */
+    private val bitmapDrawables = brandIconsById.values.toSet() +
+        bankIconsByCode.values.toSet()
 
     /** 分类 chip：icon 字符串是 lucide 名（后端种子）返回资源；emoji/空返回 null（保持文字回退）。 */
     fun forCategory(icon: String?): Int? =
         icon?.trim()?.takeIf { it.isNotEmpty() }?.let { categoryIcons[it] }
 
-    /** 账户 chip：品牌优先（id 精确 → 名称包含），subtype 线性兜底；null = emoji 文字回退。 */
-    fun forAccount(accountId: String, name: String?, subtype: String?): Int? {
+    /**
+     * 账户 chip：银行/品牌位图优先（`icon` 显式指定 → 名称别名 → id 精确），
+     * subtype 线性兜底；null = emoji 文字回退。
+     */
+    fun forAccount(
+        accountId: String,
+        name: String?,
+        subtype: String?,
+        icon: String? = null
+    ): Int? {
+        // 1. 显式指定：bank:<code> / brand:<code>
+        val explicit = icon?.trim()
+        if (!explicit.isNullOrEmpty()) {
+            val parts = explicit.split(":", limit = 2)
+            if (parts.size == 2) {
+                when (parts[0]) {
+                    "bank" -> bankIconsByCode[parts[1]]?.let { return it }
+                    "brand" -> when (parts[1]) {
+                        "wechat" -> return R.drawable.ic_brand_wechat
+                        "alipay" -> return R.drawable.ic_brand_alipay
+                    }
+                }
+            }
+        }
+        // 2. 品牌名/id
         brandIconsById[accountId]?.let { return it }
         if (!name.isNullOrBlank()) {
             brandIconsByName.entries.firstOrNull { name.contains(it.key) }?.let { return it.value }
+            // 3. 银行名别名（最长优先）
+            val bankCode = bankNameAliases.firstOrNull { name.contains(it.first) }?.second
+            if (bankCode != null) bankIconsByCode[bankCode]?.let { return it }
         }
+        // 4. subtype 线性兜底
         return subtypeIcons[subtype]
     }
 
     /**
      * 把图标放到 chip 文字起始侧（16dp，间距 6dp）。
      *
-     * @param tint 线性 lucide 图标按文字色着色（选中态变化时传新色）；品牌图标传任意值
-     *   都**不会**被着色 —— 品牌色已烘焙进资源，不随选中态变化。
+     * @param tint 线性 lucide 图标按文字色着色（选中态变化时传新色）；品牌/银行位图
+     *   传任意值都**不会**被着色 —— 颜色已烘焙进资源，不随选中态变化。
      */
     fun apply(textView: TextView, resId: Int, tint: Int?) {
         val drawable = ContextCompat.getDrawable(textView.context, resId)?.mutate() ?: return
-        if (tint != null && resId !in brandDrawables) {
+        if (tint != null && resId !in bitmapDrawables) {
             drawable.setTint(tint)
         }
         val density = textView.resources.displayMetrics.density

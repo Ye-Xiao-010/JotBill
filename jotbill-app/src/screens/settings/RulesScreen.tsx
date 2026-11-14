@@ -26,6 +26,8 @@ import {
   Trash2,
 } from 'lucide-react-native';
 import CategoryIcon from '../../components/business/CategoryIcon';
+import AccountIcon from '../../components/business/AccountIcon';
+import { accountDisplayName, resolveAccountIcon } from '../../constants/accountIcons';
 import { nativeData, type Account, type Rule } from '../../native';
 import { borderRadius, borderWidth, spacing } from '../../theme/spacing';
 import { ThemeColors } from '../../theme/colors';
@@ -384,10 +386,22 @@ function RuleFormModal({ visible, rule, onClose, onSaved }: RuleFormModalProps) 
           {accounts.map(account => (
             <TouchableOpacity
               key={account.id}
-              style={[styles.pickerItem, actionValue === account.id && styles.pickerItemSelected]}
+              style={[
+                styles.pickerItem,
+                styles.pickerItemRow,
+                actionValue === account.id && styles.pickerItemSelected,
+              ]}
               onPress={() => setActionValue(account.id)}
             >
-              <Text style={styles.pickerItemText}>{account.name}</Text>
+              <AccountIcon
+                icon={account.icon}
+                name={account.name}
+                subtype={account.subtype}
+                size={14}
+              />
+              <Text style={styles.pickerItemText}>
+                {accountDisplayName(account.name, resolveAccountIcon(account.icon, account.name))}
+              </Text>
             </TouchableOpacity>
           ))}
         </View>

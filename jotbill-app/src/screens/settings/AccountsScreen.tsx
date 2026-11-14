@@ -20,6 +20,8 @@ import {
   type AccountSubtype,
   type AccountUpdateInput,
 } from '../../native';
+import AccountIcon from '../../components/business/AccountIcon';
+import { BANKS } from '../../constants/accountIcons';
 import { QUERY_KEYS } from '../../lib/queryClient';
 import { borderRadius, borderWidth, shadow, spacing } from '../../theme/spacing';
 import { ThemeColors } from '../../theme/colors';
@@ -73,6 +75,9 @@ export default function AccountsScreen() {
   const [initialBalance, setInitialBalance] = useState('');
   const [actualBalance, setActualBalance] = useState('');
   const [calibrationNote, setCalibrationNote] = useState('');
+  /** 图标：null = 按名称自动匹配；'bank:<code>' / 'brand:<code>' = 用户手动指定 */
+  const [iconOverride, setIconOverride] = useState<string | null>(null);
+  const [showIconPicker, setShowIconPicker] = useState(false);
 
   const accountsQuery = useQuery({
     queryKey: QUERY_KEYS.accountsList,
@@ -139,6 +144,7 @@ export default function AccountsScreen() {
     setName('');
     setSubtype('cash');
     setInitialBalance('');
+    setIconOverride(null);
     setShowForm(true);
   };
 
@@ -147,12 +153,16 @@ export default function AccountsScreen() {
     setName(account.name);
     setSubtype(account.subtype);
     setInitialBalance('');
+    setIconOverride(
+      account.icon && account.icon.includes(':') ? account.icon : null,
+    );
     setShowForm(true);
   };
 
   const closeForm = () => {
     setShowForm(false);
     setEditingAccount(null);
+    setIconOverride(null);
   };
 
   const submitForm = () => {
@@ -163,7 +173,8 @@ export default function AccountsScreen() {
     if (editingAccount) {
       saveMutation.mutate({
         id: editingAccount.id,
-        input: { name: name.trim(), subtype },
+        // icon 显式传 null 清空用户指定，回到按名称自动匹配
+        input: { name: name.trim(), subtype, icon: iconOverride },
       });
       return;
     }
@@ -186,6 +197,7 @@ export default function AccountsScreen() {
         kind: selectedOption.kind,
         initialBalanceMinor: normalizedInitialBalance,
         currency: 'CNY',
+        icon: iconOverride,
       },
     });
   };
@@ -294,7 +306,12 @@ export default function AccountsScreen() {
             <View key={account.id} style={[styles.accountCard, !account.isActive && styles.inactiveCard]}>
               <View style={styles.accountTopRow}>
                 <View style={styles.accountIcon}>
-                  <CreditCard size={22} color={styles._colors.primary} />
+                  <AccountIcon
+                    icon={account.icon}
+                    name={account.name}
+                    subtype={account.subtype}
+                    size={24}
+                  />
                 </View>
                 <View style={styles.accountMain}>
                   <Text style={styles.accountName} numberOfLines={1}>{account.name}</Text>
@@ -335,13 +352,33 @@ export default function AccountsScreen() {
             <View style={styles.modalCard}>
               <Text style={styles.modalTitle}>{editingAccount ? '编辑账户' : '添加账户'}</Text>
               <Text style={styles.inputLabel}>账户名称</Text>
-              <TextInput
-                style={styles.input}
-                value={name}
-                onChangeText={setName}
-                placeholder="例如：日常银行卡"
-                placeholderTextColor={styles._colors.textTertiary}
-              />
+              <View style={styles.nameRow}>
+                <View style={styles.nameIconPreview}>
+                  <AccountIcon
+                    icon={iconOverride}
+                    name={name}
+                    subtype={subtype}
+                    size={22}
+                  />
+                </View>
+                <TextInput
+                  style={[styles.input, styles.nameInput]}
+                  value={name}
+                  onChangeText={setName}
+                  placeholder="例如：招商银行"
+                  placeholderTextColor={styles._colors.textTertiary}
+                />
+              </View>
+              <TouchableOpacity
+                style={styles.iconPickerEntry}
+                onPress={() => setShowIconPicker(true)}
+              >
+                <Text style={styles.iconPickerEntryText}>
+                  {iconOverride
+                    ? `已指定图标（${iconOverride.split(':')[1]}）`
+                    : '图标按名称自动识别，点击手动指定'}
+                </Text>
+              </TouchableOpacity>
               <Text style={styles.inputLabel}>账户类型</Text>
               <View style={styles.optionGrid}>
                 {ACCOUNT_OPTIONS.map((option) => (
@@ -380,6 +417,75 @@ export default function AccountsScreen() {
               </View>
             </View>
           </ScrollView>
+        </View>
+      </Modal>
+
+      <Modal
+        visible={showIconPicker}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowIconPicker(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>选择图标</Text>
+            <TouchableOpacity
+              style={[styles.iconPickerAuto, iconOverride === null && styles.iconPickerItemSelected]}
+              onPress={() => {
+                setIconOverride(null);
+                setShowIconPicker(false);
+              }}
+            >
+              <Text style={styles.iconPickerEntryText}>自动识别（按账户名称）</Text>
+            </TouchableOpacity>
+            <ScrollView style={styles.iconPickerScroll} contentContainerStyle={styles.iconPickerGrid}>
+              {BANKS.map(bank => (
+                <TouchableOpacity
+                  key={bank.code}
+                  style={[
+                    styles.iconPickerItem,
+                    iconOverride === `bank:${bank.code}` && styles.iconPickerItemSelected,
+                  ]}
+                  onPress={() => {
+                    setIconOverride(`bank:${bank.code}`);
+                    setShowIconPicker(false);
+                  }}
+                >
+                  <AccountIcon icon={`bank:${bank.code}`} size={28} />
+                  <Text style={styles.iconPickerItemText} numberOfLines={1}>
+                    {bank.shortName}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+              {[
+                { code: 'wechat', label: '微信' },
+                { code: 'alipay', label: '支付宝' },
+              ].map(brand => (
+                <TouchableOpacity
+                  key={brand.code}
+                  style={[
+                    styles.iconPickerItem,
+                    iconOverride === `brand:${brand.code}` && styles.iconPickerItemSelected,
+                  ]}
+                  onPress={() => {
+                    setIconOverride(`brand:${brand.code}`);
+                    setShowIconPicker(false);
+                  }}
+                >
+                  <AccountIcon icon={`brand:${brand.code}`} size={28} />
+                  <Text style={styles.iconPickerItemText} numberOfLines={1}>
+                    {brand.label}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+            <TouchableOpacity
+              style={styles.secondaryButton}
+              onPress={() => setShowIconPicker(false)}
+            >
+              <Text style={styles.secondaryButtonText}>关闭</Text>
+            </TouchableOpacity>
+          </View>
         </View>
       </Modal>
 
@@ -569,6 +675,48 @@ const createStyles = (colors: ThemeColors) => ({
     optionTextSelected: { color: colors.primary },
     optionKind: { marginTop: 3, fontSize: 11, color: colors.textSecondary },
     modalActions: { flexDirection: 'row', gap: spacing.md, marginTop: spacing.lg },
+    nameRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+    nameIconPreview: {
+      width: 48,
+      height: 48,
+      alignItems: 'center',
+      justifyContent: 'center',
+      borderWidth: borderWidth.thin,
+      borderColor: colors.stroke,
+      borderRadius: borderRadius.small,
+      backgroundColor: colors.surface,
+    },
+    nameInput: { flex: 1 },
+    iconPickerEntry: { marginTop: spacing.xs, paddingVertical: spacing.xs },
+    iconPickerEntryText: { fontSize: 12, fontWeight: '700', color: colors.primary },
+    iconPickerAuto: {
+      paddingVertical: spacing.sm,
+      paddingHorizontal: spacing.md,
+      marginTop: spacing.sm,
+      borderWidth: borderWidth.thin,
+      borderColor: colors.stroke,
+      borderRadius: borderRadius.small,
+    },
+    iconPickerScroll: { maxHeight: 320, marginTop: spacing.sm },
+    iconPickerGrid: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      gap: spacing.sm,
+      paddingBottom: spacing.sm,
+    },
+    iconPickerItem: {
+      width: '22%',
+      minHeight: 70,
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 4,
+      paddingVertical: spacing.xs,
+      borderWidth: borderWidth.thin,
+      borderColor: colors.divider,
+      borderRadius: borderRadius.small,
+    },
+    iconPickerItemSelected: { backgroundColor: colors.primaryLight, borderColor: colors.stroke, borderWidth: borderWidth.medium },
+    iconPickerItemText: { fontSize: 10, fontWeight: '700', color: colors.textSecondary, textAlign: 'center' },
   }),
   _colors: colors,
 });

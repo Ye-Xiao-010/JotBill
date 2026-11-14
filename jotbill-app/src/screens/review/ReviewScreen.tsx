@@ -43,6 +43,8 @@ import {
 import { invalidateCache, QUERY_KEYS } from '../../lib/queryClient';
 import { formatPlatform } from '../../utils/platform';
 import { formatCurrency } from '../../utils/format';
+import AccountIcon from '../../components/business/AccountIcon';
+import { accountDisplayName, resolveAccountIcon } from '../../constants/accountIcons';
 import { useAlert } from '../../providers';
 import { borderRadius, borderWidth, spacing } from '../../theme/spacing';
 import { ThemeColors } from '../../theme/colors';
@@ -491,12 +493,11 @@ function PendingCard({
     queryKey: ACCOUNTS_QUERY_KEY,
     queryFn: () => nativeData.getAccounts(),
   });
-  const accountName = useMemo(() => {
+  const accountHit = useMemo(() => {
     if (!pending.accountId) return null;
     const accounts = (accountsQuery.data ?? []) as Account[];
-    const hit = accounts.find((account: Account) => account.id === pending.accountId);
     // 查不到 = 账户被删或停用；与"从未指定"是两种情况，UI 要分开说
-    return hit ? `${hit.icon ?? '💳'} ${hit.name}` : null;
+    return accounts.find((account: Account) => account.id === pending.accountId) ?? null;
   }, [accountsQuery.data, pending.accountId]);
   // 阶段四 T7：按会话查询支付证据摘要；无会话的纯手动记录不查询
   const evidenceQuery = useQuery({
@@ -589,8 +590,20 @@ function PendingCard({
             （LedgerRepository.validateBillAccounts 硬性要求 accountId），
             必须先点「编辑」选账户 —— 让用户在点之前就知道，而不是点完吃一个
             "Transaction requires an account"。 */}
-        {accountName ? (
-          <MetaRow label="账户" value={accountName} colors={colors} />
+        {accountHit ? (
+          <MetaRow
+            label="账户"
+            value={accountHit.name}
+            colors={colors}
+            icon={
+              <AccountIcon
+                icon={accountHit.icon}
+                name={accountHit.name}
+                subtype={accountHit.subtype}
+                size={16}
+              />
+            }
+          />
         ) : pending.accountId ? (
           <MetaRow label="账户" value="已停用或已删除" colors={colors} highlight />
         ) : (
@@ -930,7 +943,17 @@ function PendingEditPanel({ pending, submitting, onCancel, onSubmit }: PendingEd
                 style={[styles.chip, accountId === account.id && styles.chipSelected]}
                 onPress={() => setAccountId(account.id)}
               >
-                <Text style={styles.chipText}>{account.name}</Text>
+                <View style={styles.chipInner}>
+                  <AccountIcon
+                    icon={account.icon}
+                    name={account.name}
+                    subtype={account.subtype}
+                    size={14}
+                  />
+                  <Text style={styles.chipText}>
+                    {accountDisplayName(account.name, resolveAccountIcon(account.icon, account.name))}
+                  </Text>
+                </View>
               </TouchableOpacity>
             ))}
           </View>
@@ -949,7 +972,17 @@ function PendingEditPanel({ pending, submitting, onCancel, onSubmit }: PendingEd
                 style={[styles.chip, targetAccountId === account.id && styles.chipSelected]}
                 onPress={() => setTargetAccountId(account.id)}
               >
-                <Text style={styles.chipText}>{account.name}</Text>
+                <View style={styles.chipInner}>
+                  <AccountIcon
+                    icon={account.icon}
+                    name={account.name}
+                    subtype={account.subtype}
+                    size={14}
+                  />
+                  <Text style={styles.chipText}>
+                    {accountDisplayName(account.name, resolveAccountIcon(account.icon, account.name))}
+                  </Text>
+                </View>
               </TouchableOpacity>
             ))}
           </View>
@@ -1030,25 +1063,31 @@ function MetaRow({
   value,
   colors,
   highlight = false,
+  icon,
 }: {
   label: string;
   value: string;
   colors: ThemeColors;
   highlight?: boolean;
+  /** 可选的图标节点（如账户图标），渲染在值文本之前 */
+  icon?: React.ReactNode;
 }) {
   const styles = useStyles(createStyles);
   return (
     <View style={styles.metaRow}>
       <Text style={styles.metaLabel}>{label}</Text>
-      <Text
-        style={[
-          styles.metaValue,
-          highlight && { color: colors.error },
-        ]}
-        numberOfLines={2}
-      >
-        {value}
-      </Text>
+      <View style={styles.metaValueRow}>
+        {icon}
+        <Text
+          style={[
+            styles.metaValue,
+            highlight && { color: colors.error },
+          ]}
+          numberOfLines={2}
+        >
+          {value}
+        </Text>
+      </View>
     </View>
   );
 }
@@ -1561,8 +1600,14 @@ const createStyles = (colors: ThemeColors) => ({
       fontWeight: '600',
       color: colors.textSecondary,
     },
-    metaValue: {
+    metaValueRow: {
       flex: 1,
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 6,
+    },
+    metaValue: {
+      flexShrink: 1,
       fontSize: 13,
       fontWeight: '600',
       color: colors.textPrimary,
@@ -1665,6 +1710,11 @@ const createStyles = (colors: ThemeColors) => ({
     chipSelected: {
       backgroundColor: colors.accent,
       borderWidth: borderWidth.medium,
+    },
+    chipInner: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 4,
     },
     chipText: {
       fontSize: 12,
