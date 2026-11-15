@@ -77,6 +77,8 @@ export default function AccountsScreen() {
   const [calibrationNote, setCalibrationNote] = useState('');
   /** 图标：null = 按名称自动匹配；'bank:<code>' / 'brand:<code>' = 用户手动指定 */
   const [iconOverride, setIconOverride] = useState<string | null>(null);
+  /** 用户是否动过图标选择器 —— 没动过时编辑不写 icon 字段，避免误清旧 emoji */
+  const [iconTouched, setIconTouched] = useState(false);
   const [showIconPicker, setShowIconPicker] = useState(false);
 
   const accountsQuery = useQuery({
@@ -145,6 +147,7 @@ export default function AccountsScreen() {
     setSubtype('cash');
     setInitialBalance('');
     setIconOverride(null);
+    setIconTouched(false);
     setShowForm(true);
   };
 
@@ -156,6 +159,7 @@ export default function AccountsScreen() {
     setIconOverride(
       account.icon && account.icon.includes(':') ? account.icon : null,
     );
+    setIconTouched(false);
     setShowForm(true);
   };
 
@@ -163,6 +167,7 @@ export default function AccountsScreen() {
     setShowForm(false);
     setEditingAccount(null);
     setIconOverride(null);
+    setIconTouched(false);
   };
 
   const submitForm = () => {
@@ -173,8 +178,13 @@ export default function AccountsScreen() {
     if (editingAccount) {
       saveMutation.mutate({
         id: editingAccount.id,
-        // icon 显式传 null 清空用户指定，回到按名称自动匹配
-        input: { name: name.trim(), subtype, icon: iconOverride },
+        // 只有用户动过图标选择器才写 icon：未动过时省略该字段（旧 emoji 原样保留），
+        // 动过且选了「自动识别」时显式传 null 清除用户指定。
+        input: {
+          name: name.trim(),
+          subtype,
+          ...(iconTouched ? { icon: iconOverride } : {}),
+        },
       });
       return;
     }
@@ -355,7 +365,8 @@ export default function AccountsScreen() {
               <View style={styles.nameRow}>
                 <View style={styles.nameIconPreview}>
                   <AccountIcon
-                    icon={iconOverride}
+                    // 未动过图标时展示账户现有 icon（含旧 emoji），与保存后的实际效果一致
+                    icon={iconTouched ? iconOverride : (editingAccount?.icon ?? null)}
                     name={name}
                     subtype={subtype}
                     size={22}
@@ -433,6 +444,7 @@ export default function AccountsScreen() {
               style={[styles.iconPickerAuto, iconOverride === null && styles.iconPickerItemSelected]}
               onPress={() => {
                 setIconOverride(null);
+                setIconTouched(true);
                 setShowIconPicker(false);
               }}
             >
@@ -448,6 +460,7 @@ export default function AccountsScreen() {
                   ]}
                   onPress={() => {
                     setIconOverride(`bank:${bank.code}`);
+                    setIconTouched(true);
                     setShowIconPicker(false);
                   }}
                 >
@@ -469,6 +482,7 @@ export default function AccountsScreen() {
                   ]}
                   onPress={() => {
                     setIconOverride(`brand:${brand.code}`);
+                    setIconTouched(true);
                     setShowIconPicker(false);
                   }}
                 >

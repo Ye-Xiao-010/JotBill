@@ -424,7 +424,7 @@ const CreateBillScreen: React.FC<CreateBillScreenProps> = ({ navigation, route }
               <Text style={styles.formLabel}>{isTransferLike ? '💳 源账户' : '账户'}</Text>
               <View style={styles.accountGrid}>
                 <TouchableOpacity
-                  style={[styles.accountOption, styles.accountOptionSelected]}
+                  style={[styles.accountOption, styles.accountOptionEmpty]}
                   onPress={() => navigation.navigate('Accounts')}
                 >
                   <Text style={styles.accountOptionName}>尚未创建账户</Text>
@@ -756,6 +756,14 @@ const createStyles = (colors: ThemeColors) => ({
         borderWidth: borderWidth.thin,
         borderColor: colors.stroke,
         backgroundColor: colors.surface,
+      },
+      accountOptionEmpty: {
+        width: '100%',
+        flexDirection: 'column',
+        alignItems: 'flex-start',
+        gap: spacing.xs,
+        backgroundColor: colors.accent,
+        borderWidth: borderWidth.medium,
       },
       accountOptionSelected: {
         backgroundColor: colors.accent,

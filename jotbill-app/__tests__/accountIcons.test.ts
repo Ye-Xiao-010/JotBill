@@ -44,9 +44,16 @@ describe('resolveAccountIcon', () => {
     expect(resolveAccountIcon('💵', '现金')).toBeNull();
   });
 
-  it('空间紧张处命中银行时用简称', () => {
-    const match = resolveAccountIcon(null, '中国工商银行');
-    expect(accountDisplayName('中国工商银行', match)).toBe('工商银行');
+  it('空间紧张处：银行全称换简称，自定义命名保留', () => {
+    const icbc = resolveAccountIcon(null, '中国工商银行');
+    expect(accountDisplayName('中国工商银行', icbc)).toBe('工商银行');
+    expect(accountDisplayName('招行工资卡', resolveAccountIcon(null, '招行工资卡'))).toBe('招行工资卡');
     expect(accountDisplayName('日常零花钱', null)).toBe('日常零花钱');
+  });
+
+  it('「上海」别名不会抢「上海浦东发展银行」', () => {
+    const spdb = resolveAccountIcon(null, '上海浦东发展银行');
+    expect(spdb?.kind).toBe('bank');
+    expect(spdb && 'code' in spdb ? spdb.code : '').toBe('spdb');
   });
 });

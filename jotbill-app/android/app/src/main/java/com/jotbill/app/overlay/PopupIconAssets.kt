@@ -1,8 +1,10 @@
 package com.jotbill.app.overlay
 
+import android.content.Context
 import android.widget.TextView
 import androidx.core.content.ContextCompat
 import com.jotbill.app.R
+import org.json.JSONArray
 
 /**
  * 弹窗 chips 的图标资产映射（2026-10-25，用户裁定：分类/账户接入 lucide 与品牌图标）。
@@ -85,33 +87,38 @@ internal object PopupIconAssets {
         "njcb" to R.drawable.ic_bank_njcb
     )
 
-    /** 银行名称/别名 → code（与 banks.json 同源；含匹配时按最长别名优先，
-     *  避免「中国银行」抢先命中「中国工商银行」这类子串冲突）。 */
-    private val bankNameAliases: List<Pair<String, String>> = listOf(
-        "中国工商银行" to "icbc", "工商银行" to "icbc", "工行" to "icbc",
-        "中国建设银行" to "ccb", "建设银行" to "ccb", "建行" to "ccb",
-        "中国农业银行" to "abchina", "农业银行" to "abchina", "农行" to "abchina",
-        "中国银行" to "boc", "中行" to "boc",
-        "交通银行" to "bankcomm", "交行" to "bankcomm",
-        "中国邮政储蓄银行" to "psbc", "邮政储蓄银行" to "psbc", "邮储银行" to "psbc", "邮储" to "psbc",
-        "招商银行" to "cmbchina", "招行" to "cmbchina",
-        "中信银行" to "citicbank", "中信" to "citicbank",
-        "上海浦东发展银行" to "spdb", "浦发银行" to "spdb", "浦发" to "spdb",
-        "中国民生银行" to "cmbc", "民生银行" to "cmbc", "民生" to "cmbc",
-        "兴业银行" to "cib", "兴业" to "cib",
-        "中国光大银行" to "cebbank", "光大银行" to "cebbank", "光大" to "cebbank",
-        "华夏银行" to "hxb", "华夏" to "hxb",
-        "广发银行" to "cgbchina", "广发" to "cgbchina",
-        "平安银行" to "pingan", "平安" to "pingan",
-        "渤海银行" to "cbhb", "渤海" to "cbhb",
-        "恒丰银行" to "hfbank", "恒丰" to "hfbank",
-        "浙商银行" to "czbank", "浙商" to "czbank",
-        "北京银行" to "bankofbeijing",
-        "上海银行" to "bosc",
-        "江苏银行" to "jsbchina",
-        "宁波银行" to "nbcb",
-        "南京银行" to "njcb"
-    ).sortedByDescending { it.first.length }
+    /**
+     * 银行名称/别名 → code 索引（从 assets/banks.json 懒加载，最长别名优先）。
+     *
+     * 不再硬编码：与 RN 侧 `constants/accountIcons.ts` 共用同一份 JSON 作
+     * 单一事实源，避免「RN 能匹配、原生匹配不到」的漂移
+     * （`BankIconAssetsTest` 锁定两侧对每个 code/别名都能解析出图标）。
+     */
+    @Volatile
+    private var bankAliasCache: List<Pair<String, String>>? = null
+
+    private fun bankAliases(context: Context): List<Pair<String, String>> {
+        bankAliasCache?.let { return it }
+        val parsed = runCatching {
+            val json = context.assets.open("banks.json").bufferedReader().use { it.readText() }
+            val array = JSONArray(json)
+            buildList {
+                for (i in 0 until array.length()) {
+                    val bank = array.getJSONObject(i)
+                    val code = bank.getString("code")
+                    add(bank.getString("name") to code)
+                    bank.optString("shortName").takeIf { it.isNotBlank() }?.let { add(it to code) }
+                    val aliases = bank.optJSONArray("aliases") ?: continue
+                    for (j in 0 until aliases.length()) add(aliases.getString(j) to code)
+                }
+            }.sortedByDescending { it.first.length }
+        }.getOrElse {
+            android.util.Log.w("PopupIconAssets", "读取 banks.json 失败，银行图标按显式指定生效", it)
+            emptyList()
+        }
+        bankAliasCache = parsed
+        return parsed
+    }
 
     private val brandIconsById = mapOf(
         "default-account-wechat" to R.drawable.ic_brand_wechat,
@@ -132,10 +139,11 @@ internal object PopupIconAssets {
         icon?.trim()?.takeIf { it.isNotEmpty() }?.let { categoryIcons[it] }
 
     /**
-     * 账户 chip：银行/品牌位图优先（`icon` 显式指定 → 名称别名 → id 精确），
+     * 账户 chip：银行/品牌位图优先（`icon` 显式指定 → 品牌 id/名称 → 银行别名），
      * subtype 线性兜底；null = emoji 文字回退。
      */
     fun forAccount(
+        context: Context,
         accountId: String,
         name: String?,
         subtype: String?,
@@ -160,7 +168,7 @@ internal object PopupIconAssets {
         if (!name.isNullOrBlank()) {
             brandIconsByName.entries.firstOrNull { name.contains(it.key) }?.let { return it.value }
             // 3. 银行名别名（最长优先）
-            val bankCode = bankNameAliases.firstOrNull { name.contains(it.first) }?.second
+            val bankCode = bankAliases(context).firstOrNull { name.contains(it.first) }?.second
             if (bankCode != null) bankIconsByCode[bankCode]?.let { return it }
         }
         // 4. subtype 线性兜底

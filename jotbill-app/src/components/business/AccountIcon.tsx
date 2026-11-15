@@ -5,7 +5,7 @@
  * 位图解析见 `constants/accountIcons.ts`（名称别名自动匹配 + `bank:`/`brand:` 显式指定）。
  */
 import React from 'react';
-import { Image, Text, View, type StyleProp, type ViewStyle } from 'react-native';
+import { Image, Text } from 'react-native';
 import {
   Banknote,
   CircleEllipsis,
@@ -36,9 +36,13 @@ const SUBTYPE_ICONS: Record<string, LucideIcon> = {
   other: CircleEllipsis,
 };
 
-/** 账户 `icon` 字段存的是 emoji 时原样渲染（兼容旧数据）。 */
-const isEmoji = (value?: string | null): boolean =>
-  Boolean(value && !value.includes(':') && /\p{Extended_Pictographic}/u.test(value));
+/**
+ * 账户 `icon` 字段的旧数据是 emoji（如 💵）；显式图标用 `bank:` / `brand:` 前缀区分。
+ * 不用 Unicode Property regex（`\p{...}`）判断 —— Hermes 对它的支持不稳，
+ * 而账户图标只有「前缀式」与「旧 emoji」两种形态，判前缀足够。
+ */
+const isLegacyTextIcon = (value?: string | null): boolean =>
+  Boolean(value && !value.includes(':'));
 
 export interface AccountIconProps {
   /** 账户 icon 字段（可空） */
@@ -49,12 +53,8 @@ export interface AccountIconProps {
   subtype?: AccountSubtypeLike;
   /** 位图/矢量尺寸 */
   size?: number;
-  /** 线性图标颜色，默认主题描边色；品牌位图不受影响 */
+  /** 线性图标颜色，默认主题描边色；品牌/银行位图不受影响 */
   color?: string;
-  /** 位图容器的圆角与边框（大图标位使用） */
-  framed?: boolean;
-  /** 容器样式（framed 时生效） */
-  containerStyle?: StyleProp<ViewStyle>;
 }
 
 export default function AccountIcon({
@@ -63,47 +63,27 @@ export default function AccountIcon({
   subtype,
   size = 22,
   color,
-  framed = false,
-  containerStyle,
 }: AccountIconProps) {
   const { colors } = useTheme();
   const match: AccountIconMatch | null = resolveAccountIcon(icon, name);
 
-  const content = match ? (
-    <Image
-      source={match.source}
-      style={{ width: size, height: size }}
-      resizeMode="contain"
-      accessibilityIgnoresInvertColors
-    />
-  ) : isEmoji(icon) ? (
-    <Text style={{ fontSize: size * 0.9, lineHeight: size * 1.1 }}>{icon}</Text>
-  ) : (
-    (() => {
-      const Icon = SUBTYPE_ICONS[subtype ?? 'other'] ?? CircleEllipsis;
-      return <Icon size={size} strokeWidth={2.5} color={color ?? colors.stroke} />;
-    })()
-  );
+  if (match) {
+    return (
+      <Image
+        source={match.source}
+        style={{ width: size, height: size }}
+        resizeMode="contain"
+        accessibilityIgnoresInvertColors
+      />
+    );
+  }
 
-  if (!framed) return content;
+  if (isLegacyTextIcon(icon)) {
+    return (
+      <Text style={{ fontSize: size * 0.9, lineHeight: size * 1.1 }}>{icon}</Text>
+    );
+  }
 
-  return (
-    <View
-      style={[
-        {
-          width: size * 1.9,
-          height: size * 1.9,
-          borderRadius: size * 0.6,
-          alignItems: 'center',
-          justifyContent: 'center',
-          backgroundColor: colors.surface,
-          borderWidth: 1.5,
-          borderColor: colors.stroke,
-        },
-        containerStyle,
-      ]}
-    >
-      {content}
-    </View>
-  );
+  const Icon = SUBTYPE_ICONS[subtype ?? 'other'] ?? CircleEllipsis;
+  return <Icon size={size} strokeWidth={2.5} color={color ?? colors.stroke} />;
 }

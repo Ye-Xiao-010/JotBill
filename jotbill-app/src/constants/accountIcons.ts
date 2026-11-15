@@ -65,25 +65,43 @@ const BRAND_NAME_HINTS: Array<{ keyword: string; code: string }> = [
 /** 名称别名匹配的最短长度：单字别名（如「中」）误匹配面太大，不参与包含匹配。 */
 const MIN_ALIAS_LENGTH = 2;
 
+/**
+ * 扁平化的「别名 → 银行」表，按别名长度降序。
+ *
+ * 必须全局最长优先：若按 banks.json 原顺序逐家匹配，「上海银行」的别名
+ * 「上海」会抢在「上海浦东发展银行」之前命中同为上海的账户名，与原生侧
+ * （`PopupIconAssets.bankNameAliases` 同样按长度降序）行为不一致。
+ */
+const BANK_ALIAS_INDEX: Array<{ alias: string; bank: BankRecord }> = BANKS.flatMap(bank =>
+  [bank.name, bank.shortName, ...bank.aliases]
+    .filter(alias => alias.length >= MIN_ALIAS_LENGTH)
+    .map(alias => ({ alias, bank })),
+).sort((a, b) => b.alias.length - a.alias.length);
+
 export type AccountIconMatch =
-  | { kind: 'bank'; code: string; source: ImageSourcePropType; shortName: string }
+  | {
+      kind: 'bank';
+      code: string;
+      source: ImageSourcePropType;
+      shortName: string;
+      fullName: string;
+    }
   | { kind: 'brand'; code: string; source: ImageSourcePropType };
 
 function matchBankByName(name: string): AccountIconMatch | null {
   const trimmed = name.trim();
   if (!trimmed) return null;
-  for (const bank of BANKS) {
-    const candidates = [bank.name, bank.shortName, ...bank.aliases].filter(
-      alias => alias.length >= MIN_ALIAS_LENGTH,
-    );
-    if (candidates.some(alias => trimmed.includes(alias))) {
-      const source = BANK_ICON_SOURCES[bank.code];
-      if (source) {
-        return { kind: 'bank', code: bank.code, source, shortName: bank.shortName };
-      }
-    }
-  }
-  return null;
+  const hit = BANK_ALIAS_INDEX.find(entry => trimmed.includes(entry.alias));
+  if (!hit) return null;
+  const source = BANK_ICON_SOURCES[hit.bank.code];
+  if (!source) return null;
+  return {
+    kind: 'bank',
+    code: hit.bank.code,
+    source,
+    shortName: hit.bank.shortName,
+    fullName: hit.bank.name,
+  };
 }
 
 function matchBrandByName(name: string): AccountIconMatch | null {
@@ -118,6 +136,7 @@ export function resolveAccountIcon(
         code,
         source: BANK_ICON_SOURCES[code],
         shortName: bank?.shortName ?? code,
+        fullName: bank?.name ?? code,
       };
     }
     if (scope === 'brand' && code && BRAND_ICON_SOURCES[code]) {
@@ -128,11 +147,17 @@ export function resolveAccountIcon(
   return byName;
 }
 
-/** 空间紧张处的显示名：命中银行时用简称（「招商银行」→「招商银行」不变，
- *  「中国工商银行」→「工商银行」），其余用原名。 */
+/**
+ * 空间紧张处的显示名：**仅当账户名就是银行全称**时换成简称
+ * （「中国工商银行」→「工商银行」）。
+ *
+ * 用户自定义命名（「招行工资卡」「工行还房贷」）原样保留 —— 换成简称会丢掉
+ * 用户自己起的区分词，比名字长一点更糟。品牌账户（微信/支付宝）也原名。
+ */
 export function accountDisplayName(
   name: string,
   match: AccountIconMatch | null,
 ): string {
-  return match?.kind === 'bank' ? match.shortName : name;
+  if (match?.kind !== 'bank') return name;
+  return name.trim() === match.fullName ? match.shortName : name;
 }

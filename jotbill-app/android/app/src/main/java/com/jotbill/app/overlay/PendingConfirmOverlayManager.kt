@@ -1610,6 +1610,7 @@ internal object PendingConfirmOverlayManager {
                         // 银行徽标 / 品牌图标（微信/支付宝）/ subtype 线性 lucide 优先；
                         // emoji（自定义账户）维持原文字渲染。同 createCategoryView 的双模设计。
                         val iconRes = PopupIconAssets.forAccount(
+                            app,
                             account.id,
                             account.name,
                             account.subtype,
