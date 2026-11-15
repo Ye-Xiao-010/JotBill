@@ -21,7 +21,7 @@ import {
   type AccountUpdateInput,
 } from '../../native';
 import AccountIcon from '../../components/business/AccountIcon';
-import { BANKS } from '../../constants/accountIcons';
+import { BANKS, resolveAccountIcon } from '../../constants/accountIcons';
 import { QUERY_KEYS } from '../../lib/queryClient';
 import { borderRadius, borderWidth, shadow, spacing } from '../../theme/spacing';
 import { ThemeColors } from '../../theme/colors';
@@ -80,6 +80,17 @@ export default function AccountsScreen() {
   /** 用户是否动过图标选择器 —— 没动过时编辑不写 icon 字段，避免误清旧 emoji */
   const [iconTouched, setIconTouched] = useState(false);
   const [showIconPicker, setShowIconPicker] = useState(false);
+  const [showBankPicker, setShowBankPicker] = useState(false);
+
+  /** 银行卡类账户（借记卡/信用卡）：走银行列表选择，而非自由输入 */
+  const isBankCardType = subtype === 'bank_debit' || subtype === 'credit_card';
+
+  const selectedBank = useMemo(() => {
+    // 显式指定优先；未指定时按名称自动匹配（编辑老账户 name=招商银行也能显示已选银行）
+    const match = resolveAccountIcon(iconOverride, name);
+    if (!match || match.kind !== 'bank') return null;
+    return BANKS.find(bank => bank.code === match.code) ?? null;
+  }, [iconOverride, name]);
 
   const accountsQuery = useQuery({
     queryKey: QUERY_KEYS.accountsList,
@@ -168,6 +179,23 @@ export default function AccountsScreen() {
     setEditingAccount(null);
     setIconOverride(null);
     setIconTouched(false);
+    setShowBankPicker(false);
+  };
+
+  /** 选中银行：带出名称（用户没改过名时）与图标。 */
+  const selectBank = (bank: (typeof BANKS)[number]) => {
+    setIconOverride(`bank:${bank.code}`);
+    setIconTouched(true);
+    // 名称用简称（「工商银行」比「中国工商银行」更适合做账户名）；
+    // 名称留空或仍是别的银行名时跟随切换，用户自定义过的名字不覆盖
+    setName(prev => {
+      const trimmed = prev.trim();
+      const isPrevBankName =
+        !trimmed ||
+        BANKS.some(b => b.code !== bank.code && (b.name === trimmed || b.shortName === trimmed));
+      return isPrevBankName ? bank.shortName : prev;
+    });
+    setShowBankPicker(false);
   };
 
   const submitForm = () => {
@@ -361,6 +389,52 @@ export default function AccountsScreen() {
           <ScrollView contentContainerStyle={styles.modalScroll} keyboardShouldPersistTaps="handled">
             <View style={styles.modalCard}>
               <Text style={styles.modalTitle}>{editingAccount ? '编辑账户' : '添加账户'}</Text>
+              <Text style={styles.inputLabel}>账户类型</Text>
+              <View style={styles.optionGrid}>
+                {ACCOUNT_OPTIONS.map((option) => (
+                  <TouchableOpacity
+                    key={option.subtype}
+                    style={[styles.option, subtype === option.subtype && styles.optionSelected]}
+                    onPress={() => {
+                      setSubtype(option.subtype);
+                      // 银行卡类：立即弹银行列表（图标 + 银行名），而不是让用户手输
+                      if (option.subtype === 'bank_debit' || option.subtype === 'credit_card') {
+                        setShowBankPicker(true);
+                        return;
+                      }
+                      // 切到非银行卡类型时，清掉之前选的银行图标（现金账户带招行 logo 很怪）
+                      if (iconOverride?.startsWith('bank:')) {
+                        setIconOverride(null);
+                        setIconTouched(true);
+                      }
+                    }}
+                  >
+                    <Text style={[styles.optionText, subtype === option.subtype && styles.optionTextSelected]}>
+                      {option.label}
+                    </Text>
+                    <Text style={styles.optionKind}>{option.kind === 'asset' ? '资产' : '负债'}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+              {isBankCardType ? (
+                <>
+                  <Text style={styles.inputLabel}>发卡银行</Text>
+                  <TouchableOpacity
+                    style={styles.bankEntry}
+                    onPress={() => setShowBankPicker(true)}
+                  >
+                    {selectedBank ? (
+                      <>
+                        <AccountIcon icon={`bank:${selectedBank.code}`} size={22} />
+                        <Text style={styles.bankEntryName}>{selectedBank.name}</Text>
+                        <Text style={styles.bankEntryAction}>更换</Text>
+                      </>
+                    ) : (
+                      <Text style={styles.bankEntryPlaceholder}>选择或手动指定图标</Text>
+                    )}
+                  </TouchableOpacity>
+                </>
+              ) : null}
               <Text style={styles.inputLabel}>账户名称</Text>
               <View style={styles.nameRow}>
                 <View style={styles.nameIconPreview}>
@@ -376,35 +450,22 @@ export default function AccountsScreen() {
                   style={[styles.input, styles.nameInput]}
                   value={name}
                   onChangeText={setName}
-                  placeholder="例如：招商银行"
+                  placeholder={isBankCardType ? '选择银行后自动带出，可修改' : '例如：现金钱包'}
                   placeholderTextColor={styles._colors.textTertiary}
                 />
               </View>
-              <TouchableOpacity
-                style={styles.iconPickerEntry}
-                onPress={() => setShowIconPicker(true)}
-              >
-                <Text style={styles.iconPickerEntryText}>
-                  {iconOverride
-                    ? `已指定图标（${iconOverride.split(':')[1]}）`
-                    : '图标按名称自动识别，点击手动指定'}
-                </Text>
-              </TouchableOpacity>
-              <Text style={styles.inputLabel}>账户类型</Text>
-              <View style={styles.optionGrid}>
-                {ACCOUNT_OPTIONS.map((option) => (
-                  <TouchableOpacity
-                    key={option.subtype}
-                    style={[styles.option, subtype === option.subtype && styles.optionSelected]}
-                    onPress={() => setSubtype(option.subtype)}
-                  >
-                    <Text style={[styles.optionText, subtype === option.subtype && styles.optionTextSelected]}>
-                      {option.label}
-                    </Text>
-                    <Text style={styles.optionKind}>{option.kind === 'asset' ? '资产' : '负债'}</Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
+              {!isBankCardType ? (
+                <TouchableOpacity
+                  style={styles.iconPickerEntry}
+                  onPress={() => setShowIconPicker(true)}
+                >
+                  <Text style={styles.iconPickerEntryText}>
+                    {iconOverride
+                      ? '已手动指定图标，点击更换'
+                      : '图标按名称自动识别，点击手动指定'}
+                  </Text>
+                </TouchableOpacity>
+              ) : null}
               {!editingAccount && (
                 <>
                   <Text style={styles.inputLabel}>初始余额</Text>
@@ -432,6 +493,50 @@ export default function AccountsScreen() {
       </Modal>
 
       <Modal
+        visible={showBankPicker}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowBankPicker(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>选择发卡银行</Text>
+            <ScrollView style={styles.bankListScroll}>
+              {BANKS.map(bank => (
+                <TouchableOpacity
+                  key={bank.code}
+                  style={[
+                    styles.bankListItem,
+                    selectedBank?.code === bank.code && styles.bankListItemSelected,
+                  ]}
+                  onPress={() => selectBank(bank)}
+                >
+                  <AccountIcon icon={`bank:${bank.code}`} size={30} />
+                  <View style={styles.bankListText}>
+                    <Text style={styles.bankListName}>{bank.name}</Text>
+                    {bank.shortName !== bank.name ? (
+                      <Text style={styles.bankListShort}>{bank.shortName}</Text>
+                    ) : null}
+                  </View>
+                  {selectedBank?.code === bank.code ? (
+                    <Check size={18} color={styles._colors.primary} />
+                  ) : null}
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+            <View style={styles.modalActions}>
+              <TouchableOpacity
+                style={styles.secondaryButton}
+                onPress={() => setShowBankPicker(false)}
+              >
+                <Text style={styles.secondaryButtonText}>取消</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
         visible={showIconPicker}
         transparent
         animationType="fade"
@@ -451,25 +556,6 @@ export default function AccountsScreen() {
               <Text style={styles.iconPickerEntryText}>自动识别（按账户名称）</Text>
             </TouchableOpacity>
             <ScrollView style={styles.iconPickerScroll} contentContainerStyle={styles.iconPickerGrid}>
-              {BANKS.map(bank => (
-                <TouchableOpacity
-                  key={bank.code}
-                  style={[
-                    styles.iconPickerItem,
-                    iconOverride === `bank:${bank.code}` && styles.iconPickerItemSelected,
-                  ]}
-                  onPress={() => {
-                    setIconOverride(`bank:${bank.code}`);
-                    setIconTouched(true);
-                    setShowIconPicker(false);
-                  }}
-                >
-                  <AccountIcon icon={`bank:${bank.code}`} size={28} />
-                  <Text style={styles.iconPickerItemText} numberOfLines={1}>
-                    {bank.shortName}
-                  </Text>
-                </TouchableOpacity>
-              ))}
               {[
                 { code: 'wechat', label: '微信' },
                 { code: 'alipay', label: '支付宝' },
@@ -731,6 +817,34 @@ const createStyles = (colors: ThemeColors) => ({
     },
     iconPickerItemSelected: { backgroundColor: colors.primaryLight, borderColor: colors.stroke, borderWidth: borderWidth.medium },
     iconPickerItemText: { fontSize: 10, fontWeight: '700', color: colors.textSecondary, textAlign: 'center' },
+    bankEntry: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: spacing.sm,
+      paddingHorizontal: spacing.md,
+      paddingVertical: spacing.sm,
+      borderWidth: borderWidth.thin,
+      borderColor: colors.stroke,
+      borderRadius: borderRadius.small,
+      backgroundColor: colors.surface,
+    },
+    bankEntryName: { flex: 1, fontSize: 15, fontWeight: '700', color: colors.textPrimary },
+    bankEntryAction: { fontSize: 12, fontWeight: '700', color: colors.primary },
+    bankEntryPlaceholder: { flex: 1, fontSize: 14, fontWeight: '600', color: colors.textTertiary },
+    bankListScroll: { maxHeight: 400, marginTop: spacing.sm },
+    bankListItem: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: spacing.md,
+      paddingVertical: spacing.sm,
+      paddingHorizontal: spacing.xs,
+      borderBottomWidth: borderWidth.thin,
+      borderBottomColor: colors.divider,
+    },
+    bankListItemSelected: { backgroundColor: colors.primaryLight },
+    bankListText: { flex: 1 },
+    bankListName: { fontSize: 15, fontWeight: '700', color: colors.textPrimary },
+    bankListShort: { marginTop: 2, fontSize: 12, fontWeight: '600', color: colors.textSecondary },
   }),
   _colors: colors,
 });
