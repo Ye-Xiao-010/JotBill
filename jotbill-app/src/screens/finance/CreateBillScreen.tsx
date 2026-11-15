@@ -159,7 +159,8 @@ const CreateBillScreen: React.FC<CreateBillScreenProps> = ({ navigation, route }
   };
 
   // 左右滑动切换类型：内容跟手位移 + 松手滑动过渡/回弹，避免"瞬切"的生硬感。
-  // PanResponder 只在水平位移显著时接管，垂直滚动不受影响；
+  // 顶部文字栏固定不动，只有其中的色块指示器跟手滑动。
+  // PanResponder 挂在整页手势区（含空白处），只在水平位移显著时接管，垂直滚动不受影响；
   // responder 只创建一次，内部经 ref 读最新状态，避免闭包捕获旧值。
   const typeRef = useRef(type);
   typeRef.current = type;
@@ -168,25 +169,58 @@ const CreateBillScreen: React.FC<CreateBillScreenProps> = ({ navigation, route }
   const handleTypeChangeRef = useRef(handleTypeChange);
   handleTypeChangeRef.current = handleTypeChange;
 
+  /** 类型栏宽度与单个 Tab 宽度（onLayout 测得，指示器定位用） */
+  const [typeSelectorWidth, setTypeSelectorWidth] = useState(0);
+  const TYPE_SELECTOR_PADDING = 4;
+  const typeButtonWidth =
+    typeSelectorWidth > 0
+      ? (typeSelectorWidth - TYPE_SELECTOR_PADDING * 2) / FORM_TYPE_OPTIONS.length
+      : 0;
+  const typeButtonWidthRef = useRef(typeButtonWidth);
+  typeButtonWidthRef.current = typeButtonWidth;
+
   /** 内容跟手位移（px），只做视觉反馈，不参与布局 */
   const swipeTranslateX = useRef(new Animated.Value(0)).current;
+  /** 类型栏色块指示器位移（px） */
+  const indicatorTranslateX = useRef(new Animated.Value(0)).current;
   /** 滑动切换中：过渡动画期间拒绝第二次手势，避免动画叠动画 */
   const swipeAnimatingRef = useRef(false);
+
+  // 类型变化（含点 Tab 切换）后色块滑到新位置；滑动切换自行驱动时跳过避免打架
+  useEffect(() => {
+    if (typeButtonWidth <= 0) return;
+    if (swipeAnimatingRef.current) return;
+    const index = FORM_TYPE_OPTIONS.findIndex(option => option.value === type);
+    Animated.timing(indicatorTranslateX, {
+      toValue: index * typeButtonWidth,
+      duration: 180,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: true,
+    }).start();
+  }, [type, typeButtonWidth, indicatorTranslateX]);
 
   /** 松手切换：内容先滑出（跟手方向），换类型后从反向滑入 */
   const slideSwitchType = (direction: 1 | -1) => {
     if (swipeAnimatingRef.current) return;
     swipeAnimatingRef.current = true;
     const screenWidth = Dimensions.get('window').width;
-    // 滑出：方向 * 30% 屏宽，ease-out 稍快，模拟"甩出去"
+    const index = FORM_TYPE_OPTIONS.findIndex(option => option.value === typeRef.current);
+    const nextIndex = index - direction; // 左滑(direction=-1) => index+1
+    // 色块与内容同步滑出：色块移到目标 Tab
+    if (typeButtonWidthRef.current > 0) {
+      Animated.timing(indicatorTranslateX, {
+        toValue: nextIndex * typeButtonWidthRef.current,
+        duration: 140,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true,
+      }).start();
+    }
     Animated.timing(swipeTranslateX, {
       toValue: direction * screenWidth * 0.3,
       duration: 140,
       easing: Easing.out(Easing.cubic),
       useNativeDriver: true,
     }).start(() => {
-      const index = FORM_TYPE_OPTIONS.findIndex(option => option.value === typeRef.current);
-      const nextIndex = index - direction; // 左滑(direction=-1) => index+1
       const next = FORM_TYPE_OPTIONS[nextIndex];
       if (next) handleTypeChangeRef.current(next.value);
       // 从反向 30% 屏宽进入
@@ -210,6 +244,15 @@ const CreateBillScreen: React.FC<CreateBillScreenProps> = ({ navigation, route }
       bounciness: 6,
       useNativeDriver: true,
     }).start();
+    if (typeButtonWidthRef.current > 0) {
+      const index = FORM_TYPE_OPTIONS.findIndex(option => option.value === typeRef.current);
+      Animated.spring(indicatorTranslateX, {
+        toValue: index * typeButtonWidthRef.current,
+        speed: 18,
+        bounciness: 6,
+        useNativeDriver: true,
+      }).start();
+    }
   };
 
   const typeSwipeResponder = useRef(
@@ -224,6 +267,13 @@ const CreateBillScreen: React.FC<CreateBillScreenProps> = ({ navigation, route }
         // 首尾边界阻尼：只给 25% 位移并快速衰减，明确"到头了"
         const raw = atStart || atEnd ? gesture.dx * 0.25 : gesture.dx;
         swipeTranslateX.setValue(raw * 0.6);
+        // 色块跟手：左滑（dx<0）往右移到下一个 Tab
+        const btnWidth = typeButtonWidthRef.current;
+        if (btnWidth > 0) {
+          const follow = index * btnWidth - gesture.dx * 0.6;
+          const maxX = (FORM_TYPE_OPTIONS.length - 1) * btnWidth;
+          indicatorTranslateX.setValue(Math.max(0, Math.min(maxX, follow)));
+        }
       },
       onPanResponderRelease: (_evt, gesture) => {
         if (typeLockedRef.current || swipeAnimatingRef.current) {
@@ -466,39 +516,50 @@ const CreateBillScreen: React.FC<CreateBillScreenProps> = ({ navigation, route }
 
 
   return (
-    <View style={styles.container}>
+    <View style={styles.container} {...typeSwipeResponder.panHandlers}>
+      {/* 类型栏固定不随滑动移动；内部色块指示器跟手滑动 */}
+      <View
+        style={styles.typeSelector}
+        onLayout={event => setTypeSelectorWidth(event.nativeEvent.layout.width)}
+      >
+        {typeButtonWidth > 0 ? (
+          <Animated.View
+            style={[
+              styles.typeIndicator,
+              {
+                width: typeButtonWidth,
+                transform: [{ translateX: indicatorTranslateX }],
+              },
+              type === 'expense' && styles.typeIndicatorExpense,
+              type === 'income' && styles.typeIndicatorIncome,
+              type === 'transfer' && styles.typeIndicatorTransfer,
+              type === 'repayment' && styles.typeIndicatorRepayment,
+            ]}
+          />
+        ) : null}
+        {FORM_TYPE_OPTIONS.map(option => (
+          <TouchableOpacity
+            key={option.value}
+            disabled={editingTypeLocked}
+            style={styles.typeButton}
+            onPress={() => handleTypeChange(option.value)}
+          >
+            <Text style={[styles.typeButtonText, type === option.value && styles.typeButtonTextActive]}>
+              {option.label}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+      {editingTypeLocked && (
+        <Text style={styles.typeLockHint}>
+          退款/手续费类型不可更改（仅可修改金额、备注、分类、账户）；如需变更类型请删除后重新记账。
+        </Text>
+      )}
+
       <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
         <Animated.View
           style={[styles.content, { transform: [{ translateX: swipeTranslateX }] }]}
-          {...typeSwipeResponder.panHandlers}
         >
-          {/* 类型切换（阶段五 T7：含转账/还款双账户语义；支持左右滑动切换） */}
-          <View style={styles.typeSelector}>
-            {FORM_TYPE_OPTIONS.map(option => (
-              <TouchableOpacity
-                key={option.value}
-                disabled={editingTypeLocked}
-                style={[
-                  styles.typeButton,
-                  type === option.value && styles.typeButtonActive,
-                  type === option.value && option.value === 'expense' && styles.typeButtonExpenseActive,
-                  type === option.value && option.value === 'income' && styles.typeButtonIncomeActive,
-                  type === option.value && option.value === 'transfer' && styles.typeButtonTransferActive,
-                  type === option.value && option.value === 'repayment' && styles.typeButtonRepaymentActive,
-                ]}
-                onPress={() => handleTypeChange(option.value)}
-              >
-                <Text style={[styles.typeButtonText, type === option.value && styles.typeButtonTextActive]}>
-                  {option.label}
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-          {editingTypeLocked && (
-            <Text style={styles.typeLockHint}>
-              退款/手续费类型不可更改（仅可修改金额、备注、分类、账户）；如需变更类型请删除后重新记账。
-            </Text>
-          )}
 
           {/* 金额 + 备注合并卡片：金额大字在上，备注输入紧随其下 */}
           <View style={styles.amountCard}>
@@ -820,31 +881,29 @@ const createStyles = (colors: ThemeColors) => ({
       borderWidth: borderWidth.thin,
       borderColor: colors.stroke,
       padding: 4,
-      marginBottom: spacing.lg,
-      alignSelf: 'center',
-      width: '100%',
+      marginBottom: spacing.md,
+      marginTop: spacing.md,
+      marginHorizontal: spacing.lg,
     },
+    // 滑动色块：绝对定位在 Tab 文字之下，靠 translateX 滑动
+    typeIndicator: {
+      position: 'absolute',
+      top: 4,
+      bottom: 4,
+      left: 4,
+      borderRadius: borderRadius.small,
+      borderWidth: borderWidth.thin,
+      borderColor: colors.stroke,
+    },
+    typeIndicatorExpense: { backgroundColor: colors.expense },
+    typeIndicatorIncome: { backgroundColor: colors.income },
+    typeIndicatorTransfer: { backgroundColor: colors.primary },
+    typeIndicatorRepayment: { backgroundColor: colors.warning },
     typeButton: {
       flex: 1,
       paddingVertical: spacing.sm,
       alignItems: 'center',
       borderRadius: borderRadius.small,
-    },
-    typeButtonActive: {
-      borderWidth: borderWidth.thin,
-      borderColor: colors.stroke,
-    },
-    typeButtonExpenseActive: {
-      backgroundColor: colors.expense,
-    },
-    typeButtonIncomeActive: {
-      backgroundColor: colors.income,
-    },
-    typeButtonTransferActive: {
-      backgroundColor: colors.primary,
-    },
-    typeButtonRepaymentActive: {
-      backgroundColor: colors.warning,
     },
     typeButtonText: { fontSize: 16, fontWeight: '700', color: colors.textSecondary },
     typeButtonTextActive: { color: '#FFFFFF', fontWeight: '800' },
@@ -852,6 +911,7 @@ const createStyles = (colors: ThemeColors) => ({
       fontSize: 12,
       color: colors.textSecondary,
       marginTop: spacing.xs,
+      marginHorizontal: spacing.lg,
     },
     formGroup: { marginBottom: spacing.lg },
     // 金额 + 备注合并卡片：大字金额在上，备注行在下，用细分割线区隔
