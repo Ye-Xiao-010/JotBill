@@ -4,6 +4,8 @@
  */
 import React, { useEffect, useRef, useState } from 'react';
 import {
+  Modal,
+  PanResponder,
   View,
   ScrollView,
   StyleSheet,
@@ -11,6 +13,7 @@ import {
   TouchableOpacity,
 } from 'react-native';
 import { Text } from 'react-native';
+import { Check, ChevronDown } from 'lucide-react-native';
 import { Toast } from '../../components';
 import { AddCategoryModal, ConfirmModal } from '../../components/modals';
 import CategoryIcon from '../../components/business/CategoryIcon';
@@ -141,6 +144,8 @@ const CreateBillScreen: React.FC<CreateBillScreenProps> = ({ navigation, route }
   const [showAddCategoryModal, setShowAddCategoryModal] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [categoryToDelete, setCategoryToDelete] = useState<Category | null>(null);
+  /** 账户选择弹窗：'source' = 主账户 / 'target' = 转账目标账户；null = 关闭 */
+  const [accountPickerTarget, setAccountPickerTarget] = useState<'source' | 'target' | null>(null);
 
   /** 切换类型时清空分类与目标账户（不同类型的字段语义不同）。 */
   const handleTypeChange = (newType: BillFormType) => {
@@ -149,6 +154,31 @@ const CreateBillScreen: React.FC<CreateBillScreenProps> = ({ navigation, route }
     setExpandedBillCategoryId(null);
     setSelectedTargetAccountId(undefined);
   };
+
+  // 左右滑动切换类型：PanResponder 只在水平位移显著时接管，垂直滚动不受影响。
+  // responder 只创建一次，内部经 ref 读最新状态，避免闭包捕获旧值。
+  const typeRef = useRef(type);
+  typeRef.current = type;
+  const typeLockedRef = useRef(editingTypeLocked);
+  typeLockedRef.current = editingTypeLocked;
+  const handleTypeChangeRef = useRef(handleTypeChange);
+  handleTypeChangeRef.current = handleTypeChange;
+  const typeSwipeResponder = useRef(
+    PanResponder.create({
+      onMoveShouldSetPanResponder: (_evt, gesture) =>
+        Math.abs(gesture.dx) > 24 && Math.abs(gesture.dx) > Math.abs(gesture.dy) * 1.5,
+      onPanResponderRelease: (_evt, gesture) => {
+        if (typeLockedRef.current) return;
+        const index = FORM_TYPE_OPTIONS.findIndex(option => option.value === typeRef.current);
+        if (index < 0) return;
+        if (gesture.dx <= -40 && index < FORM_TYPE_OPTIONS.length - 1) {
+          handleTypeChangeRef.current(FORM_TYPE_OPTIONS[index + 1].value);
+        } else if (gesture.dx >= 40 && index > 0) {
+          handleTypeChangeRef.current(FORM_TYPE_OPTIONS[index - 1].value);
+        }
+      },
+    }),
+  ).current;
 
   const handleCategoryLongPress = (category: Category) => {
     if (category.isDefault) {
@@ -370,8 +400,8 @@ const CreateBillScreen: React.FC<CreateBillScreenProps> = ({ navigation, route }
   return (
     <View style={styles.container}>
       <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
-        <View style={styles.content}>
-          {/* 类型切换（阶段五 T7：含转账/还款双账户语义） */}
+        <View style={styles.content} {...typeSwipeResponder.panHandlers}>
+          {/* 类型切换（阶段五 T7：含转账/还款双账户语义；支持左右滑动切换） */}
           <View style={styles.typeSelector}>
             {FORM_TYPE_OPTIONS.map(option => (
               <TouchableOpacity
@@ -399,10 +429,9 @@ const CreateBillScreen: React.FC<CreateBillScreenProps> = ({ navigation, route }
             </Text>
           )}
 
-          {/* 金额输入 */}
-          <View style={styles.formGroup}>
-            <Text style={styles.formLabel}>💰 金额</Text>
-            <View style={styles.amountInputContainer}>
+          {/* 金额 + 备注合并卡片：金额大字在上，备注输入紧随其下 */}
+          <View style={styles.amountCard}>
+            <View style={styles.amountRow}>
               <Text style={styles.currencySymbol}>¥</Text>
               <TextInput
                 style={styles.amountInput}
@@ -413,97 +442,86 @@ const CreateBillScreen: React.FC<CreateBillScreenProps> = ({ navigation, route }
                 placeholderTextColor={styles._colors.textTertiary}
               />
             </View>
+            <View style={styles.amountDivider} />
+            <TextInput
+              style={styles.noteInput}
+              value={description}
+              onChangeText={setDescription}
+              placeholder="添加备注..."
+              placeholderTextColor={styles._colors.textTertiary}
+            />
           </View>
 
+          {/* 账户选择：弹窗选择（不再平铺全部账户） */}
           {selectableAccounts.length === 0 ? (
-            // ⚠️ 此前此处直接不渲染账户区块：账户加载失败（被 .catch 静默吞成 []）
-            // 或用户把账户全部停用时，用户会看到一个没有任何账户选项的表单，
-            // 点了保存才收到一句英文 "Transaction requires an account" ——
-            // 既不知道发生了什么，也不知道该去哪建账户。显式空态 + 去添加入口。
-            <View style={styles.formGroup}>
-              <Text style={styles.formLabel}>{isTransferLike ? '💳 源账户' : '账户'}</Text>
-              <View style={styles.accountGrid}>
-                <TouchableOpacity
-                  style={[styles.accountOption, styles.accountOptionEmpty]}
-                  onPress={() => navigation.navigate('Accounts')}
-                >
-                  <Text style={styles.accountOptionName}>尚未创建账户</Text>
-                  <Text style={styles.accountOptionType}>点这里去「账户管理」添加</Text>
-                </TouchableOpacity>
-              </View>
-            </View>
+            <TouchableOpacity
+              style={styles.accountPickerRow}
+              onPress={() => navigation.navigate('Accounts')}
+            >
+              <Text style={styles.accountPickerPlaceholder}>尚未创建账户，点此去添加</Text>
+            </TouchableOpacity>
           ) : (
-            <View style={styles.formGroup}>
-              <Text style={styles.formLabel}>{isTransferLike ? '💳 源账户' : '账户'}</Text>
-              <View style={styles.accountGrid}>
-                {selectableAccounts.map(account => (
-                  <TouchableOpacity
-                    key={account.id}
-                    style={[
-                      styles.accountOption,
-                      selectedAccountId === account.id && styles.accountOptionSelected,
-                    ]}
-                    onPress={() => setSelectedAccountId(account.id)}
-                  >
+            <TouchableOpacity
+              style={styles.accountPickerRow}
+              onPress={() => setAccountPickerTarget('source')}
+            >
+              {(() => {
+                const selected = selectableAccounts.find(a => a.id === selectedAccountId);
+                return selected ? (
+                  <>
                     <AccountIcon
-                      icon={account.icon}
-                      name={account.name}
-                      subtype={account.subtype}
-                      size={18}
+                      icon={selected.icon}
+                      name={selected.name}
+                      subtype={selected.subtype}
+                      size={22}
                     />
-                    <Text style={styles.accountOptionName} numberOfLines={1}>
-                      {accountDisplayName(account.name, resolveAccountIcon(account.icon, account.name))}
+                    <Text style={styles.accountPickerValue} numberOfLines={1}>
+                      {accountDisplayName(selected.name, resolveAccountIcon(selected.icon, selected.name))}
                     </Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-            </View>
+                  </>
+                ) : (
+                  <Text style={styles.accountPickerPlaceholder}>
+                    {isTransferLike ? '选择转出账户' : '选择账户'}
+                  </Text>
+                );
+              })()}
+              <ChevronDown size={18} color={styles._colors.textSecondary} />
+            </TouchableOpacity>
           )}
 
-          {/* 目标账户（阶段五 T7：转账/还款双账户，还款限负债账户） */}
-          {isTransferLike && selectableTargetAccounts.length > 0 && (
-            <View style={styles.formGroup}>
-              <Text style={styles.formLabel}>
-                {type === 'repayment' ? '🏦 目标账户（限负债）' : '🏦 目标账户'}
-              </Text>
-              <View style={styles.accountGrid}>
-                {selectableTargetAccounts.map(account => (
-                  <TouchableOpacity
-                    key={account.id}
-                    style={[
-                      styles.accountOption,
-                      selectedTargetAccountId === account.id && styles.accountOptionSelected,
-                    ]}
-                    onPress={() => setSelectedTargetAccountId(account.id)}
-                  >
+          {/* 目标账户（转账/还款双账户，还款限负债账户） */}
+          {isTransferLike ? (
+            <TouchableOpacity
+              style={styles.accountPickerRow}
+              onPress={() => setAccountPickerTarget('target')}
+            >
+              {(() => {
+                const selected = selectableAccounts.find(a => a.id === selectedTargetAccountId);
+                return selected ? (
+                  <>
                     <AccountIcon
-                      icon={account.icon}
-                      name={account.name}
-                      subtype={account.subtype}
-                      size={18}
+                      icon={selected.icon}
+                      name={selected.name}
+                      subtype={selected.subtype}
+                      size={22}
                     />
-                    <Text style={styles.accountOptionName} numberOfLines={1}>
-                      {accountDisplayName(account.name, resolveAccountIcon(account.icon, account.name))}
+                    <Text style={styles.accountPickerValue} numberOfLines={1}>
+                      {accountDisplayName(selected.name, resolveAccountIcon(selected.icon, selected.name))}
                     </Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-              {type === 'repayment' ? (
-                <Text style={styles.targetAccountHint}>
-                  还款目标须为负债账户（信用卡/花呗等），确认后欠款减少。
-                </Text>
-              ) : (
-                <Text style={styles.targetAccountHint}>
-                  转账不计收支，源账户扣减、目标账户入账。
-                </Text>
-              )}
-            </View>
-          )}
+                  </>
+                ) : (
+                  <Text style={styles.accountPickerPlaceholder}>
+                    {type === 'repayment' ? '选择还款目标（限负债账户）' : '选择转入账户'}
+                  </Text>
+                );
+              })()}
+              <ChevronDown size={18} color={styles._colors.textSecondary} />
+            </TouchableOpacity>
+          ) : null}
 
           {/* 分类选择（转账/还款不计收支，无分类） */}
           {!isTransferLike && (
           <View style={styles.formGroup}>
-            <Text style={styles.formLabel}>📂 分类</Text>
             {(() => {
               const allCats = getCategoryList();
               const topLevel = allCats.filter(cat => !cat.parentId);
@@ -589,21 +607,6 @@ const CreateBillScreen: React.FC<CreateBillScreenProps> = ({ navigation, route }
             })()}
           </View>
           )}
-
-          {/* 备注输入 */}
-          <View style={styles.formGroup}>
-            <Text style={styles.formLabel}>📝 备注</Text>
-            <TextInput
-              style={styles.descriptionInput}
-              value={description}
-              onChangeText={setDescription}
-              placeholder="添加备注..."
-              placeholderTextColor={styles._colors.textTertiary}
-              multiline
-              numberOfLines={3}
-              textAlignVertical="top"
-            />
-          </View>
         </View>
       </ScrollView>
 
@@ -621,6 +624,85 @@ const CreateBillScreen: React.FC<CreateBillScreenProps> = ({ navigation, route }
 
       {/* Toast 已提升为全局单例（ToastProvider），此处不再重复渲染 ——
           否则本页面与全局 Toast 会同时显示同一条提示。 */}
+
+      {/* 账户选择弹窗：主账户 / 转账目标账户共用，按目标过滤候选 */}
+      <Modal
+        visible={accountPickerTarget !== null}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setAccountPickerTarget(null)}
+      >
+        <TouchableOpacity
+          style={styles.accountModalOverlay}
+          activeOpacity={1}
+          onPress={() => setAccountPickerTarget(null)}
+        >
+          <View style={styles.accountModalCard}>
+            <Text style={styles.accountModalTitle}>
+              {accountPickerTarget === 'target'
+                ? (type === 'repayment' ? '选择还款目标（限负债账户）' : '选择转入账户')
+                : (isTransferLike ? '选择转出账户' : '选择账户')}
+            </Text>
+            <ScrollView style={styles.accountModalScroll}>
+              {(accountPickerTarget === 'target'
+                ? selectableTargetAccounts
+                : selectableAccounts
+              ).map(account => {
+                const isSelected =
+                  accountPickerTarget === 'target'
+                    ? selectedTargetAccountId === account.id
+                    : selectedAccountId === account.id;
+                return (
+                  <TouchableOpacity
+                    key={account.id}
+                    style={[
+                      styles.accountModalItem,
+                      isSelected && styles.accountModalItemSelected,
+                    ]}
+                    onPress={() => {
+                      if (accountPickerTarget === 'target') {
+                        setSelectedTargetAccountId(account.id);
+                      } else {
+                        setSelectedAccountId(account.id);
+                      }
+                      setAccountPickerTarget(null);
+                    }}
+                  >
+                    <AccountIcon
+                      icon={account.icon}
+                      name={account.name}
+                      subtype={account.subtype}
+                      size={26}
+                    />
+                    <View style={styles.accountModalItemText}>
+                      <Text style={styles.accountModalItemName} numberOfLines={1}>
+                        {account.name}
+                      </Text>
+                      <Text style={styles.accountModalItemKind}>
+                        {account.kind === 'liability' ? '负债' : '资产'}
+                      </Text>
+                    </View>
+                    {isSelected ? (
+                      <Check size={18} color={styles._colors.primary} />
+                    ) : null}
+                  </TouchableOpacity>
+                );
+              })}
+              {accountPickerTarget === 'target' && selectableTargetAccounts.length === 0 ? (
+                <Text style={styles.accountModalEmpty}>
+                  没有可用的负债账户。请先在「账户管理」添加信用卡或消费信贷账户。
+                </Text>
+              ) : null}
+            </ScrollView>
+            <TouchableOpacity
+              style={styles.accountModalCancel}
+              onPress={() => setAccountPickerTarget(null)}
+            >
+              <Text style={styles.accountModalCancelText}>取消</Text>
+            </TouchableOpacity>
+          </View>
+        </TouchableOpacity>
+      </Modal>
 
       <AddCategoryModal
         visible={showAddCategoryModal}
@@ -693,12 +775,6 @@ const createStyles = (colors: ThemeColors) => ({
     typeButtonRepaymentActive: {
       backgroundColor: colors.warning,
     },
-    targetAccountHint: {
-      marginTop: spacing.xs,
-      fontSize: 12,
-      fontWeight: '600',
-      color: colors.textSecondary,
-    },
     typeButtonText: { fontSize: 16, fontWeight: '700', color: colors.textSecondary },
     typeButtonTextActive: { color: '#FFFFFF', fontWeight: '800' },
     typeLockHint: {
@@ -707,16 +783,33 @@ const createStyles = (colors: ThemeColors) => ({
       marginTop: spacing.xs,
     },
     formGroup: { marginBottom: spacing.lg },
-    formLabel: { fontSize: 14, fontWeight: '800', color: colors.textPrimary, marginBottom: spacing.sm },
-    amountInputContainer: {
-      flexDirection: 'row',
-      alignItems: 'center',
+    // 金额 + 备注合并卡片：大字金额在上，备注行在下，用细分割线区隔
+    amountCard: {
+      marginTop: spacing.lg,
+      marginBottom: spacing.lg,
       backgroundColor: colors.surface,
       borderRadius: borderRadius.card,
       borderWidth: borderWidth.medium,
       borderColor: colors.stroke,
       paddingHorizontal: spacing.lg,
-      paddingVertical: spacing.lg,
+      paddingTop: spacing.md,
+      paddingBottom: spacing.sm,
+    },
+    amountRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+    },
+    amountDivider: {
+      height: StyleSheet.hairlineWidth * 2,
+      backgroundColor: colors.divider,
+      marginVertical: spacing.sm,
+    },
+    noteInput: {
+      fontSize: 14,
+      fontWeight: '600',
+      color: colors.textPrimary,
+      padding: 0,
+      paddingVertical: spacing.xs,
     },
     currencySymbol: {
       fontSize: 28,
@@ -733,53 +826,86 @@ const createStyles = (colors: ThemeColors) => ({
       color: colors.textPrimary,
       padding: 0,
     },
-      descriptionInput: {
-        backgroundColor: colors.surface,
-        borderRadius: borderRadius.input,
-        borderWidth: borderWidth.thin,
-        borderColor: colors.stroke,
+    // 账户下拉选择行：图标 + 名称 + 下箭头
+    accountPickerRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: spacing.sm,
+      minHeight: 52,
       paddingHorizontal: spacing.md,
-      paddingVertical: spacing.md,
+      paddingVertical: spacing.sm,
+      marginBottom: spacing.md,
+      backgroundColor: colors.surface,
+      borderRadius: borderRadius.small,
+      borderWidth: borderWidth.thin,
+      borderColor: colors.stroke,
+    },
+    accountPickerValue: {
+      flex: 1,
       fontSize: 15,
-        fontWeight: '600',
-        color: colors.textPrimary,
-        minHeight: 80,
-      },
-      accountGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
-      accountOption: {
-        width: '48%',
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: spacing.sm,
-        padding: spacing.md,
-        borderRadius: borderRadius.small,
-        borderWidth: borderWidth.thin,
-        borderColor: colors.stroke,
-        backgroundColor: colors.surface,
-      },
-      accountOptionEmpty: {
-        width: '100%',
-        flexDirection: 'column',
-        alignItems: 'flex-start',
-        gap: spacing.xs,
-        backgroundColor: colors.accent,
-        borderWidth: borderWidth.medium,
-      },
-      accountOptionSelected: {
-        backgroundColor: colors.accent,
-        borderWidth: borderWidth.medium,
-        borderColor: colors.stroke,
-      },
-      accountOptionName: {
-        fontSize: 14,
-        fontWeight: '800',
-        color: colors.textPrimary,
-      },
-      accountOptionType: {
-        fontSize: 12,
-        fontWeight: '600',
-        color: colors.textSecondary,
-      },
+      fontWeight: '700',
+      color: colors.textPrimary,
+    },
+    accountPickerPlaceholder: {
+      flex: 1,
+      fontSize: 14,
+      fontWeight: '600',
+      color: colors.textTertiary,
+    },
+    // 账户选择弹窗
+    accountModalOverlay: {
+      flex: 1,
+      backgroundColor: 'rgba(0,0,0,0.45)',
+      justifyContent: 'flex-end',
+    },
+    accountModalCard: {
+      backgroundColor: colors.background,
+      borderTopLeftRadius: borderRadius.card,
+      borderTopRightRadius: borderRadius.card,
+      borderWidth: borderWidth.medium,
+      borderColor: colors.stroke,
+      padding: spacing.lg,
+      paddingBottom: spacing.xl,
+      maxHeight: '70%',
+    },
+    accountModalTitle: {
+      fontSize: 16,
+      fontWeight: '800',
+      color: colors.textPrimary,
+      marginBottom: spacing.md,
+      textAlign: 'center',
+    },
+    accountModalScroll: { maxHeight: 420 },
+    accountModalItem: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: spacing.md,
+      paddingVertical: spacing.sm,
+      paddingHorizontal: spacing.xs,
+      borderBottomWidth: borderWidth.thin,
+      borderBottomColor: colors.divider,
+    },
+    accountModalItemSelected: { backgroundColor: colors.primaryLight },
+    accountModalItemText: { flex: 1 },
+    accountModalItemName: { fontSize: 15, fontWeight: '700', color: colors.textPrimary },
+    accountModalItemKind: { marginTop: 2, fontSize: 12, fontWeight: '600', color: colors.textSecondary },
+    accountModalEmpty: {
+      paddingVertical: spacing.lg,
+      fontSize: 13,
+      fontWeight: '600',
+      color: colors.textSecondary,
+      textAlign: 'center',
+    },
+    accountModalCancel: {
+      marginTop: spacing.md,
+      paddingVertical: spacing.sm,
+      alignItems: 'center',
+      borderRadius: borderRadius.button,
+      borderWidth: borderWidth.thin,
+      borderColor: colors.stroke,
+      backgroundColor: colors.surface,
+    },
+    accountModalCancelText: { fontSize: 14, fontWeight: '700', color: colors.textPrimary },
       categoryGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.md },
       // 批 6:按行分块的容器,行内 4 个正方形瓷贴;展开的子分类区插在行后
       categoryRowGrid: {
