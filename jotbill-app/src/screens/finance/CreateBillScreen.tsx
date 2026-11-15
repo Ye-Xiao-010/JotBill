@@ -15,6 +15,7 @@ import {
   TextInput,
   TouchableOpacity,
 } from 'react-native';
+import { useQueryClient } from '@tanstack/react-query';
 import { Text } from 'react-native';
 import { Check, ChevronDown } from 'lucide-react-native';
 import { Toast } from '../../components';
@@ -25,7 +26,7 @@ import { accountDisplayName, resolveAccountIcon } from '../../constants/accountI
 import { DEFAULT_CATEGORIES } from '../../constants/app';
 import { useToast, useCategories, useStyles } from '../../hooks';
 import { nativeData, type Account, type Bill, type Category } from '../../native';
-import { invalidateCache } from '../../lib/queryClient';
+import { invalidateCache, QUERY_KEYS, CACHE_TIME } from '../../lib/queryClient';
 import { findDuplicateBills } from '../../lib/billDuplicateCheck';
 import { ThemeColors } from '../../theme/colors';
 import { spacing, borderRadius, borderWidth, shadow, typography } from '../../theme';
@@ -131,6 +132,20 @@ const CreateBillScreen: React.FC<CreateBillScreenProps> = ({ navigation, route }
     };
   }, []);
 
+  // 预取另一类型的分类：首次滑动切换时网格直接命中缓存，不会因为等桥接数据
+  // 而在滑入后突然重排（分类数量不同的换页会让高度变化，是卡顿感来源之一）
+  const prefetchQueryClient = useQueryClient();
+  useEffect(() => {
+    const otherType = isTransferLike ? 'income' : (type === 'income' ? 'expense' : 'income');
+    void prefetchQueryClient.prefetchQuery({
+      queryKey: QUERY_KEYS.categories.byType(otherType),
+      queryFn: () => nativeData.getCategories(otherType),
+      staleTime: CACHE_TIME.CATEGORIES,
+    });
+    // 仅挂载时预取一次；切换后的预取由 useCategories 自身缓存覆盖
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   useEffect(() => {
     setSelectedAccountId(editingBill?.accountId);
     setSelectedTargetAccountId(editingBill?.targetAccountId);
@@ -169,81 +184,126 @@ const CreateBillScreen: React.FC<CreateBillScreenProps> = ({ navigation, route }
   const handleTypeChangeRef = useRef(handleTypeChange);
   handleTypeChangeRef.current = handleTypeChange;
 
-  /** 类型栏宽度与单个 Tab 宽度（onLayout 测得，指示器定位用） */
-  const [typeSelectorWidth, setTypeSelectorWidth] = useState(0);
-  const TYPE_SELECTOR_PADDING = 4;
+  /**
+   * 类型栏内层宽度（onLayout 测得的是纯按钮行的宽度，不含边框/内边距，
+   * 避免宽度算术误差导致色块与文字错位）。
+   */
+  const [typeRowWidth, setTypeRowWidth] = useState(0);
   const typeButtonWidth =
-    typeSelectorWidth > 0
-      ? (typeSelectorWidth - TYPE_SELECTOR_PADDING * 2) / FORM_TYPE_OPTIONS.length
-      : 0;
+    typeRowWidth > 0 ? typeRowWidth / FORM_TYPE_OPTIONS.length : 0;
   const typeButtonWidthRef = useRef(typeButtonWidth);
   typeButtonWidthRef.current = typeButtonWidth;
 
   /** 内容跟手位移（px），只做视觉反馈，不参与布局 */
   const swipeTranslateX = useRef(new Animated.Value(0)).current;
+  /** 内容透明度：切换时淡出再淡入，掩盖内容换树的瞬间（跳变感的主要来源） */
+  const swipeOpacity = useRef(new Animated.Value(1)).current;
   /** 类型栏色块指示器位移（px） */
   const indicatorTranslateX = useRef(new Animated.Value(0)).current;
   /** 滑动切换中：过渡动画期间拒绝第二次手势，避免动画叠动画 */
   const swipeAnimatingRef = useRef(false);
 
-  // 类型变化（含点 Tab 切换）后色块滑到新位置；滑动切换自行驱动时跳过避免打架
+  /**
+   * 色块位置的驱动之一：**点 Tab** 切换时滑到新位置。
+   * 滑动切换走 slideSwitchType 内同步驱动的动画，此时跳过本效果
+   * （swipeAnimatingRef 为 true），避免两段动画抢同一个值。
+   */
   useEffect(() => {
-    if (typeButtonWidth <= 0) return;
-    if (swipeAnimatingRef.current) return;
+    if (typeButtonWidth <= 0 || swipeAnimatingRef.current) return;
     const index = FORM_TYPE_OPTIONS.findIndex(option => option.value === type);
     Animated.timing(indicatorTranslateX, {
       toValue: index * typeButtonWidth,
-      duration: 180,
+      duration: 160,
       easing: Easing.out(Easing.cubic),
       useNativeDriver: true,
     }).start();
   }, [type, typeButtonWidth, indicatorTranslateX]);
 
-  /** 松手切换：内容先滑出（跟手方向），换类型后从反向滑入 */
+  /**
+   * 松手切换：滑出 + 淡出 → 换类型 → 反向滑入 + 淡入。
+   *
+   * 卡顿/跳变的两个根因分别处理：
+   * 1. **换树瞬间的视觉跳变**：内容在滑出终点（30% 屏宽处）从旧树换到新树，
+   *    即使动画连续，也会看到"内容突然变了"的硬切感。用透明度淡出/淡入
+   *    掩盖换树瞬间——这就是之前"卡顿感"的主要来源。
+   * 2. **分类数据重排**：useCategories keepPreviousData + 挂载预取，
+   *    换树时网格数据已就位，不会塌陷再重排。
+   * 色块动画同一回调同步启动，不等 useEffect（commit 后才跑会被拖晚）。
+   */
   const slideSwitchType = (direction: 1 | -1) => {
     if (swipeAnimatingRef.current) return;
     swipeAnimatingRef.current = true;
     const screenWidth = Dimensions.get('window').width;
     const index = FORM_TYPE_OPTIONS.findIndex(option => option.value === typeRef.current);
     const nextIndex = index - direction; // 左滑(direction=-1) => index+1
-    // 色块与内容同步滑出：色块移到目标 Tab
+    const next = FORM_TYPE_OPTIONS[nextIndex];
     if (typeButtonWidthRef.current > 0) {
       Animated.timing(indicatorTranslateX, {
         toValue: nextIndex * typeButtonWidthRef.current,
-        duration: 140,
+        duration: 160,
         easing: Easing.out(Easing.cubic),
         useNativeDriver: true,
       }).start();
     }
-    Animated.timing(swipeTranslateX, {
-      toValue: direction * screenWidth * 0.3,
-      duration: 140,
-      easing: Easing.out(Easing.cubic),
-      useNativeDriver: true,
-    }).start(() => {
-      const next = FORM_TYPE_OPTIONS[nextIndex];
-      if (next) handleTypeChangeRef.current(next.value);
-      // 从反向 30% 屏宽进入
-      swipeTranslateX.setValue(-direction * screenWidth * 0.3);
+    const exitDistance = screenWidth * 0.12;
+    Animated.parallel([
       Animated.timing(swipeTranslateX, {
-        toValue: 0,
-        duration: 180,
+        toValue: direction * exitDistance,
+        duration: 120,
         easing: Easing.out(Easing.cubic),
         useNativeDriver: true,
-      }).start(() => {
+      }),
+      Animated.timing(swipeOpacity, {
+        toValue: 0,
+        duration: 110,
+        useNativeDriver: true,
+      }),
+    ]).start(({ finished }) => {
+      // 动画被新的手势/回弹打断：不换类型，直接回弹归位
+      if (!finished) {
+        swipeAnimatingRef.current = false;
+        springBackSwipe();
+        return;
+      }
+      // 换树瞬间内容完全透明，用户看不到硬切
+      if (next) handleTypeChangeRef.current(next.value);
+      swipeTranslateX.setValue(-direction * exitDistance);
+      Animated.parallel([
+        Animated.timing(swipeTranslateX, {
+          toValue: 0,
+          duration: 170,
+          easing: Easing.out(Easing.cubic),
+          useNativeDriver: true,
+        }),
+        Animated.timing(swipeOpacity, {
+          toValue: 1,
+          duration: 170,
+          useNativeDriver: true,
+        }),
+      ]).start(() => {
         swipeAnimatingRef.current = false;
       });
     });
   };
 
-  /** 未达切换阈值：弹性回弹归位 */
+  /** 未达切换阈值：弹性回弹归位（先停掉可能有残留的动画，避免位置打架） */
   const springBackSwipe = () => {
-    Animated.spring(swipeTranslateX, {
-      toValue: 0,
-      speed: 18,
-      bounciness: 6,
-      useNativeDriver: true,
-    }).start();
+    swipeTranslateX.stopAnimation();
+    indicatorTranslateX.stopAnimation();
+    swipeOpacity.stopAnimation();
+    Animated.parallel([
+      Animated.spring(swipeTranslateX, {
+        toValue: 0,
+        speed: 18,
+        bounciness: 6,
+        useNativeDriver: true,
+      }),
+      Animated.timing(swipeOpacity, {
+        toValue: 1,
+        duration: 120,
+        useNativeDriver: true,
+      }),
+    ]).start();
     if (typeButtonWidthRef.current > 0) {
       const index = FORM_TYPE_OPTIONS.findIndex(option => option.value === typeRef.current);
       Animated.spring(indicatorTranslateX, {
@@ -518,37 +578,40 @@ const CreateBillScreen: React.FC<CreateBillScreenProps> = ({ navigation, route }
   return (
     <View style={styles.container} {...typeSwipeResponder.panHandlers}>
       {/* 类型栏固定不随滑动移动；内部色块指示器跟手滑动 */}
-      <View
-        style={styles.typeSelector}
-        onLayout={event => setTypeSelectorWidth(event.nativeEvent.layout.width)}
-      >
-        {typeButtonWidth > 0 ? (
-          <Animated.View
-            style={[
-              styles.typeIndicator,
-              {
-                width: typeButtonWidth,
-                transform: [{ translateX: indicatorTranslateX }],
-              },
-              type === 'expense' && styles.typeIndicatorExpense,
-              type === 'income' && styles.typeIndicatorIncome,
-              type === 'transfer' && styles.typeIndicatorTransfer,
-              type === 'repayment' && styles.typeIndicatorRepayment,
-            ]}
-          />
-        ) : null}
-        {FORM_TYPE_OPTIONS.map(option => (
-          <TouchableOpacity
-            key={option.value}
-            disabled={editingTypeLocked}
-            style={styles.typeButton}
-            onPress={() => handleTypeChange(option.value)}
-          >
-            <Text style={[styles.typeButtonText, type === option.value && styles.typeButtonTextActive]}>
-              {option.label}
-            </Text>
-          </TouchableOpacity>
-        ))}
+      <View style={styles.typeSelector}>
+        {/* 内层按钮行：onLayout 测到的是纯按钮区宽度，色块定位与之一一对应 */}
+        <View
+          style={styles.typeRow}
+          onLayout={event => setTypeRowWidth(event.nativeEvent.layout.width)}
+        >
+          {typeButtonWidth > 0 ? (
+            <Animated.View
+              style={[
+                styles.typeIndicator,
+                {
+                  width: typeButtonWidth,
+                  transform: [{ translateX: indicatorTranslateX }],
+                },
+                type === 'expense' && styles.typeIndicatorExpense,
+                type === 'income' && styles.typeIndicatorIncome,
+                type === 'transfer' && styles.typeIndicatorTransfer,
+                type === 'repayment' && styles.typeIndicatorRepayment,
+              ]}
+            />
+          ) : null}
+          {FORM_TYPE_OPTIONS.map(option => (
+            <TouchableOpacity
+              key={option.value}
+              disabled={editingTypeLocked}
+              style={styles.typeButton}
+              onPress={() => handleTypeChange(option.value)}
+            >
+              <Text style={[styles.typeButtonText, type === option.value && styles.typeButtonTextActive]}>
+                {option.label}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
       </View>
       {editingTypeLocked && (
         <Text style={styles.typeLockHint}>
@@ -558,7 +621,13 @@ const CreateBillScreen: React.FC<CreateBillScreenProps> = ({ navigation, route }
 
       <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
         <Animated.View
-          style={[styles.content, { transform: [{ translateX: swipeTranslateX }] }]}
+          style={[
+            styles.content,
+            {
+              opacity: swipeOpacity,
+              transform: [{ translateX: swipeTranslateX }],
+            },
+          ]}
         >
 
           {/* 金额 + 备注合并卡片：金额大字在上，备注输入紧随其下 */}
@@ -875,7 +944,6 @@ const createStyles = (colors: ThemeColors) => ({
     scrollView: { flex: 1 },
     content: { padding: spacing.lg, paddingBottom: 100 },
     typeSelector: {
-      flexDirection: 'row',
       backgroundColor: colors.surface,
       borderRadius: borderRadius.button,
       borderWidth: borderWidth.thin,
@@ -885,12 +953,16 @@ const createStyles = (colors: ThemeColors) => ({
       marginTop: spacing.md,
       marginHorizontal: spacing.lg,
     },
+    // 纯按钮行：宽度即 4 个 Tab 的总宽，色块按它等分定位
+    typeRow: {
+      flexDirection: 'row',
+    },
     // 滑动色块：绝对定位在 Tab 文字之下，靠 translateX 滑动
     typeIndicator: {
       position: 'absolute',
-      top: 4,
-      bottom: 4,
-      left: 4,
+      top: 0,
+      bottom: 0,
+      left: 0,
       borderRadius: borderRadius.small,
       borderWidth: borderWidth.thin,
       borderColor: colors.stroke,
