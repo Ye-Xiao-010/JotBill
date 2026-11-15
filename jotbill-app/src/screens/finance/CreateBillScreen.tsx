@@ -4,6 +4,9 @@
  */
 import React, { useEffect, useRef, useState } from 'react';
 import {
+  Animated,
+  Dimensions,
+  Easing,
   Modal,
   PanResponder,
   View,
@@ -155,7 +158,8 @@ const CreateBillScreen: React.FC<CreateBillScreenProps> = ({ navigation, route }
     setSelectedTargetAccountId(undefined);
   };
 
-  // 左右滑动切换类型：PanResponder 只在水平位移显著时接管，垂直滚动不受影响。
+  // 左右滑动切换类型：内容跟手位移 + 松手滑动过渡/回弹，避免"瞬切"的生硬感。
+  // PanResponder 只在水平位移显著时接管，垂直滚动不受影响；
   // responder 只创建一次，内部经 ref 读最新状态，避免闭包捕获旧值。
   const typeRef = useRef(type);
   typeRef.current = type;
@@ -163,19 +167,83 @@ const CreateBillScreen: React.FC<CreateBillScreenProps> = ({ navigation, route }
   typeLockedRef.current = editingTypeLocked;
   const handleTypeChangeRef = useRef(handleTypeChange);
   handleTypeChangeRef.current = handleTypeChange;
+
+  /** 内容跟手位移（px），只做视觉反馈，不参与布局 */
+  const swipeTranslateX = useRef(new Animated.Value(0)).current;
+  /** 滑动切换中：过渡动画期间拒绝第二次手势，避免动画叠动画 */
+  const swipeAnimatingRef = useRef(false);
+
+  /** 松手切换：内容先滑出（跟手方向），换类型后从反向滑入 */
+  const slideSwitchType = (direction: 1 | -1) => {
+    if (swipeAnimatingRef.current) return;
+    swipeAnimatingRef.current = true;
+    const screenWidth = Dimensions.get('window').width;
+    // 滑出：方向 * 30% 屏宽，ease-out 稍快，模拟"甩出去"
+    Animated.timing(swipeTranslateX, {
+      toValue: direction * screenWidth * 0.3,
+      duration: 140,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: true,
+    }).start(() => {
+      const index = FORM_TYPE_OPTIONS.findIndex(option => option.value === typeRef.current);
+      const nextIndex = index - direction; // 左滑(direction=-1) => index+1
+      const next = FORM_TYPE_OPTIONS[nextIndex];
+      if (next) handleTypeChangeRef.current(next.value);
+      // 从反向 30% 屏宽进入
+      swipeTranslateX.setValue(-direction * screenWidth * 0.3);
+      Animated.timing(swipeTranslateX, {
+        toValue: 0,
+        duration: 180,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true,
+      }).start(() => {
+        swipeAnimatingRef.current = false;
+      });
+    });
+  };
+
+  /** 未达切换阈值：弹性回弹归位 */
+  const springBackSwipe = () => {
+    Animated.spring(swipeTranslateX, {
+      toValue: 0,
+      speed: 18,
+      bounciness: 6,
+      useNativeDriver: true,
+    }).start();
+  };
+
   const typeSwipeResponder = useRef(
     PanResponder.create({
       onMoveShouldSetPanResponder: (_evt, gesture) =>
-        Math.abs(gesture.dx) > 24 && Math.abs(gesture.dx) > Math.abs(gesture.dy) * 1.5,
-      onPanResponderRelease: (_evt, gesture) => {
-        if (typeLockedRef.current) return;
+        Math.abs(gesture.dx) > 16 && Math.abs(gesture.dx) > Math.abs(gesture.dy) * 1.2,
+      onPanResponderMove: (_evt, gesture) => {
+        if (typeLockedRef.current || swipeAnimatingRef.current) return;
         const index = FORM_TYPE_OPTIONS.findIndex(option => option.value === typeRef.current);
-        if (index < 0) return;
-        if (gesture.dx <= -40 && index < FORM_TYPE_OPTIONS.length - 1) {
-          handleTypeChangeRef.current(FORM_TYPE_OPTIONS[index + 1].value);
-        } else if (gesture.dx >= 40 && index > 0) {
-          handleTypeChangeRef.current(FORM_TYPE_OPTIONS[index - 1].value);
+        const atStart = index <= 0 && gesture.dx > 0;
+        const atEnd = index >= FORM_TYPE_OPTIONS.length - 1 && gesture.dx < 0;
+        // 首尾边界阻尼：只给 25% 位移并快速衰减，明确"到头了"
+        const raw = atStart || atEnd ? gesture.dx * 0.25 : gesture.dx;
+        swipeTranslateX.setValue(raw * 0.6);
+      },
+      onPanResponderRelease: (_evt, gesture) => {
+        if (typeLockedRef.current || swipeAnimatingRef.current) {
+          springBackSwipe();
+          return;
         }
+        const index = FORM_TYPE_OPTIONS.findIndex(option => option.value === typeRef.current);
+        const canNext = index < FORM_TYPE_OPTIONS.length - 1;
+        const canPrev = index > 0;
+        const crossed = Math.abs(gesture.dx) >= 48 || Math.abs(gesture.vx) > 0.5;
+        if (gesture.dx < 0 && canNext && crossed) {
+          slideSwitchType(-1);
+        } else if (gesture.dx > 0 && canPrev && crossed) {
+          slideSwitchType(1);
+        } else {
+          springBackSwipe();
+        }
+      },
+      onPanResponderTerminate: () => {
+        springBackSwipe();
       },
     }),
   ).current;
@@ -400,7 +468,10 @@ const CreateBillScreen: React.FC<CreateBillScreenProps> = ({ navigation, route }
   return (
     <View style={styles.container}>
       <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
-        <View style={styles.content} {...typeSwipeResponder.panHandlers}>
+        <Animated.View
+          style={[styles.content, { transform: [{ translateX: swipeTranslateX }] }]}
+          {...typeSwipeResponder.panHandlers}
+        >
           {/* 类型切换（阶段五 T7：含转账/还款双账户语义；支持左右滑动切换） */}
           <View style={styles.typeSelector}>
             {FORM_TYPE_OPTIONS.map(option => (
@@ -607,7 +678,7 @@ const CreateBillScreen: React.FC<CreateBillScreenProps> = ({ navigation, route }
             })()}
           </View>
           )}
-        </View>
+        </Animated.View>
       </ScrollView>
 
       {/* 底部操作按钮 */}
