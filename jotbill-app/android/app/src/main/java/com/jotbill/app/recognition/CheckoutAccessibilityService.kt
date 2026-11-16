@@ -13,6 +13,7 @@ import android.os.Looper
 import android.os.PowerManager
 import android.os.SystemClock
 import androidx.core.content.ContextCompat
+import com.jotbill.app.BuildConfig
 import com.jotbill.app.utils.JotBillLog
 import com.jotbill.app.utils.PaymentTiming
 import android.view.Gravity
@@ -328,6 +329,9 @@ open class CheckoutAccessibilityService : AccessibilityService() {
     private var lastWindowClass: String? = null
     private var lastObservedEventLogAt = 0L
 
+    /** 应用内事件采集诊断（拼多多前台退款实验）的节流水位。 */
+    private var lastInAppEventLogAt = 0L
+
     /**
      * 未分类帧的 pageTextLength 采样间隔（2026-10-31 节电）。
      * 该值只进诊断日志字符串、不参与任何判定 —— 但它是远程排障的主力锚点
@@ -638,6 +642,47 @@ open class CheckoutAccessibilityService : AccessibilityService() {
     }
 
     /**
+     * 诊断（debug 构建，2026-11-16）：记录拼多多前台退款时应用内提示的事件形态。
+     *
+     * 覆盖 Toast（TYPE_NOTIFICATION_STATE_CHANGED，className=android.widget.Toast）、
+     * Accessibility 播报（TYPE_ANNOUNCEMENT）以及拼多多窗口事件；数字脱敏后落日志，
+     * release 构建不输出。
+     */
+    private fun logInAppEventSample(event: AccessibilityEvent, eventPackage: String) {
+        if (!BuildConfig.DEBUG) return
+        val className = event.className?.toString().orEmpty()
+        val isToastLike = event.eventType == AccessibilityEvent.TYPE_NOTIFICATION_STATE_CHANGED ||
+            className.contains("Toast", ignoreCase = true)
+        val isAnnouncement = event.eventType == AccessibilityEvent.TYPE_ANNOUNCEMENT
+        val fromPdd = eventPackage == "com.xunmeng.pinduoduo"
+        if (!fromPdd && !isToastLike && !isAnnouncement) return
+        val now = System.currentTimeMillis()
+        if (now - lastInAppEventLogAt < 500L) return
+        lastInAppEventLogAt = now
+        val texts = try {
+            event.text
+        } catch (_: RuntimeException) {
+            null
+        }
+        val textJoined = texts?.joinToString(" ") { it?.toString().orEmpty() }.orEmpty()
+        val contentDesc = try {
+            event.contentDescription?.toString().orEmpty()
+        } catch (_: RuntimeException) {
+            ""
+        }
+        val combined = listOf(textJoined, contentDesc)
+            .filter { it.isNotBlank() }
+            .joinToString(" | ")
+        val sample = combined.replace(Regex("\\d"), "#").take(160)
+        JotBillLog.i(
+            TAG,
+            "[ABK诊断] 应用内事件: eventPkg=$eventPackage, " +
+                "type=${AccessibilityEvent.eventTypeToString(event.eventType)}, class=$className, " +
+                "textLen=${combined.length}, 样本(数字脱敏)=$sample"
+        )
+    }
+
+    /**
      * 用事件包名、活动窗口包名和最近已知前台包名推断当前应归属哪个购物/支付应用。
      *
      * 真机上的拼多多/微信页面会混入空包名或视频通话悬浮窗等第三方窗口事件；
@@ -728,6 +773,9 @@ open class CheckoutAccessibilityService : AccessibilityService() {
             return
         }
         val eventPackage = event.packageName?.toString()?.trim().orEmpty()
+        // 诊断（2026-11-16）：拼多多前台退款的应用内提示（Toast/Announcement）事件采集，
+        // 不受后续弹窗门禁影响（放置于门禁 Drop 之前）。
+        logInAppEventSample(event, eventPackage)
         if (
             event.eventType != AccessibilityEvent.TYPE_NOTIFICATION_STATE_CHANGED &&
             popupEventGate.decide(eventPackage, lastWindowPackage) == PopupEventDecision.Drop
@@ -1188,6 +1236,16 @@ open class CheckoutAccessibilityService : AccessibilityService() {
                 }
             } catch (error: RuntimeException) {
                 JotBillLog.w(TAG, "支付证据历史会话补齐失败", error)
+            }
+            // 跨通道收口（2026-11-16）：卡片与同额账单并存 ⇒ 同一笔已被其它通道
+            // 入账，忽略卡片，避免用户在待确认中心确认后双记。
+            try {
+                val reconciled = matcher.reconcilePendingAgainstRecentBills()
+                if (reconciled > 0) {
+                    JotBillLog.i(TAG, "启动期跨通道收口: 忽略同额待确认卡=$reconciled")
+                }
+            } catch (error: RuntimeException) {
+                JotBillLog.w(TAG, "启动期跨通道收口失败", error)
             }
         }
     }

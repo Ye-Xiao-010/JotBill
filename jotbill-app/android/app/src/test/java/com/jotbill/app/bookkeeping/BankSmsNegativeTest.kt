@@ -5,6 +5,8 @@ import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import com.jotbill.app.data.JotBillDatabase
 import com.jotbill.app.data.entity.AccountEntity
+import com.jotbill.app.data.entity.BillEntity
+import com.jotbill.app.data.entity.PendingTransactionEntity
 import com.jotbill.app.data.entity.RuleEntity
 import java.io.File
 import java.util.concurrent.atomic.AtomicReference
@@ -353,5 +355,141 @@ class BankSmsNegativeTest {
         val bill = database.billDao().getAllForExport().singleOrNull()
         assertTrue("短信记录应自动入账", bill != null)
         assertEquals("应入账到银行名匹配账户", bankAccountId, bill!!.accountId)
+    }
+
+    /**
+     * 跨通道吸收（真机 2026-11-16）：支付宝结果页先落了同额待确认卡，银行短信
+     * 后到自动入账时必须把该卡标记忽略 —— 否则用户在待确认中心确认即双记。
+     */
+    @Test
+    fun 短信入账后吸收同额待确认卡() = withDatabase { database ->
+        val occurredAt = System.currentTimeMillis()
+        val card = PendingTransactionEntity(
+            id = "pending-orphan-test-alipay",
+            candidateId = null,
+            sessionId = null,
+            amountMinor = 2060L,
+            type = "expense",
+            occurredAt = occurredAt,
+            platform = "com.eg.android.AlipayGphone",
+            merchant = null,
+            productDescription = null,
+            orderId = null,
+            accountId = "default-account-alipay",
+            categoryId = null,
+            conflictReason = "NO_ACTIVE_SESSION",
+            sourceType = "accessibility",
+            createdAt = occurredAt,
+            version = 1
+        )
+        database.pendingTransactionDao().insertIfAbsent(card)
+
+        deliverRecord(
+            database,
+            AutoBookkeepingEngine.ExtractedRecord(
+                fields = mapOf("amount" to "20.60", "detailType" to "2"),
+                ruleId = 2000106,
+                ruleNote = "银行短信字段提取",
+                fromApp = 4,
+                jotbillType = null,
+                sourcePackage = "com.android.mms",
+                extractTime = occurredAt
+            )
+        )
+
+        assertTrue("短信记录应自动入账", database.billDao().getAllForExport().isNotEmpty())
+        assertEquals(
+            "同额待确认卡必须被吸收（标记忽略）",
+            PendingTransactionEntity.STATUS_IGNORED,
+            database.pendingTransactionDao().getById(card.id)?.status
+        )
+    }
+
+    /**
+     * 页面退款（2026-11-16 真机）：拼多多退款详情页规则（jotbillType=refund）
+     * 抽取的金额/渠道必须走退款链路，落退款待确认卡，不按收支入账。
+     */
+    @Test
+    fun 页面退款记录落退款待确认卡() = withDatabase { database ->
+        deliverRecord(
+            database,
+            AutoBookkeepingEngine.ExtractedRecord(
+                fields = mapOf("amount" to "67.80", "refundChannel" to "微信钱包"),
+                ruleId = 2000210,
+                ruleNote = "拼多多-退款详情页",
+                fromApp = 0,
+                jotbillType = "refund",
+                sourcePackage = "com.xunmeng.pinduoduo",
+                extractTime = System.currentTimeMillis()
+            )
+        )
+
+        assertEquals("退款不应按支出入账", 0, database.billDao().count())
+        val pending = database.pendingTransactionDao().findRecentPendingRefundByAmount(
+            amountMinor = 6780L,
+            windowStart = 0L,
+            windowEnd = Long.MAX_VALUE
+        )
+        assertTrue("应落退款待确认卡", pending != null)
+        assertEquals("拼多多", pending!!.merchant)
+    }
+
+    /**
+     * 跨信号同额吸收（2026-11-16 真机双账）：用户先确认了支付宝弹窗（账单带
+     * 商户名、支付宝账户），几秒后银行短信入账同一笔 —— 平台/账户/商户都不同，
+     * 也必须吸收为同一笔，不得生成第二笔。
+     */
+    @Test
+    fun 短信入账吸收另一通道刚创建的账单() = withDatabase { database ->
+        val now = System.currentTimeMillis()
+        database.accountDao().insert(
+            AccountEntity(
+                id = "default-account-alipay", name = "支付宝", subtype = "e_wallet",
+                kind = "asset", initialBalanceMinor = 0L, currentBalanceMinor = 0L,
+                currency = "CNY", icon = null, color = null, sortOrder = 1,
+                isActive = true, createdAt = 1L, updatedAt = 1L
+            )
+        )
+        database.billDao().insert(
+            BillEntity(
+                id = "bill-alipay-confirmed",
+                amountMinor = 1500L,
+                type = "expense",
+                occurredAt = now,
+                description = "成都久益餐饮管理有限公司",
+                categoryId = null,
+                accountId = "default-account-alipay",
+                targetAccountId = null,
+                platform = "com.eg.android.AlipayGphone",
+                merchant = "成都久益餐饮管理有限公司",
+                productDescription = null,
+                sourceType = "accessibility",
+                originalTransactionId = null,
+                orderId = null,
+                createdAt = now,
+                updatedAt = now,
+                version = 1
+            )
+        )
+
+        deliverRecord(
+            database,
+            AutoBookkeepingEngine.ExtractedRecord(
+                fields = mapOf("amount" to "15.00", "detailType" to "2"),
+                ruleId = 2000106,
+                ruleNote = "银行短信字段提取",
+                fromApp = 4,
+                jotbillType = null,
+                sourcePackage = "com.android.mms",
+                extractTime = now
+            )
+        )
+
+        assertEquals("另一通道刚入账的同额账单必须吸收，不得双账", 1, database.billDao().count())
+        assertEquals(
+            "既有账单字段不被覆盖",
+            "成都久益餐饮管理有限公司",
+            database.billDao().getById("bill-alipay-confirmed")?.merchant
+        )
     }
 }

@@ -56,6 +56,15 @@ internal object BankSmsNotificationParser {
         """(?:到账|退款|退回|退货)[^0-9]{0,12}(?:人民币|RMB|¥|￥)\s*(\d+(?:[.,]\d+)?)\s*元?"""
     )
 
+    /**
+     * 简版退款金额：「退货，收入金额39.90元」（邮储 2026-11-16 真机格式）——
+     * 无货币符号，靠「收入金额」标签定位；仅在显式退款词（退货/退款/退回）
+     * 已命中的前提下使用。
+     */
+    private val REFUND_AMOUNT_FALLBACK_PATTERN = Regex(
+        """(?:收入金额|退款金额|退货金额|退回金额)\s*[:：]?\s*(\d+(?:[.,]\d+)?)\s*元?"""
+    )
+
     /** 商户前缀：「(拼多多-实物消费-拼多多平台商户)」→ 拼多多。 */
     private val MERCHANT_PREFIX_PATTERN = Regex("""[（(]([^)）\-]{2,20})-""")
 
@@ -104,13 +113,21 @@ internal object BankSmsNotificationParser {
      *  (拼多多-实物消费-拼多多平台商户) , …户名为拼多多平台商户。」
      */
     fun parseRefund(content: String, occurredAt: Long): PaymentEvidenceInput? {
-        if (content.isBlank() || !content.contains("到账")) return null
+        if (content.isBlank()) return null
+        val credit = content.contains("到账")
         val explicit = REFUND_EXPLICIT_MARKERS.any { content.contains(it) }
-        val merchantRefund = MERCHANT_REFUND_MARKERS.any { content.contains(it) }
-        val parenMerchant = MERCHANT_PAREN_PATTERN.find(content)?.groupValues?.get(1)
-            ?.takeIf { name -> NON_MERCHANT_PAREN_TERMS.none { name.contains(it) } }
+        // 商户语义只在「到账」语境下成立：支出短信的商户括号不是退款。
+        val merchantRefund = credit && MERCHANT_REFUND_MARKERS.any { content.contains(it) }
+        val parenMerchant = if (credit) {
+            MERCHANT_PAREN_PATTERN.find(content)?.groupValues?.get(1)
+                ?.takeIf { name -> NON_MERCHANT_PAREN_TERMS.none { name.contains(it) } }
+        } else {
+            null
+        }
         if (!explicit && !merchantRefund && parenMerchant == null) return null
-        val amountText = REFUND_AMOUNT_PATTERN.find(content)?.groupValues?.get(1) ?: return null
+        val amountText = REFUND_AMOUNT_PATTERN.find(content)?.groupValues?.get(1)
+            ?: REFUND_AMOUNT_FALLBACK_PATTERN.find(content)?.groupValues?.get(1)
+            ?: return null
         val amountMinor = AutoBookkeepingEngine.parseAmountMinor(amountText) ?: return null
         if (amountMinor <= 0L) return null
         val merchant = MERCHANT_PREFIX_PATTERN.find(content)?.groupValues?.get(1) ?: parenMerchant

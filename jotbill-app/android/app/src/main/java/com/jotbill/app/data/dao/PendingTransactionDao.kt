@@ -93,6 +93,64 @@ interface PendingTransactionDao {
     ): PendingTransactionEntity?
 
     /**
+     * 跨通道已入账吸收：按「类型 + 金额 + **创建时间窗**」查仍在 pending 的卡（**不限平台**）。
+     *
+     * 场景（真机 2026-11-16）：支付宝结果页证据先落卡（平台=支付宝包名），
+     * 几秒后银行短信自动入账（平台=银行短信）—— 卡与账单并存，用户确认卡即
+     * 双记。自动入账成功后调用本查询吸收同额卡，不再依赖包名维度。
+     *
+     * 窗口落在 `created_at` 而非 `occurred_at`：短信业务时间只到分钟（"10:36"），
+     * 与证据观测时刻可能差 60 秒以上，用真实创建时刻才稳定。
+     *
+     * 只匹配 `status='pending'`；退款/转账/手续费卡由调用方按 type 隔离。
+     */
+    @Query(
+        """
+        SELECT * FROM pending_transactions
+        WHERE status = 'pending'
+          AND type = :type
+          AND amount_minor = :amountMinor
+          AND created_at BETWEEN :windowStart AND :windowEnd
+        ORDER BY created_at DESC
+        """
+    )
+    suspend fun findPendingByAmountWindow(
+        type: String,
+        amountMinor: Long,
+        windowStart: Long,
+        windowEnd: Long
+    ): List<PendingTransactionEntity>
+
+    /**
+     * 启动期跨通道收口：找出「与同额账单在 [windowMillis] 内并存」的支出待确认卡。
+     *
+     * 真机 2026-11-16 遗留形态：修复前支付宝结果页与银行短信会各留一张卡、一笔账单；
+     * 启动时把这类卡标记忽略，避免用户在待确认中心确认后双记。单号冲突（都非空
+     * 且不同）不吸收，真实第二笔仍保留。
+     */
+    @Query(
+        """
+        SELECT p.* FROM pending_transactions p
+        WHERE p.status = 'pending'
+          AND p.type = 'expense'
+          AND EXISTS (
+            SELECT 1 FROM bills b
+            WHERE b.type = 'expense'
+              AND b.amount_minor = p.amount_minor
+              AND ABS(b.created_at - p.created_at) <= :windowMillis
+              AND (
+                p.order_id IS NULL OR TRIM(p.order_id) = ''
+                OR b.order_id IS NULL OR TRIM(b.order_id) = ''
+                OR UPPER(TRIM(b.order_id)) = UPPER(TRIM(p.order_id))
+              )
+          )
+        """
+    )
+    suspend fun findPendingExpensesWithRecentSameAmountBill(
+        windowMillis: Long
+    ): List<PendingTransactionEntity>
+
+    /**
      * P3 跳包双卡收敛：**跨包**同额待确认查询 —— 跳包支付（购物 App 拉起微信/
      * 支付宝）会被站内腿与支付包腿各落一张卡，两卡金额相同、时间相邻、分属
      * 不同包名。本查询与 [findRecentPendingByPlatformAndAmount] 互补：只查
@@ -257,4 +315,28 @@ interface PendingTransactionDao {
         """
     )
     suspend fun countPendingRefundsByOriginalAndAmount(originalBillId: String, amountMinor: Long): Int
+
+    /**
+     * 跨来源退款去重（2026-11-16）：同额退款卡在时间窗内已存在 ⇒ 判为同一笔退款。
+     *
+     * 同一笔退款可能同时被拼多多通知（「退款成功通知」）、微信/支付宝退款通知、
+     * 银行到账短信等多条信号描述 —— 各来源 sourceEventKey 不同，单靠键幂等挡不住，
+     * 需按「同额 + 创建时间窗」在 RefundLinker 入口收口，避免同笔退款多张卡。
+     */
+    @Query(
+        """
+        SELECT * FROM pending_transactions
+        WHERE status = 'pending'
+          AND type = 'refund'
+          AND amount_minor = :amountMinor
+          AND created_at BETWEEN :windowStart AND :windowEnd
+        ORDER BY created_at DESC
+        LIMIT 1
+        """
+    )
+    suspend fun findRecentPendingRefundByAmount(
+        amountMinor: Long,
+        windowStart: Long,
+        windowEnd: Long
+    ): PendingTransactionEntity?
 }

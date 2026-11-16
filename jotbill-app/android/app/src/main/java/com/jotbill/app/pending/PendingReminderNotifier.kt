@@ -6,6 +6,8 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import com.jotbill.app.rules.DuplicateGuard
 import com.jotbill.app.utils.JotBillLog
 
@@ -28,6 +30,20 @@ internal object PendingReminderNotifier {
 
     /** 连续多笔支付时的最小通知间隔,防止通知刷屏;被抑制次数计入日志。 */
     private const val MIN_NOTIFY_INTERVAL_MILLIS = 2_000L
+
+    /**
+     * 新建待确认提醒的投递宽限（2026-11-16 真机双通知修复）。
+     *
+     * 证据卡（支付宝结果页/通知）常比银行短信早到 2~5 秒：卡刚建就发提醒，
+     * 短信入账后卡被吸收，用户会同时看到「有一笔交易待确认」和「已自动记一笔」
+     * 两条同额通知。宽限期内卡被吸收（removed）则不再发提醒。
+     */
+    private const val NEW_REMINDER_GRACE_MILLIS = 8_000L
+
+    private val graceHandler = Handler(Looper.getMainLooper())
+
+    /** 宽限期内待投递的提醒（pendingId → Runnable）；removed 时取消。 */
+    private val scheduledPosts = mutableMapOf<String, Runnable>()
 
     @Volatile
     private var appContext: Context? = null
@@ -71,6 +87,7 @@ internal object PendingReminderNotifier {
         if (info.removed) {
             // 待确认已确认/忽略/自动入账清理：消除状态栏上"有一笔交易待确认"，
             // 否则通知挂到用户手动划掉为止
+            cancelScheduledReminder(info.pendingId)
             val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
             manager?.cancel(info.pendingId.hashCode())
             JotBillLog.i(TAG, "已消除待确认通知: id=${info.pendingId.take(16)}")
@@ -103,6 +120,38 @@ internal object PendingReminderNotifier {
             JotBillLog.i(TAG, "跳过提醒: 用户已关闭开关")
             return
         }
+        // 宽限期投递（2026-11-16）：给银行短信等另一通道先入账的机会；
+        // 宽限期内卡被吸收（removed）则彻底不发，避免同额双通知。
+        scheduleReminder(context, info)
+    }
+
+    private fun scheduleReminder(context: Context, info: PendingChangeInfo) {
+        // 退款/导入不需要宽限期：
+        // - 退款卡不会被「自动入账通知」吸收（退款链路命中同额时直接返回 Duplicate，
+        //   既有卡与其提醒保持），8 秒延后只会让用户觉得识别慢；
+        // - 导入批次没有竞争通道，保持即时。
+        if (info.type == "refund" || info.sourceType == DuplicateGuard.IMPORT_SOURCE_TYPE) {
+            postReminder(context, info)
+            return
+        }
+        val runnable = Runnable {
+            synchronized(scheduledPosts) { scheduledPosts.remove(info.pendingId) }
+            postReminder(context, info)
+        }
+        synchronized(scheduledPosts) {
+            scheduledPosts.remove(info.pendingId)?.let(graceHandler::removeCallbacks)
+            scheduledPosts[info.pendingId] = runnable
+        }
+        graceHandler.postDelayed(runnable, NEW_REMINDER_GRACE_MILLIS)
+    }
+
+    /** 卡片在宽限期内被吸收/忽略时取消待投递的提醒。 */
+    private fun cancelScheduledReminder(pendingId: String) {
+        val runnable = synchronized(scheduledPosts) { scheduledPosts.remove(pendingId) }
+        runnable?.let(graceHandler::removeCallbacks)
+    }
+
+    private fun postReminder(context: Context, info: PendingChangeInfo) {
         val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
         if (manager == null || !manager.areNotificationsEnabled()) {
             JotBillLog.w(TAG, "跳过提醒: 应用通知权限未授予(API 33+ 需运行时授权)")

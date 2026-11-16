@@ -89,6 +89,44 @@ class PaymentNotificationService : NotificationListenerService() {
         super.onListenerConnected()
         JotBillLog.i(TAG, "通知监听服务已连接")
         SentryLogger.addBreadcrumb("通知监听服务已连接", category = "service_lifecycle")
+        // 跨通道收口（2026-11-16）：通知监听通常比无障碍更早连上，把「卡与同额
+        // 账单并存」的历史遗留卡在此收口，避免用户确认后双记。
+        scope.launch {
+            try {
+                val matcher = CheckoutPaymentMatcher(JotBillDatabaseProvider.get(applicationContext))
+                val reconciled = matcher.reconcilePendingAgainstRecentBills()
+                if (reconciled > 0) {
+                    JotBillLog.i(TAG, "启动期跨通道收口: 忽略同额待确认卡=$reconciled")
+                }
+            } catch (error: RuntimeException) {
+                JotBillLog.w(TAG, "启动期跨通道收口失败", error)
+            }
+            // 补扫活跃短信通知（真机 2026-11-16）：系统在后台可能不投递通知回调，
+            // 连接时把近 10 分钟仍活跃的短信通知补处理一次 —— 退款证据按
+            // 「包名+时间桶+金额」幂等，支出重复投递走相似度吸收，不会双记。
+            try {
+                val active = activeNotifications
+                val cutoff = System.currentTimeMillis() - SMS_ACTIVE_CATCHUP_WINDOW_MILLIS
+                var processed = 0
+                for (sbn in active.orEmpty()) {
+                    val catchUp = sbn.packageName in RecognitionPackages.BOOKKEEPING_NOTIFICATION_PACKAGES ||
+                        sbn.packageName == PDD_PACKAGE
+                    if (!catchUp) continue
+                    if (sbn.postTime < cutoff) continue
+                    if (sbn.packageName == PDD_PACKAGE) {
+                        processPddNotification(sbn)
+                    } else {
+                        processBankSmsNotification(sbn)
+                    }
+                    processed += 1
+                }
+                if (processed > 0) {
+                    JotBillLog.i(TAG, "监听连接补扫短信通知: count=$processed")
+                }
+            } catch (error: RuntimeException) {
+                JotBillLog.w(TAG, "监听连接补扫短信通知失败", error)
+            }
+        }
     }
 
     /**
@@ -145,9 +183,10 @@ class PaymentNotificationService : NotificationListenerService() {
             processBankSmsNotification(sbn)
             return
         }
-        // 诊断（debug）：拼多多支付/退款是否有可用通知尚未证实，先抓样本定方案。
+        // 拼多多：支付环节无通知（已实证），只处理退款 —— 微信零钱/多多钱包退款
+        // 没有银行短信时，这是唯一的退款信号。
         if (packageName == PDD_PACKAGE) {
-            logPddNotificationSample(sbn)
+            processPddNotification(sbn)
             return
         }
         // 只认内置解析器白名单：设置页的「监听应用/过滤关键词」配置 UI 已下线
@@ -420,20 +459,50 @@ class PaymentNotificationService : NotificationListenerService() {
     }
 
     /**
+     * 拼多多通知：支付环节无通知（真机实证），只解析退款；其余保持 debug 采样。
+     */
+    private fun processPddNotification(sbn: StatusBarNotification) {
+        if (!BookkeepingChannels.shouldProcess(this, PddNotificationParser.PACKAGE)) {
+            JotBillLog.i(TAG, "[ABK诊断] 拼多多通知被渠道闸丢弃（pdd 渠道或总开关关闭）")
+            return
+        }
+        val content = notificationContentOf(sbn) ?: return
+        val refund = PddNotificationParser.parseRefund(content, sbn.postTime)
+        if (refund != null) {
+            JotBillLog.i(
+                TAG,
+                "[ABK诊断] 拼多多退款通知命中: amount=${refund.amountMinor}分, 转 RefundLinker"
+            )
+            scope.launch { handleRefundEvidence(refund) }
+            return
+        }
+        logPddNotificationSample(sbn)
+    }
+
+    /** 通知标题 + 正文 + bigText 等拼接全文（不含原始数字脱敏，日志侧自行处理）。 */
+    private fun notificationContentOf(sbn: StatusBarNotification): String? {
+        val notification = sbn.notification ?: return null
+        val extras = notification.extras ?: return null
+        val title = extras.getCharSequence(Notification.EXTRA_TITLE)?.toString() ?: ""
+        val titleBig = extras.getCharSequence(Notification.EXTRA_TITLE_BIG)?.toString() ?: ""
+        val text = extras.getCharSequence(Notification.EXTRA_TEXT)?.toString() ?: ""
+        val bigText = extras.getCharSequence(Notification.EXTRA_BIG_TEXT)?.toString() ?: ""
+        val subText = extras.getCharSequence(Notification.EXTRA_SUB_TEXT)?.toString() ?: ""
+        val summaryText = extras.getCharSequence(Notification.EXTRA_SUMMARY_TEXT)?.toString() ?: ""
+        val ticker = notification.tickerText?.toString() ?: ""
+        return listOf(title, titleBig, text, bigText, subText, summaryText, ticker)
+            .filter { it.isNotBlank() }
+            .joinToString(" ")
+            .takeIf { it.isNotBlank() }
+    }
+
+    /**
      * 诊断（debug 构建）：拼多多通知样本 —— 确认支付/退款通知的渠道、标题与文本形态，
      * 为后续是否接入解析提供真机依据。数字脱敏，release 构建不输出；按 key+内容去重。
      */
     private fun logPddNotificationSample(sbn: StatusBarNotification) {
         if (!com.jotbill.app.BuildConfig.DEBUG) return
-        val notification = sbn.notification ?: return
-        val extras = notification.extras ?: return
-        val title = extras.getCharSequence(Notification.EXTRA_TITLE)?.toString() ?: ""
-        val text = extras.getCharSequence(Notification.EXTRA_TEXT)?.toString() ?: ""
-        val bigText = extras.getCharSequence(Notification.EXTRA_BIG_TEXT)?.toString() ?: ""
-        val ticker = notification.tickerText?.toString() ?: ""
-        val content = listOf(title, text, bigText, ticker)
-            .filter { it.isNotBlank() }
-            .joinToString(" ")
+        val content = notificationContentOf(sbn) ?: return
         val signature = "${sbn.key}|${content.hashCode()}"
         synchronized(recentPddSignatures) {
             if (!recentPddSignatures.add(signature)) return
@@ -448,7 +517,7 @@ class PaymentNotificationService : NotificationListenerService() {
         val sample = content.replace(Regex("\\d"), "#").take(140)
         JotBillLog.i(
             TAG,
-            "[ABK诊断] 拼多多通知样本: channel=${notification.channelId}, key=${sbn.key}, " +
+            "[ABK诊断] 拼多多通知样本: channel=${sbn.notification?.channelId}, key=${sbn.key}, " +
                 "长度=${content.length}, 样本(数字脱敏)=$sample"
         )
     }
@@ -758,6 +827,9 @@ class PaymentNotificationService : NotificationListenerService() {
 
         /** 拼多多通知样本去重容量（同 key+内容只记一次）。 */
         private const val PDD_SIGNATURE_CAPACITY = 32
+
+        /** 监听连接补扫活跃短信通知的时间窗（覆盖后台漏回调的常见时差）。 */
+        private const val SMS_ACTIVE_CATCHUP_WINDOW_MILLIS = 10 * 60 * 1000L
 
         /** Accepted 或 AiDispatched 表示无障碍链路已接收证据，其余情况才进入纯通知待确认。 */
 

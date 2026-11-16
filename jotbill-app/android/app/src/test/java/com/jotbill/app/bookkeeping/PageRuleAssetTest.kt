@@ -74,6 +74,30 @@ class PageRuleAssetTest {
     }
 
     @Test
+    fun `拼多多退款页规则抽取金额与退款渠道`() {
+        val registry = loadRegistry()
+        val rule = registry.rulesFor("com.xunmeng.pinduoduo/*")!!
+            .first { it.ruleId == 2000210 }
+        assertEquals("refund", rule.jotbillType)
+        val dump = PageNodeDumper.dump(
+            FakePageNode(
+                text = null,
+                contentDescription = null,
+                children = listOf(
+                    FakePageNode("已退款", null),
+                    FakePageNode("67.8元将退到微信钱包（预计20分钟内到账）", null)
+                )
+            ),
+            rule
+        )
+        assertTrue("退款页应定位成功", dump.located)
+        val fields = rule.extractFrom(dump.dump)
+        assertNotNull("退款金额应抽取成功: dump=${dump.dump}", fields)
+        assertEquals("67.8", fields!!["amount"])
+        assertEquals("微信钱包", fields["refundChannel"])
+    }
+
+    @Test
     fun `支付宝结果页规则在真实格式 dump 上抽取金额`() {
         val registry = loadRegistry()
         val rule = registry.rulesFor("com.alipay.android.msp.ui.views.MspContainerActivity")!!
@@ -153,6 +177,6 @@ class PageRuleAssetTest {
          */
         private const val EXPECTED_KEYS = 21
 
-        private const val EXPECTED_RULES = 27
+        private const val EXPECTED_RULES = 28
     }
 }

@@ -84,6 +84,27 @@ class BankSmsNotificationParserTest {
         assertNull("工资入账不是退款", refund)
     }
 
+    /** 邮储退货格式（真机 2026-11-16）：「退货，收入金额39.90元」，无到账/货币符号。 */
+    @Test
+    fun 邮储退货收入短信判为退款() {
+        val refund = BankSmsNotificationParser.parseRefund(
+            "【邮储银行】26年11月16日10:55您尾号5607账户退货，收入金额39.90元，余额1782.59元",
+            occurredAt = 1_000_000L
+        )
+        assertNotNull("退货短信必须判为退款", refund)
+        assertEquals(3990L, refund!!.amountMinor)
+    }
+
+    /** 无退款词的「收入金额」入账不得误判（工资/利息等普通收入）。 */
+    @Test
+    fun 普通收入金额不入退款() {
+        val refund = BankSmsNotificationParser.parseRefund(
+            "【邮储银行】26年11月16日10:55您尾号5607账户代发工资，收入金额5000.00元，余额6782.59元",
+            occurredAt = 1_000_000L
+        )
+        assertNull("无退款词的收入金额不是退款", refund)
+    }
+
     @Test
     fun 普通到账非商户不入退款() {
         val refund = BankSmsNotificationParser.parseRefund(

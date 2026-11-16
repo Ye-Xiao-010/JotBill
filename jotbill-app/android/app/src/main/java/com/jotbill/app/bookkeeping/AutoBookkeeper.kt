@@ -5,12 +5,16 @@ import com.jotbill.app.data.JotBillDatabase
 import com.jotbill.app.data.JotBillDatabaseProvider
 import com.jotbill.app.data.LedgerRepository
 import com.jotbill.app.data.entity.BillEntity
+import com.jotbill.app.notification.PaymentEvidenceInput
+import com.jotbill.app.notification.PaymentResultNormalizer
 import com.jotbill.app.recognition.CheckoutPaymentMatcher
 import com.jotbill.app.recognition.PaymentNotificationFallbackSignal
+import com.jotbill.app.recognition.RefundLinker
 import com.jotbill.app.rules.DuplicateGuard
 import com.jotbill.app.rules.OrderIdNormalizer
 import com.jotbill.app.rules.RuleEngine
 import com.jotbill.app.utils.JotBillLog
+import java.security.MessageDigest
 import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalDateTime
@@ -89,6 +93,11 @@ class AutoBookkeeper(
         record: AutoBookkeepingEngine.ExtractedRecord,
         amountMinor: Long
     ) {
+        // 页面退款记录（jotbillType="refund"）：走退款链路，不按收支入账。
+        if (record.jotbillType == "refund") {
+            processRefundRecord(record, amountMinor)
+            return
+        }
         val type = resolveType(record)
         val merchant = (record.fields["counterparty"] ?: record.fields["merchant"])
             ?.trim()
@@ -201,7 +210,47 @@ class AutoBookkeeper(
                 type = type
             )?.takeIf { database.categoryDao().getById(it) != null }
 
+        // ---- 跨信号同额吸收（2026-11-16 真机双账修复）----
+        // 另一通道刚入账的同额账单（如用户刚确认的支付宝待确认卡，带商户名/
+        // 支付宝账户）与新通道账单（银行短信，现金账户/无商户）账户与商户都
+        // 不同，旧相似度判重不命中 ⇒ 会各记一笔。判据：同类型 + 同金额 +
+        // 近 60 秒创建 + **平台不同**（不同信号来源）+ 订单号不冲突。
+        // 平台相同不吸收：同一通道连续两笔同额支付是两笔真账（如两次同价商品）。
         val now = System.currentTimeMillis()
+        val newPlatform = patch.platform ?: channelLabel(record.sourcePackage)
+        val recentOtherChannelBill = try {
+            database.billDao().findRecentByAmountAndType(
+                type = type,
+                amountMinor = amountMinor,
+                windowStart = now - CROSS_CHANNEL_PENDING_ABSORB_WINDOW_MILLIS,
+                windowEnd = now
+            )?.takeIf { existing ->
+                (existing.platform ?: "") != (newPlatform ?: "") &&
+                    (existing.orderId.isNullOrBlank() ||
+                        orderId.isNullOrBlank() ||
+                        existing.orderId == orderId)
+            }
+        } catch (error: RuntimeException) {
+            if (error is kotlinx.coroutines.CancellationException) throw error
+            JotBillLog.w(TAG, "跨信号同额账单查询失败，按原逻辑入账", error)
+            null
+        }
+        if (recentOtherChannelBill != null) {
+            enrichExistingBill(
+                existing = recentOtherChannelBill,
+                merchant = merchant,
+                orderId = orderId,
+                categoryId = categoryId
+            )
+            JotBillLog.i(
+                TAG,
+                "跨信号同额账单已存在，吸收补全不重复入账: " +
+                    "bill=${recentOtherChannelBill.id.take(8)}, amount=$amountMinor, " +
+                    "existingPlatform=${recentOtherChannelBill.platform}, newPlatform=$newPlatform"
+            )
+            return
+        }
+
         val bill = BillEntity(
             id = UUID.randomUUID().toString(),
             amountMinor = amountMinor,
@@ -323,6 +372,14 @@ class AutoBookkeeper(
                     "规则记录命中既有账单(level-1 合并)，不重复入账: rule=${record.ruleId}"
                 )
             }
+            // 跨通道吸收：其它通道（如支付宝结果页）此前落的同额待确认卡，
+            // 在本通道入账后必须收口——否则用户确认卡会双记（2026-11-16 真机）。
+            absorbRecentlyBookedPendingCards(
+                type = type,
+                amountMinor = amountMinor,
+                createdAt = now,
+                orderId = orderId
+            )
         } catch (error: Exception) {
             // 协程取消（服务销毁等）静默退出，不做兜底（兜底也必然再被取消）
             if (error is kotlinx.coroutines.CancellationException) throw error
@@ -421,6 +478,105 @@ class AutoBookkeeper(
     }
     // ── 兜底：转待确认（弹窗管线已被认领让路时，证据不能丢）──────────────
 
+    /**
+     * 页面退款记录（拼多多退款详情页等）→ 退款链路。
+     *
+     * 规则资产以 `jotbillType="refund"` 标注；退款详情页没有订单号，证据交
+     * [RefundLinker]：原单关联不上时落待确认卡（ORIGINAL_MISSING），不静默丢。
+     * 页面身份按「包名+规则+金额+渠道」记忆 7 天，重复扫描/回访不重复建卡
+     * （见 [RefundPageMemory]）。
+     */
+    private suspend fun processRefundRecord(
+        record: AutoBookkeepingEngine.ExtractedRecord,
+        amountMinor: Long
+    ) {
+        val channel = record.fields["refundChannel"]?.trim()?.takeIf { it.isNotEmpty() }
+        val memoryKey =
+            "page-refund|${record.sourcePackage}|${record.ruleId}|$amountMinor|${channel.orEmpty()}"
+        if (RefundPageMemory.isSeen(context, memoryKey)) {
+            JotBillLog.i(
+                TAG,
+                "页面退款页已处理过(7天内)，跳过: amount=$amountMinor, channel=$channel"
+            )
+            return
+        }
+        val evidence = PaymentEvidenceInput(
+            sourcePackage = record.sourcePackage,
+            amountMinor = amountMinor,
+            occurredAt = record.extractTime.takeIf { it > 0L } ?: System.currentTimeMillis(),
+            merchant = channelLabel(record.sourcePackage),
+            orderId = null,
+            paymentStatus = PaymentResultNormalizer.PAYMENT_STATUS_REFUND,
+            sourceEventKey = sha256Text(memoryKey),
+            rawTextHash = sha256Text("page-refund-text|${record.ruleId}|$amountMinor"),
+            receivingAccountHint = channel
+        )
+        val outcome = try {
+            RefundLinker(database).processRefund(evidence)
+        } catch (error: Exception) {
+            if (error is kotlinx.coroutines.CancellationException) throw error
+            JotBillLog.w(TAG, "页面退款证据处理失败", error)
+            return
+        }
+        RefundPageMemory.mark(context, memoryKey)
+        JotBillLog.i(
+            TAG,
+            "页面退款证据处理完成: amount=$amountMinor, channel=$channel, " +
+                "rule=${record.ruleId}, outcome=${outcome.javaClass.simpleName}"
+        )
+    }
+
+    private fun sha256Text(text: String): String =
+        MessageDigest.getInstance("SHA-256").digest(text.toByteArray(Charsets.UTF_8))
+            .joinToString("") { "%02x".format(it) }
+
+
+    /**
+     * 跨通道吸收：本通道刚入账后，把其它通道此前落的同额待确认卡标记忽略。
+     *
+     * 背景（真机 2026-11-16）：支付宝结果页证据先落卡（平台=支付宝包名），
+     * 数秒后银行短信自动入账（平台=银行短信）—— 卡与账单并存，用户确认卡
+     * 即双记。只吸收 60 秒内、类型与金额相同、订单号不冲突的卡；更早或单号
+     * 冲突的卡保持原状（可能是另一笔真实交易，不能吞）。
+     */
+    private suspend fun absorbRecentlyBookedPendingCards(
+        type: String,
+        amountMinor: Long,
+        createdAt: Long,
+        orderId: String?
+    ) {
+        if (createdAt <= 0L) return
+        val cards = try {
+            database.pendingTransactionDao().findPendingByAmountWindow(
+                type = type,
+                amountMinor = amountMinor,
+                windowStart = createdAt - CROSS_CHANNEL_PENDING_ABSORB_WINDOW_MILLIS,
+                windowEnd = createdAt + CROSS_CHANNEL_PENDING_ABSORB_WINDOW_MILLIS
+            )
+        } catch (error: RuntimeException) {
+            JotBillLog.w(TAG, "跨通道待确认卡查询失败，跳过吸收", error)
+            return
+        }
+        for (card in cards) {
+            if (!card.orderId.isNullOrBlank() && !orderId.isNullOrBlank() && card.orderId != orderId) {
+                continue
+            }
+            val ignored = try {
+                ledger.ignorePendingTransaction(card, card.version)
+            } catch (error: Exception) {
+                JotBillLog.w(TAG, "跨通道吸收待确认卡失败: pending=${card.id.take(16)}", error)
+                false
+            }
+            if (ignored) {
+                JotBillLog.i(
+                    TAG,
+                    "跨通道吸收同额待确认卡: pending=${card.id.take(16)}, " +
+                        "amount=$amountMinor, platform=${card.platform}"
+                )
+            }
+        }
+    }
+
     private suspend fun fallbackToPending(
         record: AutoBookkeepingEngine.ExtractedRecord,
         amountMinor: Long,
@@ -479,6 +635,12 @@ class AutoBookkeeper(
 
         /** 银行短信来源包（BookkeepingChannels 的 mms 渠道同款包名）。 */
         private const val SMS_SOURCE_PACKAGE = "com.android.mms"
+
+        /**
+         * 跨通道待确认卡吸收窗（2026-11-16）：本通道入账后吸收其它通道此前
+         * 60 秒内落的同额卡；**不覆盖更早的同额卡**（可能是另一笔真实交易）。
+         */
+        private const val CROSS_CHANNEL_PENDING_ABSORB_WINDOW_MILLIS = 60_000L
 
         /**
          * B3 拍板（2026-11-04）：短信渠道账户字段命中用户 set_account 规则时的

@@ -1092,6 +1092,11 @@ class DataModule(
         )
         val settledBill = when (outcome) {
             is PendingConfirmService.Outcome.Confirmed -> outcome.bill
+            is PendingConfirmService.Outcome.AutoBooked ->
+                // 卡片已被其它通道自动入账：返回既有账单，RN 按成功处理
+                // （真机 2026-11-16：弹窗点确认与短信入账并发）。
+                database.billDao().getById(outcome.billId)
+                    ?: throw BridgeException("VERSION_CONFLICT", "Pending transaction $id has changed")
             is PendingConfirmService.Outcome.AlreadyHandled ->
                 throw BridgeException("VERSION_CONFLICT", "Pending transaction $id has changed")
             is PendingConfirmService.Outcome.DuplicateConfirmRequired ->

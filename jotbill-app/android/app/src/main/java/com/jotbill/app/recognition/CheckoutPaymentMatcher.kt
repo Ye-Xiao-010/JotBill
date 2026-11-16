@@ -132,6 +132,13 @@ private const val ORPHAN_DEDUP_WINDOW_MILLIS = PaymentTiming.SAME_TXN_WINDOW_MIL
 /** P3：银行短信来源包 —— 跨包同额归并的双向排除对象（拍板②：短信 orderId 恒空）。 */
 private const val MMS_SOURCE_PACKAGE = "com.android.mms"
 
+/**
+ * 跨通道已入账判定窗（2026-11-16）：其它通道刚入账的同额账单视为同一笔，
+ * 证据不再建卡。60 秒足以覆盖「证据落卡/入账与另一通道自动入账」的真实时差；
+ * 更早的同额账单维持疑似重复提示（不吞真实第二笔同额支付）。
+ */
+private const val CROSS_CHANNEL_RECENT_BILL_WINDOW_MILLIS = 60_000L
+
 /** M7：mergedSourceEventKeys 留痕数组上限（先到者优先，溢出转计数键）。 */
 private const val MAX_MERGED_SOURCE_EVENT_KEYS = 16
 
@@ -346,6 +353,12 @@ internal data class OrphanOutcome(
 
         /** 已直接入账（N-2：强证据自动记账），不是落待确认。 */
         AUTO_COMMITTED,
+
+        /**
+         * 近期已有同额账单（其它通道已自动入账），证据不再建卡。
+         * 真机 2026-11-16：银行短信入账后支付宝结果页证据仍落卡，确认即双记。
+         */
+        SUPPRESSED_ALREADY_BOOKED,
     }
 
     val isStored: Boolean get() = kind == Kind.STORED
@@ -1029,6 +1042,41 @@ internal class CheckoutPaymentMatcher(
                     ?: RuleEngine.FieldPatch()
             )
 
+            // ---- 跨通道已入账抑制（2026-11-16 真机）----
+            // 其它通道（如银行短信）刚入账的账单与卡片同额 ⇒ 证据不再建卡：卡与
+            // 账单并存会诱导用户确认后双记。按「同额 + 近 60 秒创建」直接判定，
+            // 不依赖账户/商户相似度（短信账单无商户、账户落现金，相似因素可能
+            // 全空）；订单号冲突（都非空且不同）不抑制，保留真实第二笔。
+            val recentBookedBill = try {
+                database.billDao().findRecentByAmountAndType(
+                    type = "expense",
+                    amountMinor = signal.amountMinor,
+                    windowStart = now - CROSS_CHANNEL_RECENT_BILL_WINDOW_MILLIS,
+                    windowEnd = now
+                )
+            } catch (error: RuntimeException) {
+                JotBillLog.w(
+                    "CheckoutPaymentMatcher",
+                    "跨通道已入账查询失败，按原逻辑建卡",
+                    error
+                )
+                null
+            }
+            if (recentBookedBill != null &&
+                (recentBookedBill.orderId.isNullOrBlank() ||
+                    signal.orderId.isNullOrBlank() ||
+                    recentBookedBill.orderId == signal.orderId)
+            ) {
+                JotBillLog.i(
+                    "CheckoutPaymentMatcher",
+                    "孤立支付证据命中近期已入账账单，不再建卡: " +
+                        "bill=${recentBookedBill.id.take(8)}, amount=${signal.amountMinor}, " +
+                        "pkg=${signal.paymentPackage}"
+                )
+                outcome = OrphanOutcome(OrphanOutcome.Kind.SUPPRESSED_ALREADY_BOOKED)
+                return@withTransaction
+            }
+
             // ---- 阶段五 T6 去重第 4 级：纯通知待确认创建前疑似重复提示（只提示不合并）----
             // 查询异常保守处理：疑似重复信息缺失不阻塞待确认创建（证据不丢弃），
             // 保持原 conflictReason；命中时覆盖为 SUSPECTED_DUPLICATE 并在
@@ -1407,6 +1455,43 @@ internal class CheckoutPaymentMatcher(
             )
         }
         return outcome
+    }
+
+    /**
+     * 启动期跨通道收口（2026-11-16）：卡片与同额账单在 60 秒内并存 ⇒ 判为同一笔
+     * 已被其它通道入账，忽略卡片（历史遗留形态见 [findPendingExpensesWithRecentSameAmountBill]）。
+     *
+     * 只收口 `expense` 卡：退款/转账/手续费卡与账单是两类账，不参与。
+     * 查询/写入异常静默（启动链路不得因此崩溃），返回实际忽略的卡数。
+     */
+    suspend fun reconcilePendingAgainstRecentBills(): Int {
+        val cards = try {
+            database.pendingTransactionDao()
+                .findPendingExpensesWithRecentSameAmountBill(CROSS_CHANNEL_RECENT_BILL_WINDOW_MILLIS)
+        } catch (error: RuntimeException) {
+            JotBillLog.w("CheckoutPaymentMatcher", "启动期跨通道收口查询失败", error)
+            return 0
+        }
+        if (cards.isEmpty()) return 0
+        val ledger = LedgerRepository(database)
+        var ignored = 0
+        for (card in cards) {
+            val ok = try {
+                ledger.ignorePendingTransaction(card, card.version)
+            } catch (error: Exception) {
+                JotBillLog.w("CheckoutPaymentMatcher", "启动期收口忽略卡片失败: pending=${card.id.take(16)}", error)
+                false
+            }
+            if (ok) {
+                ignored += 1
+                JotBillLog.i(
+                    "CheckoutPaymentMatcher",
+                    "启动期收口同额卡(已有账单): pending=${card.id.take(16)}, " +
+                        "amount=${card.amountMinor}, platform=${card.platform}"
+                )
+            }
+        }
+        return ignored
     }
 
     /**

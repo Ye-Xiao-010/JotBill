@@ -26,6 +26,13 @@ private const val REFUND_CANDIDATE_WINDOW_MILLIS = 90L * 24 * 60 * 60 * 1000
 /** 组合候选上限：候选只作待确认提示，超出后由用户在待确认中心自行搜索原交易。 */
 private const val REFUND_CANDIDATE_LIMIT = 5
 
+/**
+ * 跨来源同额退款去重窗（2026-11-16 真机）：同一笔退款可能由拼多多通知
+ * （「退款成功通知」）、微信/支付宝退款通知、银行到账短信等多条信号描述，
+ * 各来源 sourceEventKey 不同。2 分钟内已有同额退款卡视为同一笔，不建第二张。
+ */
+private const val REFUND_CROSS_SOURCE_DEDUP_WINDOW_MILLIS = 2 * 60 * 1000L
+
 /** 退款自动入账的审计操作者标记。 */
 private const val REFUND_AUTO_COMMIT_OPERATOR = "refund_auto_commit"
 
@@ -99,6 +106,45 @@ internal class RefundLinker(
             database.auditEntryDao()
                 .getByEntity(PENDING_CONFIRM_AUDIT_TYPE, pendingId).isNotEmpty()
         ) {
+            return@withTransaction RefundOutcome.Duplicate
+        }
+
+        // ---- 跨来源同额退款去重（2026-11-16 真机）----
+        // 拼多多「退款成功通知」、微信/支付宝退款通知、银行到账短信会描述同一笔
+        // 退款，键族各不相同；2 分钟内同额退款卡已存在即判为同一笔，不建第二张。
+        val recentRefundCard = database.pendingTransactionDao().findRecentPendingRefundByAmount(
+            amountMinor = input.amountMinor,
+            windowStart = now - REFUND_CROSS_SOURCE_DEDUP_WINDOW_MILLIS,
+            windowEnd = now + REFUND_CROSS_SOURCE_DEDUP_WINDOW_MILLIS
+        )
+        if (recentRefundCard != null) {
+            JotBillLog.i(
+                "RefundLinker",
+                "跨来源同额退款卡已存在，判为同一笔: pending=${recentRefundCard.id.take(16)}, " +
+                    "amount=${input.amountMinor}, source=${input.sourcePackage}"
+            )
+            return@withTransaction RefundOutcome.Duplicate
+        }
+
+        // 同额退款**账单**在 2 分钟内已存在（例如用户先确认了页面退款卡，随后
+        // 银行退款短信才到）⇒ 同样判为同一笔。只查 pending 卡挡不住"卡已被
+        // 确认入账"的时间差。
+        val recentRefundBill = try {
+            database.billDao().findRecentByAmountAndType(
+                type = "refund",
+                amountMinor = input.amountMinor,
+                windowStart = now - REFUND_CROSS_SOURCE_DEDUP_WINDOW_MILLIS,
+                windowEnd = now
+            )
+        } catch (error: RuntimeException) {
+            null
+        }
+        if (recentRefundBill != null) {
+            JotBillLog.i(
+                "RefundLinker",
+                "跨来源同额退款账单已存在，判为同一笔: bill=${recentRefundBill.id.take(8)}, " +
+                    "amount=${input.amountMinor}, source=${input.sourcePackage}"
+            )
             return@withTransaction RefundOutcome.Duplicate
         }
 

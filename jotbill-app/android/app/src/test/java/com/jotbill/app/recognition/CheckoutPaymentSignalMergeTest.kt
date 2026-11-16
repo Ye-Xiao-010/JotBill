@@ -4,6 +4,7 @@ import android.app.Application
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import com.jotbill.app.data.JotBillDatabase
+import com.jotbill.app.data.entity.BillEntity
 import com.jotbill.app.data.entity.PendingTransactionEntity
 import kotlinx.coroutines.runBlocking
 import org.json.JSONObject
@@ -43,6 +44,7 @@ class CheckoutPaymentSignalMergeTest {
         const val BASE = 1_800_000_000_000L
         const val PDD = "com.xunmeng.pinduoduo"
         const val WECHAT = "com.tencent.mm"
+        const val ALIPAY = "com.eg.android.AlipayGphone"
         const val MMS = "com.android.mms"
     }
 
@@ -426,6 +428,129 @@ class CheckoutPaymentSignalMergeTest {
             "溢出条数必须转计数（留痕能力不丢）",
             1,
             json.optInt("mergedSourceEventKeysOverflow", 0)
+        )
+    }
+
+    // ── 跨通道已入账抑制（2026-11-16 真机双记修复）────────────────────────
+
+    /**
+     * ⑨ 近 60 秒内已有同额账单（如银行短信刚入账）⇒ 本证据不再建卡。
+     * 真机形态：支付宝结果页先落卡、短信后入账；或短信入账后结果页证据迟到。
+     */
+    @Test
+    fun 近期同额账单存在时证据不再建卡() = runBlocking {
+        val now = System.currentTimeMillis()
+        insertBankSmsBill(amountMinor = 31001L, occurredAt = now, createdAt = now)
+
+        // 带商户的信号：DuplicateGuard 的相似因素不命中（账单无商户、账户不同），
+        // 抑制必须由「同额 + 近期创建」直接判据生效。
+        val outcome = deliver(
+            signal(ALIPAY, 31001L, now, null, "evt-booked-recent")
+        )
+
+        assertEquals(
+            "近期已有同额账单，证据必须被抑制: $outcome",
+            OrphanOutcome.Kind.SUPPRESSED_ALREADY_BOOKED,
+            outcome.kind
+        )
+        assertEquals("不得再建待确认卡", 0, pendingCount())
+    }
+
+    /** ⑩ 60 秒外的同额账单只做疑似重复标记，卡照建（真实第二笔不能吞）。 */
+    @Test
+    fun 较早同额账单仍建疑似重复卡() = runBlocking {
+        val now = System.currentTimeMillis()
+        insertBankSmsBill(
+            amountMinor = 32001L,
+            occurredAt = now,
+            createdAt = now - 10 * 60_000L
+        )
+
+        deliver(signalNoMerchant(ALIPAY, 32001L, now, "evt-booked-old"))
+
+        assertEquals("窗口外的同额账单不得抑制新卡", 1, pendingCount())
+    }
+
+    /** ⑪ 启动期收口：修复前遗留的「卡 + 同额账单」并存形态，启动时忽略卡片。 */
+    @Test
+    fun 启动期收口忽略与账单并存的同额卡() = runBlocking {
+        val now = System.currentTimeMillis()
+        insertBankSmsBill(amountMinor = 33001L, occurredAt = now, createdAt = now)
+        database.pendingTransactionDao().insertIfAbsent(
+            PendingTransactionEntity(
+                id = "pending-reconcile-1",
+                candidateId = null,
+                sessionId = null,
+                amountMinor = 33001L,
+                type = "expense",
+                occurredAt = now,
+                platform = ALIPAY,
+                merchant = null,
+                productDescription = null,
+                orderId = null,
+                accountId = "default-account-alipay",
+                categoryId = null,
+                conflictReason = "NO_ACTIVE_SESSION",
+                sourceType = "accessibility",
+                createdAt = now,
+                version = 1
+            )
+        )
+
+        val ignored = CheckoutPaymentMatcher(database).reconcilePendingAgainstRecentBills()
+
+        assertEquals("应忽略一张同额卡", 1, ignored)
+        assertEquals(
+            "卡必须被标记忽略",
+            PendingTransactionEntity.STATUS_IGNORED,
+            database.pendingTransactionDao().getById("pending-reconcile-1")?.status
+        )
+    }
+
+    private fun signalNoMerchant(
+        pkg: String,
+        amount: Long,
+        occurredAt: Long,
+        key: String
+    ) = PaymentNotificationFallbackSignal(
+        paymentPackage = pkg,
+        amountMinor = amount,
+        occurredAt = occurredAt,
+        merchant = null,
+        orderId = null,
+        sourceEventKey = key,
+        rawTextHash = null
+    )
+
+    private fun insertBankSmsBill(amountMinor: Long, occurredAt: Long, createdAt: Long) = runBlocking {
+        database.accountDao().insert(
+            com.jotbill.app.data.entity.AccountEntity(
+                id = "default-account-cash", name = "现金", subtype = "cash", kind = "asset",
+                initialBalanceMinor = 0L, currentBalanceMinor = 0L, currency = "CNY",
+                icon = null, color = null, sortOrder = 0,
+                isActive = true, createdAt = 1L, updatedAt = 1L
+            )
+        )
+        database.billDao().insert(
+            BillEntity(
+                id = "bill-sms-$amountMinor",
+                amountMinor = amountMinor,
+                type = "expense",
+                occurredAt = occurredAt,
+                description = "银行短信支出",
+                categoryId = null,
+                accountId = "default-account-cash",
+                targetAccountId = null,
+                platform = "银行短信",
+                merchant = null,
+                productDescription = null,
+                sourceType = "accessibility",
+                originalTransactionId = null,
+                orderId = null,
+                createdAt = createdAt,
+                updatedAt = createdAt,
+                version = 1
+            )
         )
     }
 }

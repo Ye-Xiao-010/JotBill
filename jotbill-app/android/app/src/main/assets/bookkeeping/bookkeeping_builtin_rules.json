@@ -259,6 +259,20 @@
     },
     "ruleId": 2000090,
     "rulePkgId": 2000016
+   },
+   {
+    "note": "拼多多-退款详情页",
+    "locateAttribute": 0,
+    "locateToken": "元将退到",
+    "locateMaxTraverseCount": 40,
+    "extractPattern": "text=(\\d+(\\.\\d{1,2})?)元将退到(微信钱包|支付宝|银行卡|多多钱包)",
+    "extractFields": {
+     "amount": 1,
+     "refundChannel": 3
+    },
+    "jotbillType": "refund",
+    "ruleId": 2000210,
+    "rulePkgId": 2000016
    }
   ],
   "com.eg.android.AlipayGphone/android.app.Notification": [

@@ -1402,6 +1402,24 @@ internal object PendingConfirmOverlayManager {
                         }
                     }
 
+                    is PendingConfirmService.Outcome.AutoBooked -> {
+                        if (!isCurrentCard) {
+                            JotBillLog.i(
+                                TAG,
+                                "自动入账结果已过期(卡片已更换)，丢弃: id=${pendingRow.id.take(16)}"
+                            )
+                            return@post
+                        }
+                        // 跨通道吸收（2026-11-16）：点确认的同时短信已入账、卡被吸收，
+                        // 单据已记 —— 按成功反馈关闭，不显示"入账失败"。
+                        JotBillLog.i(
+                            TAG,
+                            "确认时卡片已被跨通道自动入账，按成功反馈关闭: " +
+                                "id=${pendingRow.id.take(16)}, bill=${outcome.billId.take(8)}"
+                        )
+                        showSuccessFeedback(view, outcome.amountMinor, "自动记账")
+                    }
+
                     is PendingConfirmService.Outcome.AlreadyHandled -> {
                         if (!isCurrentCard) {
                             JotBillLog.i(

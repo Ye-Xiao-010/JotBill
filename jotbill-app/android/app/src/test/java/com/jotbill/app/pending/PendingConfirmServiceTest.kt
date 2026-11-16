@@ -5,6 +5,7 @@ import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import com.jotbill.app.data.JotBillDatabase
 import com.jotbill.app.data.entity.AccountEntity
+import com.jotbill.app.data.entity.BillEntity
 import com.jotbill.app.data.entity.CategoryEntity
 import com.jotbill.app.data.entity.PendingTransactionEntity
 import kotlinx.coroutines.runBlocking
@@ -188,6 +189,47 @@ class PendingConfirmServiceTest {
             overrides = PendingConfirmService.Overrides(amountMinor = 100L)
         )
         assertTrue(outcome is PendingConfirmService.Outcome.AlreadyHandled)
+    }
+
+    /**
+     * 真机 2026-11-16：用户点弹窗确认的同时银行短信入账、卡被吸收 ——
+     * 卡已不存在但同额新账单存在，必须返回 AutoBooked（按成功反馈关闭），
+     * 而不是 AlreadyHandled（弹窗会报"入账失败"）。
+     */
+    @Test
+    fun confirmReturnsAutoBookedWhenRecentBillExists() = runBlocking {
+        val now = System.currentTimeMillis()
+        database.billDao().insert(
+            BillEntity(
+                id = "bill-auto-booked-1",
+                amountMinor = 2880L,
+                type = "expense",
+                occurredAt = now,
+                description = "自动记账",
+                categoryId = null,
+                accountId = ACCOUNT_ID,
+                targetAccountId = null,
+                platform = "银行短信",
+                merchant = null,
+                productDescription = null,
+                sourceType = "accessibility",
+                originalTransactionId = null,
+                orderId = null,
+                createdAt = now,
+                updatedAt = now,
+                version = 1
+            )
+        )
+
+        val outcome = service.confirm(
+            pendingId = "pending-absorbed",
+            overrides = PendingConfirmService.Overrides(amountMinor = 2880L, type = "expense")
+        )
+
+        assertTrue(
+            "近期同额账单存在时应返回 AutoBooked: $outcome",
+            outcome is PendingConfirmService.Outcome.AutoBooked
+        )
     }
 
     @Test

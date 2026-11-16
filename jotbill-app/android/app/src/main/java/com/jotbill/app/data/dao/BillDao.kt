@@ -383,6 +383,30 @@ interface BillDao {
     @Query("SELECT * FROM bills WHERE order_id = :orderId AND amount_minor = :amountMinor LIMIT 1")
     suspend fun findByOrderAndAmount(orderId: String, amountMinor: Long): BillEntity?
 
+    /**
+     * 跨通道已入账判定（2026-11-16）：按「类型 + 金额 + **创建时间窗**」查最近账单。
+     *
+     * 不依赖账户/商户相似度：银行短信账单没有商户、账户落现金，而页面证据
+     * 账户是支付宝/微信 —— DuplicateGuard 的相似因素可能全空，但两笔实际是
+     * 同一笔支付的两个信号。用真实创建时刻 + 同额直接识别，供孤儿证据抑制建卡。
+     */
+    @Query(
+        """
+        SELECT * FROM bills
+        WHERE type = :type
+          AND amount_minor = :amountMinor
+          AND created_at BETWEEN :windowStart AND :windowEnd
+        ORDER BY created_at DESC
+        LIMIT 1
+        """
+    )
+    suspend fun findRecentByAmountAndType(
+        type: String,
+        amountMinor: Long,
+        windowStart: Long,
+        windowEnd: Long
+    ): BillEntity?
+
     /** 按来源溯源 ID（如结算 sessionId）查账单，用于判断该会话是否已手动确认入账。 */
     @Query("SELECT * FROM bills WHERE original_transaction_id = :originalTransactionId LIMIT 1")
     suspend fun findByOriginalTransactionId(originalTransactionId: String): BillEntity?

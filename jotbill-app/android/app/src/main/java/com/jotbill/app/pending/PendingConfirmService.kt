@@ -46,6 +46,13 @@ internal class PendingConfirmService(private val database: JotBillDatabase) {
         /** 待确认不存在，或确认事务内版本已变化（另一入口已处理）。 */
         object AlreadyHandled : Outcome()
 
+        /**
+         * 卡片已被其它通道自动入账（跨通道吸收，2026-11-16 真机）：
+         * 用户在弹窗点确认的同时银行短信入账、卡被吸收 —— 单据已记，按成功
+         * 反馈关闭，不显示"入账失败"。
+         */
+        data class AutoBooked(val billId: String, val amountMinor: Long) : Outcome()
+
         /** 桥接层传入参数非法（金额越界/类型不支持）。 */
         data class Invalid(val reason: String) : Outcome()
 
@@ -66,7 +73,7 @@ internal class PendingConfirmService(private val database: JotBillDatabase) {
      */
     suspend fun confirm(pendingId: String, overrides: Overrides, confirmedDuplicate: Boolean = false): Outcome {
         val pending = database.pendingTransactionDao().getById(pendingId)
-            ?: return Outcome.AlreadyHandled
+            ?: return detectRecentAutoBookedBill(overrides) ?: Outcome.AlreadyHandled
         // M4：疑似重复卡不许"点一下就过" —— 首次确认返回 DuplicateConfirmRequired，
         // 由 RN 弹窗明示后带 confirmedDuplicate=true 重试；不做硬阻断。
         if (
@@ -161,4 +168,28 @@ internal class PendingConfirmService(private val database: JotBillDatabase) {
             merged = confirmResult.mergedInto != null
         )
     }
+
+    /**
+     * 卡已不在时判断是否刚被其它通道自动入账（真机 2026-11-16）：同类型 + 同额 +
+     * 2 分钟内新账单存在 ⇒ 返回 [Outcome.AutoBooked]，弹窗按成功反馈关闭，
+     * 不再显示"入账失败 / 已在其他入口处理"。
+     */
+    private suspend fun detectRecentAutoBookedBill(overrides: Overrides): Outcome.AutoBooked? {
+        val amount = overrides.amountMinor?.takeIf { it > 0L } ?: return null
+        val type = overrides.type ?: "expense"
+        val now = System.currentTimeMillis()
+        return try {
+            database.billDao().findRecentByAmountAndType(
+                type = type,
+                amountMinor = amount,
+                windowStart = now - AUTO_BOOKED_RECENT_WINDOW_MILLIS,
+                windowEnd = now
+            )?.let { Outcome.AutoBooked(it.id, it.amountMinor) }
+        } catch (_: RuntimeException) {
+            null
+        }
+    }
 }
+
+/** 自动入账识别窗：跨通道吸收与用户点确认的真实时差（秒级）。 */
+private const val AUTO_BOOKED_RECENT_WINDOW_MILLIS = 2 * 60 * 1000L
