@@ -166,7 +166,10 @@ class AutoBookkeeper(
         val accountResolution = resolveAccountId(
             record.sourcePackage,
             patch,
+            // 通用银行短信规则抽的是 orgName（规则资产字段名），招行精确规则抽的是
+            // bank —— 两者同为「【XX银行】」来源，统一作为信号层账户匹配提示。
             bankHint = record.fields["bank"]
+                ?: record.fields["orgName"]?.takeIf { it.contains("银行") }
         )
         val accountId = when (accountResolution) {
             is AccountResolution.Resolved -> accountResolution.accountId

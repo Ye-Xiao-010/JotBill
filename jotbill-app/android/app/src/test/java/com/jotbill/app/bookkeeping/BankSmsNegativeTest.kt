@@ -99,6 +99,48 @@ class BankSmsNegativeTest {
         assertEquals("拼多多", record.fields["method"])
     }
 
+    /**
+     * 真机 2026-11-16 排查：通知事件的 className 跨 ROM/系统版本不稳定，而短信
+     * 规则资产按 `com.android.mms/android.app.Notification` 登记 —— 类名不同会
+     * 静默无规则键。引擎回退规范键后必须仍能抽取（修复前该形态零记录）。
+     */
+    @Test
+    fun 通知类名非规范值时回退mms规则键仍能抽取() {
+        val (engine, sink) = harness()
+        engine.onEvent(
+            AutoBookkeepingEngine.EventSnapshot(
+                eventType = AutoBookkeepingEngine.EVENT_NOTIFICATION_STATE_CHANGED,
+                packageName = "com.android.mms",
+                className = "com.android.mms.ui.NotificationCompat",
+                windowId = 0,
+                eventTime = 1_000_000L,
+                notificationText =
+                    "【招商银行】您账户3456于10月25日14:30在【拼多多】发生快捷支付扣款，人民币29.90元",
+                notificationContentDesc = null
+            ),
+            rootProvider = { null }
+        )
+
+        assertEquals("类名回退后短信必须仍产出记录", 1, sink.records.size)
+        assertEquals(1000033L, sink.records.single().ruleId.toLong())
+    }
+
+    /** 通用银行短信（非招行）由 singleField 通用规则抽取，覆盖真机常见形态。 */
+    @Test
+    fun 通用银行扣款短信经通用规则抽取() {
+        val (engine, sink) = harness()
+        deliverSms(
+            engine,
+            "【建设银行】您账户1234于11月16日09:41在【拼多多】发生快捷支付扣款，人民币100.00"
+        )
+
+        assertEquals("通用规则应产出且仅产出一条记录", 1, sink.records.size)
+        val record = sink.records.single()
+        assertEquals(2000106L, record.ruleId.toLong())
+        assertEquals("2", record.fields["detailType"])
+        assertEquals(10_000L, AutoBookkeepingEngine.parseAmountMinor(record.fields["amount"]))
+    }
+
     @Test
     fun 验证码短信零记录() {
         val (engine, sink) = harness()
@@ -273,5 +315,43 @@ class BankSmsNegativeTest {
             windowEnd = Long.MAX_VALUE
         )
         assertEquals("自动入账后不得再落待确认", null, pending)
+    }
+
+    /**
+     * 通用短信规则抽的是 orgName（如「四川农商银行」）而非 bank 字段：
+     * 本地恰有同名账户时必须自动入账到该账户，而不是一律落现金兜底。
+     */
+    @Test
+    fun 通用短信组织名命中唯一账户时自动入账到该账户() = withDatabase { database ->
+        val bankAccountId = "acc-sichuan-rcc"
+        database.accountDao().insert(
+            AccountEntity(
+                id = bankAccountId, name = "四川农商银行", subtype = "debit",
+                kind = "asset", initialBalanceMinor = 0L, currentBalanceMinor = 100_000L,
+                currency = "CNY", icon = null, color = null, sortOrder = 1,
+                isActive = true, createdAt = 1L, updatedAt = 1L
+            )
+        )
+        deliverRecord(
+            database,
+            AutoBookkeepingEngine.ExtractedRecord(
+                fields = mapOf(
+                    "amount" to "20.60",
+                    "detailType" to "2",
+                    "orgName" to "四川农商银行",
+                    "counterparty" to "拼多多"
+                ),
+                ruleId = 2000106,
+                ruleNote = "银行短信字段提取",
+                fromApp = 4,
+                jotbillType = null,
+                sourcePackage = "com.android.mms",
+                extractTime = System.currentTimeMillis()
+            )
+        )
+
+        val bill = database.billDao().getAllForExport().singleOrNull()
+        assertTrue("短信记录应自动入账", bill != null)
+        assertEquals("应入账到银行名匹配账户", bankAccountId, bill!!.accountId)
     }
 }

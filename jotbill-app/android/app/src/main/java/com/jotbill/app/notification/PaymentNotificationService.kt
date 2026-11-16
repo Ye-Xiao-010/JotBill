@@ -4,12 +4,17 @@ import android.app.Notification
 import android.content.ComponentName
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
+import com.jotbill.app.bookkeeping.AutoBookkeeper
+import com.jotbill.app.bookkeeping.BankSmsNotificationParser
+import com.jotbill.app.bookkeeping.BookkeepingChannels
+import com.jotbill.app.bookkeeping.PageRuleRegistry
 import com.jotbill.app.data.JotBillDatabaseProvider
 import com.jotbill.app.recognition.CheckoutAccessibilityService
 import com.jotbill.app.recognition.CheckoutPaymentMatcher
 import com.jotbill.app.recognition.NOTIFICATION_FALLBACK_GRACE_MILLIS
 import com.jotbill.app.recognition.FeeExtractor
 import com.jotbill.app.recognition.PaymentNotificationFallbackSignal
+import com.jotbill.app.recognition.RecognitionPackages
 import com.jotbill.app.recognition.RefundLinker
 import com.jotbill.app.recognition.TransferClassifier
 import com.jotbill.app.recognition.PurchaseIntentCoordinationResult
@@ -47,6 +52,15 @@ class PaymentNotificationService : NotificationListenerService() {
 
     /** N-0b：未命中语义的通知的限流记录（key = 包名|标题），见 [logUnmatchedNotification]。 */
     private val unmatchedLogAt = mutableMapOf<String, Long>()
+
+    /** 银行短信的规则解析投递口（通知监听链路；与无障碍引擎写入同源、同幂等口径）。 */
+    private val smsBookkeeper by lazy { AutoBookkeeper(applicationContext, scope) }
+
+    /** 同一条短信通知可能被系统重复投递（更新/重建），按 key+正文摘要去重。 */
+    private val recentSmsSignatures = LinkedHashSet<String>()
+
+    /** 拼多多通知样本去重签名（同 key+内容只记一次；营销推送高频，靠去重防刷屏）。 */
+    private val recentPddSignatures = LinkedHashSet<String>()
 
     /**
      * 服务创建时调用。
@@ -125,6 +139,17 @@ class PaymentNotificationService : NotificationListenerService() {
      */
     private fun processNotification(sbn: StatusBarNotification) {
         val packageName = sbn.packageName
+        // 银行短信：真机（Android 17 / HyperOS）短信通知为静默通知，无障碍不投递
+        // 通知事件 ⇒ 改由本监听器投递规则解析（见 BankSmsNotificationParser）。
+        if (packageName in RecognitionPackages.BOOKKEEPING_NOTIFICATION_PACKAGES) {
+            processBankSmsNotification(sbn)
+            return
+        }
+        // 诊断（debug）：拼多多支付/退款是否有可用通知尚未证实，先抓样本定方案。
+        if (packageName == PDD_PACKAGE) {
+            logPddNotificationSample(sbn)
+            return
+        }
         // 只认内置解析器白名单：设置页的「监听应用/过滤关键词」配置 UI 已下线
         // （e577c6b），配置的写入方不复存在，继续读取只会让存量旧值静默收窄
         // 监听范围且用户无从修改。包名边界唯一事实源 = PaymentResultNormalizer。
@@ -305,6 +330,127 @@ class PaymentNotificationService : NotificationListenerService() {
         scope.launch {
             handlePaymentEvidence(evidenceInput)
         }
+    }
+
+    /**
+     * 银行短信渠道：通知监听链路解析（配置门 + 去重 + 退款优先 + 规则抽取）。
+     *
+     * 隐私：正文只在 debug 构建以**数字脱敏**样本落日志（卡号/金额/余额不落盘），
+     * release 只记判定结论与长度。
+     */
+    private fun processBankSmsNotification(sbn: StatusBarNotification) {
+        val packageName = sbn.packageName
+        if (!BookkeepingChannels.shouldProcess(this, packageName)) {
+            JotBillLog.i(
+                TAG,
+                "[ABK诊断] 短信通知被渠道闸丢弃: pkg=$packageName（总开关或银行短信渠道未开启）"
+            )
+            return
+        }
+        val notification = sbn.notification ?: return
+        val extras = notification.extras ?: return
+        val title = extras.getCharSequence(Notification.EXTRA_TITLE)?.toString() ?: ""
+        val titleBig = extras.getCharSequence(Notification.EXTRA_TITLE_BIG)?.toString() ?: ""
+        val text = extras.getCharSequence(Notification.EXTRA_TEXT)?.toString() ?: ""
+        val bigText = extras.getCharSequence(Notification.EXTRA_BIG_TEXT)?.toString() ?: ""
+        val subText = extras.getCharSequence(Notification.EXTRA_SUB_TEXT)?.toString() ?: ""
+        val summaryText = extras.getCharSequence(Notification.EXTRA_SUMMARY_TEXT)?.toString() ?: ""
+        val tickerText = notification.tickerText?.toString() ?: ""
+        val content = listOf(title, titleBig, text, bigText, subText, summaryText, tickerText)
+            .filter { it.isNotBlank() }
+            .joinToString(" ")
+        if (content.isBlank()) return
+        if (!rememberSmsNotification(sbn.key, content)) {
+            JotBillLog.d(TAG, "短信通知重复投递，跳过: key=${sbn.key}")
+            return
+        }
+        val sample = if (com.jotbill.app.BuildConfig.DEBUG) {
+            "样本(数字脱敏)=" + content.replace(Regex("\\d"), "#").take(100)
+        } else {
+            ""
+        }
+        JotBillLog.i(
+            TAG,
+            "[ABK诊断] 短信通知到达: title=${title.take(20)}, 正文长度=${content.length}, $sample"
+        )
+
+        val refund = BankSmsNotificationParser.parseRefund(content, sbn.postTime)
+        if (refund != null) {
+            JotBillLog.i(
+                TAG,
+                "[ABK诊断] 短信判定为退款到账: amount=${refund.amountMinor}分, 转 RefundLinker"
+            )
+            scope.launch { handleRefundEvidence(refund) }
+            return
+        }
+
+        val record = BankSmsNotificationParser.parseExpense(
+            registry = PageRuleRegistry.get(this),
+            content = content,
+            extractTime = sbn.postTime
+        )
+        if (record == null) {
+            JotBillLog.i(
+                TAG,
+                "[ABK诊断] 短信未命中规则: title=${title.take(20)}, 正文长度=${content.length}, $sample"
+            )
+            return
+        }
+        JotBillLog.i(
+            TAG,
+            "[ABK诊断] 短信命中规则: ruleId=${record.ruleId}(${record.ruleNote}), 转自动入账"
+        )
+        smsBookkeeper.onRecordReady(record)
+    }
+
+    /** 同一通知被系统重复投递（更新/重建）时只解析一次；有界集合防长期增长。 */
+    private fun rememberSmsNotification(key: String, content: String): Boolean {
+        val signature = "$key|${content.hashCode()}"
+        synchronized(recentSmsSignatures) {
+            if (!recentSmsSignatures.add(signature)) return false
+            if (recentSmsSignatures.size > SMS_SIGNATURE_CAPACITY) {
+                val iterator = recentSmsSignatures.iterator()
+                if (iterator.hasNext()) {
+                    iterator.next()
+                    iterator.remove()
+                }
+            }
+        }
+        return true
+    }
+
+    /**
+     * 诊断（debug 构建）：拼多多通知样本 —— 确认支付/退款通知的渠道、标题与文本形态，
+     * 为后续是否接入解析提供真机依据。数字脱敏，release 构建不输出；按 key+内容去重。
+     */
+    private fun logPddNotificationSample(sbn: StatusBarNotification) {
+        if (!com.jotbill.app.BuildConfig.DEBUG) return
+        val notification = sbn.notification ?: return
+        val extras = notification.extras ?: return
+        val title = extras.getCharSequence(Notification.EXTRA_TITLE)?.toString() ?: ""
+        val text = extras.getCharSequence(Notification.EXTRA_TEXT)?.toString() ?: ""
+        val bigText = extras.getCharSequence(Notification.EXTRA_BIG_TEXT)?.toString() ?: ""
+        val ticker = notification.tickerText?.toString() ?: ""
+        val content = listOf(title, text, bigText, ticker)
+            .filter { it.isNotBlank() }
+            .joinToString(" ")
+        val signature = "${sbn.key}|${content.hashCode()}"
+        synchronized(recentPddSignatures) {
+            if (!recentPddSignatures.add(signature)) return
+            if (recentPddSignatures.size > PDD_SIGNATURE_CAPACITY) {
+                val iterator = recentPddSignatures.iterator()
+                if (iterator.hasNext()) {
+                    iterator.next()
+                    iterator.remove()
+                }
+            }
+        }
+        val sample = content.replace(Regex("\\d"), "#").take(140)
+        JotBillLog.i(
+            TAG,
+            "[ABK诊断] 拼多多通知样本: channel=${notification.channelId}, key=${sbn.key}, " +
+                "长度=${content.length}, 样本(数字脱敏)=$sample"
+        )
     }
 
     /**
@@ -603,6 +749,15 @@ class PaymentNotificationService : NotificationListenerService() {
 
         /** N-0b：限流表容量上限，超出后整表清空（标题种类有限，无需 LRU）。 */
         private const val UNMATCHED_LOG_KEY_LIMIT = 200
+
+        /** 银行短信通知去重签名容量（同通知重复投递按 key+正文摘要跳过）。 */
+        private const val SMS_SIGNATURE_CAPACITY = 32
+
+        /** 拼多多包名（支付/退款通知样本诊断，见 logPddNotificationSample）。 */
+        private const val PDD_PACKAGE = "com.xunmeng.pinduoduo"
+
+        /** 拼多多通知样本去重容量（同 key+内容只记一次）。 */
+        private const val PDD_SIGNATURE_CAPACITY = 32
 
         /** Accepted 或 AiDispatched 表示无障碍链路已接收证据，其余情况才进入纯通知待确认。 */
 

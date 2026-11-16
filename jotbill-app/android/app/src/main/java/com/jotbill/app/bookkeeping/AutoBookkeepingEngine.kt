@@ -1,5 +1,7 @@
 package com.jotbill.app.bookkeeping
 
+import com.jotbill.app.BuildConfig
+import com.jotbill.app.recognition.RecognitionPackages
 import com.jotbill.app.utils.JotBillLog
 import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.CoroutineScope
@@ -154,6 +156,15 @@ class AutoBookkeepingEngine(
             return
         }
         if (!channels.shouldProcess(packageName)) {
+            if (packageName in RecognitionPackages.BOOKKEEPING_NOTIFICATION_PACKAGES) {
+                // 短信渠道此前静默失败：开关状态与事件到达都在这里汇合，
+                // 真机排查（2026-11-16）必须先能看到"事件到了但渠道关闭"。
+                JotBillLog.i(
+                    TAG,
+                    "[ABK诊断] 通知事件被渠道闸丢弃: pkg=$packageName, " +
+                        "type=${snapshot.eventType}, masterOrChannelOff=true"
+                )
+            }
             return
         }
         when (snapshot.eventType) {
@@ -167,8 +178,21 @@ class AutoBookkeepingEngine(
 
     private fun onNotificationEvent(snapshot: EventSnapshot) {
         val packageName = snapshot.packageName ?: return
-        val notificationKey = "$packageName/${snapshot.className.orEmpty()}"
-        val rules = registryRef.get()?.rulesFor(notificationKey)
+        val rawKey = "$packageName/${snapshot.className.orEmpty()}"
+        var key = rawKey
+        var rules = registryRef.get()?.rulesFor(rawKey)
+        if (rules.isNullOrEmpty() && snapshot.className != CANONICAL_NOTIFICATION_CLASS) {
+            // 通知事件的 className 跨 ROM/系统版本不稳定（真机 2026-11-16 待证：
+            // 短信规则按 pkg/android.app.Notification 登记，若事件类名不同会
+            // 静默无规则键）。未知类名回退规范键，规则资产语义不变。
+            val canonicalKey = "$packageName/$CANONICAL_NOTIFICATION_CLASS"
+            registryRef.get()?.rulesFor(canonicalKey)?.takeIf { it.isNotEmpty() }?.let {
+                rules = it
+                key = canonicalKey
+            }
+        }
+        val textLength = snapshot.notificationText?.length ?: 0
+        val bookkeepingPackage = packageName in RecognitionPackages.BOOKKEEPING_NOTIFICATION_PACKAGES
         if (rules != null) {
             for (rule in rules) {
                 val locateValue = when (rule.locateAttribute) {
@@ -192,14 +216,46 @@ class AutoBookkeepingEngine(
                         )
                         return
                     }
+                    if (bookkeepingPackage) {
+                        JotBillLog.i(
+                            TAG,
+                            "[ABK诊断] 通知锚点命中但抽取失败: ruleId=${rule.ruleId}, " +
+                                "pkg=$packageName, class=${snapshot.className}, textLen=$textLength"
+                        )
+                        logNotificationSampleIfDebug(snapshot)
+                    }
                 }
+            }
+            if (bookkeepingPackage) {
+                JotBillLog.i(
+                    TAG,
+                    "[ABK诊断] 通知规则未命中: pkg=$packageName, class=${snapshot.className}, " +
+                        "key=$key, rules=${rules.size}, textLen=$textLength"
+                )
+                logNotificationSampleIfDebug(snapshot)
             }
             // 规则在但未命中 ≠ 结束：mipay 语义 `!g0 && W` —— 仍要检查
             // 二次确认的通知锚点（落空直接返回）。
+        } else if (bookkeepingPackage) {
+            // 到达即证明系统投递正常；无规则键说明类名/包名与资产不一致。
+            JotBillLog.i(
+                TAG,
+                "[ABK诊断] 通知事件无规则键: pkg=$packageName, class=${snapshot.className}, " +
+                    "key=$rawKey, textLen=$textLength"
+            )
+            logNotificationSampleIfDebug(snapshot)
         }
         if (isConfirmNotification(snapshot)) {
             tryPendingConfirmByNotification(snapshot)
         }
+    }
+
+    /** 调试构建专属：输出短信通知文本样本（数字脱敏），用于校准规则与类名。 */
+    private fun logNotificationSampleIfDebug(snapshot: EventSnapshot) {
+        if (!BuildConfig.DEBUG) return
+        val text = snapshot.notificationText ?: return
+        val masked = DIGIT_PATTERN.replace(text, "#").take(80)
+        JotBillLog.i(TAG, "[ABK诊断] 通知文本样本(debug/数字脱敏): $masked")
     }
 
     // ── 窗口状态事件（32）：建立跟踪 + 页面分析 / 确认页锚点 ────────────────
@@ -612,6 +668,12 @@ class AutoBookkeepingEngine(
         private const val SYSTEM_UI_PACKAGE = "com.android.systemui"
 
         private const val OWN_PACKAGE = "com.jotbill.app"
+
+        /** 通知事件规范类名（规则资产的通知 key 形态：`pkg/android.app.Notification`）。 */
+        private const val CANONICAL_NOTIFICATION_CLASS = "android.app.Notification"
+
+        /** 调试样本脱敏：单个数字字符替换（金额/卡号/验证码不落日志）。 */
+        private val DIGIT_PATTERN = Regex("\\d")
 
         const val EVENT_NOTIFICATION_STATE_CHANGED = 64
 
