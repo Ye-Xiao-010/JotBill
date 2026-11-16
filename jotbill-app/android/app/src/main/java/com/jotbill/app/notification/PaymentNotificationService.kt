@@ -110,13 +110,14 @@ class PaymentNotificationService : NotificationListenerService() {
                 var processed = 0
                 for (sbn in active.orEmpty()) {
                     val catchUp = sbn.packageName in RecognitionPackages.BOOKKEEPING_NOTIFICATION_PACKAGES ||
-                        sbn.packageName == PDD_PACKAGE
+                        sbn.packageName == PDD_PACKAGE ||
+                        sbn.packageName == JdNotificationParser.PACKAGE
                     if (!catchUp) continue
                     if (sbn.postTime < cutoff) continue
-                    if (sbn.packageName == PDD_PACKAGE) {
-                        processPddNotification(sbn)
-                    } else {
-                        processBankSmsNotification(sbn)
+                    when (sbn.packageName) {
+                        PDD_PACKAGE -> processPddNotification(sbn)
+                        JdNotificationParser.PACKAGE -> processJdNotification(sbn)
+                        else -> processBankSmsNotification(sbn)
                     }
                     processed += 1
                 }
@@ -187,6 +188,11 @@ class PaymentNotificationService : NotificationListenerService() {
         // 没有银行短信时，这是唯一的退款信号。
         if (packageName == PDD_PACKAGE) {
             processPddNotification(sbn)
+            return
+        }
+        // 京东：退款通知覆盖「退到微信/京东钱包」等无银行短信的场景；支付通知不入账。
+        if (packageName == JdNotificationParser.PACKAGE) {
+            processJdNotification(sbn)
             return
         }
         // 只认内置解析器白名单：设置页的「监听应用/过滤关键词」配置 UI 已下线
@@ -477,6 +483,34 @@ class PaymentNotificationService : NotificationListenerService() {
             return
         }
         logPddNotificationSample(sbn)
+    }
+
+    /**
+     * 京东通知：只解析退款（支付通知不入账）；非退款通知 debug 采样。
+     */
+    private fun processJdNotification(sbn: StatusBarNotification) {
+        if (!BookkeepingChannels.shouldProcess(this, JdNotificationParser.PACKAGE)) {
+            JotBillLog.i(TAG, "[ABK诊断] 京东通知被渠道闸丢弃（jd 渠道或总开关关闭）")
+            return
+        }
+        val content = notificationContentOf(sbn) ?: return
+        val refund = JdNotificationParser.parseRefund(content, sbn.postTime)
+        if (refund != null) {
+            JotBillLog.i(
+                TAG,
+                "[ABK诊断] 京东退款通知命中: amount=${refund.amountMinor}分, " +
+                    "channel=${refund.receivingAccountHint}, 转 RefundLinker"
+            )
+            scope.launch { handleRefundEvidence(refund) }
+            return
+        }
+        if (com.jotbill.app.BuildConfig.DEBUG) {
+            val sample = content.replace(Regex("\\d"), "#").take(140)
+            JotBillLog.i(
+                TAG,
+                "[ABK诊断] 京东通知样本(数字脱敏): 长度=${content.length}, 样本=$sample"
+            )
+        }
     }
 
     /** 通知标题 + 正文 + bigText 等拼接全文（不含原始数字脱敏，日志侧自行处理）。 */

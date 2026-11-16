@@ -162,7 +162,9 @@ internal object PendingReminderNotifier {
         // 节流，一次导入 N 条待确认只有第 1 条有系统通知、其余只留日志 ——
         // 用户对导入产生的待确认量级失去感知。导入来源豁免节流
         // （2026-10-24 场景审查）；量级兜底在 ImportScreen 结果页计数与待确认中心。
-        if (info.sourceType != DuplicateGuard.IMPORT_SOURCE_TYPE) {
+        // 退款同样豁免（2026-11-16）：多条退款同时到达（如监听补扫）时，
+        // 节流会让后一条只有卡片、没有提醒；退款低频，每条都值得单独提醒。
+        if (info.sourceType != DuplicateGuard.IMPORT_SOURCE_TYPE && info.type != "refund") {
             synchronized(this) {
                 if (now - lastNotifiedAt < MIN_NOTIFY_INTERVAL_MILLIS) {
                     suppressedCount++
