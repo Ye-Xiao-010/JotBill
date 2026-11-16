@@ -503,6 +503,18 @@ internal object PendingConfirmOverlayManager {
         // 还白占容量 3 的队列坑；isNew=false 的更新事件 evaluate 必返回
         // UPDATED_NOT_NEW，提前过滤省一次读行。两者都不可能弹窗。
         if (info.removed) {
+            // 卡片已被其它通道吸收/忽略（2026-11-16 真机 22:04 支付宝场景）：
+            // 挂起候选与心跳必须一并取消，否则会继续重试到 30 秒超时，
+            // 期间还会按旧卡片做门禁判定。
+            val waiting = waitingCandidate
+            if (waiting != null && waiting.pendingId == info.pendingId) {
+                waitingCandidate = null
+                stopCandidateHeartbeat()
+                JotBillLog.i(
+                    TAG,
+                    "弹窗挂起候选已随卡片删除取消: id=${info.pendingId.take(16)}"
+                )
+            }
             JotBillLog.i(TAG, "弹窗忽略已删除事件: id=${info.pendingId.take(16)}")
             return
         }

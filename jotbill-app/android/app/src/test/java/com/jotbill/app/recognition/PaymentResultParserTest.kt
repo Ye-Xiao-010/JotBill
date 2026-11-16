@@ -1,7 +1,9 @@
 package com.jotbill.app.recognition
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -427,5 +429,60 @@ class PaymentResultParserTest {
         )
         assertTrue("真实成功页应命中，实际为 $result", result is PaymentResultParseResult.Success)
         assertEquals(1280L, (result as PaymentResultParseResult.Success).evidence.amountMinor)
+    }
+
+    /**
+     * 退款/售后页守卫（2026-11-16 真机）：美团支付完成后的订单/退款页含
+     * 「支付成功」状态行 + 优惠券金额，必须整页跳过，不得产出支付证据。
+     */
+    @Test
+    fun refundOrAfterSalePageGuardBlocksOrderPages() {
+        assertTrue(
+            PaymentResultParser.isLikelyRefundOrAfterSalePage(
+                "支付成功 预计2个工作日内到账 申请退款 退款详情 ¥30.00"
+            )
+        )
+        assertFalse(
+            PaymentResultParser.isLikelyRefundOrAfterSalePage("支付成功 实付 ¥51.00")
+        )
+    }
+
+    /** 商户名停用词：不能把「支付成功 预计2个工作日…」里的「预计」当商户。 */
+    @Test
+    fun merchantStopwordsAreRejected() {
+        val result = PaymentResultParser.parseResult(
+            pageText = "支付成功 预计2个工作日内到账 共支付¥9.00",
+            sourcePackage = "com.sankuai.meituan",
+            pageFingerprint = "f".repeat(64),
+            observedAt = observedAt
+        )
+        val evidence = (result as? PaymentResultParseResult.Success)?.evidence
+        assertTrue("应仍能解析出金额", evidence != null)
+        assertEquals(900L, evidence!!.amountMinor)
+        assertNull("「预计」不得作为商户名", evidence.merchant)
+    }
+
+    /**
+     * 金额锚定守卫（2026-11-16 真机）：美团外卖「支付成功」页没有实付金额，
+     * 推荐位金额（¥30/22元/9）远离成功词 → 站内页面不得产出证据。
+     */
+    @Test
+    fun amountMustBeAnchoredForStationPages() {
+        val falsePage =
+            "支付成功 预计022:24-22:390送达 商家正在备餐，骑手正在赶往商家 订单详情 5 成长值+21 " +
+                "收货后到账 查看权益 美团外卖 领22元福利红包 团购 新疆民族团结羊肉串特价双人餐 ¥30 " +
+                "5.1折 闪购 康师傅冰红茶 9"
+        assertFalse(
+            "无实付标签且金额远离成功词，必须拒绝",
+            PaymentResultParser.isAmountAnchoredToPaymentSemantics(falsePage)
+        )
+        assertTrue(
+            "金额贴近成功词应放行",
+            PaymentResultParser.isAmountAnchoredToPaymentSemantics("支付成功 ¥21.40 订单详情")
+        )
+        assertTrue(
+            "带实付标签应放行",
+            PaymentResultParser.isAmountAnchoredToPaymentSemantics("支付成功 商家备餐中 实付 21.40")
+        )
     }
 }

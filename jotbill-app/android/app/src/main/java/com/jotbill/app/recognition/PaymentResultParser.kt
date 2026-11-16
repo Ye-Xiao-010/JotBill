@@ -100,6 +100,23 @@ internal object PaymentResultParser {
      */
     private val STRONG_PAYMENT_SUCCESS_TERMS = listOf("支付成功", "付款成功", "支付完成")
 
+    /**
+     * 退款/售后页强语义（B1 站内结果页负向守卫，2026-11-16 真机）。
+     *
+     * 美团实测：支付完成后的订单/退款页含「支付成功」状态行 + 优惠券/推荐位金额，
+     * 被误判为当次支付结果页，产出 ¥9.00/¥30.00 假证据。支付结果页不会展示
+     * 「退款成功/申请退款」这类售后语义，命中即整页跳过。
+     */
+    private val REFUND_PAGE_TERMS = listOf(
+        "退款成功", "退款详情", "退款进度", "退款状态", "申请退款",
+        "已退款", "退款金额", "退货退款", "退款原因"
+    )
+
+    /** 商户名停用词：正则可能抓到「支付成功 预计2个工作日…」里的「预计」。 */
+    private val NON_MERCHANT_TERMS = listOf(
+        "预计", "温馨", "请", "恭喜", "您", "本次", "退款", "提示", "查看", "如需", "提醒"
+    )
+
     /** 金额匹配正则 */
     private val AMOUNT_PATTERNS = listOf(
         Regex("""(?:¥|￥)\s*([0-9]+(?:\.[0-9]+)?)"""),
@@ -216,6 +233,9 @@ internal object PaymentResultParser {
         // M5：订单号在提取点格式归一（trim/全角转半角/大写），跨源归并不被写法差异漏并。
         val orderId = OrderIdNormalizer.normalize(extractField(pageText, ORDER_ID_PATTERNS))
         val merchant = extractField(pageText, MERCHANT_PATTERNS)
+            ?.takeIf { candidate ->
+                NON_MERCHANT_TERMS.none { stopword -> candidate.startsWith(stopword) }
+            }
 
         // 个人转账语义优先于消费证据：微信/支付宝向好友转账的成功页
         // （"转账给张三 ¥29.75"）收款人是个人而非商户，若落消费证据会把
@@ -270,6 +290,49 @@ internal object PaymentResultParser {
             )
         )
     }
+
+    /**
+     * B1 站内结果页负向守卫（2026-11-16 真机）：页面文本是否更像退款/售后页。
+     *
+     * 支付完成后的订单页/退款详情页含「支付成功」状态行与优惠/推荐位金额，
+     * 会被当次支付结果页解析误取金额。售后语义命中即不得产出支付证据。
+     */
+    internal fun isLikelyRefundOrAfterSalePage(pageText: String): Boolean {
+        if (pageText.isBlank()) return false
+        return REFUND_PAGE_TERMS.any { pageText.contains(it) }
+    }
+
+    /**
+     * B1 站内结果页正向前置条件（2026-11-16 真机）：金额必须锚定支付语义。
+     *
+     * 美团外卖「支付成功」页只有状态、没有实付金额，底部推荐位却有 ¥30/¥16/¥9，
+     * 被当成支付金额产出假证据并弹窗。站内页面必须满足其一才允许解析：
+     * 1. 存在带标签的金额（实付/支付金额/订单金额/合计…）；
+     * 2. 货币金额与支付成功词相距 ≤ [AMOUNT_ANCHOR_WINDOW_CHARS] 字符。
+     *
+     * 支付包（微信/支付宝/云闪付）结果页不走本守卫（其页面字段形态已验证）。
+     */
+    internal fun isAmountAnchoredToPaymentSemantics(pageText: String): Boolean {
+        if (pageText.isBlank()) return false
+        if (FINAL_AMOUNT_PATTERNS.any { it.containsMatchIn(pageText) }) return true
+        val successIndexes = SUCCESS_KEYWORDS
+            .mapNotNull { keyword -> pageText.indexOf(keyword).takeIf { it >= 0 } }
+        if (successIndexes.isEmpty()) return false
+        val currencyAmount = CURRENCY_AMOUNT_REGEX.findAll(pageText)
+        for (match in currencyAmount) {
+            if (successIndexes.any { anchor ->
+                    kotlin.math.abs(match.range.first - anchor) <= AMOUNT_ANCHOR_WINDOW_CHARS
+                }
+            ) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private val CURRENCY_AMOUNT_REGEX = Regex("""[¥￥]\s*\d+(?:\.\d{1,2})?|\d+(?:\.\d{1,2})?\s*元""")
+
+    private const val AMOUNT_ANCHOR_WINDOW_CHARS = 60
 
     /**
      * B1 站内结果页负向守卫：判定页面文本是否更像「订单详情 / 订单列表 / 账单」页

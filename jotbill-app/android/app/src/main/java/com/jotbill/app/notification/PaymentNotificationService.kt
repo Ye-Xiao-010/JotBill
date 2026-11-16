@@ -2,6 +2,8 @@ package com.jotbill.app.notification
 
 import android.app.Notification
 import android.content.ComponentName
+import android.os.Handler
+import android.os.Looper
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import com.jotbill.app.bookkeeping.AutoBookkeeper
@@ -63,6 +65,24 @@ class PaymentNotificationService : NotificationListenerService() {
     private val recentPddSignatures = LinkedHashSet<String>()
 
     /**
+     * 活跃通知周期补扫（真机 2026-11-16）：系统偶发「监听已连接但不投递回调」
+     * （安装/省电策略后常见），仅靠连接时补扫会漏掉之后到达的短信。
+     * 连接期间每 60 秒扫一次活跃通知，幂等键防止重复入账。
+     */
+    private val catchUpHandler = Handler(Looper.getMainLooper())
+
+    private val catchUpRunnable = object : Runnable {
+        override fun run() {
+            try {
+                catchUpActiveNotifications()
+            } catch (error: RuntimeException) {
+                JotBillLog.w(TAG, "周期补扫活跃通知失败", error)
+            }
+            catchUpHandler.postDelayed(this, ACTIVE_NOTIFICATION_CATCHUP_INTERVAL_MILLIS)
+        }
+    }
+
+    /**
      * 服务创建时调用。
      */
     override fun onCreate() {
@@ -77,6 +97,7 @@ class PaymentNotificationService : NotificationListenerService() {
      */
     override fun onDestroy() {
         super.onDestroy()
+        catchUpHandler.removeCallbacks(catchUpRunnable)
         scope.cancel()
         SentryLogger.i(TAG, "支付通知服务销毁")
         JotBillLog.i(TAG, "支付通知服务已销毁")
@@ -105,28 +126,43 @@ class PaymentNotificationService : NotificationListenerService() {
             // 连接时把近 10 分钟仍活跃的短信通知补处理一次 —— 退款证据按
             // 「包名+时间桶+金额」幂等，支出重复投递走相似度吸收，不会双记。
             try {
-                val active = activeNotifications
-                val cutoff = System.currentTimeMillis() - SMS_ACTIVE_CATCHUP_WINDOW_MILLIS
-                var processed = 0
-                for (sbn in active.orEmpty()) {
-                    val catchUp = sbn.packageName in RecognitionPackages.BOOKKEEPING_NOTIFICATION_PACKAGES ||
-                        sbn.packageName == PDD_PACKAGE ||
-                        sbn.packageName == JdNotificationParser.PACKAGE
-                    if (!catchUp) continue
-                    if (sbn.postTime < cutoff) continue
-                    when (sbn.packageName) {
-                        PDD_PACKAGE -> processPddNotification(sbn)
-                        JdNotificationParser.PACKAGE -> processJdNotification(sbn)
-                        else -> processBankSmsNotification(sbn)
-                    }
-                    processed += 1
-                }
-                if (processed > 0) {
-                    JotBillLog.i(TAG, "监听连接补扫短信通知: count=$processed")
-                }
+                catchUpActiveNotifications()
             } catch (error: RuntimeException) {
                 JotBillLog.w(TAG, "监听连接补扫短信通知失败", error)
             }
+        }
+        // 周期补扫：覆盖「已连接但不投递回调」的僵尸态（60 秒一次，幂等防重）。
+        catchUpHandler.removeCallbacks(catchUpRunnable)
+        catchUpHandler.postDelayed(catchUpRunnable, ACTIVE_NOTIFICATION_CATCHUP_INTERVAL_MILLIS)
+    }
+
+    /** 扫描当前活跃通知并补处理记账相关包（mms/拼多多/京东/美团，10 分钟内）。 */
+    private fun catchUpActiveNotifications() {
+        val active = try {
+            activeNotifications
+        } catch (error: RuntimeException) {
+            JotBillLog.w(TAG, "读取活跃通知失败", error)
+            return
+        }
+        val cutoff = System.currentTimeMillis() - SMS_ACTIVE_CATCHUP_WINDOW_MILLIS
+        var processed = 0
+        for (sbn in active.orEmpty()) {
+            val catchUp = sbn.packageName in RecognitionPackages.BOOKKEEPING_NOTIFICATION_PACKAGES ||
+                sbn.packageName == PDD_PACKAGE ||
+                sbn.packageName == JdNotificationParser.PACKAGE ||
+                sbn.packageName == MeituanNotificationParser.PACKAGE
+            if (!catchUp) continue
+            if (sbn.postTime < cutoff) continue
+            when (sbn.packageName) {
+                PDD_PACKAGE -> processPddNotification(sbn)
+                JdNotificationParser.PACKAGE -> processJdNotification(sbn)
+                MeituanNotificationParser.PACKAGE -> processMeituanNotification(sbn)
+                else -> processBankSmsNotification(sbn)
+            }
+            processed += 1
+        }
+        if (processed > 0) {
+            JotBillLog.i(TAG, "活跃通知补扫: count=$processed")
         }
     }
 
@@ -139,6 +175,7 @@ class PaymentNotificationService : NotificationListenerService() {
      */
     override fun onListenerDisconnected() {
         super.onListenerDisconnected()
+        catchUpHandler.removeCallbacks(catchUpRunnable)
         JotBillLog.w(TAG, "通知监听服务已断开，请求重绑")
         SentryLogger.addBreadcrumb("通知监听服务已断开，请求重绑", category = "service_lifecycle")
         runCatching {
@@ -193,6 +230,11 @@ class PaymentNotificationService : NotificationListenerService() {
         // 京东：退款通知覆盖「退到微信/京东钱包」等无银行短信的场景；支付通知不入账。
         if (packageName == JdNotificationParser.PACKAGE) {
             processJdNotification(sbn)
+            return
+        }
+        // 美团：退款通知（「退款通知 / 退款状态提醒」）覆盖退到微信/美团余额的场景。
+        if (packageName == MeituanNotificationParser.PACKAGE) {
+            processMeituanNotification(sbn)
             return
         }
         // 只认内置解析器白名单：设置页的「监听应用/过滤关键词」配置 UI 已下线
@@ -475,11 +517,7 @@ class PaymentNotificationService : NotificationListenerService() {
         val content = notificationContentOf(sbn) ?: return
         val refund = PddNotificationParser.parseRefund(content, sbn.postTime)
         if (refund != null) {
-            JotBillLog.i(
-                TAG,
-                "[ABK诊断] 拼多多退款通知命中: amount=${refund.amountMinor}分, 转 RefundLinker"
-            )
-            scope.launch { handleRefundEvidence(refund) }
+            deliverRefundNotification(refund, "拼多多")
             return
         }
         logPddNotificationSample(sbn)
@@ -496,12 +534,7 @@ class PaymentNotificationService : NotificationListenerService() {
         val content = notificationContentOf(sbn) ?: return
         val refund = JdNotificationParser.parseRefund(content, sbn.postTime)
         if (refund != null) {
-            JotBillLog.i(
-                TAG,
-                "[ABK诊断] 京东退款通知命中: amount=${refund.amountMinor}分, " +
-                    "channel=${refund.receivingAccountHint}, 转 RefundLinker"
-            )
-            scope.launch { handleRefundEvidence(refund) }
+            deliverRefundNotification(refund, "京东")
             return
         }
         if (com.jotbill.app.BuildConfig.DEBUG) {
@@ -511,6 +544,49 @@ class PaymentNotificationService : NotificationListenerService() {
                 "[ABK诊断] 京东通知样本(数字脱敏): 长度=${content.length}, 样本=$sample"
             )
         }
+    }
+
+    /**
+     * 美团通知：只解析退款（「退款通知 / 退款状态提醒」）；同一退款的两条通知
+     * 由 [RefundNotificationMemory] 按「包名+金额」30 分钟去重。
+     */
+    private fun processMeituanNotification(sbn: StatusBarNotification) {
+        if (!BookkeepingChannels.shouldProcess(this, MeituanNotificationParser.PACKAGE)) {
+            JotBillLog.i(TAG, "[ABK诊断] 美团通知被渠道闸丢弃（meituan 渠道或总开关关闭）")
+            return
+        }
+        val content = notificationContentOf(sbn) ?: return
+        val refund = MeituanNotificationParser.parseRefund(content, sbn.postTime)
+        if (refund != null) {
+            deliverRefundNotification(refund, "美团")
+            return
+        }
+        if (com.jotbill.app.BuildConfig.DEBUG) {
+            val sample = content.replace(Regex("\\d"), "#").take(140)
+            JotBillLog.i(
+                TAG,
+                "[ABK诊断] 美团通知样本(数字脱敏): 长度=${content.length}, 样本=$sample"
+            )
+        }
+    }
+
+    /** 通知退款统一交付：30 分钟内同包同额只建一张卡（重复通知/多阶段通知去重）。 */
+    private fun deliverRefundNotification(evidence: PaymentEvidenceInput, sourceLabel: String) {
+        val key = "${evidence.sourcePackage}|${evidence.amountMinor}"
+        if (RefundNotificationMemory.isSeen(this, key)) {
+            JotBillLog.i(
+                TAG,
+                "[ABK诊断] 同额退款通知重复(30分钟内)，跳过: $sourceLabel, amount=${evidence.amountMinor}"
+            )
+            return
+        }
+        RefundNotificationMemory.mark(this, key)
+        JotBillLog.i(
+            TAG,
+            "[ABK诊断] $sourceLabel 退款通知命中: amount=${evidence.amountMinor}分, " +
+                "channel=${evidence.receivingAccountHint}, 转 RefundLinker"
+        )
+        scope.launch { handleRefundEvidence(evidence) }
     }
 
     /** 通知标题 + 正文 + bigText 等拼接全文（不含原始数字脱敏，日志侧自行处理）。 */
@@ -864,6 +940,9 @@ class PaymentNotificationService : NotificationListenerService() {
 
         /** 监听连接补扫活跃短信通知的时间窗（覆盖后台漏回调的常见时差）。 */
         private const val SMS_ACTIVE_CATCHUP_WINDOW_MILLIS = 10 * 60 * 1000L
+
+        /** 活跃通知周期补扫间隔（覆盖「已连接但不投递回调」的僵尸态）。 */
+        private const val ACTIVE_NOTIFICATION_CATCHUP_INTERVAL_MILLIS = 60_000L
 
         /** Accepted 或 AiDispatched 表示无障碍链路已接收证据，其余情况才进入纯通知待确认。 */
 

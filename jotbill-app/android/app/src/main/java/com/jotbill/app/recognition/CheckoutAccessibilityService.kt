@@ -1562,6 +1562,33 @@ open class CheckoutAccessibilityService : AccessibilityService() {
                         )
                         continue
                     }
+                    // 退款/售后页守卫（2026-11-16 真机）：美团支付完成后的订单/退款页
+                    // 含「支付成功」状态行 + 优惠券金额，被误当支付结果页产出假证据。
+                    if (!pageDetector.supportsPaymentPackage(paymentPackage) &&
+                        PaymentResultParser.isLikelyRefundOrAfterSalePage(pageText)
+                    ) {
+                        JotBillLog.i(
+                            TAG,
+                            "站内页面判为退款/售后页(非当次支付结果页)，跳过证据提取: " +
+                                "pkg=$paymentPackage, class=${observation.windowClass}, " +
+                                "textLength=${pageText.length}"
+                        )
+                        continue
+                    }
+                    // 金额锚定守卫（2026-11-16 真机）：美团外卖「支付成功」页没有实付
+                    // 金额，底部推荐位 ¥30/¥16/¥9 被误当支付金额。站内页面必须存在
+                    // 实付标签或金额贴近成功词，否则整页跳过。
+                    if (!pageDetector.supportsPaymentPackage(paymentPackage) &&
+                        !PaymentResultParser.isAmountAnchoredToPaymentSemantics(pageText)
+                    ) {
+                        JotBillLog.i(
+                            TAG,
+                            "站内结果页金额未锚定支付语义，跳过证据提取: " +
+                                "pkg=$paymentPackage, class=${observation.windowClass}, " +
+                                "textLength=${pageText.length}"
+                        )
+                        continue
+                    }
                     val parseResult = PaymentResultParser.parseResult(
                         pageText = pageText,
                         sourcePackage = paymentPackage,
