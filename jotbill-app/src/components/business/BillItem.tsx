@@ -13,6 +13,7 @@ import { ThemeColors } from '../../theme/colors';
 import { spacing, borderRadius, borderWidth, typography } from '../../theme';
 import { useStyles } from '../../hooks';
 import { formatSignedCurrency } from '../../utils/format';
+import CategoryIcon from './CategoryIcon';
 
 
 export interface BillData {
@@ -50,7 +51,12 @@ const BillItem: React.FC<BillItemProps> = ({ bill, onPress }) => {
           styles.iconContainer,
           { backgroundColor: isIncome ? styles._colors.income : styles._colors.expense },
         ]}>
-          <Text style={styles.icon}>{bill.icon}</Text>
+          <CategoryIcon
+            icon={bill.icon}
+            fallback={isIncome ? '💰' : '💸'}
+            size={20}
+            emojiStyle={styles.icon}
+          />
         </View>
         <View style={styles.billInfo}>
           <Text style={styles.category}>{bill.category}</Text>

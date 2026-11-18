@@ -70,6 +70,13 @@ export const CATEGORY_LUCIDE_ICONS: { [key: string]: LucideIcon } = {
 export const isLucideIconName = (icon?: string | null): boolean =>
   Boolean(icon && icon in CATEGORY_LUCIDE_ICONS);
 
+/**
+ * 是否可作为 emoji 文本渲染。纯 ASCII 标识符（如未登记的 lucide 名
+ * `shopping-bag`）不当作图标字符 —— 否则界面上会出现"一行字母"。
+ */
+const isEmojiText = (value?: string | null): boolean =>
+  Boolean(value && !/^[\x20-\x7E]+$/.test(value.trim()));
+
 interface CategoryIconProps {
   icon?: string | null;
   /** 矢量图标尺寸；emoji 回退时以其为 fontSize */
@@ -100,6 +107,8 @@ export default function CategoryIcon({
     return <Icon size={size} strokeWidth={strokeWidth} color={color ?? colors.stroke} />;
   }
   return (
-    <Text style={[{ fontSize: size }, emojiStyle]}>{icon || fallback}</Text>
+    <Text style={[{ fontSize: size }, emojiStyle]}>
+      {isEmojiText(icon) ? icon : fallback}
+    </Text>
   );
 }
