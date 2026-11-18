@@ -171,7 +171,8 @@ class RecognitionModule(
         val now = System.currentTimeMillis()
         val activeSessions = database.checkoutSessionDao().getActiveSessions(now).size
         val aiRequestingCount = database.checkoutSessionDao().countAiRequesting(now)
-        val pendingCount = database.pendingTransactionDao().count()
+        // 已入账编辑卡不是"待确认"（账单已在账本里），与待确认列表同一口径计数。
+        val pendingCount = database.pendingTransactionDao().countExcludingEditCards()
         JSONObject().apply {
             put("activeSessions", activeSessions)
             put("pendingCount", pendingCount)

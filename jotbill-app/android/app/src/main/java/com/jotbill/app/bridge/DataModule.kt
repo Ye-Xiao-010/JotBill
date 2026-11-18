@@ -989,8 +989,8 @@ class DataModule(
         val page = filter.optInt("page", 1).coerceAtLeast(1)
         val limit = filter.optInt("limit", 20).coerceIn(1, 100)
         val offset = ((page - 1).toLong() * limit).coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
-        val pending = database.pendingTransactionDao().getPage(limit, offset)
-        val total = database.pendingTransactionDao().count()
+        val pending = database.pendingTransactionDao().getPageExcludingEditCards(limit, offset)
+        val total = database.pendingTransactionDao().countExcludingEditCards()
         JSONObject().apply {
             put("items", JSONArray().also { array -> pending.forEach { array.put(BridgeDtoMapper.pending(it)) } })
             put("total", total)

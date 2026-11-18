@@ -1,13 +1,13 @@
 package com.jotbill.app.recognition
 
-import androidx.room.withTransaction
 import com.jotbill.app.bookkeeping.AccountInference
+import com.jotbill.app.bookkeeping.AutoBookkeeper
+import com.jotbill.app.bookkeeping.SignalBillWriter
 import com.jotbill.app.data.CreateBillOutcome
 import com.jotbill.app.data.JotBillDatabase
 import com.jotbill.app.utils.JotBillLog
 import com.jotbill.app.pending.PendingChangeHub
 import com.jotbill.app.pending.PendingChangeInfo
-import com.jotbill.app.data.LedgerRepository
 import com.jotbill.app.data.PENDING_CONFIRM_AUDIT_TYPE
 import com.jotbill.app.data.RefundCapGuard
 import com.jotbill.app.data.entity.AuditEntryEntity
@@ -20,21 +20,12 @@ import java.security.MessageDigest
 import org.json.JSONArray
 import org.json.JSONObject
 
-/** 无订单号时的退款组合候选回溯窗口：退款不会早于原消费，向前回溯 90 天。 */
-private const val REFUND_CANDIDATE_WINDOW_MILLIS = 90L * 24 * 60 * 60 * 1000
-
-/** 组合候选上限：候选只作待确认提示，超出后由用户在待确认中心自行搜索原交易。 */
-private const val REFUND_CANDIDATE_LIMIT = 5
-
 /**
  * 跨来源同额退款去重窗（2026-11-16 真机）：同一笔退款可能由拼多多通知
  * （「退款成功通知」）、微信/支付宝退款通知、银行到账短信等多条信号描述，
  * 各来源 sourceEventKey 不同。2 分钟内已有同额退款卡视为同一笔，不建第二张。
  */
 private const val REFUND_CROSS_SOURCE_DEDUP_WINDOW_MILLIS = 2 * 60 * 1000L
-
-/** 退款自动入账的审计操作者标记。 */
-private const val REFUND_AUTO_COMMIT_OPERATOR = "refund_auto_commit"
 
 // P14：支付平台种子账户 ID 唯一出处为 [AccountInference]，本文件不再私有定义。
 private val WECHAT_PAY_ACCOUNT_ID = AccountInference.WECHAT_PAY_ACCOUNT_ID
@@ -43,37 +34,33 @@ private val ALIPAY_ACCOUNT_ID = AccountInference.ALIPAY_ACCOUNT_ID
 /** 与 DefaultDataInitializer 保持一致的退款种子分类。 */
 private const val DEFAULT_REFUND_CATEGORY_ID = "default-category-income-refund"
 
-/** 待确认冲突原因：原交易号命中多笔支出，无法唯一关联。 */
-internal const val REFUND_CONFLICT_AMBIGUOUS = "ORIGINAL_AMBIGUOUS"
-
 /**
- * 阶段五 T2：退款识别与原交易关联决策。
+ * 退款识别与原交易关联决策（首笔信号模型，2026-11-16 调整 / 2026-11-17 审查修复）。
  *
- * 职责（见 docs/tdd/09_phase5_tasks.md 第 3.5 节与任务卡 T2）：
+ * 职责：
  * - 接收 Normalizer 解析出的退款证据（paymentStatus = REFUND）；
- * - 原交易号优先关联本地支出 Bill；无订单号时按金额+商户+平台+时间窗口生成候选（仅提示）；
- * - 多次部分退款按 originalTransactionId 累计，累计退款超过原实付金额时标记 REFUND_EXCEEDED；
- * - 原交易缺失时创建独立退款待确认（ORIGINAL_MISSING），不阻塞其他流程；
- * - 自动入账条件（严格执行，缺一不可）：原交易号唯一命中 + 累计退款 ≤ 原实付 + 可用资金账户；
- *   其余场景一律进入待确认，不静默入账；
- * - 幂等：账单 ID 与待确认 ID 均由 sourceEventKey 确定性生成，重复通知只处理一次；
- *   用户确认过的退款通过审计墓碑（refund_confirm）防止重复通知再次挂账。
+ * - 原交易号唯一命中时绑定本地支出 Bill；
+ * - **首笔退款信号直接成账**（交给 [SignalBillWriter.recordRefund]），60 秒内同额
+ *   后续信号只做信息补全；账户按「规则 > 退款去向提示 > 原单账户 > 包名映射 > 现金」解析；
+ * - 只有规则 send_to_review、订单号撞号、入账失败等场景才落待确认（可重试、不静默丢）；
+ * - 累计退款超过原实付仅审计提示（首笔信号必须落账，由用户核对）；
+ * - 幂等：待确认 ID 确定性生成；账单幂等由 [SignalBillWriter] 的事务内事件键承担。
  *
  * 退款余额口径（沿用 BalanceCalculator）：refund 计入收入侧统计、金额加回退款接收账户。
- * 接收账户以通知为准，但 MVP 无法把"退回至XX"文本可靠映射到本地账户，
- * 按 原交易账户（原路退回）> 支付包默认账户 回退。
  */
 internal class RefundLinker(
     private val database: JotBillDatabase,
     private val nowMillis: () -> Long = { System.currentTimeMillis() }
 ) {
-    private val ledger = LedgerRepository(database)
     private val ruleEngine = RuleEngine(database)
 
     /** 退款处理结果，供调用方记录日志与面包屑。 */
     internal sealed class RefundOutcome {
         /** 自动入账成功：退款 Bill 已写入并联动余额。 */
-        data class AutoCommitted(val billId: String, val originalBillId: String) : RefundOutcome()
+        data class AutoCommitted(val billId: String, val originalBillId: String?) : RefundOutcome()
+
+        /** 后续同笔信号补全既有退款账单（未新建）。 */
+        data class Enriched(val billId: String) : RefundOutcome()
 
         /** 进入待确认中心：conflictReason 说明原因。 */
         data class PendingCreated(val pendingId: String, val conflictReason: String) : RefundOutcome()
@@ -86,19 +73,19 @@ internal class RefundLinker(
     }
 
     /**
-     * 处理一条退款证据：幂等校验 → 规则执行 → 原交易关联 → 自动入账或待确认。
-     * 全程在单个 Room 事务内，任一写入失败整体回滚。
+     * 处理一条退款证据：幂等校验 → 规则执行 → 原交易关联 → 入账或待确认。
+     * 账单写入与幂等键在 [SignalBillWriter] 的同一事务内完成；待确认卡按确定性 ID 幂等插入。
      */
-    suspend fun processRefund(input: PaymentEvidenceInput): RefundOutcome = database.withTransaction {
-        // N-1：通知来源放行（D-3 整体停用闸已删）。本分类器会直接写 Bill 并联动余额，
-        // 故是否自动入账由 [isNotificationAutoCommitAllowed] 决定，当前仍扣住 ——
-        // 证据落待确认由用户核对，见下方 conflictReason 的 AUTO_COMMIT_DEFERRED 分支。
+    suspend fun processRefund(input: PaymentEvidenceInput): RefundOutcome {
+        // 首笔信号模型（2026-11-16）：退款不再受自动入账闸限制，直接成账；
+        // 是否落待确认只由规则 send_to_review / 撞号 / 入账失败决定。
         val now = nowMillis()
-        if (input.amountMinor !in 1L..MAX_SAFE_MINOR_UNIT || input.occurredAt <= 0L) {
-            return@withTransaction RefundOutcome.Duplicate
+        if (input.amountMinor !in 1L..MAX_SAFE_MINOR_UNIT) {
+            return RefundOutcome.Duplicate
         }
 
         // ---- 幂等：确定性 ID + 用户确认墓碑，同一退款事件只处理一次 ----
+        // billId 用于兼容旧模型已按 sourceEventKey 落库的退款账单。
         val billId = stableId("refund-bill", input.sourceEventKey)
         val pendingId = stableId("pending-refund", input.sourceEventKey)
         if (database.billDao().getById(billId) != null ||
@@ -106,7 +93,7 @@ internal class RefundLinker(
             database.auditEntryDao()
                 .getByEntity(PENDING_CONFIRM_AUDIT_TYPE, pendingId).isNotEmpty()
         ) {
-            return@withTransaction RefundOutcome.Duplicate
+            return RefundOutcome.Duplicate
         }
 
         // ---- 跨来源同额退款去重（2026-11-16 真机）----
@@ -115,7 +102,8 @@ internal class RefundLinker(
         val recentRefundCard = database.pendingTransactionDao().findRecentPendingRefundByAmount(
             amountMinor = input.amountMinor,
             windowStart = now - REFUND_CROSS_SOURCE_DEDUP_WINDOW_MILLIS,
-            windowEnd = now + REFUND_CROSS_SOURCE_DEDUP_WINDOW_MILLIS
+            // 只回溯不前瞻：未来时间戳的卡是时钟异常，不应挡住当前这笔真实退款。
+            windowEnd = now
         )
         if (recentRefundCard != null) {
             JotBillLog.i(
@@ -123,29 +111,7 @@ internal class RefundLinker(
                 "跨来源同额退款卡已存在，判为同一笔: pending=${recentRefundCard.id.take(16)}, " +
                     "amount=${input.amountMinor}, source=${input.sourcePackage}"
             )
-            return@withTransaction RefundOutcome.Duplicate
-        }
-
-        // 同额退款**账单**在 2 分钟内已存在（例如用户先确认了页面退款卡，随后
-        // 银行退款短信才到）⇒ 同样判为同一笔。只查 pending 卡挡不住"卡已被
-        // 确认入账"的时间差。
-        val recentRefundBill = try {
-            database.billDao().findRecentByAmountAndType(
-                type = "refund",
-                amountMinor = input.amountMinor,
-                windowStart = now - REFUND_CROSS_SOURCE_DEDUP_WINDOW_MILLIS,
-                windowEnd = now
-            )
-        } catch (error: RuntimeException) {
-            null
-        }
-        if (recentRefundBill != null) {
-            JotBillLog.i(
-                "RefundLinker",
-                "跨来源同额退款账单已存在，判为同一笔: bill=${recentRefundBill.id.take(8)}, " +
-                    "amount=${input.amountMinor}, source=${input.sourcePackage}"
-            )
-            return@withTransaction RefundOutcome.Duplicate
+            return RefundOutcome.Duplicate
         }
 
         // ---- 规则引擎（阶段五 T1：纯通知路径同样执行规则）----
@@ -153,6 +119,7 @@ internal class RefundLinker(
             RuleEngine.Subject(
                 amountMinor = input.amountMinor,
                 platform = input.sourcePackage,
+                platformAliases = listOfNotNull(AutoBookkeeper.channelLabel(input.sourcePackage)),
                 merchant = input.merchant,
                 description = null,
                 sourceType = "notification"
@@ -176,99 +143,134 @@ internal class RefundLinker(
                     createdAt = now
                 )
             )
-            return@withTransaction RefundOutcome.Ignored
+            return RefundOutcome.Ignored
         }
         val rulePatch = ruleEngine.sanitizePatch(
             (ruleDecision as? RuleEngine.Decision.Continue)?.patch ?: RuleEngine.FieldPatch()
         )
         val forcedReview = ruleDecision is RuleEngine.Decision.ToReview
 
-        // ---- 原交易关联：订单号优先，感知多笔歧义 ----
+        // ---- 原交易关联：订单号唯一命中才绑定（否则退化为无原单退款账单）----
         val orderIdMatches = input.orderId
             ?.takeIf { it.isNotBlank() }
             ?.let { database.billDao().findExpensesByOrderId(it) }
             .orEmpty()
         val original: BillEntity? = orderIdMatches.singleOrNull()
-
-        // 无订单号命中时的组合候选（仅待确认提示，不作为自动入账依据）
-        val candidates: List<BillEntity> = if (orderIdMatches.isEmpty()) {
-            database.billDao().findRefundCandidates(
-                merchant = input.merchant?.takeIf { it.isNotBlank() },
-                platform = input.sourcePackage,
-                minAmountMinor = input.amountMinor,
-                startDate = input.occurredAt - REFUND_CANDIDATE_WINDOW_MILLIS,
-                endDate = input.occurredAt,
-                limit = REFUND_CANDIDATE_LIMIT
+        if (orderIdMatches.size > 1) {
+            JotBillLog.i(
+                "RefundLinker",
+                "退款订单号命中多笔原单，不绑定: orderId=${input.orderId?.take(16)}, " +
+                    "count=${orderIdMatches.size}"
             )
-        } else {
-            emptyList()
         }
 
-        // ---- 累计退款校验（多次部分退款口径；判定唯一出处 RefundCapGuard）----
-        val capState = original?.let { RefundCapGuard(database).evaluate(input.amountMinor, it.id) }
-        val refundedBefore = capState?.refundedBeforeMinor ?: 0L
-        val exceeded = capState?.exceeded == true
-
-        // ---- 资金账户解析：规则指定 > 原交易账户（原路退回）> 支付包默认 ----
-        val accountId = rulePatch.accountId
-            ?: original?.accountId?.let { activeAccountId(it) }
-            ?: packageDefaultAccountId(input.sourcePackage)
-
-        // ---- 决策：自动入账条件严格判定，其余一律待确认 ----
-        val conflictReason: String? = when {
-            forcedReview -> RuleEngine.CONFLICT_RULE_FORCED_REVIEW
-            orderIdMatches.size > 1 -> REFUND_CONFLICT_AMBIGUOUS
-            original == null -> "ORIGINAL_MISSING"
-            exceeded -> "REFUND_EXCEEDED"
-            accountId == null -> "ACCOUNT_UNAVAILABLE"
-            // N-1：放在各分类器自己的冲突码**之后** —— 有更具体原因时优先展示具体原因。
-            !isNotificationAutoCommitAllowed() -> CONFLICT_AUTO_COMMIT_DEFERRED
-            else -> null
-        }
-
-        if (conflictReason == null) {
-            val bill = BillEntity(
-                id = billId,
-                amountMinor = input.amountMinor,
-                type = "refund",
-                occurredAt = input.occurredAt,
-                description = input.merchant ?: "退款",
-                categoryId = rulePatch.categoryId ?: refundCategoryId(),
-                accountId = accountId,
-                targetAccountId = null,
-                platform = original?.platform ?: input.sourcePackage,
-                merchant = input.merchant ?: original?.merchant,
-                productDescription = null,
-                sourceType = "notification",
-                originalTransactionId = original!!.id,
-                orderId = input.orderId,
-                createdAt = now,
-                updatedAt = now,
-                version = 1
-            )
-            // 写 Bill + refund 口径联动余额（收入侧，金额加回账户）+ 审计日志。
-            // 按 outcome 分支：命中去重时未 insert、未动余额，返回的必须是
-            // 既有账单的 id，而非那个从未落库的 UUID。
-            val outcome = ledger.createBillWithDedup(bill, operator = REFUND_AUTO_COMMIT_OPERATOR)
-            val settledBillId = when (outcome) {
-                is CreateBillOutcome.Committed -> outcome.bill.id
-                is CreateBillOutcome.MergedInto -> outcome.bill.id
+        // ---- 累计退款上限（仅审计提示；首笔信号必须落账，不再转待确认）----
+        if (original != null) {
+            val capState = try {
+                RefundCapGuard(database).evaluate(input.amountMinor, original.id)
+            } catch (error: RuntimeException) {
+                null
             }
-            return@withTransaction RefundOutcome.AutoCommitted(settledBillId, original.id)
+            if (capState?.exceeded == true) {
+                JotBillLog.w(
+                    "RefundLinker",
+                    "退款累计超过原实付，仍按信号入账(请用户核对): " +
+                        "original=${original.id.take(8)}, amount=${input.amountMinor}, " +
+                        "refundedBefore=${capState.refundedBeforeMinor}"
+                )
+            }
         }
 
+        // ---- 规则强制复核（send_to_review）：落待确认，不静默入账 ----
+        if (forcedReview) {
+            val reason = (ruleDecision as RuleEngine.Decision.ToReview).reason
+            return createRefundPending(
+                input = input,
+                pendingId = pendingId,
+                rulePatch = rulePatch,
+                ruleHits = ruleDecision.hits,
+                original = original,
+                orderIdMatches = orderIdMatches,
+                conflictReason = reason,
+                now = now
+            )
+        }
+
+        // ---- 首笔信号直接入账（2026-11-16 模型调整）----
+        val outcome = try {
+            SignalBillWriter(null, database).recordRefund(
+                SignalBillWriter.RefundSignal(
+                    amountMinor = input.amountMinor,
+                    occurredAt = input.occurredAt,
+                    merchant = rulePatch.merchant ?: input.merchant,
+                    orderId = input.orderId,
+                    platform = original?.platform ?: input.sourcePackage,
+                    sourcePackage = input.sourcePackage,
+                    sourceType = "notification",
+                    receivingHints = listOf(input.receivingAccountHint),
+                    originalBillId = original?.id,
+                    ruleAccountId = rulePatch.accountId,
+                    categoryId = rulePatch.categoryId,
+                    sourceEventKey = input.sourceEventKey
+                )
+            )
+        } catch (error: Exception) {
+            if (error is kotlinx.coroutines.CancellationException) throw error
+            JotBillLog.w("RefundLinker", "退款信号入账失败", error)
+            return createRefundPending(
+                input, pendingId, rulePatch, ruleDecision.hits, original,
+                orderIdMatches, "REFUND_BOOK_FAILED", now
+            )
+        }
+        return when (outcome) {
+            is SignalBillWriter.Outcome.Created ->
+                RefundOutcome.AutoCommitted(outcome.billId, original?.id)
+            is SignalBillWriter.Outcome.Enriched ->
+                RefundOutcome.Enriched(outcome.billId)
+            is SignalBillWriter.Outcome.Duplicate -> RefundOutcome.Duplicate
+            is SignalBillWriter.Outcome.Ignored -> {
+                JotBillLog.i("RefundLinker", "退款信号被丢弃: ${outcome.reason}")
+                RefundOutcome.Ignored
+            }
+            is SignalBillWriter.Outcome.NeedsReview -> createRefundPending(
+                input, pendingId, rulePatch, ruleDecision.hits, original,
+                orderIdMatches, outcome.reason, now
+            )
+            is SignalBillWriter.Outcome.Failed -> createRefundPending(
+                input, pendingId, rulePatch, ruleDecision.hits, original,
+                orderIdMatches, outcome.reason, now
+            )
+        }
+    }
+
+    /**
+     * 退款待确认卡（规则强制复核 / 撞号 / 入账失败）：确定性 ID 幂等，
+     * 证据与候选原单不丢；emit 变更供待确认中心与提醒使用。
+     */
+    private suspend fun createRefundPending(
+        input: PaymentEvidenceInput,
+        pendingId: String,
+        rulePatch: RuleEngine.FieldPatch,
+        ruleHits: List<RuleEngine.RuleHit>,
+        original: BillEntity?,
+        orderIdMatches: List<BillEntity>,
+        conflictReason: String,
+        now: Long
+    ): RefundOutcome.PendingCreated {
         val pending = PendingTransactionEntity(
             id = pendingId,
             candidateId = null,
             sessionId = null,
             amountMinor = input.amountMinor,
             type = "refund",
-            occurredAt = input.occurredAt,
+            occurredAt = input.occurredAt.takeIf { it > 0L } ?: now,
             platform = input.sourcePackage,
             merchant = input.merchant,
             productDescription = null,
             orderId = input.orderId,
-            accountId = accountId ?: original?.accountId?.let { activeAccountId(it) },
+            accountId = rulePatch.accountId
+                ?: original?.accountId?.let { activeAccountId(it) }
+                ?: packageDefaultAccountId(input.sourcePackage),
             categoryId = rulePatch.categoryId ?: refundCategoryId(),
             conflictReason = conflictReason,
             sourceType = "notification",
@@ -282,19 +284,9 @@ internal class RefundLinker(
                             JSONArray().apply { orderIdMatches.forEach { put(it.id) } }
                         )
                     }
-                    if (candidates.isNotEmpty()) {
-                        put(
-                            "candidates",
-                            JSONArray().apply { candidates.forEach { put(it.id) } }
-                        )
-                    }
-                    if (original != null) {
-                        put("refundedMinor", refundedBefore)
-                        put("originalAmountMinor", original.amountMinor)
-                    }
                     input.receivingAccountHint?.let { put("receivingAccountHint", it) }
                 }.toString(),
-                ruleDecision.hits
+                ruleHits
             ),
             originalBillId = original?.id,
             createdAt = now,
@@ -313,8 +305,12 @@ internal class RefundLinker(
                     isNew = true
                 )
             )
+            JotBillLog.i(
+                "RefundLinker",
+                "退款证据转待确认: pending=${pending.id.take(16)}, reason=$conflictReason"
+            )
         }
-        RefundOutcome.PendingCreated(pending.id, conflictReason)
+        return RefundOutcome.PendingCreated(pending.id, conflictReason)
     }
 
     /** 账户存在且启用时返回 ID，否则 null。 */

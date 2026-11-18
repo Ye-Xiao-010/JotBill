@@ -1253,6 +1253,7 @@ function shortenOrderId(orderId: string): string {
 const EVIDENCE_SOURCE_LABELS: Record<string, string> = {
   notification: '通知',
   accessibility: '结果页',
+  sms: '银行短信',
   manual: '手动',
 };
 

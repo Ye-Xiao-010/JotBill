@@ -10,6 +10,7 @@ import com.jotbill.app.bookkeeping.AutoBookkeeper
 import com.jotbill.app.bookkeeping.BankSmsNotificationParser
 import com.jotbill.app.bookkeeping.BookkeepingChannels
 import com.jotbill.app.bookkeeping.PageRuleRegistry
+import com.jotbill.app.bookkeeping.SignalBillWriter
 import com.jotbill.app.data.JotBillDatabaseProvider
 import com.jotbill.app.recognition.CheckoutAccessibilityService
 import com.jotbill.app.recognition.CheckoutPaymentMatcher
@@ -683,82 +684,75 @@ class PaymentNotificationService : NotificationListenerService() {
      * @param input 解析后的支付证据输入
      */
     private suspend fun handlePaymentEvidence(input: PaymentEvidenceInput) {
-        // 构建回退信号，用于触发无障碍服务的购买意图回退
-        val signal = PaymentNotificationFallbackSignal(
-            paymentPackage = input.sourcePackage,
-            amountMinor = input.amountMinor,
-            occurredAt = input.occurredAt,
-            merchant = input.merchant,
-            orderId = input.orderId,
-            rawTextHash = input.rawTextHash,
-            sourceEventKey = input.sourceEventKey
-        )
-
-        // 通过无障碍服务触发回退，尝试关联活跃结算会话
-        val result = tryFallbackSignal(signal)
-        val acceptedByAccessibility = result is PurchaseIntentCoordinationResult.Accepted ||
-            result is PurchaseIntentCoordinationResult.AiDispatched
-
-            // 回退未被接受（服务不可用/超时/门禁拒绝）：证据不丢弃，落纯通知待确认
-            if (!acceptedByAccessibility) {
-                try {
-                    val database = JotBillDatabaseProvider.get(applicationContext)
-                    if (result == null) {
-                        // 超时可能是无障碍链路仍在异步落库；短暂等待后按 sourceEventKey 复查，
-                        // 避免同一次支付既落会话证据又落孤儿待确认。
-                        delay(EVIDENCE_GRACE_MILLIS)
-                    }
-                    val evidenceAlreadyStored = database.paymentEvidenceDao()
-                        .getBySourceEventKey(input.sourceEventKey) != null
-                    if (evidenceAlreadyStored) {
-                        JotBillLog.i(TAG, "支付证据已由无障碍链路落库，跳过纯通知兜底")
-                        return
-                    }
-                    // 规则引擎（无障碍通知事件）不写 payment_evidence 表，上面的证据表
-                    // 判重看不到它。同包同额已被认领 ⇒ 引擎已自动入账，此处再落卡就是重复。
-                    if (CheckoutAccessibilityService.isPaymentClaimedByBookkeeping(
-                            input.sourcePackage,
-                            input.amountMinor
-                        )
-                    ) {
-                        JotBillLog.i(
-                            TAG,
-                            "同笔支付已被规则引擎认领并入账，跳过纯通知兜底: " +
-                                "pkg=${input.sourcePackage}, amount=${input.amountMinor}"
-                        )
-                        return
-                    }
-                    // N-0a：按真实落库结果记录。此前此处无条件打「已转纯通知待确认」，
-                    // 而 D-3 闸门在 matcher 内部静默丢弃 ⇒ 日志与实际不符，真机排查会
-                    // 照着它去找一条根本不存在的待确认。
-                    val outcome = CheckoutPaymentMatcher(database).recordOrphanPaymentSignal(
-                        signal, sourceType = "NOTIFICATION"
-                    )
-                    val summary = "通知证据落库结果=${outcome.kind}" +
-                        (outcome.pendingId?.let { ", id=${it.take(16)}" } ?: "")
-                    if (outcome.isAutoCommitted) {
-                        JotBillLog.i(TAG, "支付通知回退不可用($result)，$summary（已自动入账）")
-                    } else if (outcome.isStored) {
-                        JotBillLog.i(TAG, "支付通知回退不可用($result)，$summary")
-                    } else {
-                        JotBillLog.w(TAG, "支付通知回退不可用($result)，$summary（未产生新待确认）")
-                    }
-                } catch (error: RuntimeException) {
-                    JotBillLog.w(TAG, "纯通知待确认写入失败", error)
+        // 模型调整（2026-11-16）：支付通知作为首笔信号直接入账；同额后续信号
+        // 在 SignalBillWriter 的 60 秒窗内补全，不再走会话匹配与待确认兜底。
+        val channelLabel = AutoBookkeeper.channelLabel(input.sourcePackage)
+        try {
+            val database = JotBillDatabaseProvider.get(applicationContext)
+            val outcome = SignalBillWriter(applicationContext, database).recordPayment(
+                SignalBillWriter.PaymentSignal(
+                    amountMinor = input.amountMinor,
+                    occurredAt = input.occurredAt,
+                    merchant = input.merchant,
+                    orderId = input.orderId,
+                    platform = input.sourcePackage,
+                    channelLabel = channelLabel,
+                    sourcePackage = input.sourcePackage,
+                    sourceType = "notification",
+                    accountHints = listOf(channelLabel),
+                    sourceEventKey = input.sourceEventKey
+                )
+            )
+            // 规则强制复核 / 入账失败：证据不得丢弃，落纯通知待确认由用户核对。
+            if (outcome is SignalBillWriter.Outcome.NeedsReview ||
+                outcome is SignalBillWriter.Outcome.Failed
+            ) {
+                val reason = when (outcome) {
+                    is SignalBillWriter.Outcome.NeedsReview -> outcome.reason
+                    is SignalBillWriter.Outcome.Failed -> outcome.reason
+                    else -> ""
                 }
+                fallbackToPending(input, reason)
             }
+            JotBillLog.i(
+                TAG,
+                "支付通知入账: outcome=${outcome.javaClass.simpleName}, " +
+                    "amount=${input.amountMinor}, pkg=${input.sourcePackage}"
+            )
+        } catch (error: RuntimeException) {
+            JotBillLog.w(TAG, "支付通知入账失败", error)
+            fallbackToPending(input, "NOTIFICATION_BOOK_FAILED")
+        }
+    }
 
-        // 记录处理结果
-        val resultInfo = mapOf(
-            "package" to input.sourcePackage,
-            "fallbackResult" to (result?.javaClass?.simpleName ?: "TIMEOUT_OR_UNAVAILABLE")
-        )
-        SentryLogger.addBreadcrumb(
-            "支付证据处理完成",
-            data = resultInfo,
-            category = "payment_evidence"
-        )
-        JotBillLog.i(TAG, "支付证据处理完成: $resultInfo")
+    /** 信号无法自动入账时的待确认兜底（幂等由 orphan 卡的确定性 ID 承担）。 */
+    private suspend fun fallbackToPending(input: PaymentEvidenceInput, reason: String) {
+        try {
+            CheckoutPaymentMatcher(JotBillDatabaseProvider.get(applicationContext))
+                .recordOrphanPaymentSignal(
+                    PaymentNotificationFallbackSignal(
+                        paymentPackage = input.sourcePackage,
+                        amountMinor = input.amountMinor,
+                        occurredAt = input.occurredAt,
+                        merchant = input.merchant,
+                        orderId = input.orderId,
+                        sourceEventKey = input.sourceEventKey,
+                        rawTextHash = input.rawTextHash
+                    ),
+                    sourceType = "NOTIFICATION",
+                    conflictReason = reason,
+                    // 本次兜底的前提就是"自动入账不可行"（规则复核/失败）：
+                    // 禁止 N-2 强证据路径再次尝试入账，否则 send_to_review 会被击穿。
+                    suppressStrongEvidence = true
+                )
+            JotBillLog.i(
+                TAG,
+                "支付通知转待确认: reason=$reason, amount=${input.amountMinor}"
+            )
+        } catch (error: Exception) {
+            if (error is kotlinx.coroutines.CancellationException) throw error
+            JotBillLog.w(TAG, "支付通知转待确认失败，证据丢弃", error)
+        }
     }
 
     /**

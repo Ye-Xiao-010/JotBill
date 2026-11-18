@@ -68,6 +68,10 @@ internal object BankSmsNotificationParser {
     /** 商户前缀：「(拼多多-实物消费-拼多多平台商户)」→ 拼多多。 */
     private val MERCHANT_PREFIX_PATTERN = Regex("""[（(]([^)）\-]{2,20})-""")
 
+    /** 银行名（【四川农商银行】）与卡尾号，用于退款接收账户提取。 */
+    private val BANK_NAME_BRACKET_PATTERN = Regex("""【([^】]{2,20}银行)】""")
+    private val CARD_TAIL_PATTERN = Regex("""尾号\s*(\d{4})""")
+
     private const val TIME_BUCKET_MILLIS = 15_000L
 
     /**
@@ -87,6 +91,8 @@ internal object BankSmsNotificationParser {
             if (rule.locateAttribute !in 0..1) continue
             if (!rule.isLocatedBy(content)) continue
             val fields = rule.extractFrom(content) ?: continue
+            val amountMinor =
+                AutoBookkeepingEngine.parseAmountMinor(fields["amount"]) ?: 0L
             return AutoBookkeepingEngine.ExtractedRecord(
                 fields = fields,
                 ruleId = rule.ruleId,
@@ -94,7 +100,13 @@ internal object BankSmsNotificationParser {
                 fromApp = rule.fromApp,
                 jotbillType = rule.jotbillType,
                 sourcePackage = PACKAGE,
-                extractTime = extractTime
+                extractTime = extractTime,
+                // 幂等键：包名 + 时间桶 + 金额 + 正文指纹。短信分组更新会重投，
+                // 正文指纹区分不同笔；同笔重投由 60 秒补全窗兜底归并。
+                sourceEventKey = sha256(
+                    "bank-sms-expense|$PACKAGE|${extractTime / TIME_BUCKET_MILLIS}|" +
+                        "$amountMinor|${content.hashCode()}"
+                )
             )
         }
         return null
@@ -132,6 +144,11 @@ internal object BankSmsNotificationParser {
         if (amountMinor <= 0L) return null
         val merchant = MERCHANT_PREFIX_PATTERN.find(content)?.groupValues?.get(1) ?: parenMerchant
         val textHash = sha256(content)
+        // 退款去向提示：银行名 + 卡尾号（「先提取，再兜底」——能匹配到本地账户就升级）。
+        val receivingHint = listOfNotNull(
+            BANK_NAME_BRACKET_PATTERN.find(content)?.groupValues?.get(1),
+            CARD_TAIL_PATTERN.find(content)?.groupValues?.get(1)?.let { "尾号$it" }
+        ).joinToString(" ").takeIf { it.isNotEmpty() }
         return PaymentEvidenceInput(
             sourcePackage = PACKAGE,
             amountMinor = amountMinor,
@@ -145,7 +162,7 @@ internal object BankSmsNotificationParser {
                 "bank-sms-refund|$PACKAGE|${occurredAt / TIME_BUCKET_MILLIS}|$amountMinor"
             ),
             rawTextHash = textHash,
-            receivingAccountHint = null
+            receivingAccountHint = receivingHint
         )
     }
 

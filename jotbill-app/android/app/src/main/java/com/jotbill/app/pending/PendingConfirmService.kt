@@ -4,7 +4,10 @@ import com.jotbill.app.bridge.BridgeDtoMapper
 import com.jotbill.app.data.JotBillDatabase
 import com.jotbill.app.data.LedgerRepository
 import com.jotbill.app.data.entity.BillEntity
+import com.jotbill.app.data.entity.PendingTransactionEntity
+import com.jotbill.app.rules.FieldPriorityResolver
 import com.jotbill.app.rules.RuleEngine
+import com.jotbill.app.utils.JotBillLog
 import java.util.UUID
 
 /**
@@ -74,6 +77,10 @@ internal class PendingConfirmService(private val database: JotBillDatabase) {
     suspend fun confirm(pendingId: String, overrides: Overrides, confirmedDuplicate: Boolean = false): Outcome {
         val pending = database.pendingTransactionDao().getById(pendingId)
             ?: return detectRecentAutoBookedBill(overrides) ?: Outcome.AlreadyHandled
+        // 「已入账编辑卡」（2026-11-16）：账单已存在，确认只更新账户/分类。
+        EditCardMarker.billId(pending.appliedRules)?.let { billId ->
+            return confirmEditCard(pending, billId, overrides)
+        }
         // M4：疑似重复卡不许"点一下就过" —— 首次确认返回 DuplicateConfirmRequired，
         // 由 RN 弹窗明示后带 confirmedDuplicate=true 重试；不做硬阻断。
         if (
@@ -167,6 +174,65 @@ internal class PendingConfirmService(private val database: JotBillDatabase) {
             bill = settledBill,
             merged = confirmResult.mergedInto != null
         )
+    }
+
+    /**
+     * 「已入账编辑卡」确认（2026-11-16）：不新建账单，只把用户选择的账户/分类
+     * 写回既有账单；账户变化由 LedgerRepository 同步迁移余额（含审计）。
+     */
+    private suspend fun confirmEditCard(
+        pending: PendingTransactionEntity,
+        billId: String,
+        overrides: Overrides
+    ): Outcome {
+        val bill = database.billDao().getById(billId) ?: return Outcome.AlreadyHandled
+        val accountId = overrides.accountId ?: bill.accountId
+        val categoryId = overrides.categoryId ?: bill.categoryId
+        val merchant = overrides.merchant ?: bill.merchant
+        val changed = accountId != bill.accountId ||
+            categoryId != bill.categoryId ||
+            merchant != bill.merchant
+        val updatedBill = bill.copy(
+            accountId = accountId,
+            categoryId = categoryId,
+            merchant = merchant,
+            version = bill.version + 1,
+            updatedAt = System.currentTimeMillis()
+        )
+        val applied = if (!changed) {
+            true
+        } else {
+            try {
+                LedgerRepository(database).updateBillWithBalanceUpdate(
+                    bill,
+                    updatedBill,
+                    FieldPriorityResolver.Source.USER_LOCK
+                )
+            } catch (error: RuntimeException) {
+                JotBillLog.w("PendingConfirmService", "编辑卡保存失败: bill=${bill.id.take(8)}", error)
+                false
+            }
+        }
+        if (!applied) return Outcome.AlreadyHandled
+        database.pendingTransactionDao().deleteByIdIfVersion(pending.id, pending.version)
+        PendingChangeHub.emit(
+            PendingChangeInfo(
+                pendingId = pending.id,
+                type = pending.type,
+                amountMinor = pending.amountMinor,
+                sourceType = pending.sourceType,
+                conflictReason = null,
+                occurredAt = pending.occurredAt,
+                isNew = false,
+                removed = true,
+                isEditCard = true
+            )
+        )
+        JotBillLog.i(
+            "PendingConfirmService",
+            "编辑卡保存成功: bill=${bill.id.take(8)}, changed=$changed, account=$accountId"
+        )
+        return Outcome.Confirmed(if (changed) updatedBill else bill, false)
     }
 
     /**

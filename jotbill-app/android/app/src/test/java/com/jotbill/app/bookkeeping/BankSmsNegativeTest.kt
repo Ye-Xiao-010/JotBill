@@ -260,11 +260,11 @@ class BankSmsNegativeTest {
     }
 
     /**
-     * B3 拍板 ②：短信 + 用户 set_account 规则命中账户字段 ⇒ 强制转待确认
-     * （猜测性人工干预须用户核对），不得自动入账。
+     * 首笔信号模型（2026-11-16 调整）：短信 + 用户 set_account 规则命中 ⇒
+     * 规则是最高优先级账户来源，直接按规则账户入账，不再强制转待确认。
      */
     @Test
-    fun 短信用户账户规则命中强制待确认() = withDatabase { database ->
+    fun 短信用户账户规则命中时按规则账户直接入账() = withDatabase { database ->
         val ruleAccountId = "acc-bank-card"
         database.accountDao().insert(
             AccountEntity(
@@ -286,17 +286,13 @@ class BankSmsNegativeTest {
 
         deliverRecord(database, smsRecord(amountText = "34.50", orderId = "ORD-SMS-RULE-1"))
 
-        assertEquals("规则命中不得自动入账", 0, database.billDao().count())
-        val pending = database.pendingTransactionDao().findRecentPendingByPlatformAndAmount(
-            platform = "com.android.mms",
-            amountMinor = 3450L,
-            windowStart = 0L,
-            windowEnd = Long.MAX_VALUE
-        )
-        assertTrue("应落待确认卡", pending != null)
+        val bill = database.billDao().findByOrderAndAmount("ORD-SMS-RULE-1", 3450L)
+        assertTrue("短信记录应直接入账", bill != null)
+        assertEquals("规则命中的账户优先于推断", ruleAccountId, bill!!.accountId)
         assertEquals(
-            AutoBookkeeper.CONFLICT_RULE_ACCOUNT_NEEDS_REVIEW,
-            pending!!.conflictReason
+            "首笔信号模型下不再落待确认",
+            0,
+            database.pendingTransactionDao().countExcludingEditCards()
         )
     }
 
@@ -316,7 +312,16 @@ class BankSmsNegativeTest {
             windowStart = 0L,
             windowEnd = Long.MAX_VALUE
         )
-        assertEquals("自动入账后不得再落待确认", null, pending)
+        // 只允许「已入账编辑卡」存在（驱动弹窗），不得有业务待确认卡。
+        assertTrue(
+            "自动入账后不得再落业务待确认（编辑卡除外）",
+            pending == null || com.jotbill.app.pending.EditCardMarker.isEditCard(pending.appliedRules)
+        )
+        assertEquals(
+            "待确认中心计数不含编辑卡",
+            0,
+            database.pendingTransactionDao().countExcludingEditCards()
+        )
     }
 
     /**
@@ -406,11 +411,11 @@ class BankSmsNegativeTest {
     }
 
     /**
-     * 页面退款（2026-11-16 真机）：拼多多退款详情页规则（jotbillType=refund）
-     * 抽取的金额/渠道必须走退款链路，落退款待确认卡，不按收支入账。
+     * 页面退款（2026-11-16 真机 + 记账模型调整）：拼多多退款详情页规则抽取的
+     * 金额/渠道直接生成退款账单（首笔即入账），不再落待确认卡。
      */
     @Test
-    fun 页面退款记录落退款待确认卡() = withDatabase { database ->
+    fun 页面退款记录直接生成退款账单() = withDatabase { database ->
         deliverRecord(
             database,
             AutoBookkeepingEngine.ExtractedRecord(
@@ -424,14 +429,11 @@ class BankSmsNegativeTest {
             )
         )
 
-        assertEquals("退款不应按支出入账", 0, database.billDao().count())
-        val pending = database.pendingTransactionDao().findRecentPendingRefundByAmount(
-            amountMinor = 6780L,
-            windowStart = 0L,
-            windowEnd = Long.MAX_VALUE
-        )
-        assertTrue("应落退款待确认卡", pending != null)
-        assertEquals("拼多多", pending!!.merchant)
+        val bills = database.billDao().getAllForExport()
+        assertEquals("应生成一笔退款账单", 1, bills.size)
+        assertEquals("refund", bills.first().type)
+        assertEquals(6780L, bills.first().amountMinor)
+        assertEquals("不得再产生待确认卡", 0, database.pendingTransactionDao().count())
     }
 
     /**

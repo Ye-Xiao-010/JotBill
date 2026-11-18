@@ -139,6 +139,12 @@ private const val MMS_SOURCE_PACKAGE = "com.android.mms"
  */
 private const val CROSS_CHANNEL_RECENT_BILL_WINDOW_MILLIS = 60_000L
 
+/**
+ * 启动期编辑卡清理时效（2026-11-17 审查修复）：只清创建超过 5 分钟的残留卡。
+ * 监听服务重连常发生在「新卡刚建、弹窗还没上屏」的瞬间，无条件清理会误杀。
+ */
+private const val EDIT_CARD_STARTUP_CLEANUP_AGE_MILLIS = 5 * 60 * 1000L
+
 /** M7：mergedSourceEventKeys 留痕数组上限（先到者优先，溢出转计数键）。 */
 private const val MAX_MERGED_SOURCE_EVENT_KEYS = 16
 
@@ -1465,6 +1471,33 @@ internal class CheckoutPaymentMatcher(
      * 查询/写入异常静默（启动链路不得因此崩溃），返回实际忽略的卡数。
      */
     suspend fun reconcilePendingAgainstRecentBills(): Int {
+        // 清理残留「已入账编辑卡」（2026-11-16）：账单已存在，编辑卡只驱动过一次
+        // 弹窗；弹窗未展示/超时后不应长期留在 pending 表。
+        // 2026-11-17 审查修复：只清「创建超过 5 分钟」的卡 —— 服务重连可能发生在
+        // 新卡刚创建、弹窗尚未展示的瞬间，无条件清理会把正在等待上屏的卡误杀。
+        val editCards = try {
+            val cutoff = System.currentTimeMillis() - EDIT_CARD_STARTUP_CLEANUP_AGE_MILLIS
+            database.pendingTransactionDao().findPendingEditCards()
+                .filter { it.createdAt < cutoff }
+        } catch (error: RuntimeException) {
+            JotBillLog.w("CheckoutPaymentMatcher", "编辑卡清理查询失败", error)
+            emptyList()
+        }
+        if (editCards.isNotEmpty()) {
+            val ledger = LedgerRepository(database)
+            var cleaned = 0
+            for (card in editCards) {
+                val ok = try {
+                    ledger.ignorePendingTransaction(card, card.version)
+                } catch (error: Exception) {
+                    false
+                }
+                if (ok) cleaned += 1
+            }
+            if (cleaned > 0) {
+                JotBillLog.i("CheckoutPaymentMatcher", "启动期清理已入账编辑卡: count=$cleaned")
+            }
+        }
         val cards = try {
             database.pendingTransactionDao()
                 .findPendingExpensesWithRecentSameAmountBill(CROSS_CHANNEL_RECENT_BILL_WINDOW_MILLIS)

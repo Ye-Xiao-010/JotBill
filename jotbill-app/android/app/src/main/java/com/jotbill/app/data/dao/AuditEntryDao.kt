@@ -11,9 +11,12 @@ interface AuditEntryDao {
     @Insert(onConflict = OnConflictStrategy.ABORT)
     suspend fun insert(entry: AuditEntryEntity): Long
 
-    /** 幂等插入：同一确定性 ID 的审计（如规则 ignore 决策）重复触发时静默跳过。 */
+    /**
+     * 幂等插入：同一确定性 ID 的审计（如规则 ignore 决策、信号幂等键）重复触发时
+     * 静默跳过。返回 rowId；命中冲突返回 -1（调用方据此判定"已处理过"）。
+     */
     @Insert(onConflict = OnConflictStrategy.IGNORE)
-    suspend fun insertIfAbsent(entry: AuditEntryEntity)
+    suspend fun insertIfAbsent(entry: AuditEntryEntity): Long
 
     @Query("SELECT * FROM audit_entries WHERE entity_type = :type AND entity_id = :id ORDER BY created_at DESC")
     suspend fun getByEntity(type: String, id: String): List<AuditEntryEntity>

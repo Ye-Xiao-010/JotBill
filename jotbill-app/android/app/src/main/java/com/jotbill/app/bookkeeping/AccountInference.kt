@@ -42,10 +42,10 @@ internal object AccountInference {
     const val ALIPAY_ACCOUNT_ID: String = "default-account-alipay"
 
     /** 微信支付包名（包名映射键）。 */
-    private const val WECHAT_PACKAGE: String = "com.tencent.mm"
+    internal const val WECHAT_PACKAGE: String = "com.tencent.mm"
 
     /** 支付宝包名（包名映射键）。 */
-    private const val ALIPAY_PACKAGE: String = "com.eg.android.AlipayGphone"
+    internal const val ALIPAY_PACKAGE: String = "com.eg.android.AlipayGphone"
 
     /**
      * 从信号推断账户（读法一的信号层）。
@@ -110,4 +110,39 @@ internal object AccountInference {
                 trimmed.contains(account.name, ignoreCase = true))
         }
     }
+
+    /**
+     * 信号内账户提示解析（2026-11-16：「先提取，再兜底」）。
+     *
+     * 提示来源：银行短信的银行名/卡尾号、退款通知的退款渠道（微信支付/支付宝/银行卡）、
+     * 京东/美团退款的去向。优先级：渠道/银行名唯一匹配本地账户 → 包名映射 → 现金。
+     * **多候选不猜**：按用户裁定直接走现金兜底（不弹待确认）。
+     */
+    fun resolveByHints(
+        sourcePackage: String?,
+        hints: List<String?>,
+        accounts: List<AccountEntity>
+    ): AccountResolution {
+        val active = accounts.filter { it.isActive }
+        for (raw in hints) {
+            val hint = raw?.trim().orEmpty()
+            if (hint.isEmpty()) continue
+            if (hint.contains("微信")) {
+                active.firstOrNull { it.id == WECHAT_PAY_ACCOUNT_ID }?.let {
+                    return AccountResolution.Resolved(it.id)
+                }
+            }
+            if (hint.contains("支付宝") || hint.contains("余额宝")) {
+                active.firstOrNull { it.id == ALIPAY_ACCOUNT_ID }?.let {
+                    return AccountResolution.Resolved(it.id)
+                }
+            }
+            val bankName = BANK_NAME_PATTERN.find(hint)?.groupValues?.get(1) ?: hint
+            val matched = matchAccountsByName(active, bankName)
+            if (matched.size == 1) return AccountResolution.Resolved(matched.first().id)
+        }
+        return inferSignalThenFallback(sourcePackage, null, accounts)
+    }
+
+    private val BANK_NAME_PATTERN = Regex("([\\u4e00-\\u9fa5]{2,10}银行)")
 }

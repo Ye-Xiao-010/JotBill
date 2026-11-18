@@ -10,6 +10,12 @@
 const PLATFORM_LABELS: Record<string, string> = {
   'com.tencent.mm': '微信支付',
   'com.eg.android.AlipayGphone': '支付宝',
+  'com.unionpay': '云闪付',
+  'com.xunmeng.pinduoduo': '拼多多',
+  'com.jingdong.app.mall': '京东',
+  'com.sankuai.meituan': '美团',
+  'com.ss.android.ugc.aweme': '抖音',
+  'com.android.mms': '银行短信',
 };
 
 /** 把平台字段转为展示名；未知包名/平台名原样返回，空值返回空串。 */

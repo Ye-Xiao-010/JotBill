@@ -23,7 +23,9 @@ data class PendingChangeInfo(
     val conflictReason: String?,
     val occurredAt: Long,
     val isNew: Boolean,
-    val removed: Boolean = false
+    val removed: Boolean = false,
+    /** 「已入账编辑卡」：账单已存在，提醒/待确认中心必须忽略（2026-11-16）。 */
+    val isEditCard: Boolean = false
 )
 
 /**

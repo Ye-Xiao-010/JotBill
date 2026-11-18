@@ -67,7 +67,9 @@ class AutoBookkeepingEngine(
         val fromApp: Int,
         val jotbillType: String?,
         val sourcePackage: String,
-        val extractTime: Long
+        val extractTime: Long,
+        /** 来源事件幂等键（短信/通知可提供；页面规则留空由入账器按证据窗口兜底）。 */
+        val sourceEventKey: String? = null
     )
 
     /** 交付回调：入账方同步判定「是否认领」（金额可解析且>0 才认领），异步落账。 */

@@ -28,6 +28,7 @@ import com.jotbill.app.data.entity.CategoryEntity
 import com.jotbill.app.data.entity.PendingTransactionEntity
 import com.jotbill.app.pending.PendingChangeHub
 import com.jotbill.app.pending.PendingChangeInfo
+import com.jotbill.app.pending.EditCardMarker
 import com.jotbill.app.pending.PendingConfirmReadiness
 import com.jotbill.app.pending.PendingConfirmService
 import com.jotbill.app.pending.PendingPromptPolicy
@@ -345,6 +346,9 @@ internal object PendingConfirmOverlayManager {
      */
     private var displayedAutoDismissInfo: AutoDismissInfo? = null
 
+    /** 当前展示的是否为「已入账编辑卡」（2026-11-16）：账单已存在，不补发"还没记上"通知。 */
+    private var displayedIsEditCard = false
+
     private data class AutoDismissInfo(
         val amountMinor: Long,
         val type: String,
@@ -596,7 +600,8 @@ internal object PendingConfirmOverlayManager {
                         val candidate = PromptCandidate(
                             pendingId = info.pendingId,
                             dedupKey = decision.dedupKey,
-                            createdAt = System.currentTimeMillis()
+                            createdAt = System.currentTimeMillis(),
+                            isEditCard = EditCardMarker.isEditCard(pendingRow.appliedRules)
                         )
                         maybeShowCandidate(candidate, info)
                     }
@@ -803,6 +808,11 @@ internal object PendingConfirmOverlayManager {
                 candidateExpiryRunnable?.let(mainHandler::removeCallbacks)
                 candidateExpiryRunnable = null
                 stopCandidateHeartbeat()
+                // 编辑卡从未上屏即超时：账单已在账本里，这张卡再无展示机会，
+                // 直接回收，避免长期残留 pending 表（2026-11-17 审查）。
+                if (candidate.isEditCard) {
+                    cleanupEditCard(candidate.pendingId, "CANDIDATE_EXPIRED")
+                }
                 val mark = if (overDue > CandidateExpiryPolicy.FREEZE_DETECT_MILLIS) {
                     ", SUSPECT_FREEZE(overDue=${overDue}ms${if (age >= CandidateExpiryPolicy.HARD_DEADLINE_MILLIS) ", HARD_DEADLINE" else ""})"
                 } else {
@@ -1107,6 +1117,10 @@ internal object PendingConfirmOverlayManager {
                 "无悬浮窗权限,弹窗放弃(通知兜底): opMode=${snapshot.opModeName}, " +
                     "foreground=$lastForegroundPackage, sensitive=$lastObservationSensitive"
             )
+            // 编辑卡永远没有上屏机会：回收，避免残留（2026-11-17 复审）。
+            if (EditCardMarker.isEditCard(pendingRow.appliedRules)) {
+                cleanupEditCard(pendingRow.id, "NO_OVERLAY_PERMISSION")
+            }
             // inFlightCandidate 已在 showCandidate 释放 ⇒ 此刻槽位空闲，
             // 补播队列（2026-10-24 复审补：门禁放行到本处的 TOCTOU 窗口内
             // MIUI 收权时，队列会因此滞留）。
@@ -1177,6 +1191,13 @@ internal object PendingConfirmOverlayManager {
                 type = pendingRow.type,
                 sourceType = pendingRow.sourceType
             )
+            // 「已入账编辑卡」（2026-11-16）：金额属于既有账单，锁定不可改；
+            // 确认语义是"保存账户/分类修改"，不是新建账单。
+            val isEditCard = com.jotbill.app.pending.EditCardMarker.isEditCard(pendingRow.appliedRules)
+            displayedIsEditCard = isEditCard
+            if (isEditCard) {
+                amountInput.isEnabled = false
+            }
             selectedCategory = null
             // 账户不造占位实体：待确认携带的账户 ID 由 loadAccounts 在列表中匹配预选，
             // 匹配不到就要求用户手选，避免把不存在的账户写进账单。
@@ -1186,6 +1207,9 @@ internal object PendingConfirmOverlayManager {
 
             val confirmButton = view.findViewById<Button>(R.id.btn_confirm)
             currentConfirmButton = confirmButton
+            if (displayedIsEditCard) {
+                confirmButton.text = "保存修改"
+            }
             updateConfirmEnabled(confirmButton)
 
             view.findViewById<ImageButton>(R.id.btn_close_x).setOnClickListener {
@@ -1220,6 +1244,10 @@ internal object PendingConfirmOverlayManager {
             )
         } catch (error: RuntimeException) {
             JotBillLog.w(TAG, "弹窗显示失败(通知兜底)", error)
+            // 编辑卡从未上屏（无悬浮窗权限/addView 被拒）：回收卡片，不留死状态。
+            if (displayedIsEditCard) {
+                cleanupEditCard(displayedPendingId, "DISPLAY_FAILED")
+            }
             // 上屏自检可能已排上（scheduleVisibilityCheck 之后的 findViewById 仍可能抛），
             // 一并撤销，保持"没有弹窗 ⇒ 没有待执行的上屏自检"这条不变式。
             visibilityCheckRunnable?.let(mainHandler::removeCallbacks)
@@ -1465,7 +1493,7 @@ internal object PendingConfirmOverlayManager {
                         // 重新排队自动关闭：确认入口已取消原计时器，不重排就失去
                         // "30 秒兜底"（错误页隐藏了 X/稍后，用户只能点重试）。
                         scheduleAutoDismiss()
-                        confirmButton.text = "确认入账"
+                        confirmButton.text = if (displayedIsEditCard) "保存修改" else "确认入账"
                         updateConfirmEnabled(confirmButton)
                     }
 
@@ -1482,7 +1510,7 @@ internal object PendingConfirmOverlayManager {
                         isConfirming = false
                         showErrorFeedback(view, "疑似重复交易，请到待确认中心核对后再确认")
                         scheduleAutoDismiss()
-                        confirmButton.text = "确认入账"
+                        confirmButton.text = if (displayedIsEditCard) "保存修改" else "确认入账"
                         updateConfirmEnabled(confirmButton)
                     }
 
@@ -1498,7 +1526,7 @@ internal object PendingConfirmOverlayManager {
                         isConfirming = false
                         showErrorFeedback(view, "入账失败，请稍后在待确认中心重试")
                         scheduleAutoDismiss()
-                        confirmButton.text = "确认入账"
+                        confirmButton.text = if (displayedIsEditCard) "保存修改" else "确认入账"
                         updateConfirmEnabled(confirmButton)
                     }
                 }
@@ -1848,6 +1876,44 @@ internal object PendingConfirmOverlayManager {
     }
 
     /**
+     * 编辑卡回收（2026-11-17 审查）：弹窗关闭/超时/上屏失败后删除对应 pending 行。
+     * 只处理带 `editBillId` 标记的卡；普通待确认卡必须保留给待确认中心。
+     */
+    private fun cleanupEditCard(pendingId: String?, reason: String) {
+        val id = pendingId ?: return
+        val db = database ?: return
+        scope.launch {
+            try {
+                val card = db.pendingTransactionDao().getById(id) ?: return@launch
+                if (!EditCardMarker.isEditCard(card.appliedRules)) return@launch
+                val deleted = db.pendingTransactionDao()
+                    .deleteByIdIfVersion(card.id, card.version)
+                if (deleted > 0) {
+                    PendingChangeHub.emit(
+                        PendingChangeInfo(
+                            pendingId = card.id,
+                            type = card.type,
+                            amountMinor = card.amountMinor,
+                            sourceType = card.sourceType,
+                            conflictReason = null,
+                            occurredAt = card.occurredAt,
+                            isNew = false,
+                            removed = true,
+                            isEditCard = true
+                        )
+                    )
+                    JotBillLog.i(
+                        TAG,
+                        "编辑卡已回收: id=${card.id.take(16)}, reason=$reason"
+                    )
+                }
+            } catch (error: RuntimeException) {
+                JotBillLog.w(TAG, "编辑卡回收失败: id=${id.take(16)}", error)
+            }
+        }
+    }
+
+    /**
      * 关闭弹窗；主线程调用。
      *
      * @param expect 期望关闭的卡片。延迟回调（成功反馈、已处理超时）必须传入发起时的
@@ -1870,6 +1936,12 @@ internal object PendingConfirmOverlayManager {
         } catch (error: RuntimeException) {
             JotBillLog.w(TAG, "弹窗关闭异常", error)
         } finally {
+            // 编辑卡关闭即回收（2026-11-17 审查）：账单已在账本里，卡片只服务本次
+            // 弹窗；用户点 X/稍后/自动关闭/保存失败后留在表里就是死状态。
+            // 成功保存路径卡片已被 PendingConfirmService 删除，这里重复删除幂等。
+            if (displayedIsEditCard) {
+                cleanupEditCard(displayedPendingId, reason)
+            }
             // ⚠️ 必须在下面清空 displayedPendingId / displayedAutoDismissInfo **之前**调用：
             // 它读的就是这两个字段。放在清空之后会永远拿到 null ⇒ 通知永不发出。
             notifyAutoDismissIfNeeded(reason)
@@ -1886,6 +1958,7 @@ internal object PendingConfirmOverlayManager {
             currentAmountInput = null
             displayedPendingId = null
             displayedAutoDismissInfo = null
+            displayedIsEditCard = false
             isConfirming = false
             waitingCandidate = null
             candidateExpiryRunnable?.let(mainHandler::removeCallbacks)
@@ -1894,6 +1967,12 @@ internal object PendingConfirmOverlayManager {
             // 在途候选一并作废：否则读行协程回来后仍会通过 [showCandidate] 的
             // `inFlightCandidate !== candidate` 检查并补弹一张 —— 用户刚点的"关闭"
             // 会表现为"关了又冒出来"（见 [inFlightCandidate]）。
+            // 在途编辑卡同样已无展示机会，随槽位释放一并回收。
+            inFlightCandidate?.let { candidate ->
+                if (candidate.isEditCard) {
+                    cleanupEditCard(candidate.pendingId, "DISMISSED_IN_FLIGHT")
+                }
+            }
             inFlightCandidate = null
             JotBillLog.i(TAG, "付款确认弹窗已关闭: reason=$reason")
             // 槽位已释放：补播排队中的候选（2026-10-24 审查 P1-1）。
@@ -1910,6 +1989,8 @@ internal object PendingConfirmOverlayManager {
      */
     private fun notifyAutoDismissIfNeeded(reason: String) {
         if (reason != "AUTO_DISMISS") return
+        // 已入账编辑卡：账单已在账本里，不补发"这笔还没记上"（2026-11-16）。
+        if (displayedIsEditCard) return
         val context = appContext ?: return
         val pendingId = displayedPendingId ?: return
         val info = displayedAutoDismissInfo ?: return
@@ -1948,6 +2029,8 @@ internal object PendingConfirmOverlayManager {
     private data class PromptCandidate(
         val pendingId: String,
         val dedupKey: String,
-        val createdAt: Long
+        val createdAt: Long,
+        /** 已入账编辑卡：超时/放弃时需回收卡片（账单已在账本里）。 */
+        val isEditCard: Boolean = false
     )
 }

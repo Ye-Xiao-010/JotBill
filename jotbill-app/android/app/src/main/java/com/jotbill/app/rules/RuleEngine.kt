@@ -25,6 +25,11 @@ class RuleEngine(private val database: JotBillDatabase) {
     data class Subject(
         val amountMinor: Long? = null,
         val platform: String? = null,
+        /**
+         * 平台别名（展示渠道名，如「微信支付」「银行短信」）：`platform_equals`
+         * 同时接受包名与别名，兼容历史按中文渠道创建的规则。
+         */
+        val platformAliases: List<String> = emptyList(),
         val merchant: String? = null,
         val description: String? = null,
         val sourceType: String? = null
@@ -222,7 +227,10 @@ class RuleEngine(private val database: JotBillDatabase) {
         val expected = rule.conditionValue.trim()
         return when (rule.condition) {
             CONDITION_PLATFORM_EQUALS ->
-                subject.platform?.trim()?.equals(expected, ignoreCase = true) == true
+                (subject.platform?.trim()?.equals(expected, ignoreCase = true) == true) ||
+                    subject.platformAliases.any {
+                        it.trim().equals(expected, ignoreCase = true)
+                    }
             CONDITION_MERCHANT_EQUALS ->
                 subject.merchant?.trim()?.equals(expected, ignoreCase = true) == true
             CONDITION_MERCHANT_CONTAINS ->

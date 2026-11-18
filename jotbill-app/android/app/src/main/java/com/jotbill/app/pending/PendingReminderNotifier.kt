@@ -97,6 +97,11 @@ internal object PendingReminderNotifier {
             JotBillLog.i(TAG, "跳过提醒: 内容更新事件 id=${info.pendingId.take(16)}")
             return
         }
+        // 已入账编辑卡：账单已在账本里，不是"待确认"，不发提醒（2026-11-16）。
+        if (info.isEditCard) {
+            JotBillLog.d(TAG, "跳过提醒: 已入账编辑卡 id=${info.pendingId.take(16)}")
+            return
+        }
         // 用户断言通道产生的待确认不发送系统通知:断言是用户主动点击,
         // 按钮状态变化已构成操作反馈;弹窗/通知的触发权属于支付证据链路
         // (支付结果页无障碍读取/支付通知)。条目仍静默进入待确认中心。
@@ -321,6 +326,7 @@ internal object PendingReminderNotifier {
         "notification" -> "支付通知"
         "accessibility" -> "支付结果页"
         "accessibility_transfer" -> "转账结果页"
+        "sms" -> "银行短信"
         "ai_vision" -> "截图识别"
         "import" -> "导入"
         "manual" -> "手动"

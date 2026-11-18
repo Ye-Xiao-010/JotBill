@@ -81,6 +81,7 @@ interface PendingTransactionDao {
           AND platform = :platform
           AND amount_minor = :amountMinor
           AND occurred_at BETWEEN :windowStart AND :windowEnd
+          AND applied_rules NOT LIKE '%editBillId%'
         ORDER BY created_at DESC
         LIMIT 1
         """
@@ -111,6 +112,7 @@ interface PendingTransactionDao {
           AND type = :type
           AND amount_minor = :amountMinor
           AND created_at BETWEEN :windowStart AND :windowEnd
+          AND applied_rules NOT LIKE '%editBillId%'
         ORDER BY created_at DESC
         """
     )
@@ -133,6 +135,7 @@ interface PendingTransactionDao {
         SELECT p.* FROM pending_transactions p
         WHERE p.status = 'pending'
           AND p.type = 'expense'
+          AND p.applied_rules NOT LIKE '%editBillId%'
           AND EXISTS (
             SELECT 1 FROM bills b
             WHERE b.type = 'expense'
@@ -232,6 +235,7 @@ interface PendingTransactionDao {
           AND type = 'expense'
           AND UPPER(TRIM(order_id)) = UPPER(TRIM(:orderId))
           AND occurred_at BETWEEN :windowStart AND :windowEnd
+          AND applied_rules NOT LIKE '%editBillId%'
         ORDER BY created_at DESC
         LIMIT 1
         """
@@ -339,4 +343,38 @@ interface PendingTransactionDao {
         windowStart: Long,
         windowEnd: Long
     ): PendingTransactionEntity?
+
+    /**
+     * 待确认中心列表（排除「已入账编辑卡」，2026-11-16）：编辑卡只驱动弹窗，
+     * 账单已存在，不应出现在待确认中心。
+     */
+    @Query(
+        """
+        SELECT * FROM pending_transactions
+        WHERE status = 'pending'
+          AND applied_rules NOT LIKE '%editBillId%'
+        ORDER BY created_at DESC
+        LIMIT :limit OFFSET :offset
+        """
+    )
+    suspend fun getPageExcludingEditCards(limit: Int, offset: Int): List<PendingTransactionEntity>
+
+    @Query(
+        """
+        SELECT COUNT(*) FROM pending_transactions
+        WHERE status = 'pending'
+          AND applied_rules NOT LIKE '%editBillId%'
+        """
+    )
+    suspend fun countExcludingEditCards(): Int
+
+    /** 启动期清理：残留的「已入账编辑卡」（弹窗未展示/超时遗留）。 */
+    @Query(
+        """
+        SELECT * FROM pending_transactions
+        WHERE status = 'pending'
+          AND applied_rules LIKE '%editBillId%'
+        """
+    )
+    suspend fun findPendingEditCards(): List<PendingTransactionEntity>
 }

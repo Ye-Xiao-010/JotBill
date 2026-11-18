@@ -162,6 +162,7 @@ internal fun normalizePaymentEvidenceSourceType(value: String?): String? =
     when (value?.trim()?.lowercase(Locale.ROOT)) {
         "notification" -> "notification"
         "accessibility", "accessibility_result" -> "accessibility"
+        "sms" -> "sms"
         "manual" -> "manual"
         else -> null
     }

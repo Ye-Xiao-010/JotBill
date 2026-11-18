@@ -71,7 +71,7 @@ class RefundLinkerCrossSourceDedupTest {
     )
 
     @Test
-    fun 同额退款多来源只建一张卡() = runBlocking {
+    fun 同额退款多来源只成一笔账单() = runBlocking {
         insertCashAccount()
         val now = System.currentTimeMillis()
         val linker = RefundLinker(database)
@@ -79,21 +79,26 @@ class RefundLinkerCrossSourceDedupTest {
         val first = linker.processRefund(
             refundEvidence("com.xunmeng.pinduoduo", 3990L, now, "pdd-refund-1")
         )
-        assertTrue("首个退款信号应建卡", first is RefundLinker.RefundOutcome.PendingCreated)
+        assertTrue("首个退款信号应直接入账", first is RefundLinker.RefundOutcome.AutoCommitted)
 
         val second = linker.processRefund(
             refundEvidence("com.android.mms", 3990L, now + 30_000L, "sms-refund-1")
         )
-        assertEquals(
-            "2 分钟内同额退款来自不同来源应判重复",
-            RefundLinker.RefundOutcome.Duplicate,
-            second
+        assertTrue(
+            "同额后续退款应补全既有账单: $second",
+            second is RefundLinker.RefundOutcome.Enriched ||
+                second is RefundLinker.RefundOutcome.Duplicate
         )
-        assertEquals("只允许一张退款卡", 1, database.pendingTransactionDao().count())
+        assertEquals(
+            "只允许一笔退款账单",
+            1,
+            database.billDao().getAllForExport().count { it.type == "refund" }
+        )
+        assertEquals("不再产生待确认卡", 0, database.pendingTransactionDao().count())
     }
 
     @Test
-    fun 不同金额退款各自建卡() = runBlocking {
+    fun 不同金额退款各自成账() = runBlocking {
         insertCashAccount()
         val now = System.currentTimeMillis()
         val linker = RefundLinker(database)
@@ -103,16 +108,20 @@ class RefundLinkerCrossSourceDedupTest {
             refundEvidence("com.xunmeng.pinduoduo", 4990L, now + 10_000L, "pdd-refund-3")
         )
 
-        assertTrue("不同金额不是同一笔", other is RefundLinker.RefundOutcome.PendingCreated)
-        assertEquals(2, database.pendingTransactionDao().count())
+        assertTrue("不同金额不是同一笔", other is RefundLinker.RefundOutcome.AutoCommitted)
+        assertEquals(
+            2,
+            database.billDao().getAllForExport().count { it.type == "refund" }
+        )
+        assertEquals(0, database.pendingTransactionDao().count())
     }
 
     /**
      * 用户先确认了页面退款卡（已生成退款账单），随后银行退款短信才到 ——
-     * pending 卡已不在，必须靠"近期同额退款账单"挡住第二条。
+     * 60 秒窗内应补全既有账单，而不是再记一笔。
      */
     @Test
-    fun 同额退款账单已存在时后续信号判重复() = runBlocking {
+    fun 后续同额信号补全既有退款账单() = runBlocking {
         insertCashAccount()
         val now = System.currentTimeMillis()
         database.billDao().insert(
@@ -141,7 +150,12 @@ class RefundLinkerCrossSourceDedupTest {
             refundEvidence("com.android.mms", 3990L, now + 30_000L, "sms-after-confirm-1")
         )
 
-        assertEquals(RefundLinker.RefundOutcome.Duplicate, outcome)
-        assertEquals("不得再建退款卡", 0, database.pendingTransactionDao().count())
+        assertTrue("后续同额信号应补全既有账单: $outcome", outcome is RefundLinker.RefundOutcome.Enriched)
+        assertEquals(
+            "不得再记一笔",
+            1,
+            database.billDao().getAllForExport().count { it.type == "refund" }
+        )
+        assertEquals(0, database.pendingTransactionDao().count())
     }
 }

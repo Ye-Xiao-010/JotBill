@@ -113,8 +113,9 @@ class CheckoutPaymentMatcherIntegrationTest {
             occurredAt = now
         )
         val row = database.pendingTransactionDao().getPage(10, 0).single()
-        // `normalizePaymentEvidenceSourceType` 只认这三个值，且 RN 侧
-        // SOURCE_LABELS 按字面量映射中文 —— 越界值会把原始英文串显示给用户。
+        // `normalizePaymentEvidenceSourceType` 只认契约内的来源值（notification /
+        // accessibility / sms / manual），且 RN 侧 SOURCE_LABELS 按字面量映射中文
+        // —— 越界值会把原始英文串显示给用户。
         // 转账的业务语义由 type="transfer" 承载，不该塞进 sourceType。
         assertTrue(
             "sourceType=${row.sourceType} 不在 Native.d.ts 契约内",

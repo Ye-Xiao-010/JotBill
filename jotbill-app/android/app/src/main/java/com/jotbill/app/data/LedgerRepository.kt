@@ -258,11 +258,18 @@ class LedgerRepository(private val database: JotBillDatabase) {
             validateBillAccounts(protected, requireActiveAccounts = true)
             // B2：编辑路径的退款累计上限（此前只有自动入账/确认路径有，编辑可绕过）。
             // 覆盖两种场景：调大已有退款金额、把支出改为 refund 并关联原交易。
+            // 2026-11-17 复审：只在金额/原单关联实际变化时校验 —— 否则一笔已超额
+            // 写入的退款连改分类/账户都会被硬拦，用户永远无法修正。
             // excludeId = 自身 —— 事务内此刻 DB 仍是旧行，不剔除会把旧金额计入合计误报。
             // 走向：抛 LedgerValidationException 整体回滚（桥接层映射 INVALID_ARGUMENT），
             // 与确认路径同口径 —— 编辑是用户显式操作，即时拒绝比转待确认更直接，
             // 且本路径没有"转待确认"的既有通道。
-            if (protected.type == "refund") {
+            val refundCapRelevant = protected.type == "refund" &&
+                (
+                    protected.amountMinor != current.amountMinor ||
+                        protected.originalTransactionId != current.originalTransactionId
+                    )
+            if (refundCapRelevant) {
                 RefundCapGuard(database)
                     .evaluate(
                         protected.amountMinor,

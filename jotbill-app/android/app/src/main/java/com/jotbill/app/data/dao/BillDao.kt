@@ -407,6 +407,30 @@ interface BillDao {
         windowEnd: Long
     ): BillEntity?
 
+    /**
+     * 自动信号补全候选（2026-11-17 复审）：同类型同金额 + 创建时间窗 + 来源白名单，
+     * 在 SQL 端过滤后取最近一笔。先取最近再在内存过滤会因「最近一笔是 manual」
+     * 而错过窗口内更早的合法自动账单。
+     */
+    @Query(
+        """
+        SELECT * FROM bills
+        WHERE type = :type
+          AND amount_minor = :amountMinor
+          AND created_at BETWEEN :windowStart AND :windowEnd
+          AND source_type IN (:sourceTypes)
+        ORDER BY created_at DESC
+        LIMIT 1
+        """
+    )
+    suspend fun findRecentByAmountAndTypeAndSources(
+        type: String,
+        amountMinor: Long,
+        windowStart: Long,
+        windowEnd: Long,
+        sourceTypes: List<String>
+    ): BillEntity?
+
     /** 按来源溯源 ID（如结算 sessionId）查账单，用于判断该会话是否已手动确认入账。 */
     @Query("SELECT * FROM bills WHERE original_transaction_id = :originalTransactionId LIMIT 1")
     suspend fun findByOriginalTransactionId(originalTransactionId: String): BillEntity?

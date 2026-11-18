@@ -1,9 +1,7 @@
 package com.jotbill.app.bookkeeping
 
-import com.jotbill.app.data.CreateBillOutcome
 import com.jotbill.app.data.JotBillDatabase
 import com.jotbill.app.data.JotBillDatabaseProvider
-import com.jotbill.app.data.LedgerRepository
 import com.jotbill.app.data.entity.BillEntity
 import com.jotbill.app.notification.PaymentEvidenceInput
 import com.jotbill.app.notification.PaymentResultNormalizer
@@ -12,14 +10,12 @@ import com.jotbill.app.recognition.PaymentNotificationFallbackSignal
 import com.jotbill.app.recognition.RefundLinker
 import com.jotbill.app.rules.DuplicateGuard
 import com.jotbill.app.rules.OrderIdNormalizer
-import com.jotbill.app.rules.RuleEngine
 import com.jotbill.app.utils.JotBillLog
 import java.security.MessageDigest
 import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.ZoneId
-import java.util.UUID
 import java.util.regex.Pattern
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
@@ -57,11 +53,7 @@ class AutoBookkeeper(
         databaseOverride ?: JotBillDatabaseProvider.get(context)
     }
 
-    private val ledger by lazy { LedgerRepository(database) }
-
     private val matcher by lazy { CheckoutPaymentMatcher(database) }
-
-    private val notifier by lazy { AutoBookkeepingNotifier(context) }
 
     // ── Sink：主线程回调，只做轻量同步判定 ────────────────────────────────
 
@@ -110,233 +102,61 @@ class AutoBookkeeper(
             fallback = record.extractTime
         )
 
-        // 用户分类规则补全（金额/平台/商户/描述 → set_category/set_account 等）。
-        // 决策三分支对齐 RuleEngine 契约与 CheckoutPaymentMatcher 三处先例：
-        // - Ignored（如「星巴克不自动记账」）= 丢弃：不写 Bill、不进待确认；
-        // - ToReview = 转待确认由用户处理（CONFLICT_RULE_FORCED_REVIEW）；
-        // - Continue = 取 patch 继续自动入账。
-        val decision = try {
-            RuleEngine(database).evaluateAndRecord(
-                RuleEngine.Subject(
+        // 统一入账（2026-11-16 模型调整 / 2026-11-17 审查收敛）：
+        // 页面规则与银行短信都作为「信号」交给 SignalBillWriter —— 首笔直接成账，
+        // 后续同额信号 60 秒内补全账户/商户；规则 send_to_review 转待确认。
+        val channel = channelLabel(record.sourcePackage)
+        val bankHint = record.fields["bank"]
+            ?: record.fields["orgName"]?.takeIf { it.contains("银行") }
+        val accountHints = if (record.sourcePackage == SMS_SOURCE_PACKAGE) {
+            listOfNotNull(
+                bankHint,
+                record.fields["card"]?.takeIf { it.isNotBlank() }
+            )
+        } else {
+            emptyList()
+        }
+        val sourceType = if (record.sourcePackage == SMS_SOURCE_PACKAGE) {
+            "sms"
+        } else {
+            BILL_SOURCE_TYPE
+        }
+        val sourceEventKey = record.sourceEventKey
+            ?: "abk:${record.ruleId}:${record.extractTime}:$amountMinor"
+        val outcome = try {
+            SignalBillWriter(context, database).recordPayment(
+                SignalBillWriter.PaymentSignal(
                     amountMinor = amountMinor,
-                    platform = channelLabel(record.sourcePackage),
-                    merchant = merchant,
-                    // 用户规则按「描述包含 X」匹配 —— 传商户这种真实交易语义，
-                    // 不传规则备注等工程字样（会误触发渠道名规则）。
-                    description = merchant,
-                    sourceType = BILL_SOURCE_TYPE
-                )
-            )
-        } catch (error: RuntimeException) {
-            JotBillLog.w(TAG, "分类规则执行失败，按无规则补全处理", error)
-            null
-        }
-        when (decision) {
-            is RuleEngine.Decision.Ignored -> {
-                JotBillLog.i(
-                    TAG,
-                    "规则决策=忽略，丢弃自动记账记录: rule=${record.ruleId}, " +
-                        "amount=$amountMinor, hits=${decision.hits.size}"
-                )
-                return
-            }
-            is RuleEngine.Decision.ToReview -> {
-                fallbackToPending(
-                    record, amountMinor, merchant, orderId, occurredAt,
-                    RuleEngine.CONFLICT_RULE_FORCED_REVIEW
-                )
-                return
-            }
-            else -> Unit
-        }
-        val patch = try {
-            RuleEngine(database).sanitizePatch(
-                (decision as? RuleEngine.Decision.Continue)?.patch ?: RuleEngine.FieldPatch()
-            )
-        } catch (error: RuntimeException) {
-            JotBillLog.w(TAG, "分类规则补全净化失败，按无规则补全处理", error)
-            RuleEngine.FieldPatch()
-        }
-
-        // ---- B3 拍板（2026-11-04）：短信渠道 + 用户 set_account 规则命中 ⇒ 强制待确认 ----
-        // 判据 = 净化后的 patch.accountId 非空（RuleEngine 的 patch 只来自用户自建规则，
-        // set_account 是唯一填充 accountId 的动作；sanitizePatch 已滤掉失效/停用账户，
-        // 引用失效等同未配置 ⇒ 走默认现金兜底自动入账）。语义：默认兜底走自动化，
-        // 但用户人为指定账户属于猜测性干预，必须让用户核对。
-        // ⚠️ 仅短信渠道（com.android.mms）生效，不得扩散到通知/结果页等其他渠道。
-        if (record.sourcePackage == SMS_SOURCE_PACKAGE && patch.accountId != null) {
-            fallbackToPending(
-                record, amountMinor, merchant, orderId, occurredAt,
-                CONFLICT_RULE_ACCOUNT_NEEDS_REVIEW
-            )
-            return
-        }
-
-        val accountResolution = resolveAccountId(
-            record.sourcePackage,
-            patch,
-            // 通用银行短信规则抽的是 orgName（规则资产字段名），招行精确规则抽的是
-            // bank —— 两者同为「【XX银行】」来源，统一作为信号层账户匹配提示。
-            bankHint = record.fields["bank"]
-                ?: record.fields["orgName"]?.takeIf { it.contains("银行") }
-        )
-        val accountId = when (accountResolution) {
-            is AccountResolution.Resolved -> accountResolution.accountId
-            // 短信银行名多账户命中：转待确认（复用 RULE_ACCOUNT_NEEDS_REVIEW，不猜测）
-            AccountResolution.NeedsReview -> {
-                fallbackToPending(
-                    record, amountMinor, merchant, orderId, occurredAt,
-                    CONFLICT_RULE_ACCOUNT_NEEDS_REVIEW
-                )
-                return
-            }
-            AccountResolution.Unresolved -> {
-                fallbackToPending(record, amountMinor, merchant, orderId, occurredAt, "NO_DEFAULT_ACCOUNT")
-                return
-            }
-        }
-
-        // ---- P1：现金兜底可识别标记（不改乙口径，只提可观测性/可纠正性）----
-        // 账户来自推断链**链尾**（无用户 set_account 规则、银行名/包名映射均未命中，
-        // 落入现金兜底）时，该笔的账户归属是"系统猜的"。入账后写一条审计标记，
-        // 供 UI 提示「该笔账户为推断」、用户核对纠正；账单数据本身不变。
-        val accountInferred = patch.accountId == null &&
-            accountId == CASH_FALLBACK_ACCOUNT_ID
-        val categoryId = patch.categoryId?.takeIf { database.categoryDao().getById(it) != null }
-            ?: BookkeepingCategoryHints.guess(
-                merchant = merchant,
-                platform = patch.platform ?: channelLabel(record.sourcePackage),
-                ruleNote = record.ruleNote,
-                type = type
-            )?.takeIf { database.categoryDao().getById(it) != null }
-
-        // ---- 跨信号同额吸收（2026-11-16 真机双账修复）----
-        // 另一通道刚入账的同额账单（如用户刚确认的支付宝待确认卡，带商户名/
-        // 支付宝账户）与新通道账单（银行短信，现金账户/无商户）账户与商户都
-        // 不同，旧相似度判重不命中 ⇒ 会各记一笔。判据：同类型 + 同金额 +
-        // 近 60 秒创建 + **平台不同**（不同信号来源）+ 订单号不冲突。
-        // 平台相同不吸收：同一通道连续两笔同额支付是两笔真账（如两次同价商品）。
-        val now = System.currentTimeMillis()
-        val newPlatform = patch.platform ?: channelLabel(record.sourcePackage)
-        val recentOtherChannelBill = try {
-            database.billDao().findRecentByAmountAndType(
-                type = type,
-                amountMinor = amountMinor,
-                windowStart = now - CROSS_CHANNEL_PENDING_ABSORB_WINDOW_MILLIS,
-                windowEnd = now
-            )?.takeIf { existing ->
-                (existing.platform ?: "") != (newPlatform ?: "") &&
-                    (existing.orderId.isNullOrBlank() ||
-                        orderId.isNullOrBlank() ||
-                        existing.orderId == orderId)
-            }
-        } catch (error: RuntimeException) {
-            if (error is kotlinx.coroutines.CancellationException) throw error
-            JotBillLog.w(TAG, "跨信号同额账单查询失败，按原逻辑入账", error)
-            null
-        }
-        if (recentOtherChannelBill != null) {
-            enrichExistingBill(
-                existing = recentOtherChannelBill,
-                merchant = merchant,
-                orderId = orderId,
-                categoryId = categoryId
-            )
-            JotBillLog.i(
-                TAG,
-                "跨信号同额账单已存在，吸收补全不重复入账: " +
-                    "bill=${recentOtherChannelBill.id.take(8)}, amount=$amountMinor, " +
-                    "existingPlatform=${recentOtherChannelBill.platform}, newPlatform=$newPlatform"
-            )
-            return
-        }
-
-        val bill = BillEntity(
-            id = UUID.randomUUID().toString(),
-            amountMinor = amountMinor,
-            type = type,
-            occurredAt = occurredAt,
-            // 无商户的支付（支付宝主结果页只抽得到金额）给出渠道级描述，
-            // 账单列表不至于出现光秃秃的金额；后续账单详情页二次抽取补上
-            // 商户时以商户为准展示。
-            description = merchant ?: "${channelLabel(record.sourcePackage)}" +
-                (if (type == "income") "收入" else "支出"),
-            categoryId = categoryId,
-            accountId = accountId,
-            targetAccountId = null,
-            platform = patch.platform ?: channelLabel(record.sourcePackage),
-            merchant = patch.merchant ?: merchant,
-            productDescription = null,
-            sourceType = BILL_SOURCE_TYPE,
-            originalTransactionId = null,
-            orderId = orderId,
-            createdAt = now,
-            updatedAt = now,
-            version = 1
-        )
-
-        // 相似度去重（对齐既有自动入账路径的第 4 级检查）：疑似重复不冒二次
-        // 入账风险，转待确认由用户判断。
-        val similar = try {
-            DuplicateGuard(database).findSimilar(
-                type = bill.type,
-                amountMinor = bill.amountMinor,
-                occurredAt = bill.occurredAt,
-                accountId = bill.accountId,
-                merchant = bill.merchant,
-                excludeId = bill.id
-            )
-        } catch (error: RuntimeException) {
-            // 协程取消不是落库失败：不得在已取消的作用域里再做兜底落库
-            if (error is kotlinx.coroutines.CancellationException) throw error
-            JotBillLog.w(TAG, "相似度去重检查失败，转待确认", error)
-            null
-        }
-        if (similar != null && similar.isNotEmpty()) {
-            // 跨通道互认（不再只认同 sourceType 的账单）：同一笔被页面规则 / 通知监听 /
-            // 账单导入任一通道先入账后，本通道的二次抽取同样应归并进既有账单，
-            // 而不是落一张 SUSPECTED_DUPLICATE 待确认。
-            //
-            // 吸收判据按通道分两档：
-            // - **同通道**：沿用 [isSameTransaction]，任一方缺订单号仍可吸收 ——
-            //   这是「主结果页先只有金额、账单详情页二次抽出商户/分类」的补全场景；
-            // - **跨通道**：必须双方都有订单号且相同。订单号是唯一能客观证明同一笔的键，
-            //   任一方缺失时只提示不吸收，否则同额同商户的两笔真实支付会被误合并。
-            val absorbable = similar.filter { hit ->
-                if (hit.bill.sourceType == BILL_SOURCE_TYPE) {
-                    isSameTransaction(hit.bill.orderId, orderId)
-                } else {
-                    !hit.bill.orderId.isNullOrBlank() && !orderId.isNullOrBlank() &&
-                        hit.bill.orderId == orderId
-                }
-            }
-            if (absorbable.isNotEmpty()) {
-                // 二次抽取命中既有账单：只补既有账单的空缺字段，金额/账户/类型绝不改动。
-                // 对齐小米服务端「指纹合并+字段补全」的本地形态（合并与补全在小米是
-                // 服务端能力，客户端只上报；本地版由 [FieldPriorityResolver] 承担裁决）。
-                enrichExistingBill(
-                    existing = absorbable.maxByOrNull { it.bill.createdAt }!!.bill,
+                    occurredAt = occurredAt,
                     merchant = merchant,
                     orderId = orderId,
-                    categoryId = categoryId
+                    platform = record.sourcePackage,
+                    channelLabel = channel,
+                    sourcePackage = record.sourcePackage,
+                    sourceType = sourceType,
+                    type = type,
+                    accountHints = accountHints,
+                    sourceEventKey = sourceEventKey
                 )
-                return
-            }
-            // 有相似命中但不可吸收（订单号不一致 / 跨通道缺订单号）：
-            // 疑似真实第二笔，转待确认由用户判断，不得擅自合并
+            )
+        } catch (error: Exception) {
+            if (error is kotlinx.coroutines.CancellationException) throw error
+            JotBillLog.w(TAG, "信号入账异常，转待确认", error)
             fallbackToPending(
-                record, amountMinor, merchant, orderId, occurredAt,
-                DuplicateGuard.CONFLICT_SUSPECTED_DUPLICATE
+                record, amountMinor, merchant, orderId, occurredAt, "AUTO_BOOK_FAILED"
             )
             return
         }
-
-        try {
-            val outcome = ledger.createBillWithDedup(bill, operator = AUDIT_OPERATOR)
-            val settled = (outcome as? CreateBillOutcome.Committed)?.bill
-            if (settled != null) {
-                if (accountInferred) {
-                    // P1：审计标记失败不得拖垮已完成的入账（兜底静默）。
+        when (outcome) {
+            is SignalBillWriter.Outcome.Created -> {
+                // P1：现金兜底可识别标记（账户归属来自推断链链尾，供 UI 提示纠正）。
+                val settled = try {
+                    database.billDao().getById(outcome.billId)
+                } catch (error: RuntimeException) {
+                    JotBillLog.w(TAG, "入账后读取账单失败(仅审计标记跳过)", error)
+                    null
+                }
+                if (settled?.accountId == CASH_FALLBACK_ACCOUNT_ID) {
                     runCatching {
                         database.auditEntryDao().insertIfAbsent(
                             com.jotbill.app.data.entity.AuditEntryEntity(
@@ -348,53 +168,53 @@ class AutoBookkeeper(
                                 oldValue = null,
                                 newValue = settled.accountId,
                                 operator = AUDIT_OPERATOR,
-                                createdAt = now
+                                createdAt = System.currentTimeMillis()
                             )
                         )
                     }
                 }
-                notifier.notifyAutoBooked(
-                    billId = settled.id,
-                    amountMinor = settled.amountMinor,
-                    type = settled.type,
-                    channelLabel = settled.platform ?: channelLabel(record.sourcePackage),
-                    merchant = settled.merchant
-                )
                 JotBillLog.i(
                     TAG,
-                    "自动入账完成: billId=${settled.id.take(8)}, amount=$amountMinor, " +
+                    "自动入账完成: billId=${settled?.id?.take(8)}, amount=$amountMinor, " +
                         "type=$type, rule=${record.ruleId}(${record.ruleNote}), " +
-                        "account=$accountId, category=$categoryId"
+                        "account=${settled?.accountId}"
                 )
-            } else {
+            }
+
+            is SignalBillWriter.Outcome.Enriched -> {
                 JotBillLog.i(
                     TAG,
-                    "规则记录命中既有账单(level-1 合并)，不重复入账: rule=${record.ruleId}"
+                    "后续信号补全既有账单: bill=${outcome.billId.take(8)}, " +
+                        "amount=$amountMinor, rule=${record.ruleId}"
                 )
             }
-            // 跨通道吸收：其它通道（如支付宝结果页）此前落的同额待确认卡，
-            // 在本通道入账后必须收口——否则用户确认卡会双记（2026-11-16 真机）。
-            absorbRecentlyBookedPendingCards(
-                type = type,
-                amountMinor = amountMinor,
-                createdAt = now,
-                orderId = orderId
-            )
-        } catch (error: Exception) {
-            // 协程取消（服务销毁等）静默退出，不做兜底（兜底也必然再被取消）
-            if (error is kotlinx.coroutines.CancellationException) throw error
-            if (error is com.jotbill.app.data.OrderConflictException) {
-                // M1：同单号撞号（金额/类型不一致）—— 新证据转待确认并带可识别
-                // 冲突标记，绝不被静默吞进旧账单。
-                JotBillLog.w(TAG, "同单号撞号，转待确认: orderId=$orderId", error)
+
+            is SignalBillWriter.Outcome.Duplicate -> {
+                JotBillLog.i(
+                    TAG,
+                    "重复信号已处理过，跳过: amount=$amountMinor, rule=${record.ruleId}"
+                )
+            }
+
+            is SignalBillWriter.Outcome.Ignored -> {
+                JotBillLog.i(
+                    TAG,
+                    "规则决策=忽略，丢弃自动记账记录: rule=${record.ruleId}, " +
+                        "amount=$amountMinor, reason=${outcome.reason}"
+                )
+            }
+
+            is SignalBillWriter.Outcome.NeedsReview -> {
                 fallbackToPending(
-                    record, amountMinor, merchant, orderId, occurredAt,
-                    DuplicateGuard.CONFLICT_DEDUP_CHECK_FAILED
+                    record, amountMinor, merchant, orderId, occurredAt, outcome.reason
                 )
-                return
             }
-            JotBillLog.w(TAG, "自动入账失败，转待确认", error)
-            fallbackToPending(record, amountMinor, merchant, orderId, occurredAt, "AUTO_BOOK_FAILED")
+
+            is SignalBillWriter.Outcome.Failed -> {
+                fallbackToPending(
+                    record, amountMinor, merchant, orderId, occurredAt, outcome.reason
+                )
+            }
         }
     }
 
@@ -409,74 +229,7 @@ class AutoBookkeeper(
         }
     }
 
-    /**
-     * 账户解析（读法一）：规则 → 信号推断 → 包名映射 → 现金兜底。
-     *
-     * 信号层与包名/兜底层共用 [AccountInference.inferSignalThenFallback]（与
-     * CheckoutPaymentMatcher.defaultAccountIdForPayment 同一实现）；规则（set_account）
-     * 命中在此**之前**已由调用方处理（短信渠道命中即强制待确认）。
-     *
-     * @param bankHint 短信解析的银行名（其它信号恒 null）；多账户命中返回
-     *   [AccountResolution.NeedsReview] 由调用方转待确认，不猜测。
-     */
-    private suspend fun resolveAccountId(
-        sourcePackage: String,
-        patch: RuleEngine.FieldPatch,
-        bankHint: String?
-    ): AccountResolution {
-        patch.accountId?.let { candidate ->
-            val account = database.accountDao().getById(candidate)
-            if (account != null && account.isActive) return AccountResolution.Resolved(candidate)
-        }
-        val activeAccounts = database.accountDao().getAll().filter { it.isActive }
-        return AccountInference.inferSignalThenFallback(sourcePackage, bankHint, activeAccounts)
-    }
-
-        /**
-     * 二次抽取（账单详情页/通知）对既有账单的字段回填：只补空缺，绝不覆盖。
-     * 走 [FieldPriorityResolver.Source.EVIDENCE] 级（4 级）—— 低于用户编辑与
-     * 用户规则，锁定字段自动受保护；金额/账户/类型不参与回填，余额不动。
-     */
-    private suspend fun enrichExistingBill(
-        existing: BillEntity,
-        merchant: String?,
-        orderId: String?,
-        categoryId: String?
-    ) {
-        val fills = computeFieldFills(existing, merchant, orderId, categoryId)
-        if (fills.merchant == null && fills.orderId == null && fills.categoryId == null) {
-            JotBillLog.i(
-                TAG,
-                "二次抽取无字段可补（既有账单已完整），丢弃: bill=${existing.id.take(8)}"
-            )
-            return
-        }
-        val categoryFill = fills.categoryId
-            ?.takeIf { database.categoryDao().getById(it) != null }
-        val updated = existing.copy(
-            merchant = fills.merchant ?: existing.merchant,
-            orderId = fills.orderId ?: existing.orderId,
-            categoryId = categoryFill ?: existing.categoryId,
-            version = existing.version + 1
-        )
-        val applied = try {
-            ledger.updateBillWithBalanceUpdate(
-                existing,
-                updated,
-                com.jotbill.app.rules.FieldPriorityResolver.Source.EVIDENCE
-            )
-        } catch (error: Exception) {
-            JotBillLog.w(TAG, "二次抽取字段回填失败", error)
-            false
-        }
-        JotBillLog.i(
-            TAG,
-            "二次抽取字段回填${if (applied) "成功" else "跳过(版本竞争/校验未过)"}: " +
-                "bill=${existing.id.take(8)}, merchant=${fills.merchant != null}, " +
-                "orderId=${fills.orderId != null}, category=${categoryFill != null}"
-        )
-    }
-    // ── 兜底：转待确认（弹窗管线已被认领让路时，证据不能丢）──────────────
+        // ── 兜底：转待确认（弹窗管线已被认领让路时，证据不能丢）──────────────
 
     /**
      * 页面退款记录（拼多多退款详情页等）→ 退款链路。
@@ -518,7 +271,15 @@ class AutoBookkeeper(
             JotBillLog.w(TAG, "页面退款证据处理失败", error)
             return
         }
-        RefundPageMemory.mark(context, memoryKey)
+        // 只在终态标记记忆：入账失败/转待确认时保留重试机会，不锁死 7 天。
+        if (
+            outcome is RefundLinker.RefundOutcome.AutoCommitted ||
+            outcome is RefundLinker.RefundOutcome.Enriched ||
+            outcome is RefundLinker.RefundOutcome.Duplicate ||
+            outcome is RefundLinker.RefundOutcome.Ignored
+        ) {
+            RefundPageMemory.mark(context, memoryKey)
+        }
         JotBillLog.i(
             TAG,
             "页面退款证据处理完成: amount=$amountMinor, channel=$channel, " +
@@ -530,52 +291,6 @@ class AutoBookkeeper(
         MessageDigest.getInstance("SHA-256").digest(text.toByteArray(Charsets.UTF_8))
             .joinToString("") { "%02x".format(it) }
 
-
-    /**
-     * 跨通道吸收：本通道刚入账后，把其它通道此前落的同额待确认卡标记忽略。
-     *
-     * 背景（真机 2026-11-16）：支付宝结果页证据先落卡（平台=支付宝包名），
-     * 数秒后银行短信自动入账（平台=银行短信）—— 卡与账单并存，用户确认卡
-     * 即双记。只吸收 60 秒内、类型与金额相同、订单号不冲突的卡；更早或单号
-     * 冲突的卡保持原状（可能是另一笔真实交易，不能吞）。
-     */
-    private suspend fun absorbRecentlyBookedPendingCards(
-        type: String,
-        amountMinor: Long,
-        createdAt: Long,
-        orderId: String?
-    ) {
-        if (createdAt <= 0L) return
-        val cards = try {
-            database.pendingTransactionDao().findPendingByAmountWindow(
-                type = type,
-                amountMinor = amountMinor,
-                windowStart = createdAt - CROSS_CHANNEL_PENDING_ABSORB_WINDOW_MILLIS,
-                windowEnd = createdAt + CROSS_CHANNEL_PENDING_ABSORB_WINDOW_MILLIS
-            )
-        } catch (error: RuntimeException) {
-            JotBillLog.w(TAG, "跨通道待确认卡查询失败，跳过吸收", error)
-            return
-        }
-        for (card in cards) {
-            if (!card.orderId.isNullOrBlank() && !orderId.isNullOrBlank() && card.orderId != orderId) {
-                continue
-            }
-            val ignored = try {
-                ledger.ignorePendingTransaction(card, card.version)
-            } catch (error: Exception) {
-                JotBillLog.w(TAG, "跨通道吸收待确认卡失败: pending=${card.id.take(16)}", error)
-                false
-            }
-            if (ignored) {
-                JotBillLog.i(
-                    TAG,
-                    "跨通道吸收同额待确认卡: pending=${card.id.take(16)}, " +
-                        "amount=$amountMinor, platform=${card.platform}"
-                )
-            }
-        }
-    }
 
     private suspend fun fallbackToPending(
         record: AutoBookkeepingEngine.ExtractedRecord,
@@ -596,7 +311,11 @@ class AutoBookkeeper(
                     sourceEventKey = "abk:${record.ruleId}:${record.extractTime}",
                     rawTextHash = null
                 ),
-                sourceType = "ACCESSIBILITY",
+                sourceType = if (record.sourcePackage == SMS_SOURCE_PACKAGE) {
+                    "SMS"
+                } else {
+                    "ACCESSIBILITY"
+                },
                 conflictReason = reason
             )
             JotBillLog.i(
@@ -625,22 +344,11 @@ class AutoBookkeeper(
 
         private const val CROSS_DAY_TOLERANCE_MINUTES = 60L
 
-        /** 与 DefaultDataInitializer 种子账户一致（CheckoutPaymentMatcher 同源约定）；唯一出处见 [AccountInference]。 */
-        private const val WECHAT_PAY_ACCOUNT_ID = AccountInference.WECHAT_PAY_ACCOUNT_ID
-
-        private const val ALIPAY_ACCOUNT_ID = AccountInference.ALIPAY_ACCOUNT_ID
-
         /** 非微信/支付宝渠道的入账兜底账户（现金，推断链链尾）。 */
         private const val CASH_FALLBACK_ACCOUNT_ID = AccountInference.CASH_FALLBACK_ACCOUNT_ID
 
         /** 银行短信来源包（BookkeepingChannels 的 mms 渠道同款包名）。 */
         private const val SMS_SOURCE_PACKAGE = "com.android.mms"
-
-        /**
-         * 跨通道待确认卡吸收窗（2026-11-16）：本通道入账后吸收其它通道此前
-         * 60 秒内落的同额卡；**不覆盖更早的同额卡**（可能是另一笔真实交易）。
-         */
-        private const val CROSS_CHANNEL_PENDING_ABSORB_WINDOW_MILLIS = 60_000L
 
         /**
          * B3 拍板（2026-11-04）：短信渠道账户字段命中用户 set_account 规则时的

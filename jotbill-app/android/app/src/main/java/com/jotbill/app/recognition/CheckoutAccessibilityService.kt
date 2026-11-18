@@ -29,6 +29,7 @@ import com.jotbill.app.bookkeeping.AutoBookkeepingEngine
 import com.jotbill.app.bookkeeping.BookkeepingChannels
 import com.jotbill.app.bookkeeping.PageNode
 import com.jotbill.app.bookkeeping.PageRuleRegistry
+import com.jotbill.app.bookkeeping.SignalBillWriter
 import com.jotbill.app.overlay.PendingConfirmOverlayManager
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CoroutineScope
@@ -173,6 +174,13 @@ open class CheckoutAccessibilityService : AccessibilityService() {
          *    不是遗漏（页面显示时间时 `occurredAt` 恒定，仍会命中）。
          */
         private const val PAYMENT_RESULT_EVENT_MEMORY_MILLIS = PaymentTiming.SAME_TXN_WINDOW_MILLIS
+
+        /**
+         * 无订单号结果页的"同页重观测"滑动记忆窗（2026-11-17 复审）：
+         * 同包名+金额+页面文本哈希 5 分钟内只处理一次。窗口取 5 分钟是保守值
+         * （用户拍板的账单合并窗仍是 60 秒）；超过后允许新账单，避免永久锁死。
+         */
+        private const val PAGE_OBSERVATION_MEMORY_MILLIS = 5 * 60 * 1000L
 
         /** 支付结果页截图兜底的系统回调看门狗：MIUI 等可能静默丢弃回调，超时强制复位。 */
         private const val PAYMENT_SCREENSHOT_FALLBACK_WATCHDOG_MILLIS = 8_000L
@@ -1999,9 +2007,13 @@ open class CheckoutAccessibilityService : AccessibilityService() {
         }
     }
 
-    private fun markPaymentResultEvent(sourceEventKey: String, now: Long): Boolean {
+    private fun markPaymentResultEvent(
+        sourceEventKey: String,
+        now: Long,
+        ttlMillis: Long = PAYMENT_RESULT_EVENT_MEMORY_MILLIS
+    ): Boolean {
         recentPaymentResultEventKeys.entries.removeAll {
-            now - it.value > PAYMENT_RESULT_EVENT_MEMORY_MILLIS
+            now - it.value > ttlMillis
         }
         val previous = recentPaymentResultEventKeys[sourceEventKey]
         if (previous != null) {
@@ -2101,63 +2113,97 @@ open class CheckoutAccessibilityService : AccessibilityService() {
         evidence: PaymentResultEvidence,
         aiUnverified: Boolean = false
     ): String? {
-        val signal = PaymentNotificationFallbackSignal(
-            paymentPackage = paymentPackage,
-            amountMinor = evidence.amountMinor,
-            occurredAt = evidence.occurredAt ?: System.currentTimeMillis(),
-            merchant = evidence.merchant,
-            orderId = evidence.orderId,
-            sourceEventKey = evidence.sourceEventKey,
-            rawTextHash = evidence.rawTextHash
-        )
-
-        // 订单号/金额+时间窗口综合解析
-        when (val resolution = matcher.resolveSessionForPayment(
-            paymentPackage = paymentPackage,
-            amountMinor = evidence.amountMinor,
-            occurredAt = evidence.occurredAt ?: System.currentTimeMillis(),
-            orderId = evidence.orderId
-        )) {
-            is PaymentSessionResolution.Matched -> {
-                val result = matcher.recordPaymentEvidence(
-                    resolution.reference,
-                    signal,
-                    sourceType = "ACCESSIBILITY",
-                    aiUnverified = aiUnverified
+        // 模型调整（2026-11-16）：结果页证据作为首笔信号直接入账；后续同额信号
+        // （短信/通知）在 SignalBillWriter 的 60 秒窗内补全账户/商户/订单号。
+        val channelLabel = AutoBookkeeper.channelLabel(paymentPackage)
+        val accountHints = when (paymentPackage) {
+            "com.tencent.mm", "com.eg.android.AlipayGphone" -> listOf(channelLabel)
+            else -> emptyList()
+        }
+        // 页面重观测抑制（2026-11-17 复审）：滑动 TTL（5 分钟）记忆
+        // 「包名+金额+页面文本哈希」。不用静态时间桶 —— 同桶会误删真实第二笔、
+        // 跨桶边界又会重复入账；滑动 TTL 只压"反复看同一成功页"这一种形态。
+        // 有订单号时不走本闸：不同订单号客观证明是两笔，交给账单层判重。
+        if (evidence.orderId.isNullOrBlank()) {
+            val observationKey =
+                "page-observation|$paymentPackage|${evidence.amountMinor}|${evidence.rawTextHash}"
+            if (
+                !markPaymentResultEvent(
+                    observationKey,
+                    System.currentTimeMillis(),
+                    PAGE_OBSERVATION_MEMORY_MILLIS
                 )
-                if (result is CheckoutPaymentMatchResult.Rejected) {
-                    matcher.recordOrphanPaymentSignal(
-                        signal,
-                        sourceType = "ACCESSIBILITY",
-                        conflictReason = result.reason
-                    )
-                }
+            ) {
                 JotBillLog.i(
                     TAG,
-                    "支付结果页证据落库结果（" +
-                        (if (resolution.byOrderId) "订单号" else "金额+时间窗口") +
-                        "）: ${formatMatchResult(result)}"
+                    "支付结果页重观测(5分钟内同页), 跳过: pkg=$paymentPackage, " +
+                        "amount=${evidence.amountMinor}"
                 )
-                return acceptedSessionIdOf(result)
-            }
-            is PaymentSessionResolution.Ambiguous -> {
-                // 并发会话无法区分：不强行合并，保留证据交给已有待确认兜底。
-                matcher.recordOrphanPaymentSignal(
-                    signal,
-                    sourceType = "ACCESSIBILITY",
-                    conflictReason = "AMBIGUOUS_SESSION_IDS:${resolution.sessionIds.joinToString(",")}",
-                    sessionIds = resolution.sessionIds
-                )
-                JotBillLog.i(TAG, "支付结果页命中并发会话(${resolution.sessionIds.size}个)，已转待确认")
-                return null
-            }
-            PaymentSessionResolution.NoMatch -> {
-                // D-24 / R4：0 命中 ⇒ 落孤儿待确认，不猜（已摘除最近活跃会话兜底）。
-                matcher.recordOrphanPaymentSignal(signal, sourceType = "ACCESSIBILITY")
-                JotBillLog.i(TAG, "支付结果页无关联活跃会话，已转待确认（不回落猜测）")
                 return null
             }
         }
+        val outcome = try {
+            SignalBillWriter(applicationContext, JotBillDatabaseProvider.get(applicationContext))
+                .recordPayment(
+                    SignalBillWriter.PaymentSignal(
+                        amountMinor = evidence.amountMinor,
+                        occurredAt = evidence.occurredAt ?: System.currentTimeMillis(),
+                        merchant = evidence.merchant,
+                        orderId = evidence.orderId,
+                        platform = paymentPackage,
+                        channelLabel = channelLabel,
+                        sourcePackage = paymentPackage,
+                        sourceType = "accessibility",
+                        accountHints = accountHints,
+                        sourceEventKey = evidence.sourceEventKey
+                    )
+                )
+        } catch (error: Exception) {
+            if (error is kotlinx.coroutines.CancellationException) throw error
+            JotBillLog.w(TAG, "支付结果页证据入账失败", error)
+            return null
+        }
+        val billId = when (outcome) {
+            is SignalBillWriter.Outcome.Created -> outcome.billId
+            is SignalBillWriter.Outcome.Enriched -> outcome.billId
+            is SignalBillWriter.Outcome.Duplicate -> outcome.billId
+            is SignalBillWriter.Outcome.Ignored -> null
+            is SignalBillWriter.Outcome.NeedsReview,
+            is SignalBillWriter.Outcome.Failed -> {
+                // 规则强制复核 / 入账失败：证据转待确认，不静默丢弃。
+                val reason = when (outcome) {
+                    is SignalBillWriter.Outcome.NeedsReview -> outcome.reason
+                    is SignalBillWriter.Outcome.Failed -> outcome.reason
+                    else -> "PAYMENT_BOOK_FAILED"
+                }
+                try {
+                    matcher.recordOrphanPaymentSignal(
+                        PaymentNotificationFallbackSignal(
+                            paymentPackage = paymentPackage,
+                            amountMinor = evidence.amountMinor,
+                            occurredAt = evidence.occurredAt ?: System.currentTimeMillis(),
+                            merchant = evidence.merchant,
+                            orderId = evidence.orderId,
+                            sourceEventKey = evidence.sourceEventKey,
+                            rawTextHash = evidence.rawTextHash
+                        ),
+                        sourceType = "ACCESSIBILITY",
+                        conflictReason = reason
+                    )
+                } catch (error: Exception) {
+                    if (error is kotlinx.coroutines.CancellationException) throw error
+                    JotBillLog.w(TAG, "支付结果页证据转待确认失败", error)
+                }
+                null
+            }
+        }
+        JotBillLog.i(
+            TAG,
+            "支付结果页证据入账: outcome=${outcome.javaClass.simpleName}, " +
+                "amount=${evidence.amountMinor}, pkg=$paymentPackage"
+        )
+        // 非 null 表示证据已入账（沿用原"已接收"语义供调用方日志/去重路径使用）。
+        return billId
     }
 
     /**
