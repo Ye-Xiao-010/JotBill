@@ -41,7 +41,7 @@ import com.jotbill.app.data.entity.PendingTransactionEntity
 import com.jotbill.app.data.entity.RuleEntity
 import com.jotbill.app.data.entity.TransactionCandidateEntity
 
-const val JOT_BILL_DATABASE_VERSION = 12
+const val JOT_BILL_DATABASE_VERSION = 13
 
 @Database(
     entities = [
@@ -436,6 +436,16 @@ object DatabaseMigrations {
         }
     }
 
+    /**
+     * 2026-11-17：accounts 增加可空 card_tail（后 4 位），供银行短信精准匹配账户。
+     * 既有数据为 null，退回银行名匹配，零迁移风险。
+     */
+    private val migration12To13 = object : Migration(12, 13) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL("ALTER TABLE accounts ADD COLUMN card_tail TEXT")
+        }
+    }
+
     val all: Array<Migration> = arrayOf(
         migration1To2,
         migration2To3,
@@ -447,6 +457,7 @@ object DatabaseMigrations {
         migration8To9,
         migration9To10,
         migration10To11,
-        migration11To12
+        migration11To12,
+        migration12To13
     )
 }

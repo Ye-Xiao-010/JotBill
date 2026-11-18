@@ -444,7 +444,12 @@ class DataModule(
             sortOrder = input.optInt("sortOrder", 0),
             isActive = true,
             createdAt = now,
-            updatedAt = now
+            updatedAt = now,
+            cardTail = if (subtype in BANK_CARD_SUBTYPES) {
+                input.optionalString("cardTail")?.let(::normalizeCardTail)
+            } else {
+                null
+            }
         )
         database.accountDao().insert(account)
         events.emit("onAccountChanged", BridgeDtoMapper.account(account))
@@ -476,6 +481,16 @@ class DataModule(
                 color = input.updatedNullableString("color", existing.color),
                 sortOrder = input.optionalInt("sortOrder") ?: existing.sortOrder,
                 isActive = input.optionalBoolean("isActive") ?: existing.isActive,
+                cardTail = if (subtype in BANK_CARD_SUBTYPES) {
+                    if (input.has("cardTail")) {
+                        input.updatedNullableString("cardTail", null)?.let(::normalizeCardTail)
+                    } else {
+                        // 老备份可能带入非法值：静默丢弃，避免每次编辑都抛校验错。
+                        existing.cardTail?.takeIf { Regex("\\d{4}").matches(it) }
+                    }
+                } else {
+                    null
+                },
                 updatedAt = System.currentTimeMillis()
             )
             database.accountDao().update(updated)
@@ -1207,6 +1222,18 @@ class DataModule(
             throw BridgeException("INVALID_ARGUMENT", "Unsupported account subtype: $subtype")
         }
     }
+
+    /** 卡尾号只接受 4 位数字（银行短信按它精准匹配账户）。 */
+    private fun normalizeCardTail(raw: String): String {
+        val trimmed = raw.trim()
+        if (!Regex("\\d{4}").matches(trimmed)) {
+            throw BridgeException("INVALID_ARGUMENT", "cardTail must be exactly 4 digits")
+        }
+        return trimmed
+    }
+
+    /** 只有借记卡/信用卡账户才有卡尾号语义。 */
+    private val BANK_CARD_SUBTYPES = setOf("bank_debit", "credit_card")
 
     private fun resolveAccountKind(input: JSONObject, subtype: String): String {
         val derivedKind = accountKind(subtype)

@@ -226,7 +226,8 @@ class SignalBillWriter(
         val patch = rule.patch
 
         val accounts = activeAccounts()
-        val accountId = resolvePaymentAccount(signal, patch, accounts)
+        val accountChoice = resolvePaymentAccount(signal, patch, accounts)
+        val accountId = accountChoice?.accountId
         val merchant = patch.merchant ?: signal.merchant
         val orderId = signal.orderId?.takeIf { it.isNotBlank() }
 
@@ -244,7 +245,9 @@ class SignalBillWriter(
                 merchant = merchant,
                 orderId = orderId,
                 categoryId = patch.categoryId,
-                accountId = accountId
+                accountId = accountId,
+                incomingAccountRank = accountChoice?.rank ?: AccountInference.Rank.NONE,
+                lockAccount = accountChoice?.rank == AccountInference.Rank.RULE
             )
             JotBillLog.i(
                 TAG,
@@ -276,6 +279,11 @@ class SignalBillWriter(
             sourceType = signal.sourceType,
             originalTransactionId = null,
             orderId = orderId,
+            fieldLocks = if (accountChoice?.rank == AccountInference.Rank.RULE) {
+                FieldPriorityResolver.serializeLocks(setOf("accountId"))
+            } else {
+                "[]"
+            },
             createdAt = now,
             updatedAt = now,
             version = 1
@@ -289,7 +297,9 @@ class SignalBillWriter(
                     merchant = merchant,
                     orderId = orderId,
                     categoryId = patch.categoryId,
-                    accountId = accountId
+                    accountId = accountId,
+                    incomingAccountRank = accountChoice?.rank ?: AccountInference.Rank.NONE,
+                    lockAccount = accountChoice?.rank == AccountInference.Rank.RULE
                 )
                 JotBillLog.i(
                     TAG,
@@ -313,7 +323,8 @@ class SignalBillWriter(
         val originalAccountId = signal.originalBillId?.let { id ->
             database.billDao().getById(id)?.accountId?.takeIf { acc -> accounts.any { it.id == acc } }
         }
-        val accountId = resolveRefundAccount(signal, accounts, originalAccountId)
+        val accountChoice = resolveRefundAccount(signal, accounts, originalAccountId)
+        val accountId = accountChoice?.accountId
         val orderId = signal.orderId?.takeIf { it.isNotBlank() }
 
         val recent = findMergeCandidate(
@@ -331,6 +342,8 @@ class SignalBillWriter(
                 orderId = orderId,
                 categoryId = null,
                 accountId = accountId,
+                incomingAccountRank = accountChoice?.rank ?: AccountInference.Rank.NONE,
+                lockAccount = signal.ruleAccountId != null,
                 originalBillId = signal.originalBillId
             )
             JotBillLog.i(
@@ -357,6 +370,11 @@ class SignalBillWriter(
             sourceType = signal.sourceType,
             originalTransactionId = signal.originalBillId,
             orderId = orderId,
+            fieldLocks = if (signal.ruleAccountId != null) {
+                FieldPriorityResolver.serializeLocks(setOf("accountId"))
+            } else {
+                "[]"
+            },
             createdAt = now,
             updatedAt = now,
             version = 1
@@ -370,6 +388,8 @@ class SignalBillWriter(
                     orderId = orderId,
                     categoryId = signal.categoryId,
                     accountId = accountId,
+                    incomingAccountRank = accountChoice?.rank ?: AccountInference.Rank.NONE,
+                    lockAccount = signal.ruleAccountId != null,
                     originalBillId = signal.originalBillId
                 )
                 Tx.Enriched(outcome.bill.id)
@@ -450,11 +470,18 @@ class SignalBillWriter(
         return recent
     }
 
-    /** 商户护栏：两侧都非空且互不包含 ⇒ 两笔真单，不合并。 */
+    /** 商户护栏：两侧都非空且互不包含 ⇒ 两笔真单，不合并。渠道词视作通配。 */
     private fun merchantCompatible(existing: String?, incoming: String?): Boolean {
         val left = existing?.trim().orEmpty()
         val right = incoming?.trim().orEmpty()
         if (left.isEmpty() || right.isEmpty()) return true
+        // 银行短信的"商户"常是支付通道而不是店铺（财付通/平台商户等），
+        // 与页面店铺名互不包含，不能据此拆单。
+        if (CHANNEL_MERCHANT_WORDS.any { left.contains(it, ignoreCase = true) } ||
+            CHANNEL_MERCHANT_WORDS.any { right.contains(it, ignoreCase = true) }
+        ) {
+            return true
+        }
         return left.contains(right, ignoreCase = true) ||
             right.contains(left, ignoreCase = true)
     }
@@ -498,40 +525,63 @@ class SignalBillWriter(
         return RuleOutcome(decision, patch)
     }
 
+    /** 账户选择：账户 ID + 证据等级（等级用于"只升不降"）。 */
+    private data class AccountChoice(val accountId: String, val rank: Int)
+
     private fun resolvePaymentAccount(
         signal: PaymentSignal,
         patch: RuleEngine.FieldPatch,
         accounts: List<AccountEntity>
-    ): String? {
+    ): AccountChoice? {
         patch.accountId?.let { candidate ->
-            if (accounts.any { it.id == candidate }) return candidate
+            if (accounts.any { it.id == candidate }) {
+                return AccountChoice(candidate, AccountInference.Rank.RULE)
+            }
         }
-        return (AccountInference.resolveByHints(signal.sourcePackage, signal.accountHints, accounts)
-            as? AccountResolution.Resolved)?.accountId
+        return when (
+            val resolution = AccountInference.resolveByHints(
+                signal.sourcePackage,
+                signal.accountHints,
+                accounts
+            )
+        ) {
+            is AccountResolution.Resolved -> AccountChoice(resolution.accountId, resolution.rank)
+            else -> null
+        }
     }
 
     private fun resolveRefundAccount(
         signal: RefundSignal,
         accounts: List<AccountEntity>,
         originalAccountId: String?
-    ): String? {
+    ): AccountChoice? {
         signal.ruleAccountId?.let { id ->
-            if (accounts.any { it.id == id }) return id
+            if (accounts.any { it.id == id }) {
+                return AccountChoice(id, AccountInference.Rank.RULE)
+            }
         }
-        val byHints = AccountInference.resolveByHints(
+        val hint = (AccountInference.resolveByHints(
             signal.sourcePackage,
             signal.receivingHints,
             accounts
-        )
-        val hintAccount = (byHints as? AccountResolution.Resolved)?.accountId
-        // 信号未给出可匹配账户（落现金）时，原单账户优先于现金
-        val cashId = AccountInference.CASH_FALLBACK_ACCOUNT_ID
-        if (hintAccount != null && hintAccount != cashId) return hintAccount
-        return originalAccountId ?: hintAccount ?: cashId
+        ) as? AccountResolution.Resolved)?.let { AccountChoice(it.accountId, it.rank) }
+        val original = originalAccountId?.let { id ->
+            accounts.firstOrNull { it.id == id }?.let {
+                AccountChoice(it.id, AccountInference.rankOf(it))
+            }
+        }
+        // 退款去向提示优先于原单（用户拍板：退款有短信说明账户更清晰）；
+        // 提示只能落到现金时，原单账户优先于现金。
+        if (hint != null && hint.rank > AccountInference.Rank.CASH) return hint
+        return original ?: hint ?: accounts.firstOrNull {
+            it.id == AccountInference.CASH_FALLBACK_ACCOUNT_ID
+        }?.let { AccountChoice(it.id, AccountInference.Rank.CASH) }
     }
 
     /**
-     * 后续信号补全：只补空缺字段；账户允许从现金兜底**升级**为具体账户（余额随之迁移）。
+     * 后续信号补全：只补空缺字段；账户按**证据等级只升不降**升级
+     * （现金 → 钱包 → 银行短信账户/规则），余额随账户迁移。
+     * 同级或更低等级信号不会覆盖既有账户，避免微信/支付宝/银行来回翻转。
      */
     private suspend fun enrichBill(
         existing: BillEntity,
@@ -539,6 +589,8 @@ class SignalBillWriter(
         orderId: String?,
         categoryId: String?,
         accountId: String?,
+        incomingAccountRank: Int,
+        lockAccount: Boolean = false,
         originalBillId: String? = null
     ) {
         val current = database.billDao().getById(existing.id) ?: return
@@ -546,17 +598,27 @@ class SignalBillWriter(
         val orderFill = current.orderId ?: orderId
         val categoryFill = current.categoryId
             ?: categoryId?.takeIf { database.categoryDao().getById(it) != null }
-        val accountUpgrade = current.accountId == AccountInference.CASH_FALLBACK_ACCOUNT_ID &&
-            accountId != null &&
+        val currentAccount = current.accountId?.let { database.accountDao().getById(it) }
+        val currentRank = AccountInference.rankOf(currentAccount)
+        val accountUpgrade = accountId != null &&
             accountId != current.accountId &&
-            accountId != AccountInference.CASH_FALLBACK_ACCOUNT_ID
+            incomingAccountRank > currentRank
         val accountFill = if (accountUpgrade) accountId else current.accountId
+        // 规则账户一经应用即锁账户字段：后续银行短信（EVIDENCE）不得覆盖用户规则。
+        val fieldLocksFill = if (lockAccount) {
+            FieldPriorityResolver.serializeLocks(
+                FieldPriorityResolver.parseLocks(current.fieldLocks) + "accountId"
+            )
+        } else {
+            current.fieldLocks
+        }
         val originalFill = current.originalTransactionId ?: originalBillId
         val descriptionFill = current.description ?: merchant
         val changed = merchantFill != current.merchant ||
             orderFill != current.orderId ||
             categoryFill != current.categoryId ||
             accountFill != current.accountId ||
+            fieldLocksFill != current.fieldLocks ||
             originalFill != current.originalTransactionId ||
             descriptionFill != current.description
         if (!changed) return
@@ -565,6 +627,7 @@ class SignalBillWriter(
             orderId = orderFill,
             categoryId = categoryFill,
             accountId = accountFill,
+            fieldLocks = fieldLocksFill,
             originalTransactionId = originalFill,
             description = descriptionFill,
             version = current.version + 1,
@@ -682,6 +745,12 @@ class SignalBillWriter(
             "accessibility",
             "sms",
             "ai_vision"
+        )
+
+        /** 支付通道词：命中即视作跨渠道商户，不做商户互斥判断。 */
+        private val CHANNEL_MERCHANT_WORDS = listOf(
+            "财付通", "微信支付", "微信", "支付宝", "银联", "网联",
+            "快捷支付", "平台商户", "拼多多", "京东", "美团", "抖音"
         )
 
         fun editCardId(billId: String): String = "pending-edit-$billId"

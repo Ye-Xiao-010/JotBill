@@ -333,8 +333,7 @@ class BankSmsNegativeTest {
         val bankAccountId = "acc-sichuan-rcc"
         database.accountDao().insert(
             AccountEntity(
-                id = bankAccountId, name = "四川农商银行", subtype = "debit",
-                kind = "asset", initialBalanceMinor = 0L, currentBalanceMinor = 100_000L,
+                id = bankAccountId, name = "四川农商银行", subtype = "bank_debit", kind = "asset", initialBalanceMinor = 0L, currentBalanceMinor = 100_000L,
                 currency = "CNY", icon = null, color = null, sortOrder = 1,
                 isActive = true, createdAt = 1L, updatedAt = 1L
             )

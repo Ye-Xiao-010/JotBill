@@ -81,6 +81,8 @@ export default function AccountsScreen() {
   const [iconTouched, setIconTouched] = useState(false);
   const [showIconPicker, setShowIconPicker] = useState(false);
   const [showBankPicker, setShowBankPicker] = useState(false);
+  /** 银行卡尾号（后 4 位）：填写后银行短信按尾号精准匹配账户 */
+  const [cardTail, setCardTail] = useState('');
 
   /** 银行卡类账户（借记卡/信用卡）：走银行列表选择，而非自由输入 */
   const isBankCardType = subtype === 'bank_debit' || subtype === 'credit_card';
@@ -159,6 +161,7 @@ export default function AccountsScreen() {
     setInitialBalance('');
     setIconOverride(null);
     setIconTouched(false);
+    setCardTail('');
     setShowForm(true);
   };
 
@@ -171,6 +174,7 @@ export default function AccountsScreen() {
       account.icon && account.icon.includes(':') ? account.icon : null,
     );
     setIconTouched(false);
+    setCardTail(account.cardTail ?? '');
     setShowForm(true);
   };
 
@@ -179,6 +183,7 @@ export default function AccountsScreen() {
     setEditingAccount(null);
     setIconOverride(null);
     setIconTouched(false);
+    setCardTail('');
     setShowBankPicker(false);
   };
 
@@ -203,6 +208,11 @@ export default function AccountsScreen() {
       Alert.alert('提示', '请输入账户名称');
       return;
     }
+    const trimmedTail = cardTail.trim();
+    if (isBankCardType && trimmedTail && !/^\d{4}$/.test(trimmedTail)) {
+      Alert.alert('提示', '卡尾号请填写后 4 位数字');
+      return;
+    }
     if (editingAccount) {
       saveMutation.mutate({
         id: editingAccount.id,
@@ -212,6 +222,7 @@ export default function AccountsScreen() {
           name: name.trim(),
           subtype,
           ...(iconTouched ? { icon: iconOverride } : {}),
+          ...(isBankCardType ? { cardTail: trimmedTail || null } : {}),
         },
       });
       return;
@@ -236,6 +247,7 @@ export default function AccountsScreen() {
         initialBalanceMinor: normalizedInitialBalance,
         currency: 'CNY',
         icon: iconOverride,
+        cardTail: isBankCardType ? (trimmedTail || null) : null,
       },
     });
   };
@@ -433,6 +445,16 @@ export default function AccountsScreen() {
                       <Text style={styles.bankEntryPlaceholder}>选择或手动指定图标</Text>
                     )}
                   </TouchableOpacity>
+                  <Text style={styles.inputLabel}>卡尾号（后 4 位，可选）</Text>
+                  <TextInput
+                    style={styles.input}
+                    value={cardTail}
+                    onChangeText={setCardTail}
+                    placeholder="如 2510，用于银行短信自动匹配账户"
+                    placeholderTextColor={styles._colors.textTertiary}
+                    keyboardType="number-pad"
+                    maxLength={4}
+                  />
                 </>
               ) : null}
               <Text style={styles.inputLabel}>账户名称</Text>

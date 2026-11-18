@@ -111,6 +111,8 @@ export interface Account {
   color?: string;
   sortOrder: number;
   isActive: boolean;
+  /** 银行卡尾号（后 4 位）；用于银行短信精准匹配账户 */
+  cardTail?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -125,6 +127,8 @@ export interface AccountInput {
   icon?: string | null;
   color?: string;
   sortOrder?: number;
+  /** 银行卡尾号（后 4 位，可空）：填了按尾号精准匹配短信账户 */
+  cardTail?: string | null;
 }
 
 export interface AccountUpdateInput extends Partial<AccountInput> {

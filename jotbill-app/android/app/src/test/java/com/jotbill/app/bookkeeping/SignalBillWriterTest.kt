@@ -55,7 +55,7 @@ class SignalBillWriterTest {
                     id = "acc-rcc", name = "四川农商银行", subtype = "bank_debit", kind = "asset",
                     initialBalanceMinor = 0L, currentBalanceMinor = 0L,
                     currency = "CNY", icon = null, color = null, sortOrder = 1,
-                    isActive = true, createdAt = 1L, updatedAt = 1L
+                    isActive = true, createdAt = 1L, updatedAt = 1L, cardTail = "2510"
                 )
             )
             database.accountDao().insert(
@@ -185,7 +185,10 @@ class SignalBillWriterTest {
 
         val outcome = PendingConfirmService(database).confirm(
             pendingId = card.id,
-            overrides = PendingConfirmService.Overrides(accountId = "acc-rcc")
+            overrides = PendingConfirmService.Overrides(
+                accountId = "acc-rcc",
+                accountTouched = true
+            )
         )
 
         assertTrue("编辑卡确认应成功: $outcome", outcome is PendingConfirmService.Outcome.Confirmed)
@@ -372,6 +375,159 @@ class SignalBillWriterTest {
             "导入卡应保持待确认状态",
             com.jotbill.app.data.entity.PendingTransactionEntity.STATUS_PENDING,
             card!!.status
+        )
+    }
+
+    @Test
+    fun 钱包账单被短信卡尾号升级为银行卡() = runBlocking {
+        val writer = SignalBillWriter(context, database)
+        writer.recordPayment(
+            payment(
+                1888L,
+                hints = listOf("微信支付"),
+                source = "com.tencent.mm",
+                sourceEventKey = "wechat-page-1"
+            )
+        )
+        assertEquals(
+            "首笔仅能从结果页映射到微信零钱",
+            "default-account-wechat",
+            database.billDao().getAllForExport().single().accountId
+        )
+
+        // 银行短信带卡尾号 2510：短信账户来源优先级最高，应升级到银行卡。
+        val second = writer.recordPayment(
+            payment(
+                1888L,
+                hints = listOf("四川农商银行", "6222020200112510"),
+                source = "com.android.mms",
+                sourceType = "sms",
+                sourceEventKey = "sms-card-1"
+            )
+        )
+
+        assertTrue("短信应补全既有账单: $second", second is SignalBillWriter.Outcome.Enriched)
+        val bill = database.billDao().getAllForExport().single()
+        assertEquals("升级到卡尾号命中的银行账户", "acc-rcc", bill.accountId)
+        assertEquals(
+            "微信零钱余额回补",
+            0L,
+            database.accountDao().getById("default-account-wechat")!!.currentBalanceMinor
+        )
+        assertEquals(
+            "银行账户承接支出",
+            -1888L,
+            database.accountDao().getById("acc-rcc")!!.currentBalanceMinor
+        )
+    }
+
+    @Test
+    fun 银行账户不被钱包信号降级() = runBlocking {
+        val writer = SignalBillWriter(context, database)
+        writer.recordPayment(
+            payment(
+                1666L,
+                hints = listOf("四川农商银行", "6222020200112510"),
+                source = "com.android.mms",
+                sourceType = "sms",
+                sourceEventKey = "sms-first-1"
+            )
+        )
+        assertEquals(
+            "短信卡尾号直接落银行账户",
+            "acc-rcc",
+            database.billDao().getAllForExport().single().accountId
+        )
+
+        val second = writer.recordPayment(
+            payment(
+                1666L,
+                hints = listOf("微信支付"),
+                source = "com.tencent.mm",
+                sourceEventKey = "wechat-late-1"
+            )
+        )
+
+        assertTrue("同额信号仍应补全", second is SignalBillWriter.Outcome.Enriched)
+        assertEquals(
+            "钱包信号不得把银行账户降级",
+            "acc-rcc",
+            database.billDao().getAllForExport().single().accountId
+        )
+    }
+
+    @Test
+    fun 卡尾号优先于同名银行账户() = runBlocking {
+        // 同名的第二张卡（没填尾号）：只按银行名会多候选，按尾号必须唯一命中。
+        database.accountDao().insert(
+            AccountEntity(
+                id = "acc-rcc-2", name = "四川农商银行", subtype = "bank_debit", kind = "asset",
+                initialBalanceMinor = 0L, currentBalanceMinor = 0L,
+                currency = "CNY", icon = null, color = null, sortOrder = 2,
+                isActive = true, createdAt = 1L, updatedAt = 1L
+            )
+        )
+
+        val resolution = AccountInference.resolveByHints(
+            sourcePackage = "com.android.mms",
+            hints = listOf("四川农商银行 尾号2510"),
+            accounts = database.accountDao().getAll().filter { it.isActive }
+        )
+
+        assertTrue("尾号应唯一命中: $resolution", resolution is AccountResolution.Resolved)
+        assertEquals(
+            "命中填了尾号的账户",
+            "acc-rcc",
+            (resolution as AccountResolution.Resolved).accountId
+        )
+        assertEquals("短信账户等级最高", AccountInference.Rank.BANK, resolution.rank)
+    }
+
+    @Test
+    fun 退款泛化渠道提示不猜账户且保留原单账户() = runBlocking {
+        // 另一张银行账户：若把「银行卡」当账户名包含匹配，会错误命中它。
+        database.accountDao().insert(
+            AccountEntity(
+                id = "acc-cmb-card", name = "招商银行卡", subtype = "bank_debit", kind = "asset",
+                initialBalanceMinor = 0L, currentBalanceMinor = 0L,
+                currency = "CNY", icon = null, color = null, sortOrder = 3,
+                isActive = true, createdAt = 1L, updatedAt = 1L
+            )
+        )
+        val writer = SignalBillWriter(context, database)
+        writer.recordPayment(
+            payment(
+                4200L,
+                hints = listOf("四川农商银行", "6222020200112510"),
+                source = "com.android.mms",
+                sourceType = "sms",
+                sourceEventKey = "expense-origin-1"
+            )
+        )
+        val original = database.billDao().getAllForExport().single { it.type == "expense" }
+        assertEquals("原单应落卡尾号账户", "acc-rcc", original.accountId)
+
+        val outcome = writer.recordRefund(
+            SignalBillWriter.RefundSignal(
+                amountMinor = 4200L,
+                occurredAt = System.currentTimeMillis(),
+                merchant = "京东",
+                orderId = null,
+                platform = "com.jingdong.app.mall",
+                sourcePackage = "com.jingdong.app.mall",
+                sourceType = "notification",
+                receivingHints = listOf("银行卡"),
+                originalBillId = original.id,
+                sourceEventKey = "refund-generic-1"
+            )
+        )
+
+        assertTrue("退款首笔应成账: $outcome", outcome is SignalBillWriter.Outcome.Created)
+        val refund = database.billDao().getAllForExport().first { it.type == "refund" }
+        assertEquals(
+            "泛化「银行卡」提示不得猜账户，应沿用原单账户",
+            "acc-rcc",
+            refund.accountId
         )
     }
 }

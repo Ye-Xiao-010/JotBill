@@ -771,6 +771,7 @@ internal class BackupManager(
                 putNullable("color", cursor.string("color"))
                 put("sortOrder", cursor.int("sort_order"))
                 put("isActive", cursor.bool("is_active"))
+                putNullable("cardTail", cursor.string("card_tail"))
                 put("createdAt", cursor.long("created_at"))
                 put("updatedAt", cursor.long("updated_at"))
             }
@@ -1039,6 +1040,7 @@ internal class BackupManager(
                 putNullableString("color", optionalString(row, "color"))
                 put("sort_order", requiredInt(row, "sortOrder"))
                 put("is_active", requiredBooleanInt(row, "isActive"))
+                putNullableString("card_tail", optionalString(row, "cardTail"))
                 put("created_at", requiredLong(row, "createdAt"))
                 put("updated_at", requiredLong(row, "updatedAt"))
             })

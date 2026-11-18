@@ -16,11 +16,17 @@ import org.junit.Test
  */
 class AccountResolvePriorityTest {
 
-    /** 构造启用账户。 */
-    private fun account(id: String, name: String, active: Boolean = true) = AccountEntity(
+    /** 构造启用账户（银行名/尾号匹配只作用于银行卡类型）。 */
+    private fun account(
+        id: String,
+        name: String,
+        active: Boolean = true,
+        subtype: String = "bank_debit",
+        cardTail: String? = null
+    ) = AccountEntity(
         id = id,
         name = name,
-        subtype = "savings",
+        subtype = subtype,
         kind = "asset",
         initialBalanceMinor = 0L,
         currentBalanceMinor = 0L,
@@ -30,7 +36,8 @@ class AccountResolvePriorityTest {
         sortOrder = 0,
         isActive = active,
         createdAt = 0L,
-        updatedAt = 0L
+        updatedAt = 0L,
+        cardTail = cardTail
     )
 
     /** 用例 4：银行名唯一命中 → Resolved 到对应账户。 */
@@ -64,7 +71,10 @@ class AccountResolvePriorityTest {
         )
         val resolution = AccountInference.inferSignalThenFallback("com.tencent.mm", null, accounts)
         assertEquals(
-            AccountResolution.Resolved("default-account-wechat"),
+            AccountResolution.Resolved(
+                "default-account-wechat",
+                AccountInference.Rank.WALLET
+            ),
             resolution
         )
     }
@@ -74,7 +84,10 @@ class AccountResolvePriorityTest {
     fun nothingMatchesFallsBackToCash() {
         val accounts = listOf(account("default-account-cash", "现金"))
         val resolution = AccountInference.inferSignalThenFallback("com.unionpay", null, accounts)
-        assertEquals(AccountResolution.Resolved("default-account-cash"), resolution)
+        assertEquals(AccountResolution.Resolved(
+                "default-account-cash",
+                AccountInference.Rank.CASH
+            ), resolution)
     }
 
     /** 信号层优先于包名映射：短信命中时不得落包名/现金。 */
@@ -85,7 +98,10 @@ class AccountResolvePriorityTest {
             account("default-account-cash", "现金")
         )
         val resolution = AccountInference.inferSignalThenFallback("com.android.mms", "招商银行", accounts)
-        assertEquals(AccountResolution.Resolved("cmb"), resolution)
+        assertEquals(
+            AccountResolution.Resolved("cmb", AccountInference.Rank.BANK),
+            resolution
+        )
     }
 
     /** NeedsReview 短路：多命中不得继续落到包名/现金（不猜测）。 */
@@ -107,5 +123,27 @@ class AccountResolvePriorityTest {
     fun inactiveAccountsNeverMatch() {
         val accounts = listOf(account("cmb", "招商银行储蓄卡", active = false))
         assertEquals(AccountResolution.Unresolved, AccountInference.inferFromSignal("招商银行", accounts))
+    }
+
+    /** 尾号不是跨行唯一键：银行名不同时不得命中别家银行的卡。 */
+    @Test
+    fun tailMustMatchSameBank() {
+        val accounts = listOf(
+            account("cmb", "招商银行2510", cardTail = "2510"),
+            account("default-account-cash", "现金", subtype = "cash")
+        )
+        val resolution = AccountInference.resolveByHints(
+            sourcePackage = "com.android.mms",
+            hints = listOf("工商银行 尾号2510"),
+            accounts = accounts
+        )
+        assertEquals(
+            "跨行尾号不得命中招商账户，应退回现金",
+            AccountResolution.Resolved(
+                "default-account-cash",
+                AccountInference.Rank.CASH
+            ),
+            resolution
+        )
     }
 }

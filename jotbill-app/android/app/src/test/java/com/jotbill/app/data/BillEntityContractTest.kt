@@ -44,10 +44,12 @@ class BillEntityContractTest {
 
     @Test
     fun databaseMigrationChainCoversPhase6Step() {
-        assertEquals(12, JOT_BILL_DATABASE_VERSION)
+        assertEquals(13, JOT_BILL_DATABASE_VERSION)
         assertTrue(DatabaseMigrations.all.any { it.startVersion == 9 && it.endVersion == 10 })
         assertTrue(DatabaseMigrations.all.any { it.startVersion == 10 && it.endVersion == 11 })
         // 批 6 子分类:categories.parent_id 轻量迁移
         assertTrue(DatabaseMigrations.all.any { it.startVersion == 11 && it.endVersion == 12 })
+        // 2026-11-17:accounts.card_tail 卡尾号匹配
+        assertTrue(DatabaseMigrations.all.any { it.startVersion == 12 && it.endVersion == 13 })
     }
 }

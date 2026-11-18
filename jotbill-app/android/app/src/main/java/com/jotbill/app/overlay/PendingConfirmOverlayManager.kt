@@ -349,6 +349,10 @@ internal object PendingConfirmOverlayManager {
     /** 当前展示的是否为「已入账编辑卡」（2026-11-16）：账单已存在，不补发"还没记上"通知。 */
     private var displayedIsEditCard = false
 
+    /** 用户在弹窗里是否实际点选过账户/分类（编辑卡只锁真正改过的字段）。 */
+    private var displayedAccountTouched = false
+    private var displayedCategoryTouched = false
+
     private data class AutoDismissInfo(
         val amountMinor: Long,
         val type: String,
@@ -1195,6 +1199,8 @@ internal object PendingConfirmOverlayManager {
             // 确认语义是"保存账户/分类修改"，不是新建账单。
             val isEditCard = com.jotbill.app.pending.EditCardMarker.isEditCard(pendingRow.appliedRules)
             displayedIsEditCard = isEditCard
+            displayedAccountTouched = false
+            displayedCategoryTouched = false
             if (isEditCard) {
                 amountInput.isEnabled = false
             }
@@ -1408,7 +1414,9 @@ internal object PendingConfirmOverlayManager {
                         merchant = pendingRow.merchant,
                         categoryId = category.id,
                         accountId = account.id,
-                        description = remark
+                        description = remark,
+                        accountTouched = displayedAccountTouched,
+                        categoryTouched = displayedCategoryTouched
                     )
                 )
             } catch (error: CancellationException) {
@@ -1695,6 +1703,7 @@ internal object PendingConfirmOverlayManager {
                         }
                         gravity = Gravity.CENTER
                         setOnClickListener {
+                            displayedAccountTouched = true
                             selectAccount(this, account)
                         }
                         // 图标放最后：此时文字色已定；品牌图标内部保持品牌色不着色
@@ -1746,6 +1755,7 @@ internal object PendingConfirmOverlayManager {
             }
             gravity = Gravity.CENTER
             setOnClickListener {
+                displayedCategoryTouched = true
                 selectCategory(this, category)
             }
             // 图标放最后：此时文字色已定，lucide 按文字色着色
@@ -1959,6 +1969,8 @@ internal object PendingConfirmOverlayManager {
             displayedPendingId = null
             displayedAutoDismissInfo = null
             displayedIsEditCard = false
+            displayedAccountTouched = false
+            displayedCategoryTouched = false
             isConfirming = false
             waitingCandidate = null
             candidateExpiryRunnable?.let(mainHandler::removeCallbacks)

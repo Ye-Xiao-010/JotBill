@@ -39,7 +39,10 @@ internal class PendingConfirmService(private val database: JotBillDatabase) {
         val description: String? = null,
         val occurredAt: Long? = null,
         /** 退款/手续费手动关联的原交易 ID；不传时绑定待确认来源会话。 */
-        val originalTransactionId: String? = null
+        val originalTransactionId: String? = null,
+        /** 编辑卡专用：用户在弹窗里是否实际点选过账户/分类（未点选不覆盖账单最新值）。 */
+        val accountTouched: Boolean = false,
+        val categoryTouched: Boolean = false
     )
 
     sealed class Outcome {
@@ -186,19 +189,43 @@ internal class PendingConfirmService(private val database: JotBillDatabase) {
         overrides: Overrides
     ): Outcome {
         val bill = database.billDao().getById(billId) ?: return Outcome.AlreadyHandled
-        val accountId = overrides.accountId ?: bill.accountId
-        val categoryId = overrides.categoryId ?: bill.categoryId
-        val merchant = overrides.merchant ?: bill.merchant
+        // 未点选过的字段以**账单最新值**为准：弹窗打开后账单可能已被短信升级，
+        // 用户只点"保存修改"不得用卡片旧快照把升级回滚。商户弹窗不可编辑，恒取账单值。
+        val accountId = if (overrides.accountTouched) {
+            overrides.accountId ?: bill.accountId
+        } else {
+            bill.accountId
+        }
+        val categoryId = if (overrides.categoryTouched) {
+            overrides.categoryId ?: bill.categoryId
+        } else {
+            bill.categoryId
+        }
+        val merchant = bill.merchant
         val changed = accountId != bill.accountId ||
-            categoryId != bill.categoryId ||
-            merchant != bill.merchant
-        val updatedBill = bill.copy(
+            categoryId != bill.categoryId
+        val baseUpdated = bill.copy(
             accountId = accountId,
             categoryId = categoryId,
             merchant = merchant,
             version = bill.version + 1,
             updatedAt = System.currentTimeMillis()
         )
+        // A-1 同口径：用户手改的字段并入 fieldLocks —— 否则后续短信/通知的
+        // EVIDENCE 级账户升级会把用户在弹窗里选定的账户覆盖回去。
+        val autoLockedFields = FieldPriorityResolver.LOCKABLE_FIELDS.filter { field ->
+            FieldPriorityResolver.billFieldValue(baseUpdated, field) !=
+                FieldPriorityResolver.billFieldValue(bill, field)
+        }
+        val updatedBill = if (autoLockedFields.isEmpty()) {
+            baseUpdated
+        } else {
+            baseUpdated.copy(
+                fieldLocks = FieldPriorityResolver.serializeLocks(
+                    FieldPriorityResolver.parseLocks(bill.fieldLocks) + autoLockedFields
+                )
+            )
+        }
         val applied = if (!changed) {
             true
         } else {

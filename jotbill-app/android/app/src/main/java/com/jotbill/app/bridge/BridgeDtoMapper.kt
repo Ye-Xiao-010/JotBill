@@ -87,6 +87,7 @@ internal object BridgeDtoMapper {
         putOptional("color", entity.color)
         put("sortOrder", entity.sortOrder)
         put("isActive", entity.isActive)
+        putOptional("cardTail", entity.cardTail)
         put("createdAt", formatTimestamp(entity.createdAt))
         put("updatedAt", formatTimestamp(entity.updatedAt))
     }
