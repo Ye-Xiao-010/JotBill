@@ -29,26 +29,18 @@ function AppContent() {
     markBundleLoaded();
   }, []);
 
-  // 监听账单创建成功事件（悬浮窗确认入账后由 DataModule 发出）。
-  //
-  // ⚠️ 2026-10-24 修正：此前监听的是 PaymentNotificationModule，而事件实际从
-  // DataModule 的 sharedJsEventEmitter 发出（PendingConfirmOverlayManager.emitJsEvents
-  // → DataModule），模块不匹配 ⇒ 监听器注册了但永远收不到 —— 这正是
-  // “悬浮窗确认后 RN 缓存不刷新、用户以为没记上再记一遍”的根因。
-  // （PaymentNotificationModule:295 的注释也确认了事件已迁移到 sharedJsEventEmitter。）
+  // 自动补全可以同时更换账单账户并迁移余额，详情和账户缓存都要失效。
   useEffect(() => {
     const rawDataModule = NativeModules.Data;
     if (!rawDataModule) {
       console.warn('[App] Data module 不可用，账单创建事件无法订阅');
       return;
     }
-    const subscription = new NativeEventEmitter(rawDataModule).addListener(
-      'onBillCreated',
-      () => {
-        invalidateCache.bills();
-      },
+    const emitter = new NativeEventEmitter(rawDataModule);
+    const subscriptions = ['onBillCreated', 'onBillUpdated'].map(event =>
+      emitter.addListener(event, () => invalidateCache.bills()),
     );
-    return () => subscription.remove();
+    return () => subscriptions.forEach(subscription => subscription.remove());
   }, []);
 
   // 待确认创建/更新事件:失效识别链路缓存,保证待确认中心及时刷新

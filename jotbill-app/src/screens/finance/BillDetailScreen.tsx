@@ -12,13 +12,15 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { useFocusEffect, useNavigation, useRoute } from '@react-navigation/native';
+import { skipToken, useQuery } from '@tanstack/react-query';
 import { ThemeColors } from '../../theme/colors';
 import { borderRadius, borderWidth, spacing, shadow } from '../../theme/spacing';
-import { nativeData, type Bill, type Category } from '../../native';
-import { invalidateCache } from '../../lib/queryClient';
+import { nativeData } from '../../native';
+import { invalidateCache, QUERY_KEYS } from '../../lib/queryClient';
 import { formatPlatform } from '../../utils/platform';
 import { formatCurrency } from '../../utils/format';
 import { useStyles } from '../../hooks';
+import AccountIcon from '../../components/business/AccountIcon';
 import CategoryIcon from '../../components/business/CategoryIcon';
 import QueryErrorBanner from '../../components/ui/QueryErrorBanner';
 import { useAlert } from '../../providers';
@@ -32,33 +34,24 @@ export default function BillDetailScreen() {
   const styles = useStyles(createStyles);
   const { alert, confirm } = useAlert();
 
-  const [bill, setBill] = useState<Bill | null>(null);
-  const [category, setCategory] = useState<Category | null>(null);
-  const [loading, setLoading] = useState(true);
   const [deleting, setDeleting] = useState(false);
-  /** 加载失败信息；非空时渲染失败态而非"账单不存在" */
-  const [loadError, setLoadError] = useState<string | null>(null);
-
-  const fetchBill = useCallback(async () => {
-    try {
-      setLoading(true);
-      const loadedBill = await nativeData.getBillById(billId);
-      setBill(loadedBill);
-
-      const categoryType = loadedBill.type === 'income' || loadedBill.type === 'refund'
-        ? 'income'
-        : 'expense';
-      const categories = await nativeData.getCategories(categoryType);
-      setCategory(categories.find(item => item.id === loadedBill.categoryId) || null);
-      setLoadError(null);
-    } catch (error) {
-      console.error('Failed to fetch bill:', error);
-      setLoadError(error instanceof Error ? error.message : '获取账单详情失败');
-      alert('错误', '获取账单详情失败');
-    } finally {
-      setLoading(false);
-    }
-  }, [billId, alert]);
+  const { data: bill, isLoading: loading, error: loadError, refetch: fetchBill } = useQuery({
+    queryKey: QUERY_KEYS.bills.detail(billId),
+    queryFn: () => nativeData.getBillById(billId),
+  });
+  const categoryType = bill?.type === 'income' || bill?.type === 'refund' ? 'income' : 'expense';
+  const { data: categories } = useQuery({
+    queryKey: QUERY_KEYS.categories.byType(categoryType),
+    queryFn: () => nativeData.getCategories(categoryType),
+    enabled: Boolean(bill),
+  });
+  const accountId = bill?.accountId;
+  const accountQuery = useQuery({
+    queryKey: ['accounts', 'detail', accountId],
+    queryFn: accountId ? () => nativeData.getAccountById(accountId) : skipToken,
+  });
+  const category = categories?.find(item => item.id === bill?.categoryId);
+  const account = accountQuery.data;
 
   useFocusEffect(
     useCallback(() => {
@@ -128,7 +121,7 @@ export default function BillDetailScreen() {
             error={loadError}
             title="账单详情加载失败"
             hint="这不代表这条账单不存在"
-            onRetry={fetchBill}
+            onRetry={() => { void fetchBill(); }}
             style={styles.errorBanner}
           />
         </View>
@@ -157,6 +150,14 @@ export default function BillDetailScreen() {
               ? '收入'
               : '支出';
   const amountColor = isPositive ? styles._colors.income : styles._colors.expense;
+  const accountLabel = bill.type === 'refund'
+    ? '退款到账账户'
+    : bill.type === 'expense' || bill.type === 'fee'
+      ? '扣款账户'
+      : bill.type === 'income' ? '到账账户' : '账户';
+  const accountName = account?.name ?? (bill.accountId
+    ? accountQuery.isFetching ? '正在读取' : '账户未能读取'
+    : '未关联账户');
 
   return (
     <View style={styles.container}>
@@ -193,6 +194,14 @@ export default function BillDetailScreen() {
           <View style={styles.detailRow}>
             <Text style={styles.detailLabel}>时间</Text>
             <Text style={styles.detailValueCourier}>{`${formatDate(bill.occurredAt)} ${formatTime(bill.occurredAt)}`}</Text>
+          </View>
+          <View style={styles.divider} />
+          <View style={styles.detailRow}>
+            <Text style={styles.detailLabel}>{accountLabel}</Text>
+            <View style={styles.accountValueContainer}>
+              {account && <AccountIcon icon={account.icon} name={account.name} subtype={account.subtype} size={16} />}
+              <Text style={[styles.detailValue, styles.accountName]}>{accountName}</Text>
+            </View>
           </View>
           {bill.platform && (
             <>
@@ -341,6 +350,17 @@ const createStyles = (colors: ThemeColors) => ({
       flexDirection: 'row',
       alignItems: 'center',
       gap: spacing.xs,
+    },
+    accountValueContainer: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: spacing.xs,
+      marginLeft: spacing.sm,
+      flexShrink: 1,
+    },
+    accountName: {
+      flexShrink: 1,
+      textAlign: 'right',
     },
     detailIcon: {
       fontSize: 16,

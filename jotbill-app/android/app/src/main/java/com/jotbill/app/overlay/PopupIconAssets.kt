@@ -4,7 +4,7 @@ import android.content.Context
 import android.widget.TextView
 import androidx.core.content.ContextCompat
 import com.jotbill.app.R
-import org.json.JSONArray
+import com.jotbill.app.bookkeeping.AccountInference
 
 /**
  * 弹窗 chips 的图标资产映射（2026-10-25，用户裁定：分类/账户接入 lucide 与品牌图标）。
@@ -87,39 +87,6 @@ internal object PopupIconAssets {
         "njcb" to R.drawable.ic_bank_njcb
     )
 
-    /**
-     * 银行名称/别名 → code 索引（从 assets/banks.json 懒加载，最长别名优先）。
-     *
-     * 不再硬编码：与 RN 侧 `constants/accountIcons.ts` 共用同一份 JSON 作
-     * 单一事实源，避免「RN 能匹配、原生匹配不到」的漂移
-     * （`BankIconAssetsTest` 锁定两侧对每个 code/别名都能解析出图标）。
-     */
-    @Volatile
-    private var bankAliasCache: List<Pair<String, String>>? = null
-
-    private fun bankAliases(context: Context): List<Pair<String, String>> {
-        bankAliasCache?.let { return it }
-        val parsed = runCatching {
-            val json = context.assets.open("banks.json").bufferedReader().use { it.readText() }
-            val array = JSONArray(json)
-            buildList {
-                for (i in 0 until array.length()) {
-                    val bank = array.getJSONObject(i)
-                    val code = bank.getString("code")
-                    add(bank.getString("name") to code)
-                    bank.optString("shortName").takeIf { it.isNotBlank() }?.let { add(it to code) }
-                    val aliases = bank.optJSONArray("aliases") ?: continue
-                    for (j in 0 until aliases.length()) add(aliases.getString(j) to code)
-                }
-            }.sortedByDescending { it.first.length }
-        }.getOrElse {
-            android.util.Log.w("PopupIconAssets", "读取 banks.json 失败，银行图标按显式指定生效", it)
-            emptyList()
-        }
-        bankAliasCache = parsed
-        return parsed
-    }
-
     private val brandIconsById = mapOf(
         "default-account-wechat" to R.drawable.ic_brand_wechat,
         "default-account-alipay" to R.drawable.ic_brand_alipay
@@ -168,7 +135,7 @@ internal object PopupIconAssets {
         if (!name.isNullOrBlank()) {
             brandIconsByName.entries.firstOrNull { name.contains(it.key) }?.let { return it.value }
             // 3. 银行名别名（最长优先）
-            val bankCode = bankAliases(context).firstOrNull { name.contains(it.first) }?.second
+            val bankCode = AccountInference.bankCode(context, name)
             if (bankCode != null) bankIconsByCode[bankCode]?.let { return it }
         }
         // 4. subtype 线性兜底

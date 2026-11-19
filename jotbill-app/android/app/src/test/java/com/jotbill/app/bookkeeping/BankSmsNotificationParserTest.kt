@@ -47,6 +47,7 @@ class BankSmsNotificationParserTest {
         assertEquals(2000106, record!!.ruleId)
         assertEquals("2", record.fields["detailType"])
         assertEquals(600L, AutoBookkeepingEngine.parseAmountMinor(record.fields["amount"]))
+        assertEquals(BankCardEvidence("邮储银行", "5607", "bank_debit"), record.bankCard)
     }
 
     @Test
@@ -93,6 +94,36 @@ class BankSmsNotificationParserTest {
         )
         assertNotNull("退货短信必须判为退款", refund)
         assertEquals(3990L, refund!!.amountMinor)
+        assertEquals(BankCardEvidence("邮储银行", "5607", "bank_debit"), refund.bankCard)
+    }
+
+    @Test
+    fun 退款短信不把对方尾号当作本人尾号() {
+        val refund = BankSmsNotificationParser.parseRefund(
+            "【邮储银行】退款金额39.90元，对方账号尾号5607。",
+            occurredAt = 1_000_000L
+        )
+        assertNotNull(refund)
+        assertNull(refund!!.bankCard)
+        assertEquals("邮储银行", refund.receivingAccountHint)
+    }
+
+    @Test
+    fun 信用卡退款识别为信用卡() {
+        val refund = BankSmsNotificationParser.parseRefund(
+            "【招商银行】您的信用卡尾号0176退款金额39.90元，可用额度2000元。",
+            occurredAt = 1_000_000L
+        )
+        assertEquals(BankCardEvidence("招商银行", "0176", "credit_card"), refund?.bankCard)
+    }
+
+    @Test
+    fun 未知卡类型不猜为借记卡() {
+        val refund = BankSmsNotificationParser.parseRefund(
+            "【招商银行】您尾号0176的卡退款金额39.90元。",
+            occurredAt = 1_000_000L
+        )
+        assertEquals(BankCardEvidence("招商银行", "0176", null), refund?.bankCard)
     }
 
     /** 无退款词的「收入金额」入账不得误判（工资/利息等普通收入）。 */

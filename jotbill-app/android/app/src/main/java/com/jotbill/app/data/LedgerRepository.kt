@@ -1,6 +1,7 @@
 package com.jotbill.app.data
 
 import androidx.room.withTransaction
+import com.jotbill.app.data.entity.AccountEntity
 import com.jotbill.app.data.entity.AuditEntryEntity
 import com.jotbill.app.data.entity.BalanceCalibrationEntity
 import com.jotbill.app.data.entity.BillEntity
@@ -108,7 +109,8 @@ class LedgerRepository(private val database: JotBillDatabase) {
      */
     suspend fun createBillWithDedup(
         bill: BillEntity,
-        operator: String = "system"
+        operator: String = "system",
+        newAccount: AccountEntity? = null
     ): CreateBillOutcome {
         validateSafeAmount(bill.amountMinor)
         // 阶段五 T5：锁定字段名必须在合并器可锁字段清单内，防止脏数据落库
@@ -147,6 +149,10 @@ class LedgerRepository(private val database: JotBillDatabase) {
                 DuplicateGuard.Level1Check.Clear -> Unit
             }
 
+            if (newAccount != null) {
+                require(newAccount.id == bill.accountId)
+                database.accountDao().insert(newAccount)
+            }
             validateBillAccounts(bill, requireActiveAccounts = true)
             database.billDao().insert(bill)
             applyBalanceDelta(

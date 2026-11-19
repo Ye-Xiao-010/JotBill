@@ -768,7 +768,7 @@ class PaymentNotificationService : NotificationListenerService() {
     private suspend fun handleRefundEvidence(input: PaymentEvidenceInput) {
         try {
             val database = JotBillDatabaseProvider.get(applicationContext)
-            val outcome = RefundLinker(database).processRefund(input)
+            val outcome = RefundLinker(database, appContext = applicationContext).processRefund(input)
             val outcomeInfo = mapOf(
                 "package" to input.sourcePackage,
                 "outcome" to outcome.javaClass.simpleName

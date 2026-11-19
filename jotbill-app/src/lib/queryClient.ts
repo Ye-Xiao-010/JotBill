@@ -43,7 +43,7 @@ export const QUERY_KEYS = {
   bills: {
     all: ['bills'] as const,
     list: (params: Record<string, any>) => ['bills', 'list', params] as const,
-    detail: (id: number) => ['bills', 'detail', id] as const,
+    detail: (id: string) => ['bills', 'detail', id] as const,
   },
 
   // 分类相关

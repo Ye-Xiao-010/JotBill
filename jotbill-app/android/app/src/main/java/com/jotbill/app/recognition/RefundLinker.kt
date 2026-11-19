@@ -50,6 +50,7 @@ private const val DEFAULT_REFUND_CATEGORY_ID = "default-category-income-refund"
  */
 internal class RefundLinker(
     private val database: JotBillDatabase,
+    private val appContext: android.content.Context? = null,
     private val nowMillis: () -> Long = { System.currentTimeMillis() }
 ) {
     private val ruleEngine = RuleEngine(database)
@@ -198,7 +199,7 @@ internal class RefundLinker(
 
         // ---- 首笔信号直接入账（2026-11-16 模型调整）----
         val outcome = try {
-            SignalBillWriter(null, database).recordRefund(
+            SignalBillWriter(appContext, database).recordRefund(
                 SignalBillWriter.RefundSignal(
                     amountMinor = input.amountMinor,
                     occurredAt = input.occurredAt,
@@ -206,8 +207,9 @@ internal class RefundLinker(
                     orderId = input.orderId,
                     platform = original?.platform ?: input.sourcePackage,
                     sourcePackage = input.sourcePackage,
-                    sourceType = "notification",
+                    sourceType = if (input.sourcePackage == "com.android.mms") "sms" else "notification",
                     receivingHints = listOf(input.receivingAccountHint),
+                    bankCard = input.bankCard,
                     originalBillId = original?.id,
                     ruleAccountId = rulePatch.accountId,
                     categoryId = rulePatch.categoryId,

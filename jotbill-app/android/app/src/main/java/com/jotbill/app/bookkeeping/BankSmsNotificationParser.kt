@@ -68,9 +68,36 @@ internal object BankSmsNotificationParser {
     /** 商户前缀：「(拼多多-实物消费-拼多多平台商户)」→ 拼多多。 */
     private val MERCHANT_PREFIX_PATTERN = Regex("""[（(]([^)）\-]{2,20})-""")
 
-    /** 银行名（【四川农商银行】）与卡尾号，用于退款接收账户提取。 */
-    private val BANK_NAME_BRACKET_PATTERN = Regex("""【([^】]{2,20}银行)】""")
-    private val CARD_TAIL_PATTERN = Regex("""尾号\s*(\d{4})""")
+    private val BANK_NAME_BRACKET_PATTERN = Regex("""[【\[]([\p{IsHan}]{2,20}银行)[】\]]""")
+    private val OWN_CARD_PATTERN = Regex(
+        """您(?:的)?\s*(?:(信用卡|借记卡|储蓄卡|银行卡|账户|卡)\s*)?(?:尾号(?:为)?|卡号)\s*([0-9]{4,19})(?![0-9])(?:\s*(?:的)?\s*(信用卡|借记卡|储蓄卡|银行卡|账户|卡))?"""
+    )
+    private val POSTAL_DEPOSIT_PATTERN = Regex(
+        """您(?:的)?\s*尾号\s*[0-9]{4}(?:的)?账户\s*(?:快捷支付|退货|退款).*?[，,；;。]\s*余额\s*[0-9]"""
+    )
+    private val POSTAL_BANK_NAMES = setOf("邮储银行", "中国邮政储蓄银行", "邮政储蓄银行")
+    private val CREDIT_TERMS = Regex("信用卡|可用额度|应还|信用额度")
+
+    private fun extractBankCard(content: String): BankCardEvidence? {
+        val bankName = BANK_NAME_BRACKET_PATTERN.findAll(content)
+            .map { it.groupValues[1] }.distinct().toList().singleOrNull() ?: return null
+        val cards = OWN_CARD_PATTERN.findAll(content).toList()
+        val tail = cards.map { it.groupValues[2].takeLast(4) }.distinct().singleOrNull() ?: return null
+        val types = cards.flatMap { listOf(it.groupValues[1], it.groupValues[3]) }.mapNotNull {
+            when (it) {
+                "信用卡" -> "credit_card"
+                "借记卡", "储蓄卡" -> "bank_debit"
+                else -> null
+            }
+        }.distinct()
+        val subtype = when {
+            types.size == 1 -> types.single()
+            types.isEmpty() && bankName in POSTAL_BANK_NAMES &&
+                !CREDIT_TERMS.containsMatchIn(content) && POSTAL_DEPOSIT_PATTERN.containsMatchIn(content) -> "bank_debit"
+            else -> null
+        }
+        return BankCardEvidence(bankName, tail, subtype)
+    }
 
     private const val TIME_BUCKET_MILLIS = 15_000L
 
@@ -106,7 +133,8 @@ internal object BankSmsNotificationParser {
                 sourceEventKey = sha256(
                     "bank-sms-expense|$PACKAGE|${extractTime / TIME_BUCKET_MILLIS}|" +
                         "$amountMinor|${content.hashCode()}"
-                )
+                ),
+                bankCard = extractBankCard(content)
             )
         }
         return null
@@ -144,11 +172,9 @@ internal object BankSmsNotificationParser {
         if (amountMinor <= 0L) return null
         val merchant = MERCHANT_PREFIX_PATTERN.find(content)?.groupValues?.get(1) ?: parenMerchant
         val textHash = sha256(content)
-        // 退款去向提示：银行名 + 卡尾号（「先提取，再兜底」——能匹配到本地账户就升级）。
-        val receivingHint = listOfNotNull(
-            BANK_NAME_BRACKET_PATTERN.find(content)?.groupValues?.get(1),
-            CARD_TAIL_PATTERN.find(content)?.groupValues?.get(1)?.let { "尾号$it" }
-        ).joinToString(" ").takeIf { it.isNotEmpty() }
+        val bankCard = extractBankCard(content)
+        val receivingHint = bankCard?.let { "${it.bankName} 尾号${it.tail}" }
+            ?: BANK_NAME_BRACKET_PATTERN.find(content)?.groupValues?.get(1)
         return PaymentEvidenceInput(
             sourcePackage = PACKAGE,
             amountMinor = amountMinor,
@@ -162,7 +188,8 @@ internal object BankSmsNotificationParser {
                 "bank-sms-refund|$PACKAGE|${occurredAt / TIME_BUCKET_MILLIS}|$amountMinor"
             ),
             rawTextHash = textHash,
-            receivingAccountHint = receivingHint
+            receivingAccountHint = receivingHint,
+            bankCard = bankCard
         )
     }
 

@@ -7,7 +7,10 @@ import com.jotbill.app.data.JotBillDatabase
 import com.jotbill.app.data.entity.AccountEntity
 import com.jotbill.app.pending.EditCardMarker
 import com.jotbill.app.pending.PendingConfirmService
+import com.jotbill.app.recognition.RefundLinker
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.runBlocking
@@ -481,6 +484,122 @@ class SignalBillWriterTest {
             (resolution as AccountResolution.Resolved).accountId
         )
         assertEquals("短信账户等级最高", AccountInference.Rank.BANK, resolution.rank)
+    }
+
+    private fun postalSms(amount: String, timestamp: Long = System.currentTimeMillis()) =
+        checkNotNull(BankSmsNotificationParser.parseExpense(
+            PageRuleRegistry.get(context),
+            "【邮储银行】您尾号0176账户快捷支付-支付宝，支出金额${amount}元，余额10.00元",
+            timestamp
+        ))
+
+    @Test
+    fun 支付宝先入账邮储短信补全并复用新卡() = runBlocking {
+        val alipay = AccountInference.ALIPAY_ACCOUNT_ID
+        database.accountDao().insert(database.accountDao().getById("default-account-wechat")!!.copy(
+            id = alipay,
+            name = "支付宝"
+        ))
+        val writer = SignalBillWriter(context, database)
+        val first = writer.recordPayment(payment(600, source = AccountInference.ALIPAY_PACKAGE)) as SignalBillWriter.Outcome.Created
+        assertEquals(alipay, database.billDao().getById(first.billId)?.accountId)
+        val sms = postalSms("6.00")
+        val bookkeeper = AutoBookkeeper(context, this, database)
+        repeat(2) {
+            assertTrue(bookkeeper.onRecordReady(sms))
+            coroutineContext[Job]!!.children.toList().joinAll()
+        }
+        val bank = database.accountDao().getAll().single { it.cardTail == "0176" }
+        assertEquals("bank:psbc", bank.icon)
+        assertEquals("bank_debit", bank.subtype)
+        assertEquals(-600L, bank.currentBalanceMinor)
+        assertEquals(0L, database.accountDao().getById(alipay)?.currentBalanceMinor)
+        val onlyBill = database.billDao().getAllForExport().single()
+        assertEquals(first.billId, onlyBill.id)
+        assertEquals(AccountInference.ALIPAY_PACKAGE, onlyBill.platform)
+        assertEquals(bank.id, onlyBill.accountId)
+        assertEquals(bank.id, database.pendingTransactionDao().getById(SignalBillWriter.editCardId(onlyBill.id))?.accountId)
+
+        assertTrue(bookkeeper.onRecordReady(postalSms("7.00")))
+        coroutineContext[Job]!!.children.toList().joinAll()
+        assertEquals(1, database.accountDao().getAll().count { it.cardTail == "0176" })
+        assertEquals(-1300L, database.accountDao().getById(bank.id)?.currentBalanceMinor)
+    }
+
+    @Test
+    fun 兼容已存在的邮储别名同尾号账户且不重复建卡() = runBlocking {
+        val existing = database.accountDao().getById("acc-rcc")!!.copy(
+            id = "my-postal-card",
+            name = "我的工资卡",
+            icon = "bank:psbc",
+            cardTail = "0176"
+        )
+        database.accountDao().insert(existing)
+        assertTrue(AutoBookkeeper(context, this, database).onRecordReady(postalSms("6.00")))
+        coroutineContext[Job]!!.children.toList().joinAll()
+        assertEquals(existing.id, database.billDao().getAllForExport().single().accountId)
+        assertEquals(1, database.accountDao().getAll().count { it.cardTail == "0176" })
+    }
+
+    @Test
+    fun 邮储退款短信补全已有退款并创建到账卡() = runBlocking {
+        val writer = SignalBillWriter(context, database)
+        val first = writer.recordRefund(refund(600)) as SignalBillWriter.Outcome.Created
+        val sms = checkNotNull(BankSmsNotificationParser.parseRefund(
+            "【邮储银行】您尾号0176账户退货，收入金额6.00元，余额10.00元。",
+            System.currentTimeMillis()
+        ))
+        val outcome = RefundLinker(database, appContext = context).processRefund(sms)
+        assertEquals(RefundLinker.RefundOutcome.Enriched(first.billId), outcome)
+        val saved = database.billDao().getAllForExport().single()
+        val bank = database.accountDao().getAll().single { it.cardTail == "0176" }
+        assertEquals(bank.id, saved.accountId)
+        assertEquals(600L, bank.currentBalanceMinor)
+        assertEquals(100_000L, database.accountDao().getById("default-account-cash")?.currentBalanceMinor)
+    }
+
+    @Test
+    fun 同一卡两笔短信并发只创建一个账户() = runBlocking {
+        val bookkeeper = AutoBookkeeper(context, this, database)
+        assertTrue(bookkeeper.onRecordReady(postalSms("6.00")))
+        assertTrue(bookkeeper.onRecordReady(postalSms("7.00")))
+        coroutineContext[Job]!!.children.toList().joinAll()
+        val bank = database.accountDao().getAll().single { it.cardTail == "0176" }
+        val bills = database.billDao().getAllForExport()
+        assertEquals(2, bills.size)
+        assertTrue(bills.all { it.accountId == bank.id })
+        assertEquals(-1300L, bank.currentBalanceMinor)
+    }
+
+    @Test
+    fun 超过补全窗口的同订单短信不会创建无账单账户() = runBlocking {
+        val writer = SignalBillWriter(context, database)
+        val first = writer.recordPayment(payment(600, orderId = "POSTAL-OLD-ORDER")) as SignalBillWriter.Outcome.Created
+        val bill = database.billDao().getById(first.billId)!!
+        database.billDao().delete(bill)
+        database.billDao().insert(bill.copy(createdAt = System.currentTimeMillis() - 61_000))
+        val result = writer.recordPayment(payment(
+            600, orderId = bill.orderId, source = "com.android.mms", sourceType = "sms"
+        ).copy(bankCard = BankCardEvidence("邮储银行", "0176", "bank_debit")))
+        assertEquals(SignalBillWriter.Outcome.Enriched(first.billId), result)
+        assertEquals(bill.accountId, database.billDao().getAllForExport().single().accountId)
+        assertTrue(database.accountDao().getAll().none { it.cardTail == "0176" })
+    }
+
+    @Test
+    fun 未知类型与锁定账单不会产生新账户() = runBlocking {
+        val writer = SignalBillWriter(context, database)
+        val result = writer.recordPayment(payment(500).copy(
+            bankCard = BankCardEvidence("邮储银行", "0176", null)
+        ))
+        assertTrue(result is SignalBillWriter.Outcome.Created)
+        assertEquals(3, database.accountDao().getAll().size)
+        val bill = database.billDao().getAllForExport().single()
+        database.billDao().insert(bill.copy(id = "locked", amountMinor = 600, fieldLocks = "[\"accountId\"]"))
+        assertTrue(AutoBookkeeper(context, this, database).onRecordReady(postalSms("6.00")))
+        coroutineContext[Job]!!.children.toList().joinAll()
+        assertEquals("default-account-cash", database.billDao().getById("locked")?.accountId)
+        assertEquals(3, database.accountDao().getAll().size)
     }
 
     @Test

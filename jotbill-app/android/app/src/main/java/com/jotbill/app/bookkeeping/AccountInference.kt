@@ -1,6 +1,10 @@
 package com.jotbill.app.bookkeeping
 
+import android.content.Context
 import com.jotbill.app.data.entity.AccountEntity
+import org.json.JSONArray
+
+data class BankCardEvidence(val bankName: String, val tail: String, val subtype: String?)
 
 /**
  * 账户推断结果（三态）：唯一命中 / 多候选需人工核对 / 无命中。
@@ -211,8 +215,30 @@ internal object AccountInference {
         else -> Rank.WALLET
     }
 
-    /** 可参与短信账户匹配的银行卡类型（贷款/钱包/其他账户不参与）。 */
-    private val BANK_CARD_SUBTYPES = setOf("bank_debit", "credit_card")
+    val BANK_CARD_SUBTYPES = setOf("bank_debit", "credit_card")
+
+    @Volatile
+    private var bankAliasCache: List<Pair<String, String>>? = null
+
+    fun bankCode(context: Context, name: String, exact: Boolean = false): String? {
+        val aliases = bankAliasCache ?: runCatching {
+            val json = context.assets.open("banks.json").bufferedReader().use { it.readText() }
+            val array = JSONArray(json)
+            buildList {
+                for (i in 0 until array.length()) {
+                    val bank = array.getJSONObject(i)
+                    val code = bank.getString("code")
+                    add(bank.getString("name") to code)
+                    bank.optString("shortName").takeIf { it.isNotBlank() }?.let { add(it to code) }
+                    val aliases = bank.optJSONArray("aliases") ?: continue
+                    for (j in 0 until aliases.length()) add(aliases.getString(j) to code)
+                }
+            }.sortedByDescending { it.first.length }.also { bankAliasCache = it }
+        }.getOrDefault(emptyList())
+        return aliases.firstOrNull { (alias, _) ->
+            if (exact) name.trim().equals(alias, ignoreCase = true) else name.contains(alias)
+        }?.second
+    }
 
     private val BANK_NAME_PATTERN = Regex("([\\u4e00-\\u9fa5]{2,10}银行)")
 

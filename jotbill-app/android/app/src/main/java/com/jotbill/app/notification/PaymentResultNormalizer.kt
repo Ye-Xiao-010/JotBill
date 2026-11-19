@@ -1,5 +1,6 @@
 package com.jotbill.app.notification
 
+import com.jotbill.app.bookkeeping.BankCardEvidence
 import com.jotbill.app.recognition.RecognitionPackages
 import com.jotbill.app.rules.OrderIdNormalizer
 import java.math.BigDecimal
@@ -28,7 +29,8 @@ data class PaymentEvidenceInput(
     /** 转账/还款目标账户提示文本（如"转到银行卡""还款至花呗"），由 TransferClassifier 匹配本地账户。 */
     val targetAccountHint: String? = null,
     /** 转账收款人姓名（如"转账给张三"）：命中即视为他人转账，不自动判定为自有账户转账。 */
-    val recipientName: String? = null
+    val recipientName: String? = null,
+    val bankCard: BankCardEvidence? = null
 )
 
 /**

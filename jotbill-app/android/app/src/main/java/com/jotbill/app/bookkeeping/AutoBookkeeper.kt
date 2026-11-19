@@ -136,7 +136,8 @@ class AutoBookkeeper(
                     sourceType = sourceType,
                     type = type,
                     accountHints = accountHints,
-                    sourceEventKey = sourceEventKey
+                    sourceEventKey = sourceEventKey,
+                    bankCard = record.bankCard
                 )
             )
         } catch (error: Exception) {
@@ -265,7 +266,7 @@ class AutoBookkeeper(
             receivingAccountHint = channel
         )
         val outcome = try {
-            RefundLinker(database).processRefund(evidence)
+            RefundLinker(database, appContext = context).processRefund(evidence)
         } catch (error: Exception) {
             if (error is kotlinx.coroutines.CancellationException) throw error
             JotBillLog.w(TAG, "页面退款证据处理失败", error)

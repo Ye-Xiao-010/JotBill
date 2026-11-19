@@ -2,6 +2,8 @@ package com.jotbill.app.bookkeeping
 
 import android.content.Context
 import androidx.room.withTransaction
+import com.jotbill.app.bridge.BridgeDtoMapper
+import com.jotbill.app.bridge.sharedJsEventEmitter
 import com.jotbill.app.data.CreateBillOutcome
 import com.jotbill.app.data.JotBillDatabase
 import com.jotbill.app.data.LedgerRepository
@@ -17,6 +19,7 @@ import com.jotbill.app.rules.FieldPriorityResolver
 import com.jotbill.app.rules.RuleEngine
 import com.jotbill.app.utils.JotBillLog
 import java.util.UUID
+import org.json.JSONObject
 
 /**
  * 统一信号入账器（2026-11-16 记账模型调整）。
@@ -63,7 +66,8 @@ class SignalBillWriter(
         val accountHints: List<String?> = emptyList(),
         /** 幂等键：同一条来源事件（通知/结果页/短信）只处理一次。 */
         val sourceEventKey: String? = null,
-        val createEditCard: Boolean = true
+        val createEditCard: Boolean = true,
+        val bankCard: BankCardEvidence? = null
     )
 
     /** 退款信号。 */
@@ -82,7 +86,8 @@ class SignalBillWriter(
         val ruleAccountId: String? = null,
         val categoryId: String? = null,
         /** 幂等键：同一条来源事件（通知/结果页/短信）只处理一次。 */
-        val sourceEventKey: String? = null
+        val sourceEventKey: String? = null,
+        val bankCard: BankCardEvidence? = null
     )
 
     sealed class Outcome {
@@ -113,7 +118,7 @@ class SignalBillWriter(
         val now = System.currentTimeMillis()
         val occurredAt = signal.occurredAt.takeIf { it > 0L } ?: now
         val tx = try {
-            commitPayment(signal, occurredAt, now)
+            commitPayment(signal, occurredAt)
         } catch (error: Exception) {
             if (error is kotlinx.coroutines.CancellationException) throw error
             if (error is OrderConflictException) {
@@ -129,6 +134,7 @@ class SignalBillWriter(
         }
         return when (tx) {
             is Tx.Created -> {
+                sharedJsEventEmitter?.emit("onBillCreated", BridgeDtoMapper.bill(tx.bill))
                 // post-commit 副作用不得让"已入账"变成异常（2026-11-17 复审）：
                 // 通知失败只记日志，调用方仍按成功处理，避免再落一张同额待确认。
                 runCatching {
@@ -151,7 +157,10 @@ class SignalBillWriter(
                 )
                 Outcome.Created(tx.bill.id)
             }
-            is Tx.Enriched -> Outcome.Enriched(tx.billId)
+            is Tx.Enriched -> {
+                sharedJsEventEmitter?.emit("onBillUpdated", JSONObject().put("id", tx.billId))
+                Outcome.Enriched(tx.billId)
+            }
             is Tx.Duplicate -> Outcome.Duplicate(tx.billId)
             is Tx.NeedsReview -> Outcome.NeedsReview(tx.reason)
             is Tx.Ignored -> Outcome.Ignored(tx.reason)
@@ -165,7 +174,7 @@ class SignalBillWriter(
         val now = System.currentTimeMillis()
         val occurredAt = signal.occurredAt.takeIf { it > 0L } ?: now
         val tx = try {
-            commitRefund(signal, occurredAt, now)
+            commitRefund(signal, occurredAt)
         } catch (error: Exception) {
             if (error is kotlinx.coroutines.CancellationException) throw error
             if (error is OrderConflictException) {
@@ -181,6 +190,7 @@ class SignalBillWriter(
         }
         return when (tx) {
             is Tx.Created -> {
+                sharedJsEventEmitter?.emit("onBillCreated", BridgeDtoMapper.bill(tx.bill))
                 JotBillLog.i(
                     TAG,
                     "退款首笔已入账: bill=${tx.bill.id.take(8)}, amount=${tx.bill.amountMinor}, " +
@@ -191,7 +201,10 @@ class SignalBillWriter(
                 absorbSameAmountPendingCards(tx.bill, "refund")
                 Outcome.Created(tx.bill.id)
             }
-            is Tx.Enriched -> Outcome.Enriched(tx.billId)
+            is Tx.Enriched -> {
+                sharedJsEventEmitter?.emit("onBillUpdated", JSONObject().put("id", tx.billId))
+                Outcome.Enriched(tx.billId)
+            }
             is Tx.Duplicate -> Outcome.Duplicate(tx.billId)
             is Tx.NeedsReview -> Outcome.NeedsReview(tx.reason)
             is Tx.Ignored -> Outcome.Ignored(tx.reason)
@@ -202,9 +215,9 @@ class SignalBillWriter(
 
     private suspend fun commitPayment(
         signal: PaymentSignal,
-        occurredAt: Long,
-        now: Long
+        occurredAt: Long
     ): Tx = database.withTransaction {
+        val now = System.currentTimeMillis()
         // 先做只读幂等预检（2026-11-17 复审）：已处理过的事件直接判重，不再重跑规则。
         // 否则用户事后新增 send_to_review 规则时，同一事件的重投会给已入账账单
         // 再生成一张复核卡。轻量查审计键，不写任何东西。
@@ -225,8 +238,8 @@ class SignalBillWriter(
             ?: return@withTransaction Tx.Duplicate(null)
         val patch = rule.patch
 
-        val accounts = activeAccounts()
-        val accountChoice = resolvePaymentAccount(signal, patch, accounts)
+        val accounts = database.accountDao().getAll()
+        val accountChoice = resolvePaymentAccount(signal, patch, accounts, now)
         val accountId = accountChoice?.accountId
         val merchant = patch.merchant ?: signal.merchant
         val orderId = signal.orderId?.takeIf { it.isNotBlank() }
@@ -245,9 +258,7 @@ class SignalBillWriter(
                 merchant = merchant,
                 orderId = orderId,
                 categoryId = patch.categoryId,
-                accountId = accountId,
-                incomingAccountRank = accountChoice?.rank ?: AccountInference.Rank.NONE,
-                lockAccount = accountChoice?.rank == AccountInference.Rank.RULE
+                accountChoice = accountChoice
             )
             JotBillLog.i(
                 TAG,
@@ -288,7 +299,7 @@ class SignalBillWriter(
             updatedAt = now,
             version = 1
         )
-        when (val outcome = ledger.createBillWithDedup(bill, operator = "signal_auto_book")) {
+        when (val outcome = ledger.createBillWithDedup(bill, operator = "signal_auto_book", newAccount = accountChoice?.newAccount)) {
             is CreateBillOutcome.Committed -> Tx.Created(outcome.bill)
             is CreateBillOutcome.MergedInto -> {
                 // level-1（订单号）命中既有账单：合并字段后按补全返回，绝不返回未落库 ID。
@@ -297,9 +308,9 @@ class SignalBillWriter(
                     merchant = merchant,
                     orderId = orderId,
                     categoryId = patch.categoryId,
-                    accountId = accountId,
-                    incomingAccountRank = accountChoice?.rank ?: AccountInference.Rank.NONE,
-                    lockAccount = accountChoice?.rank == AccountInference.Rank.RULE
+                    accountChoice = accountChoice.takeIf {
+                        outcome.bill.createdAt in (now - MERGE_WINDOW_MILLIS)..now
+                    }
                 )
                 JotBillLog.i(
                     TAG,
@@ -313,17 +324,17 @@ class SignalBillWriter(
 
     private suspend fun commitRefund(
         signal: RefundSignal,
-        occurredAt: Long,
-        now: Long
+        occurredAt: Long
     ): Tx = database.withTransaction {
+        val now = System.currentTimeMillis()
         claimEvent("refund", signal.sourceEventKey, now)
             ?: return@withTransaction Tx.Duplicate(null)
 
-        val accounts = activeAccounts()
+        val accounts = database.accountDao().getAll()
         val originalAccountId = signal.originalBillId?.let { id ->
-            database.billDao().getById(id)?.accountId?.takeIf { acc -> accounts.any { it.id == acc } }
+            database.billDao().getById(id)?.accountId
         }
-        val accountChoice = resolveRefundAccount(signal, accounts, originalAccountId)
+        val accountChoice = resolveRefundAccount(signal, accounts, originalAccountId, now)
         val accountId = accountChoice?.accountId
         val orderId = signal.orderId?.takeIf { it.isNotBlank() }
 
@@ -341,9 +352,7 @@ class SignalBillWriter(
                 merchant = signal.merchant,
                 orderId = orderId,
                 categoryId = null,
-                accountId = accountId,
-                incomingAccountRank = accountChoice?.rank ?: AccountInference.Rank.NONE,
-                lockAccount = signal.ruleAccountId != null,
+                accountChoice = accountChoice,
                 originalBillId = signal.originalBillId
             )
             JotBillLog.i(
@@ -370,7 +379,7 @@ class SignalBillWriter(
             sourceType = signal.sourceType,
             originalTransactionId = signal.originalBillId,
             orderId = orderId,
-            fieldLocks = if (signal.ruleAccountId != null) {
+            fieldLocks = if (accountChoice?.rank == AccountInference.Rank.RULE) {
                 FieldPriorityResolver.serializeLocks(setOf("accountId"))
             } else {
                 "[]"
@@ -379,7 +388,7 @@ class SignalBillWriter(
             updatedAt = now,
             version = 1
         )
-        when (val outcome = ledger.createBillWithDedup(bill, operator = "refund_signal")) {
+        when (val outcome = ledger.createBillWithDedup(bill, operator = "refund_signal", newAccount = accountChoice?.newAccount)) {
             is CreateBillOutcome.Committed -> Tx.Created(outcome.bill)
             is CreateBillOutcome.MergedInto -> {
                 enrichBill(
@@ -387,9 +396,9 @@ class SignalBillWriter(
                     merchant = signal.merchant,
                     orderId = orderId,
                     categoryId = signal.categoryId,
-                    accountId = accountId,
-                    incomingAccountRank = accountChoice?.rank ?: AccountInference.Rank.NONE,
-                    lockAccount = signal.ruleAccountId != null,
+                    accountChoice = accountChoice.takeIf {
+                        outcome.bill.createdAt in (now - MERGE_WINDOW_MILLIS)..now
+                    },
                     originalBillId = signal.originalBillId
                 )
                 Tx.Enriched(outcome.bill.id)
@@ -432,8 +441,6 @@ class SignalBillWriter(
     }
 
     // ── 内部 ─────────────────────────────────────────────────────────────
-
-    private suspend fun activeAccounts() = database.accountDao().getAll().filter { it.isActive }
 
     /**
      * 合并候选：同类型 + 同金额 + 60 秒窗 + **自动信号来源白名单**（SQL 端过滤）
@@ -525,57 +532,105 @@ class SignalBillWriter(
         return RuleOutcome(decision, patch)
     }
 
-    /** 账户选择：账户 ID + 证据等级（等级用于"只升不降"）。 */
-    private data class AccountChoice(val accountId: String, val rank: Int)
+    private data class AccountChoice(
+        val accountId: String,
+        val rank: Int,
+        val newAccount: AccountEntity? = null
+    )
 
     private fun resolvePaymentAccount(
         signal: PaymentSignal,
         patch: RuleEngine.FieldPatch,
-        accounts: List<AccountEntity>
+        accounts: List<AccountEntity>,
+        now: Long
     ): AccountChoice? {
         patch.accountId?.let { candidate ->
-            if (accounts.any { it.id == candidate }) {
+            if (accounts.any { it.id == candidate && it.isActive }) {
                 return AccountChoice(candidate, AccountInference.Rank.RULE)
             }
         }
-        return when (
-            val resolution = AccountInference.resolveByHints(
-                signal.sourcePackage,
-                signal.accountHints,
-                accounts
-            )
-        ) {
-            is AccountResolution.Resolved -> AccountChoice(resolution.accountId, resolution.rank)
-            else -> null
-        }
+        return resolveSignalAccount(
+            signal.sourcePackage, signal.accountHints, signal.bankCard, accounts, now,
+            allowCreate = signal.type == "expense"
+        )
     }
 
     private fun resolveRefundAccount(
         signal: RefundSignal,
         accounts: List<AccountEntity>,
-        originalAccountId: String?
+        originalAccountId: String?,
+        now: Long
     ): AccountChoice? {
         signal.ruleAccountId?.let { id ->
-            if (accounts.any { it.id == id }) {
+            if (accounts.any { it.id == id && it.isActive }) {
                 return AccountChoice(id, AccountInference.Rank.RULE)
             }
         }
-        val hint = (AccountInference.resolveByHints(
-            signal.sourcePackage,
-            signal.receivingHints,
-            accounts
-        ) as? AccountResolution.Resolved)?.let { AccountChoice(it.accountId, it.rank) }
-        val original = originalAccountId?.let { id ->
-            accounts.firstOrNull { it.id == id }?.let {
-                AccountChoice(it.id, AccountInference.rankOf(it))
-            }
-        }
-        // 退款去向提示优先于原单（用户拍板：退款有短信说明账户更清晰）；
-        // 提示只能落到现金时，原单账户优先于现金。
+        val hint = resolveSignalAccount(signal.sourcePackage, signal.receivingHints, signal.bankCard, accounts, now)
         if (hint != null && hint.rank > AccountInference.Rank.CASH) return hint
-        return original ?: hint ?: accounts.firstOrNull {
-            it.id == AccountInference.CASH_FALLBACK_ACCOUNT_ID
-        }?.let { AccountChoice(it.id, AccountInference.Rank.CASH) }
+        val original = accounts.firstOrNull { it.id == originalAccountId && it.isActive }
+        return original?.let { AccountChoice(it.id, AccountInference.rankOf(it)) } ?: hint
+    }
+
+    private fun resolveSignalAccount(
+        sourcePackage: String,
+        hints: List<String?>,
+        bankCard: BankCardEvidence?,
+        accounts: List<AccountEntity>,
+        now: Long,
+        allowCreate: Boolean = true
+    ): AccountChoice? {
+        if (bankCard != null) {
+            resolveBankCard(bankCard, accounts, now, allowCreate)?.let { return it }
+        }
+        // A known but conflicting tail must not fall back to a different card at the same bank.
+        val resolution = AccountInference.resolveByHints(sourcePackage, if (bankCard == null) hints else emptyList(), accounts)
+        return (resolution as? AccountResolution.Resolved)?.let { AccountChoice(it.accountId, it.rank) }
+    }
+
+    private fun resolveBankCard(
+        evidence: BankCardEvidence,
+        accounts: List<AccountEntity>,
+        now: Long,
+        allowCreate: Boolean
+    ): AccountChoice? {
+        val bankCode = appContext?.let {
+            AccountInference.bankCode(it, evidence.bankName, exact = true)
+                ?: AccountInference.bankCode(it, evidence.bankName.removeSuffix("银行"), exact = true)
+        }
+        val sameBank = accounts.filter { account ->
+            if (account.subtype !in AccountInference.BANK_CARD_SUBTYPES) return@filter false
+            val accountCode = account.icon?.takeIf { it.startsWith("bank:") }?.removePrefix("bank:")
+                ?: appContext?.let { AccountInference.bankCode(it, account.name) }
+            if (bankCode != null && accountCode != null) bankCode == accountCode
+            else account.name.contains(evidence.bankName)
+        }
+        val sameTail = sameBank.filter { it.cardTail == evidence.tail }
+        val candidates = sameTail.ifEmpty { sameBank.filter { it.cardTail.isNullOrBlank() } }
+        if (candidates.isNotEmpty()) {
+            return candidates.singleOrNull()
+                ?.takeIf { it.isActive && (evidence.subtype == null || it.subtype == evidence.subtype) }
+                ?.let { AccountChoice(it.id, AccountInference.Rank.BANK) }
+        }
+        val subtype = evidence.subtype?.takeIf { it in AccountInference.BANK_CARD_SUBTYPES } ?: return null
+        if (!allowCreate || bankCode == null) return null
+        val account = AccountEntity(
+            id = UUID.randomUUID().toString(),
+            name = "${evidence.bankName}（尾号 ${evidence.tail}）",
+            subtype = subtype,
+            kind = if (subtype == "credit_card") "liability" else "asset",
+            initialBalanceMinor = 0L,
+            currentBalanceMinor = 0L,
+            currency = "CNY",
+            icon = "bank:$bankCode",
+            color = null,
+            sortOrder = 0,
+            isActive = true,
+            createdAt = now,
+            updatedAt = now,
+            cardTail = evidence.tail
+        )
+        return AccountChoice(account.id, AccountInference.Rank.BANK, account)
     }
 
     /**
@@ -588,9 +643,7 @@ class SignalBillWriter(
         merchant: String?,
         orderId: String?,
         categoryId: String?,
-        accountId: String?,
-        incomingAccountRank: Int,
-        lockAccount: Boolean = false,
+        accountChoice: AccountChoice?,
         originalBillId: String? = null
     ) {
         val current = database.billDao().getById(existing.id) ?: return
@@ -600,15 +653,12 @@ class SignalBillWriter(
             ?: categoryId?.takeIf { database.categoryDao().getById(it) != null }
         val currentAccount = current.accountId?.let { database.accountDao().getById(it) }
         val currentRank = AccountInference.rankOf(currentAccount)
-        val accountUpgrade = accountId != null &&
-            accountId != current.accountId &&
-            incomingAccountRank > currentRank
-        val accountFill = if (accountUpgrade) accountId else current.accountId
-        // 规则账户一经应用即锁账户字段：后续银行短信（EVIDENCE）不得覆盖用户规则。
-        val fieldLocksFill = if (lockAccount) {
-            FieldPriorityResolver.serializeLocks(
-                FieldPriorityResolver.parseLocks(current.fieldLocks) + "accountId"
-            )
+        val locks = FieldPriorityResolver.parseLocks(current.fieldLocks)
+        val accountUpgrade = accountChoice != null && "accountId" !in locks &&
+            accountChoice.accountId != current.accountId && accountChoice.rank > currentRank
+        val accountFill = if (accountUpgrade) accountChoice?.accountId else current.accountId
+        val fieldLocksFill = if (accountChoice?.rank == AccountInference.Rank.RULE && accountChoice.accountId == accountFill) {
+            FieldPriorityResolver.serializeLocks(locks + "accountId")
         } else {
             current.fieldLocks
         }
@@ -633,25 +683,16 @@ class SignalBillWriter(
             version = current.version + 1,
             updatedAt = System.currentTimeMillis()
         )
-        val applied = try {
-            ledger.updateBillWithBalanceUpdate(
-                current,
-                updated,
-                FieldPriorityResolver.Source.EVIDENCE
-            )
-        } catch (error: Exception) {
-            if (error is kotlinx.coroutines.CancellationException) throw error
-            JotBillLog.w(TAG, "信号补全失败: bill=${current.id.take(8)}", error)
-            false
+        if (accountUpgrade) {
+            accountChoice?.newAccount?.let { database.accountDao().insert(it) }
         }
-        if (applied) {
-            // 以事务内最终落库值为准同步卡片（字段锁定/校验可能拒绝部分改动）。
-            val persisted = database.billDao().getById(current.id) ?: updated
-            updateEditCardFields(persisted)
+        check(ledger.updateBillWithBalanceUpdate(current, updated, FieldPriorityResolver.Source.EVIDENCE)) {
+            "Bill changed during signal enrichment"
         }
+        updateEditCardFields(checkNotNull(database.billDao().getById(current.id)))
         JotBillLog.i(
             TAG,
-            "信号补全${if (applied) "成功" else "跳过"}: bill=${current.id.take(8)}, " +
+            "信号补全成功: bill=${current.id.take(8)}, " +
                 "merchant=${merchantFill != current.merchant}, order=${orderFill != current.orderId}, " +
                 "category=${categoryFill != current.categoryId}, accountUpgrade=$accountUpgrade"
         )
