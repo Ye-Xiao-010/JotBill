@@ -2,13 +2,17 @@ package com.jotbill.app.runtime
 
 import android.content.ComponentName
 import android.content.Intent
+import android.net.Uri
 import android.os.Build
 import android.os.PowerManager
 import android.provider.Settings
+import androidx.core.app.NotificationManagerCompat
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
+import com.jotbill.app.bookkeeping.BookkeepingChannels
+import com.jotbill.app.budget.BudgetReminderNotifier
 import com.jotbill.app.data.DatabaseMigrationGuard
 import com.jotbill.app.data.JOT_BILL_DATABASE_VERSION
 import com.jotbill.app.data.JotBillDatabase
@@ -16,7 +20,10 @@ import com.jotbill.app.data.JotBillDatabaseProvider
 import com.jotbill.app.keepalive.KeepAliveSettings
 import com.jotbill.app.keepalive.RecognitionKeepAliveService
 import com.jotbill.app.notification.PaymentNotificationService
+import com.jotbill.app.overlay.PendingConfirmOverlayManager
+import com.jotbill.app.pending.PendingReminderNotifier
 import com.jotbill.app.recognition.CheckoutAccessibilityService
+import com.jotbill.app.recognition.RecognitionPackages
 import com.jotbill.app.utils.DiagLogExporter
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -122,6 +129,78 @@ class RuntimeModule(
     }
 
     @ReactMethod
+    fun getRecognitionPermissions(promise: Promise) {
+        scope.launch {
+            try {
+                val pageRecognition = (RecognitionPackages.PAYMENT_PACKAGES + RecognitionPackages.SHOPPING_PACKAGES)
+                    .any { BookkeepingChannels.shouldProcessPaymentResult(reactContext, it) }
+                val notificationRecognition = PaymentNotificationService.SUPPORTED_SOURCE_PACKAGES
+                    .any { PaymentNotificationService.shouldProcessSource(reactContext, it) }
+                val automaticBooking = pageRecognition || notificationRecognition
+                val overlayEnabled = automaticBooking && PendingConfirmOverlayManager.isEnabled(reactContext)
+                val notificationReminders = automaticBooking ||
+                    (PendingReminderNotifier.isEnabled(reactContext) &&
+                        database.pendingTransactionDao().countExcludingEditCards() > 0) ||
+                    (BudgetReminderNotifier.isEnabled(reactContext) && database.budgetDao().getActive().isNotEmpty())
+                val result = JSONObject().apply {
+                    put("accessibility", when {
+                        !pageRecognition && !overlayEnabled -> "not_required"
+                        CheckoutAccessibilityService.isServiceRunning() -> "ready"
+                        isAccessibilityServiceEnabled() -> "disconnected"
+                        else -> "missing"
+                    })
+                    put("notificationAccess", when {
+                        !notificationRecognition -> "not_required"
+                        PaymentNotificationService.isListenerConnected -> "ready"
+                        isNotificationListenerEnabled() -> "disconnected"
+                        else -> "missing"
+                    })
+                    put("overlay", when {
+                        !overlayEnabled -> "not_required"
+                        !isOverlayPermissionGranted() -> "missing"
+                        else -> "ready"
+                    })
+                    put("appNotifications", when {
+                        !notificationReminders -> "not_required"
+                        !NotificationManagerCompat.from(reactContext).areNotificationsEnabled() -> "missing"
+                        else -> "ready"
+                    })
+                }
+                promise.resolve(result.toString())
+            } catch (error: RuntimeException) {
+                promise.reject("RECOGNITION_PERMISSIONS_ERROR", error.message, error)
+            }
+        }
+    }
+
+    @ReactMethod
+    fun openRecognitionPermissionSettings(permission: String, promise: Promise) {
+        try {
+            val packageUri = Uri.fromParts("package", reactContext.packageName, null)
+            val intent = when (permission) {
+                "accessibility" -> Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
+                "notificationAccess" -> Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)
+                "overlay" -> Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, packageUri)
+                "appNotifications" -> if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).apply {
+                        putExtra(Settings.EXTRA_APP_PACKAGE, reactContext.packageName)
+                    }
+                } else {
+                    Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, packageUri)
+                }
+                else -> {
+                    promise.reject("INVALID_PERMISSION", "不支持的权限设置项")
+                    return
+                }
+            }
+            reactContext.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            promise.resolve(null)
+        } catch (error: RuntimeException) {
+            promise.reject("OPEN_SETTINGS_ERROR", "无法打开系统设置，请手动前往设置", error)
+        }
+    }
+
+    @ReactMethod
     fun getRuntimeHealth(promise: Promise) {
         scope.launch {
             try {
@@ -168,8 +247,8 @@ class RuntimeModule(
         val serviceName = ComponentName(
             reactContext.packageName,
             CheckoutAccessibilityService.REGISTERED_SERVICE_CLASS_NAME
-        ).flattenToString()
-        return enabledServices.split(':').any { it.equals(serviceName, ignoreCase = true) }
+        )
+        return enabledServices.split(':').any { ComponentName.unflattenFromString(it) == serviceName }
     }
 
     /** 检查支付通知监听服务是否已在系统设置中启用。 */
@@ -181,8 +260,8 @@ class RuntimeModule(
         val componentName = ComponentName(
             reactContext.packageName,
             PaymentNotificationService::class.java.name
-        ).flattenToString()
-        return enabledListeners.split(':').any { it.equals(componentName, ignoreCase = true) }
+        )
+        return enabledListeners.split(':').any { ComponentName.unflattenFromString(it) == componentName }
     }
 
     /** 检查悬浮窗权限是否已授予。 */

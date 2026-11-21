@@ -98,6 +98,7 @@ class PaymentNotificationService : NotificationListenerService() {
      */
     override fun onDestroy() {
         super.onDestroy()
+        isListenerConnected = false
         catchUpHandler.removeCallbacks(catchUpRunnable)
         scope.cancel()
         SentryLogger.i(TAG, "支付通知服务销毁")
@@ -109,6 +110,7 @@ class PaymentNotificationService : NotificationListenerService() {
      */
     override fun onListenerConnected() {
         super.onListenerConnected()
+        isListenerConnected = true
         JotBillLog.i(TAG, "通知监听服务已连接")
         SentryLogger.addBreadcrumb("通知监听服务已连接", category = "service_lifecycle")
         // 跨通道收口（2026-11-16）：通知监听通常比无障碍更早连上，把「卡与同额
@@ -139,6 +141,7 @@ class PaymentNotificationService : NotificationListenerService() {
 
     /** 扫描当前活跃通知并补处理记账相关包（mms/拼多多/京东/美团，10 分钟内）。 */
     private fun catchUpActiveNotifications() {
+        if (!BookkeepingChannels.isMasterEnabled(this)) return
         val active = try {
             activeNotifications
         } catch (error: RuntimeException) {
@@ -176,6 +179,7 @@ class PaymentNotificationService : NotificationListenerService() {
      */
     override fun onListenerDisconnected() {
         super.onListenerDisconnected()
+        isListenerConnected = false
         catchUpHandler.removeCallbacks(catchUpRunnable)
         JotBillLog.w(TAG, "通知监听服务已断开，请求重绑")
         SentryLogger.addBreadcrumb("通知监听服务已断开，请求重绑", category = "service_lifecycle")
@@ -216,6 +220,7 @@ class PaymentNotificationService : NotificationListenerService() {
      */
     private fun processNotification(sbn: StatusBarNotification) {
         val packageName = sbn.packageName
+        if (!shouldProcessSource(this, packageName)) return
         // 银行短信：真机（Android 17 / HyperOS）短信通知为静默通知，无障碍不投递
         // 通知事件 ⇒ 改由本监听器投递规则解析（见 BankSmsNotificationParser）。
         if (packageName in RecognitionPackages.BOOKKEEPING_NOTIFICATION_PACKAGES) {
@@ -241,10 +246,6 @@ class PaymentNotificationService : NotificationListenerService() {
         // 只认内置解析器白名单：设置页的「监听应用/过滤关键词」配置 UI 已下线
         // （e577c6b），配置的写入方不复存在，继续读取只会让存量旧值静默收窄
         // 监听范围且用户无从修改。包名边界唯一事实源 = PaymentResultNormalizer。
-        if (packageName !in PaymentResultNormalizer.SUPPORTED_PACKAGES) {
-            return
-        }
-
         val notification = sbn.notification ?: return
         val extras = notification.extras ?: return
 
@@ -486,7 +487,8 @@ class PaymentNotificationService : NotificationListenerService() {
         }
         JotBillLog.i(
             TAG,
-            "[ABK诊断] 短信命中规则: ruleId=${record.ruleId}(${record.ruleNote}), 转自动入账"
+            "[ABK诊断] 短信命中规则: ruleId=${record.ruleId}(${record.ruleNote}), " +
+                "bankCardEvidence=${record.bankCard != null}, cardType=${record.bankCard?.subtype}, 转自动入账"
         )
         smsBookkeeper.onRecordReady(record)
     }
@@ -684,6 +686,7 @@ class PaymentNotificationService : NotificationListenerService() {
      * @param input 解析后的支付证据输入
      */
     private suspend fun handlePaymentEvidence(input: PaymentEvidenceInput) {
+        if (!shouldProcessSource(this, input.sourcePackage)) return
         // 模型调整（2026-11-16）：支付通知作为首笔信号直接入账；同额后续信号
         // 在 SignalBillWriter 的 60 秒窗内补全，不再走会话匹配与待确认兜底。
         val channelLabel = AutoBookkeeper.channelLabel(input.sourcePackage)
@@ -766,6 +769,7 @@ class PaymentNotificationService : NotificationListenerService() {
      * @param input 解析后的退款证据输入
      */
     private suspend fun handleRefundEvidence(input: PaymentEvidenceInput) {
+        if (!shouldProcessSource(this, input.sourcePackage)) return
         try {
             val database = JotBillDatabaseProvider.get(applicationContext)
             val outcome = RefundLinker(database, appContext = applicationContext).processRefund(input)
@@ -802,6 +806,7 @@ class PaymentNotificationService : NotificationListenerService() {
      * @param input 解析后的转账/还款证据输入
      */
     private suspend fun handleTransferEvidence(input: PaymentEvidenceInput) {
+        if (!shouldProcessSource(this, input.sourcePackage)) return
         try {
             val database = JotBillDatabaseProvider.get(applicationContext)
             val outcome = TransferClassifier(database).processTransfer(input)
@@ -838,6 +843,7 @@ class PaymentNotificationService : NotificationListenerService() {
      * @param parse 手续费通知拆分结果（feePart 必有，mainPart 可空）
      */
     private suspend fun handleFeeEvidence(parse: FeeNotificationParse) {
+        if (!shouldProcessSource(this, parse.feePart.sourcePackage)) return
         try {
             val database = JotBillDatabaseProvider.get(applicationContext)
             val outcome = FeeExtractor(database).processFee(parse.feePart, parse.mainPart)
@@ -928,6 +934,17 @@ class PaymentNotificationService : NotificationListenerService() {
 
         /** 拼多多包名（支付/退款通知样本诊断，见 logPddNotificationSample）。 */
         private const val PDD_PACKAGE = "com.xunmeng.pinduoduo"
+
+        internal val SUPPORTED_SOURCE_PACKAGES = PaymentResultNormalizer.SUPPORTED_PACKAGES +
+            RecognitionPackages.BOOKKEEPING_NOTIFICATION_PACKAGES +
+            setOf(PDD_PACKAGE, JdNotificationParser.PACKAGE, MeituanNotificationParser.PACKAGE)
+
+        internal fun shouldProcessSource(context: android.content.Context, packageName: String): Boolean =
+            packageName in SUPPORTED_SOURCE_PACKAGES && BookkeepingChannels.shouldProcess(context, packageName)
+
+        @Volatile
+        internal var isListenerConnected: Boolean = false
+            private set
 
         /** 拼多多通知样本去重容量（同 key+内容只记一次）。 */
         private const val PDD_SIGNATURE_CAPACITY = 32

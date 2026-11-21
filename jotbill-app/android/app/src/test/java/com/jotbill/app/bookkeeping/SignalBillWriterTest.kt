@@ -5,6 +5,7 @@ import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import com.jotbill.app.data.JotBillDatabase
 import com.jotbill.app.data.entity.AccountEntity
+import com.jotbill.app.overlay.PendingConfirmOverlayManager
 import com.jotbill.app.pending.EditCardMarker
 import com.jotbill.app.pending.PendingConfirmService
 import com.jotbill.app.recognition.RefundLinker
@@ -16,6 +17,7 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -116,6 +118,35 @@ class SignalBillWriterTest {
             receivingHints = hints,
             sourceEventKey = sourceEventKey
         )
+
+    @Test
+    fun 全局静默默认关闭开启后跨渠道入账不创建编辑卡() = runBlocking {
+        val overlay = PendingConfirmOverlayManager
+        assertFalse(overlay.isSilentBookkeepingEnabled(context))
+        assertTrue(overlay.isEnabled(context))
+
+        overlay.setSilentBookkeepingEnabled(context, true)
+        val writer = SignalBillWriter(context, database)
+        assertTrue(overlay.isSilentBookkeepingEnabled(context))
+        assertFalse(overlay.isEnabled(context))
+        val sources = listOf(
+            "com.tencent.mm" to "accessibility",
+            "com.eg.android.AlipayGphone" to "notification",
+            "com.android.mms" to "sms",
+            "com.xunmeng.pinduoduo" to "accessibility"
+        )
+        sources.forEachIndexed { index, (pkg, type) ->
+            assertTrue(writer.recordPayment(payment(1000L + index, source = pkg, sourceType = type)) is SignalBillWriter.Outcome.Created)
+        }
+        assertTrue(writer.recordRefund(refund(500L)) is SignalBillWriter.Outcome.Created)
+        assertEquals(5, database.billDao().count())
+        assertEquals(0, database.pendingTransactionDao().count())
+
+        overlay.setSilentBookkeepingEnabled(context, false)
+        assertTrue(overlay.isEnabled(context))
+        assertTrue(writer.recordPayment(payment(2000L)) is SignalBillWriter.Outcome.Created)
+        assertEquals(1, database.pendingTransactionDao().findPendingEditCards().size)
+    }
 
     @Test
     fun 首笔支付信号直接生成账单() = runBlocking {
@@ -292,7 +323,8 @@ class SignalBillWriterTest {
         )
         val writer = SignalBillWriter(context, database)
         val first = writer.recordPayment(payment(2600L, sourceEventKey = "review-1"))
-        // NeedsReview 不写事件认领键：重投必须仍可处理（落卡失败可重试），不能判重丢证据。
+        // 静默模式不绕过复核规则，也不会把待确认信号标成已入账。
+        PendingConfirmOverlayManager.setSilentBookkeepingEnabled(context, true)
         val second = writer.recordPayment(payment(2600L, sourceEventKey = "review-1"))
 
         assertTrue("规则复核应返回 NeedsReview: $first", first is SignalBillWriter.Outcome.NeedsReview)
@@ -524,6 +556,59 @@ class SignalBillWriterTest {
         coroutineContext[Job]!!.children.toList().joinAll()
         assertEquals(1, database.accountDao().getAll().count { it.cardTail == "0176" })
         assertEquals(-1300L, database.accountDao().getById(bank.id)?.currentBalanceMinor)
+    }
+
+    @Test
+    fun 四川农商借记卡短信不被同银行未填尾号信用卡阻挡建卡() = runBlocking {
+        val credit = database.accountDao().getById("acc-rcc")!!.copy(
+            id = "same-bank-credit", name = "四川农商银行信用卡", subtype = "credit_card",
+            kind = "liability", cardTail = null
+        )
+        database.accountDao().insert(credit)
+        val expense = checkNotNull(BankSmsNotificationParser.parseExpense(
+            PageRuleRegistry.get(context),
+            "【四川农商银行】您尾号0294的账户11月20日15:13通过快捷支付支出人民币39.90元，余额100.00元。",
+            System.currentTimeMillis()
+        ))
+        val bookkeeper = AutoBookkeeper(context, this, database)
+        repeat(2) {
+            assertTrue(bookkeeper.onRecordReady(expense))
+            coroutineContext[Job]!!.children.toList().joinAll()
+        }
+        val bank = database.accountDao().getAll().single { it.cardTail == "0294" }
+        assertEquals("四川农商银行（尾号 0294）", bank.name)
+        assertEquals("bank_debit", bank.subtype)
+        assertEquals(null, bank.icon)
+        assertEquals(bank.id, database.billDao().getAllForExport().single().accountId)
+        assertEquals(-3990L, bank.currentBalanceMinor)
+        assertEquals(100_000L, database.accountDao().getById("default-account-cash")?.currentBalanceMinor)
+        assertEquals(0L, database.accountDao().getById("acc-rcc")?.currentBalanceMinor)
+
+        val refund = checkNotNull(BankSmsNotificationParser.parseRefund(
+            "【四川农商银行】您尾号0294的账户11月20日15:14到账人民币39.90元（拼多多），余额139.90元。",
+            System.currentTimeMillis()
+        ))
+        val result = RefundLinker(database, appContext = context).processRefund(refund)
+        assertTrue(result is RefundLinker.RefundOutcome.AutoCommitted)
+        val savedRefund = database.billDao().getAllForExport().single { it.type == "refund" }
+        assertEquals(bank.id, savedRefund.accountId)
+        assertEquals(0L, database.accountDao().getById(bank.id)?.currentBalanceMinor)
+        assertEquals(1, database.accountDao().getAll().count { it.cardTail == "0294" })
+        assertEquals(0L, database.accountDao().getById(credit.id)?.currentBalanceMinor)
+    }
+
+    @Test
+    fun 可用额度证据不能复用同尾号借记账户也不猜建信用卡() = runBlocking {
+        val expense = checkNotNull(BankSmsNotificationParser.parseExpense(
+            PageRuleRegistry.get(context),
+            "【四川农商银行】您尾号2510的账户11月20日15:13通过快捷支付支出人民币39.90元，可用额度500元。",
+            System.currentTimeMillis()
+        ))
+        assertTrue(AutoBookkeeper(context, this, database).onRecordReady(expense))
+        coroutineContext[Job]!!.children.toList().joinAll()
+        assertEquals("default-account-cash", database.billDao().getAllForExport().single().accountId)
+        assertEquals(0L, database.accountDao().getById("acc-rcc")?.currentBalanceMinor)
+        assertEquals(3, database.accountDao().getAll().size)
     }
 
     @Test

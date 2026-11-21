@@ -28,6 +28,7 @@ import java.security.MessageDigest
 internal object BankSmsNotificationParser {
 
     const val PACKAGE = "com.android.mms"
+    const val SICHUAN_RURAL_BANK = "四川农商银行"
 
     /** 规则资产中的通知规则 key（与 BookkeepingChannels 的 mms 渠道同包名）。 */
     const val NOTIFICATION_KEY = "$PACKAGE/android.app.Notification"
@@ -70,10 +71,18 @@ internal object BankSmsNotificationParser {
 
     private val BANK_NAME_BRACKET_PATTERN = Regex("""[【\[]([\p{IsHan}]{2,20}银行)[】\]]""")
     private val OWN_CARD_PATTERN = Regex(
-        """您(?:的)?\s*(?:(信用卡|借记卡|储蓄卡|银行卡|账户|卡)\s*)?(?:尾号(?:为)?|卡号)\s*([0-9]{4,19})(?![0-9])(?:\s*(?:的)?\s*(信用卡|借记卡|储蓄卡|银行卡|账户|卡))?"""
+        """您(?:的)?\s*(?:(信用卡|借记卡|储蓄卡|银行卡|账户|卡)\s*)?""" +
+            """(?:尾号(?:为)?\s*([0-9]{4})(?![0-9])|卡号\s*([0-9]{4,19}(?:[ \t-]+[0-9]{3,4}(?![0-9年月日:：])){0,4})(?![0-9]))""" +
+            """(?:\s*(?:的)?\s*(信用卡|借记卡|储蓄卡|银行卡|账户|卡))?"""
     )
     private val POSTAL_DEPOSIT_PATTERN = Regex(
         """您(?:的)?\s*尾号\s*[0-9]{4}(?:的)?账户\s*(?:快捷支付|退货|退款).*?[，,；;。]\s*余额\s*[0-9]"""
+    )
+    private val SICHUAN_DEPOSIT_PATTERN = Regex(
+        """您(?:的)?\s*尾号(?:为)?\s*[0-9]{4}\s*(?:的)?\s*账户\s*""" +
+            """(?:(?:[0-9]{2,4}年)?[0-9]{1,2}月[0-9]{1,2}日\s*[0-9]{1,2}:[0-9]{2}(?::[0-9]{2})?\s*)?""" +
+            """(?:(?:通过)?快捷支付\s*)?(?:支出|扣款|到账|退款|退货)[^。\r\n]{0,120}""" +
+            """[，,；;]\s*(?:账户)?余额\s*[:：]?\s*[0-9]"""
     )
     private val POSTAL_BANK_NAMES = setOf("邮储银行", "中国邮政储蓄银行", "邮政储蓄银行")
     private val CREDIT_TERMS = Regex("信用卡|可用额度|应还|信用额度")
@@ -82,21 +91,31 @@ internal object BankSmsNotificationParser {
         val bankName = BANK_NAME_BRACKET_PATTERN.findAll(content)
             .map { it.groupValues[1] }.distinct().toList().singleOrNull() ?: return null
         val cards = OWN_CARD_PATTERN.findAll(content).toList()
-        val tail = cards.map { it.groupValues[2].takeLast(4) }.distinct().singleOrNull() ?: return null
-        val types = cards.flatMap { listOf(it.groupValues[1], it.groupValues[3]) }.mapNotNull {
+        val tails = cards.map { card ->
+            val number = card.groupValues[2].ifEmpty { card.groupValues[3] }.filter { it in '0'..'9' }
+            if (number.length !in 4..19) return null
+            number.takeLast(4)
+        }
+        val tail = tails.distinct().singleOrNull() ?: return null
+        val types = cards.flatMap { listOf(it.groupValues[1], it.groupValues[4]) }.mapNotNull {
             when (it) {
                 "信用卡" -> "credit_card"
                 "借记卡", "储蓄卡" -> "bank_debit"
                 else -> null
             }
         }.distinct()
-        val subtype = when {
-            types.size == 1 -> types.single()
-            types.isEmpty() && bankName in POSTAL_BANK_NAMES &&
-                !CREDIT_TERMS.containsMatchIn(content) && POSTAL_DEPOSIT_PATTERN.containsMatchIn(content) -> "bank_debit"
+        val depositTemplate = when (bankName) {
+            in POSTAL_BANK_NAMES -> POSTAL_DEPOSIT_PATTERN
+            SICHUAN_RURAL_BANK -> SICHUAN_DEPOSIT_PATTERN
             else -> null
         }
-        return BankCardEvidence(bankName, tail, subtype)
+        val hasCreditTerms = CREDIT_TERMS.containsMatchIn(content)
+        val subtype = when {
+            types.size == 1 -> types.single()
+            types.isEmpty() && !hasCreditTerms && depositTemplate?.containsMatchIn(content) == true -> "bank_debit"
+            else -> null
+        }
+        return BankCardEvidence(bankName, tail, subtype, creditOnly = subtype == null && hasCreditTerms)
     }
 
     private const val TIME_BUCKET_MILLIS = 15_000L

@@ -1,15 +1,53 @@
 package com.jotbill.app.bookkeeping
 
+import android.app.Application
+import androidx.test.core.app.ApplicationProvider
+import com.jotbill.app.notification.PaymentNotificationService
 import com.jotbill.app.recognition.RecognitionPackages
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 
 /**
  * 渠道注册表（单一事实源）完整性：键唯一、支付渠道默认开、短信默认关。
  * RN 设置页与桥接层全部从这份注册表派生，这里钉死它的基本形状。
  */
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [34], application = Application::class)
 class BookkeepingChannelsTest {
+
+    @Test
+    fun `总开关暂停通知和结果页且可恢复`() {
+        val context = ApplicationProvider.getApplicationContext<Application>()
+        BookkeepingChannels.setMasterEnabled(context, false)
+        for (source in RecognitionPackages.PAYMENT_PACKAGES + RecognitionPackages.SHOPPING_PACKAGES) {
+            assertFalse(BookkeepingChannels.shouldProcessPaymentResult(context, source))
+        }
+        for (source in PaymentNotificationService.SUPPORTED_SOURCE_PACKAGES) {
+            assertFalse(PaymentNotificationService.shouldProcessSource(context, source))
+        }
+        BookkeepingChannels.setMasterEnabled(context, true)
+        assertTrue(BookkeepingChannels.shouldProcessPaymentResult(context, "com.tencent.mm"))
+        assertTrue(PaymentNotificationService.shouldProcessSource(context, "com.tencent.mm"))
+        assertTrue(BookkeepingChannels.shouldProcessPaymentResult(context, "com.shizhuang.duapp"))
+        assertFalse(BookkeepingChannels.shouldProcessPaymentResult(context, "com.android.systemui"))
+    }
+
+    @Test
+    fun `关闭微信时保留支付宝和独立开启的短信`() {
+        val context = ApplicationProvider.getApplicationContext<Application>()
+        BookkeepingChannels.setChannelEnabled(context, "wechat", false)
+        BookkeepingChannels.setChannelEnabled(context, "mms", true)
+        assertFalse(BookkeepingChannels.shouldProcessPaymentResult(context, "com.tencent.mm"))
+        assertFalse(PaymentNotificationService.shouldProcessSource(context, "com.tencent.mm"))
+        assertTrue(BookkeepingChannels.shouldProcessPaymentResult(context, "com.eg.android.AlipayGphone"))
+        assertTrue(PaymentNotificationService.shouldProcessSource(context, "com.eg.android.AlipayGphone"))
+        assertTrue(PaymentNotificationService.shouldProcessSource(context, "com.android.mms"))
+    }
 
     @Test
     fun `渠道键唯一`() {

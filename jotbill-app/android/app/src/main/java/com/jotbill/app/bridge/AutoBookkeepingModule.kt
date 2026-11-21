@@ -4,9 +4,11 @@ import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
+import com.facebook.react.bridge.UiThreadUtil
 import com.jotbill.app.bookkeeping.BookkeepingChannels
 import com.jotbill.app.keepalive.KeepAliveSettings
 import com.jotbill.app.keepalive.RecognitionKeepAliveService
+import com.jotbill.app.overlay.PendingConfirmOverlayManager
 import com.jotbill.app.utils.JotBillLog
 import org.json.JSONObject
 
@@ -42,6 +44,7 @@ class AutoBookkeepingModule(private val reactContext: ReactApplicationContext) :
             }
             val result = JSONObject()
                 .put("masterEnabled", BookkeepingChannels.isMasterEnabled(reactContext))
+                .put("silentBookkeepingEnabled", PendingConfirmOverlayManager.isSilentBookkeepingEnabled(reactContext))
                 .put("keepAliveEnabled", KeepAliveSettings.isEnabled(reactContext))
                 .put("keepAlivePrompted", KeepAliveSettings.isPrompted(reactContext))
                 .put("keepAliveRunning", RecognitionKeepAliveService.isRunning)
@@ -61,6 +64,18 @@ class AutoBookkeepingModule(private val reactContext: ReactApplicationContext) :
             promise.resolve(null)
         } catch (error: Exception) {
             promise.reject("AUTO_BOOKKEEPING_SET_FAILED", error)
+        }
+    }
+
+    @ReactMethod
+    fun setSilentBookkeepingEnabled(enabled: Boolean, promise: Promise) {
+        UiThreadUtil.runOnUiThread {
+            try {
+                PendingConfirmOverlayManager.setSilentBookkeepingEnabled(reactContext, enabled)
+                promise.resolve(null)
+            } catch (error: RuntimeException) {
+                promise.reject("AUTO_BOOKKEEPING_SET_FAILED", error)
+            }
         }
     }
 

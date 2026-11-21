@@ -3,8 +3,10 @@
  * 保留暖白、积木色块与偏移阴影，集中强调本月支出和近期交易。
  * 近期交易按天分组展示；预算与目标卡片默认隐藏，由「设置 → 显示」开关控制。
  */
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
+  AppState,
+  Platform,
   View,
   Text,
   ScrollView,
@@ -13,8 +15,9 @@ import {
   TouchableOpacity,
   Dimensions,
 } from 'react-native';
-import { useNavigation } from '@react-navigation/native';
+import { useFocusEffect, useIsFocused, useNavigation } from '@react-navigation/native';
 import { useQuery } from '@tanstack/react-query';
+import { TriangleAlert, X } from 'lucide-react-native';
 import { ThemeColors } from '../../theme/colors';
 import {
   borderRadius,
@@ -26,8 +29,9 @@ import { ProgressBar, QueryErrorBanner } from '../../components/ui';
 import { DashboardSkeleton } from '../../components/skeleton';
 import CategoryIcon from '../../components/business/CategoryIcon';
 import { useDashboard, useStyles } from '../../hooks';
-import { useDisplayPreferences, useTheme } from '../../providers';
-import { nativeData, nativeRecognition } from '../../native';
+import { useAlert, useDisplayPreferences, useTheme } from '../../providers';
+import { nativeData, nativeRecognition, nativeRuntime } from '../../native';
+import type { RecognitionPermission } from '../../native/runtime';
 import { formatPlatform } from '../../utils/platform';
 import { formatCurrency, formatSignedCurrency, formatTime } from '../../utils/format';
 import { getCategoryIcon, getCategoryColor } from '../../constants/app';
@@ -382,6 +386,113 @@ function ProgressCardCarousel({
   );
 }
 
+const PERMISSION_ITEMS = [
+  { id: 'accessibility', label: '无障碍权限', impact: '支付结果页和页面规则可能无法识别' },
+  { id: 'notificationAccess', label: '通知读取权限', impact: '无法读取支付通知和银行短信' },
+  { id: 'overlay', label: '悬浮窗权限', impact: '账单仍可入账，但无法显示编辑弹窗' },
+  { id: 'appNotifications', label: '系统通知权限', impact: '收不到自动记账、待确认或预算提醒' },
+] as const satisfies readonly { id: RecognitionPermission; label: string; impact: string }[];
+
+function RecognitionPermissionBanner() {
+  const focused = useIsFocused();
+  const styles = useStyles(createStyles);
+  const { colors } = useTheme();
+  const { alert } = useAlert();
+  const enabled = Platform.OS === 'android';
+  const [dismissed, setDismissed] = useState<Partial<Record<RecognitionPermission, true>>>({});
+  const { data, refetch } = useQuery({
+    queryKey: QUERY_KEYS.recognition.permissions,
+    queryFn: nativeRuntime.getRecognitionPermissions,
+    enabled: enabled && focused,
+    staleTime: 0,
+    retry: false,
+  });
+
+  useFocusEffect(useCallback(() => {
+    if (!enabled) return;
+    const refresh = () => { void refetch({ cancelRefetch: false }); };
+    refresh();
+    const subscription = AppState.addEventListener('change', state => {
+      if (state === 'active') refresh();
+    });
+    const timer = setInterval(() => {
+      if (AppState.currentState === 'active') refresh();
+    }, 10_000);
+    return () => {
+      subscription.remove();
+      clearInterval(timer);
+    };
+  }, [enabled, refetch]));
+
+  useEffect(() => {
+    if (!data) return;
+    setDismissed(previous => {
+      const next = { ...previous };
+      for (const { id } of PERMISSION_ITEMS) {
+        if (data[id] === 'ready' || data[id] === 'not_required') delete next[id];
+      }
+      return Object.keys(next).length === Object.keys(previous).length ? previous : next;
+    });
+  }, [data]);
+
+  if (!enabled || !data) return null;
+  const issues = PERMISSION_ITEMS.filter(({ id }) =>
+    !dismissed[id] && (data[id] === 'missing' || data[id] === 'disconnected'),
+  );
+  if (issues.length === 0) return null;
+
+  const dismiss = () => {
+    setDismissed(previous => {
+      const next = { ...previous };
+      for (const { id } of issues) next[id] = true;
+      return next;
+    });
+  };
+
+  const openSettings = async (id: RecognitionPermission) => {
+    try {
+      await nativeRuntime.openRecognitionPermissionSettings(id);
+    } catch (error) {
+      alert('打开设置失败', error instanceof Error ? error.message : '请手动前往系统设置');
+    }
+  };
+
+  return (
+    <View style={styles.permissionBanner}>
+      <View style={styles.permissionHeading}>
+        <TriangleAlert size={18} color={colors.warning} />
+        <Text style={styles.permissionTitle} accessibilityLiveRegion="polite">权限需要处理</Text>
+        <TouchableOpacity
+          style={styles.permissionDismiss}
+          accessibilityLabel="关闭本次权限提醒"
+          accessibilityRole="button"
+          onPress={dismiss}
+        >
+          <X size={19} color={colors.textPrimary} />
+        </TouchableOpacity>
+      </View>
+      {issues.map(({ id, label, impact }) => (
+        <View key={id} style={styles.permissionRow}>
+          <View style={styles.permissionText}>
+            <Text style={styles.permissionLabel}>
+              {label}{data[id] === 'disconnected' ? '已开启，服务未连接' : '未授权'}
+            </Text>
+            <Text style={styles.permissionImpact}>{impact}</Text>
+          </View>
+          <TouchableOpacity
+            style={styles.permissionAction}
+            onPress={() => { void openSettings(id); }}
+            accessibilityRole="button"
+            accessibilityLabel={`前往${label}设置`}
+          >
+            <Text style={styles.permissionActionText}>去设置 →</Text>
+          </TouchableOpacity>
+        </View>
+      ))}
+    </View>
+  );
+}
+
 export default function DashboardScreen() {
   const navigation = useNavigation();
   const styles = useStyles(createStyles);
@@ -567,6 +678,8 @@ export default function DashboardScreen() {
           <Text style={styles.headerSubtitle}>{yearName}</Text>
         </View>
       </View>
+
+      <RecognitionPermissionBanner />
 
       {/* 主查询失败：顶部警示条 + 重试；失败时不再渲染「暂无交易」空态，
           避免把故障伪装成"没记账" */}
@@ -764,6 +877,62 @@ const createStyles = (colors: ThemeColors) => ({
       fontWeight: '500',
       color: colors.textTertiary,
       marginTop: spacing.xs,
+    },
+    permissionBanner: {
+      backgroundColor: colors.surface,
+      borderWidth: borderWidth.thin,
+      borderColor: colors.warning,
+      borderRadius: borderRadius.card,
+      marginBottom: spacing.lg,
+      paddingHorizontal: spacing.md,
+    },
+    permissionHeading: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: spacing.sm,
+    },
+    permissionTitle: {
+      flex: 1,
+      color: colors.textPrimary,
+      fontSize: 15,
+      fontWeight: '800',
+    },
+    permissionDismiss: {
+      minHeight: 44,
+      minWidth: 44,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    permissionRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: spacing.sm,
+      paddingVertical: spacing.sm,
+      borderTopWidth: borderWidth.hairline,
+      borderTopColor: colors.divider,
+    },
+    permissionText: {
+      flex: 1,
+      gap: spacing.xs,
+    },
+    permissionLabel: {
+      color: colors.textPrimary,
+      fontSize: 13,
+      fontWeight: '700',
+    },
+    permissionImpact: {
+      color: colors.textSecondary,
+      fontSize: 12,
+    },
+    permissionAction: {
+      minHeight: 44,
+      justifyContent: 'center',
+      paddingHorizontal: spacing.sm,
+    },
+    permissionActionText: {
+      color: colors.primary,
+      fontSize: 13,
+      fontWeight: '700',
     },
     overviewCard: {
       backgroundColor: colors.primaryDark,

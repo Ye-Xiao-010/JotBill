@@ -581,7 +581,10 @@ class SignalBillWriter(
         allowCreate: Boolean = true
     ): AccountChoice? {
         if (bankCard != null) {
-            resolveBankCard(bankCard, accounts, now, allowCreate)?.let { return it }
+            val knownBankWithoutIcon = sourcePackage == BankSmsNotificationParser.PACKAGE &&
+                bankCard.bankName == BankSmsNotificationParser.SICHUAN_RURAL_BANK
+            resolveBankCard(bankCard, accounts, now, allowCreate, knownBankWithoutIcon)?.let { return it }
+            JotBillLog.i(TAG, "银行卡证据未匹配: source=$sourcePackage, cardTypeKnown=${bankCard.subtype != null}")
         }
         // A known but conflicting tail must not fall back to a different card at the same bank.
         val resolution = AccountInference.resolveByHints(sourcePackage, if (bankCard == null) hints else emptyList(), accounts)
@@ -592,7 +595,8 @@ class SignalBillWriter(
         evidence: BankCardEvidence,
         accounts: List<AccountEntity>,
         now: Long,
-        allowCreate: Boolean
+        allowCreate: Boolean,
+        knownBankWithoutIcon: Boolean
     ): AccountChoice? {
         val bankCode = appContext?.let {
             AccountInference.bankCode(it, evidence.bankName, exact = true)
@@ -605,15 +609,19 @@ class SignalBillWriter(
             if (bankCode != null && accountCode != null) bankCode == accountCode
             else account.name.contains(evidence.bankName)
         }
+        val matchingSubtype = evidence.subtype ?: "credit_card".takeIf { evidence.creditOnly }
         val sameTail = sameBank.filter { it.cardTail == evidence.tail }
-        val candidates = sameTail.ifEmpty { sameBank.filter { it.cardTail.isNullOrBlank() } }
+        val candidates = sameTail.ifEmpty {
+            sameBank.filter { it.cardTail.isNullOrBlank() && (matchingSubtype == null || it.subtype == matchingSubtype) }
+        }
         if (candidates.isNotEmpty()) {
-            return candidates.singleOrNull()
-                ?.takeIf { it.isActive && (evidence.subtype == null || it.subtype == evidence.subtype) }
+            return candidates.filter { matchingSubtype == null || it.subtype == matchingSubtype }
+                .singleOrNull()
+                ?.takeIf { it.isActive }
                 ?.let { AccountChoice(it.id, AccountInference.Rank.BANK) }
         }
         val subtype = evidence.subtype?.takeIf { it in AccountInference.BANK_CARD_SUBTYPES } ?: return null
-        if (!allowCreate || bankCode == null) return null
+        if (!allowCreate || (bankCode == null && !knownBankWithoutIcon)) return null
         val account = AccountEntity(
             id = UUID.randomUUID().toString(),
             name = "${evidence.bankName}（尾号 ${evidence.tail}）",
@@ -622,7 +630,7 @@ class SignalBillWriter(
             initialBalanceMinor = 0L,
             currentBalanceMinor = 0L,
             currency = "CNY",
-            icon = "bank:$bankCode",
+            icon = bankCode?.let { "bank:$it" },
             color = null,
             sortOrder = 0,
             isActive = true,

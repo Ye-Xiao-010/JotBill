@@ -34,6 +34,28 @@ class BankSmsNotificationParserTest {
         assertEquals(2000106, record!!.ruleId)
         assertEquals("2", record.fields["detailType"])
         assertEquals(2060L, AutoBookkeepingEngine.parseAmountMinor(record.fields["amount"]))
+        assertEquals(BankCardEvidence("四川农商银行", "2510", "bank_debit"), record.bankCard)
+    }
+
+    @Test
+    fun 四川农商短信有信用卡信号时不按储蓄卡推断() {
+        val record = BankSmsNotificationParser.parseExpense(
+            registry(),
+            "【四川农商银行】您尾号0294的账户11月20日15:13通过快捷支付支出人民币39.90元，余额100.00元，可用额度500元。",
+            extractTime = 1_000_000L
+        )
+        assertEquals(BankCardEvidence("四川农商银行", "0294", null, creditOnly = true), record?.bankCard)
+    }
+
+    @Test
+    fun 带空格和连字符的卡号取末四位而不是首组() {
+        for (number in listOf("6222 0202 0011 0176", "6222-0202-0011-0176")) {
+            val refund = BankSmsNotificationParser.parseRefund(
+                "【四川农商银行】您的借记卡卡号$number 退款金额39.90元，对方账号尾号9999。",
+                occurredAt = 1_000_000L
+            )
+            assertEquals(BankCardEvidence("四川农商银行", "0176", "bank_debit"), refund?.bankCard)
+        }
     }
 
     @Test
@@ -61,7 +83,8 @@ class BankSmsNotificationParserTest {
         assertEquals(2060L, refund!!.amountMinor)
         assertEquals("拼多多", refund.merchant)
         assertEquals(PaymentResultNormalizer.PAYMENT_STATUS_REFUND, refund.paymentStatus)
-        assertNull("银行短信无原订单号，由 RefundLinker 走待确认", refund.orderId)
+        assertEquals(BankCardEvidence("四川农商银行", "2510", "bank_debit"), refund.bankCard)
+        assertNull(refund.orderId)
     }
 
     /** 四川农商简版退款格式：「到账人民币19.8元(拼多多)」——无「退款/商户」字样。 */

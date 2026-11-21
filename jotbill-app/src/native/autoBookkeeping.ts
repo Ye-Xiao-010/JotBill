@@ -10,6 +10,7 @@ export interface AutoBookkeepingChannelMeta {
 
 export interface AutoBookkeepingSettings {
   masterEnabled: boolean;
+  silentBookkeepingEnabled: boolean;
   keepAliveEnabled: boolean;
   keepAlivePrompted: boolean;
   keepAliveRunning: boolean;
@@ -27,6 +28,7 @@ export interface AutoBookkeepingRuleStats {
 interface RawAutoBookkeepingModule {
   getSettings(): Promise<string>;
   setMasterEnabled(enabled: boolean): Promise<null>;
+  setSilentBookkeepingEnabled(enabled: boolean): Promise<null>;
   setChannelEnabled(channel: string, enabled: boolean): Promise<null>;
   setKeepAliveEnabled(enabled: boolean): Promise<null>;
   markKeepAlivePrompted(): Promise<null>;
@@ -49,6 +51,10 @@ export const nativeAutoBookkeeping = {
 
   async setMasterEnabled(enabled: boolean): Promise<void> {
     await getRawModule().setMasterEnabled(enabled);
+  },
+
+  async setSilentBookkeepingEnabled(enabled: boolean): Promise<void> {
+    await getRawModule().setSilentBookkeepingEnabled(enabled);
   },
 
   async setChannelEnabled(channel: string, enabled: boolean): Promise<void> {

@@ -105,6 +105,16 @@ export default function AutoBookkeepingScreen() {
     mutationFn: nativeAutoBookkeeping.setMasterEnabled,
     onSuccess: invalidate,
   });
+  const silentBookkeepingMutation = useMutation({
+    mutationFn: nativeAutoBookkeeping.setSilentBookkeepingEnabled,
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: SETTINGS_QUERY_KEY }),
+        queryClient.invalidateQueries({ queryKey: QUERY_KEYS.recognition.permissions }),
+      ]);
+    },
+    onError: () => Alert.alert('设置失败', '无法保存静默记账设置，请重试。'),
+  });
   const channelMutation = useMutation({
     mutationFn: ({ channel, enabled }: { channel: string; enabled: boolean }) =>
       nativeAutoBookkeeping.setChannelEnabled(channel, enabled),
@@ -138,9 +148,9 @@ export default function AutoBookkeepingScreen() {
           <View style={styles.warningCard}>
             <AlertCircle size={20} color={styles._colors.error} />
             <View style={styles.masterText}>
-              <Text style={styles.warningTitle}>自动记账已失效</Text>
+              <Text style={styles.warningTitle}>无障碍服务未连接</Text>
               <Text style={styles.warningText}>
-                无障碍服务未运行（系统更新后可能被静默关闭）。不处理则不会自动记任何账。
+                支付结果页和页面规则无法识别；已开启的通知和短信识别仍可独立工作。
               </Text>
               <TouchableOpacity
                 style={styles.warningAction}
@@ -178,6 +188,25 @@ export default function AutoBookkeepingScreen() {
                   },
                 });
               }}
+              trackColor={{ false: styles._colors.divider, true: styles._colors.primary }}
+              thumbColor="#FFFFFF"
+            />
+          </View>
+        </View>
+
+        <View style={styles.sectionCard}>
+          <View style={styles.masterRow}>
+            <View style={styles.masterText}>
+              <Text style={styles.sectionTitle}>全局静默记账</Text>
+              <Text style={styles.sectionText}>
+                已启用渠道的交易照常自动入账，不弹出记账窗口。需核对的交易仍留在待确认中心，通知栏提醒不受影响。
+              </Text>
+            </View>
+            <Switch
+              accessibilityLabel="全局静默记账"
+              value={settings?.silentBookkeepingEnabled ?? false}
+              disabled={!masterEnabled || silentBookkeepingMutation.isPending}
+              onValueChange={enabled => silentBookkeepingMutation.mutate(enabled)}
               trackColor={{ false: styles._colors.divider, true: styles._colors.primary }}
               thumbColor="#FFFFFF"
             />

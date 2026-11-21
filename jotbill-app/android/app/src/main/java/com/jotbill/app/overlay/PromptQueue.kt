@@ -101,9 +101,8 @@ internal class PromptQueue(
         firstSeenAt.remove(pendingId)
     }
 
-    /** 清空队列（功能停用、进程状态重置时调用），返回清除的条数。 */
-    fun clear(): Int {
-        val removed = entries.size
+    fun clear(): List<PendingChangeInfo> {
+        val removed = entries.map { it.info }
         entries.clear()
         firstSeenAt.clear()
         return removed

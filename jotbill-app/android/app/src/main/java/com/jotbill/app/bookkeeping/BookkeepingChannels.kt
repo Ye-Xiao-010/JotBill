@@ -1,6 +1,7 @@
 package com.jotbill.app.bookkeeping
 
 import android.content.Context
+import com.jotbill.app.recognition.RecognitionPackages
 import com.jotbill.app.utils.JotBillLog
 
 /**
@@ -149,6 +150,16 @@ object BookkeepingChannels {
         if (!isMasterEnabled(context)) return false
         val channel = PACKAGES[packageName] ?: return false
         return isChannelEnabled(context, channel.key)
+    }
+
+    // Recognized shopping apps without an individual switch follow the master switch.
+    internal fun shouldProcessPaymentResult(context: Context, packageName: String): Boolean {
+        if (!isMasterEnabled(context)) return false
+        if (packageName !in RecognitionPackages.PAYMENT_PACKAGES && packageName !in RecognitionPackages.SHOPPING_PACKAGES) {
+            return false
+        }
+        val channel = PACKAGES[packageName]
+        return channel == null || isChannelEnabled(context, channel.key)
     }
 
     /** 通道键是否合法（桥接层 setChannelEnabled 校验用）。 */

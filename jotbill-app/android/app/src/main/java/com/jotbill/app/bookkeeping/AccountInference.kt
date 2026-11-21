@@ -4,7 +4,12 @@ import android.content.Context
 import com.jotbill.app.data.entity.AccountEntity
 import org.json.JSONArray
 
-data class BankCardEvidence(val bankName: String, val tail: String, val subtype: String?)
+data class BankCardEvidence(
+    val bankName: String,
+    val tail: String,
+    val subtype: String?,
+    val creditOnly: Boolean = false
+)
 
 /**
  * 账户推断结果（三态）：唯一命中 / 多候选需人工核对 / 无命中。

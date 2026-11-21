@@ -1461,6 +1461,7 @@ open class CheckoutAccessibilityService : AccessibilityService() {
         event: AccessibilityEvent,
         paymentPackage: String
     ) {
+        val recognitionEnabled = BookkeepingChannels.shouldProcessPaymentResult(applicationContext, paymentPackage)
         val observedAt = System.currentTimeMillis()
         val includeWindows =
             event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED ||
@@ -1476,11 +1477,12 @@ open class CheckoutAccessibilityService : AccessibilityService() {
                     "type=${AccessibilityEvent.eventTypeToString(event.eventType)}, class=${event.className}"
             )
             // 空树帧也可能是支付交接瞬间的暂态（D-9 记录过）：同样进入重扫兜底。
-            schedulePaymentResultRescan(paymentPackage, event.className?.toString())
+            if (recognitionEnabled) schedulePaymentResultRescan(paymentPackage, event.className?.toString())
             return
         }
 
         var sawResultPage = false
+        var sawSensitiveFrame = false
         try {
             for ((rootIndex, root) in roots.withIndex()) {
                 try {
@@ -1491,9 +1493,10 @@ open class CheckoutAccessibilityService : AccessibilityService() {
                         observedAt = observedAt,
                         includeHiddenText = true
                     )
-                    // 付款确认弹窗的帧级敏感门禁依据（支付密码页帧为敏感时不得弹出）。
+                    // The overlay still needs a safety observation for independently enabled SMS.
+                    sawSensitiveFrame = sawSensitiveFrame || observation.isSensitivePage
                     PendingConfirmOverlayManager.onObservationState(
-                        sensitive = observation.isSensitivePage,
+                        sensitive = if (recognitionEnabled) observation.isSensitivePage else sawSensitiveFrame,
                         foregroundPackage = paymentPackage
                     )
 
@@ -1513,6 +1516,8 @@ open class CheckoutAccessibilityService : AccessibilityService() {
                         )
                         continue
                     }
+
+                    if (!recognitionEnabled) continue
 
                     if (observation.pageRole == CheckoutPageRole.PAYMENT_RESULT) {
                         sawResultPage = true
@@ -1760,9 +1765,7 @@ open class CheckoutAccessibilityService : AccessibilityService() {
             }
         }
 
-        // 走到这里 = 本帧没有任何证据产出（Success / 转账 / 幂等命中都提前 return）。
-        // 结果页静止后事件流停摆是"证据饿死"的最后一个成因，排短周期重扫兜底。
-        schedulePaymentResultRescan(paymentPackage, event.className?.toString())
+        if (recognitionEnabled) schedulePaymentResultRescan(paymentPackage, event.className?.toString())
     }
 
     /**
@@ -1990,6 +1993,7 @@ open class CheckoutAccessibilityService : AccessibilityService() {
         transfer: PaymentPersonalTransfer,
         paymentPackage: String
     ) {
+        if (!BookkeepingChannels.shouldProcessPaymentResult(applicationContext, paymentPackage)) return
         val matcher = synchronized(aiLifecycleLock) { paymentMatcher }
             ?: run {
                 val database = JotBillDatabaseProvider.get(applicationContext)
@@ -2113,6 +2117,7 @@ open class CheckoutAccessibilityService : AccessibilityService() {
         evidence: PaymentResultEvidence,
         aiUnverified: Boolean = false
     ): String? {
+        if (!BookkeepingChannels.shouldProcessPaymentResult(applicationContext, paymentPackage)) return null
         // 模型调整（2026-11-16）：结果页证据作为首笔信号直接入账；后续同额信号
         // （短信/通知）在 SignalBillWriter 的 60 秒窗内补全账户/商户/订单号。
         val channelLabel = AutoBookkeeper.channelLabel(paymentPackage)

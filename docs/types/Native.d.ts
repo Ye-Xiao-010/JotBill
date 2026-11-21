@@ -1236,8 +1236,14 @@ export interface InstallApkModule {
 /**
  * 运行状态接口
  */
+export type RecognitionPermission = 'accessibility' | 'notificationAccess' | 'overlay' | 'appNotifications';
+export type RecognitionPermissionState = 'not_required' | 'ready' | 'missing' | 'disconnected';
+export type RecognitionPermissions = Record<RecognitionPermission, RecognitionPermissionState>;
+
 export interface RuntimeModule {
   getRuntimeHealth(): Promise<RuntimeHealth>;
+  getRecognitionPermissions(): Promise<RecognitionPermissions>;
+  openRecognitionPermissionSettings(permission: RecognitionPermission): Promise<void>;
   /** 通知权限契约变更：打开通知监听专用系统设置页。 */
   openNotificationListenerSettings(): Promise<void>;
   /** 打开系统电池优化列表，由用户自行选择是否放行后台。 */
@@ -1263,6 +1269,7 @@ export interface AutoBookkeepingChannelMeta {
 
 export interface AutoBookkeepingSettings {
   masterEnabled: boolean;
+  silentBookkeepingEnabled: boolean;
   keepAliveEnabled: boolean;
   keepAlivePrompted: boolean;
   keepAliveRunning: boolean;
@@ -1279,6 +1286,7 @@ export interface AutoBookkeepingRuleStats {
 export interface AutoBookkeepingModule {
   getSettings(): Promise<AutoBookkeepingSettings>;
   setMasterEnabled(enabled: boolean): Promise<void>;
+  setSilentBookkeepingEnabled(enabled: boolean): Promise<void>;
   setChannelEnabled(channel: string, enabled: boolean): Promise<void>;
   setKeepAliveEnabled(enabled: boolean): Promise<void>;
   markKeepAlivePrompted(): Promise<void>;

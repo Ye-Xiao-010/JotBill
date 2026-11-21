@@ -180,7 +180,7 @@ class PromptQueueTest {
         queue.offer(info("pending-1"))
         queue.offer(info("pending-2"))
 
-        assertEquals(2, queue.clear())
+        assertEquals(listOf("pending-1", "pending-2"), queue.clear().map { it.pendingId })
         assertEquals(0, queue.size)
         assertEquals(PromptQueue.PollResult.Empty, queue.poll())
     }

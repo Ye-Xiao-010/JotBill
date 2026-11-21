@@ -20,8 +20,14 @@ export interface RuntimeHealth {
 
 export type RuntimeStatus = RuntimeHealth;
 
+export type RecognitionPermission = 'accessibility' | 'notificationAccess' | 'overlay' | 'appNotifications';
+export type RecognitionPermissionState = 'not_required' | 'ready' | 'missing' | 'disconnected';
+export type RecognitionPermissions = Record<RecognitionPermission, RecognitionPermissionState>;
+
 interface RawRuntimeModule {
   getRuntimeHealth(): Promise<string>;
+  getRecognitionPermissions(): Promise<string>;
+  openRecognitionPermissionSettings(permission: RecognitionPermission): Promise<null>;
   openNotificationListenerSettings(): Promise<null>;
   openBatteryOptimizationSettings(): Promise<null>;
   exportDiagLog(): Promise<string>;
@@ -38,6 +44,14 @@ function getRawRuntimeModule(): RawRuntimeModule {
 export const nativeRuntime = {
   async getRuntimeHealth(): Promise<RuntimeHealth> {
     return JSON.parse(await getRawRuntimeModule().getRuntimeHealth()) as RuntimeHealth;
+  },
+
+  async getRecognitionPermissions(): Promise<RecognitionPermissions> {
+    return JSON.parse(await getRawRuntimeModule().getRecognitionPermissions()) as RecognitionPermissions;
+  },
+
+  async openRecognitionPermissionSettings(permission: RecognitionPermission): Promise<void> {
+    await getRawRuntimeModule().openRecognitionPermissionSettings(permission);
   },
 
   /**

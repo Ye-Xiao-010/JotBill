@@ -1,5 +1,6 @@
 import { NativeModules } from 'react-native';
 import { nativeAi, type AiBudgetSummary, type AiCostRecord } from '../src/native/ai';
+import { nativeAutoBookkeeping, type AutoBookkeepingSettings } from '../src/native/autoBookkeeping';
 import { nativeBackup } from '../src/native/backup';
 import {
   nativeData,
@@ -137,6 +138,46 @@ test('Runtime 模块返回阶段二基础状态摘要', async () => {
   modules.Runtime = { getRuntimeHealth };
 
   expect(await nativeRuntime.getRuntimeHealth()).toEqual(declaredRuntime(status));
+});
+
+test('静默记账通过独立的原生设置读写', async () => {
+  const settings = {
+    masterEnabled: true,
+    silentBookkeepingEnabled: false,
+    keepAliveEnabled: false,
+    keepAlivePrompted: true,
+    keepAliveRunning: false,
+    channels: { alipay: true, mms: false },
+    channelMeta: [],
+  } satisfies AutoBookkeepingSettings;
+  const setSilentBookkeepingEnabled = jest.fn().mockResolvedValue(null);
+  modules.AutoBookkeeping = {
+    getSettings: jest.fn().mockResolvedValue(JSON.stringify(settings)),
+    setSilentBookkeepingEnabled,
+  };
+  expect(await nativeAutoBookkeeping.getSettings()).toEqual(settings);
+  await nativeAutoBookkeeping.setSilentBookkeepingEnabled(true);
+  await nativeAutoBookkeeping.setSilentBookkeepingEnabled(false);
+  expect(setSilentBookkeepingEnabled.mock.calls).toEqual([[true], [false]]);
+});
+
+test('Runtime 区分权限掉落、服务断开和无需权限，并能打开指定设置', async () => {
+  const state = {
+    accessibility: 'disconnected',
+    notificationAccess: 'missing',
+    overlay: 'ready',
+    appNotifications: 'not_required',
+  } as const;
+  const openRecognitionPermissionSettings = jest.fn().mockResolvedValue(null);
+  modules.Runtime = {
+    getRecognitionPermissions: jest.fn().mockResolvedValue(JSON.stringify(state)),
+    openRecognitionPermissionSettings,
+  };
+
+  expect(await nativeRuntime.getRecognitionPermissions()).toEqual(state);
+  await nativeRuntime.openRecognitionPermissionSettings('accessibility');
+  await nativeRuntime.openRecognitionPermissionSettings('notificationAccess');
+  expect(openRecognitionPermissionSettings.mock.calls).toEqual([['accessibility'], ['notificationAccess']]);
 });
 
 test('Backup 模块只通过 CSV 导出和清库边界', async () => {

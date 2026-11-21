@@ -77,6 +77,7 @@ export const QUERY_KEYS = {
   // 识别链路相关
   recognition: {
     status: ['recognition', 'status'] as const,
+    permissions: ['recognition', 'permissions'] as const,
     accessibility: ['recognition', 'accessibility'] as const,
     notification: ['recognition', 'notification'] as const,
     pending: ['recognition', 'pending'] as const,

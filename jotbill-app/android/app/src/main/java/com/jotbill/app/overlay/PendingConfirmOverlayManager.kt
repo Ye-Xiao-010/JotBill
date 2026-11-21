@@ -62,6 +62,7 @@ internal object PendingConfirmOverlayManager {
     private const val TAG = "PendingConfirmOverlay"
     private const val PREFS_NAME = "pending_confirm_overlay"
     private const val KEY_ENABLED = "enabled"
+    private const val KEY_SILENT_BOOKKEEPING = "silent_bookkeeping"
     private const val KEY_LAST_CATEGORY_ID = "last_category_id"
 
     /**
@@ -387,22 +388,32 @@ internal object PendingConfirmOverlayManager {
         }
     }
 
-    fun isEnabled(context: Context): Boolean =
+    private fun popupPreferences(context: Context) =
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            .getBoolean(KEY_ENABLED, true)
+
+    fun isEnabled(context: Context): Boolean = popupPreferences(context).run {
+        getBoolean(KEY_ENABLED, true) && !getBoolean(KEY_SILENT_BOOKKEEPING, false)
+    }
+
+    fun isSilentBookkeepingEnabled(context: Context): Boolean =
+        popupPreferences(context).getBoolean(KEY_SILENT_BOOKKEEPING, false)
+
+    fun setSilentBookkeepingEnabled(context: Context, enabled: Boolean) {
+        popupPreferences(context).edit().putBoolean(KEY_SILENT_BOOKKEEPING, enabled).apply()
+        if (enabled) dismissDisabledPrompts()
+    }
 
     fun setEnabled(context: Context, enabled: Boolean) {
-        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            .edit().putBoolean(KEY_ENABLED, enabled).apply()
-        if (!enabled) {
-            mainHandler.post {
-                // 停用即清队列：功能关掉后不得再补播任何历史候选。
-                val dropped = promptQueue.clear()
-                if (dropped > 0) {
-                    JotBillLog.i(TAG, "弹窗候选队列已清空(功能停用): dropped=$dropped")
-                }
-                dismissInternal("DISABLED")
-            }
+        popupPreferences(context).edit().putBoolean(KEY_ENABLED, enabled).apply()
+        if (!enabled) dismissDisabledPrompts()
+    }
+
+    private fun dismissDisabledPrompts() {
+        mainHandler.post {
+            val dropped = promptQueue.clear()
+            dropped.filter { it.isEditCard }.forEach { cleanupEditCard(it.pendingId, "DISABLED") }
+            waitingCandidate?.takeIf { it.isEditCard }?.let { cleanupEditCard(it.pendingId, "DISABLED") }
+            dismissInternal("DISABLED")
         }
     }
 
@@ -530,6 +541,11 @@ internal object PendingConfirmOverlayManager {
             JotBillLog.i(TAG, "弹窗忽略更新事件: id=${info.pendingId.take(16)}")
             return
         }
+        val context = appContext ?: return
+        if (!isEnabled(context)) {
+            if (info.isEditCard) cleanupEditCard(info.pendingId, "DISABLED")
+            return
+        }
         if (overlayView != null || waitingCandidate != null || inFlightCandidate != null) {
             // 已有弹窗 / 挂起候选 / 在途上屏：不叠加
             // （去重由 policy 的窗口键兜底跨笔场景）。
@@ -589,6 +605,9 @@ internal object PendingConfirmOverlayManager {
                 )
                 when (decision) {
                     is PendingPromptPolicy.Decision.Skip -> {
+                        if (decision.reason == PendingPromptPolicy.SkipReason.DISABLED && info.isEditCard) {
+                            cleanupEditCard(info.pendingId, "DISABLED")
+                        }
                         JotBillLog.i(
                             TAG,
                             "弹窗跳过: ${decision.reason.wireValue}, id=${info.pendingId.take(16)}"
@@ -980,6 +999,7 @@ internal object PendingConfirmOverlayManager {
     private fun evaluateGate(): GateVerdict {
         val context = appContext
             ?: return GateVerdict(false, "APP_CONTEXT_NULL")
+        if (!isEnabled(context)) return GateVerdict(false, "DISABLED")
         val now = System.currentTimeMillis()
         val observationAge = now - lastObservationAt
         if (observationAge > OBSERVATION_FRESH_MILLIS) {
@@ -1114,6 +1134,10 @@ internal object PendingConfirmOverlayManager {
 
     private fun displayOverlay(pendingRow: PendingTransactionEntity) {
         val context = appContext ?: return
+        if (!isEnabled(context)) {
+            if (EditCardMarker.isEditCard(pendingRow.appliedRules)) cleanupEditCard(pendingRow.id, "DISABLED")
+            return
+        }
         if (!hasOverlayPermission(context)) {
             val snapshot = readOverlayPermSnapshot(context)
             JotBillLog.i(
@@ -1335,9 +1359,9 @@ internal object PendingConfirmOverlayManager {
                     JotBillLog.w(TAG, "弹窗重建前移除失败", error)
                 }
                 mainHandler.postDelayed({
-                    if (overlayView !== view) {
-                        return@postDelayed
-                    }
+                    if (overlayView !== view) return@postDelayed
+                    val context = appContext ?: return@postDelayed
+                    if (!isEnabled(context)) return@postDelayed
                     try {
                         windowManager?.addView(view, createLayoutParams())
                         JotBillLog.i(TAG, "弹窗已重建上屏: id=${displayedPendingId?.take(16)}")
