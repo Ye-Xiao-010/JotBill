@@ -20,20 +20,100 @@ import { ThemeColors } from '../theme/colors';
 import { spacing, borderRadius, borderWidth, shadow } from '../theme/spacing';
 import { ProgressBar, BrutalPressable } from '../components/ui';
 import CategoryIcon from '../components/business/CategoryIcon';
+import { getBudgetStatusColor } from '../constants/app';
 import { useStyles, useToast } from '../hooks';
 import { useAlert, useTheme } from '../providers';
-import { nativeData, type BudgetInput, type BudgetProgress, type Category } from '../native';
+import { nativeData, type BudgetInput, type BudgetPeriod, type BudgetProgress, type Category } from '../native';
 import { QUERY_KEYS, invalidateCache } from '../lib/queryClient';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { typography } from '../theme';
 
-type BudgetPeriod = 'monthly' | 'yearly';
+const PERIOD_OPTIONS: Array<{ value: BudgetPeriod; label: string }> = [
+  { value: 'monthly', label: '月度' },
+  { value: 'weekly', label: '每周' },
+  { value: 'biweekly', label: '每两周' },
+  { value: 'quarterly', label: '每季度' },
+  { value: 'yearly', label: '年度' },
+  { value: 'once', label: '一次性' },
+];
+
+const WEEKDAY_OPTIONS = [
+  { value: 1, label: '周一' },
+  { value: 2, label: '周二' },
+  { value: 3, label: '周三' },
+  { value: 4, label: '周四' },
+  { value: 5, label: '周五' },
+  { value: 6, label: '周六' },
+  { value: 7, label: '周日' },
+];
 
 function formatAmount(amountMinor: number): string {
   return (amountMinor / 100).toLocaleString('zh-CN', {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   });
+}
+
+function localDateString(date: Date): string {
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${date.getFullYear()}-${month}-${day}`;
+}
+
+function todayDateString(): string {
+  return localDateString(new Date());
+}
+
+function addDays(dateString: string, days: number): string {
+  const [year, month, day] = dateString.split('-').map(Number);
+  const date = new Date(year, month - 1, day + days);
+  return localDateString(date);
+}
+
+function isValidDateString(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return false;
+  }
+  const [year, month, day] = value.split('-').map(Number);
+  const date = new Date(year, month - 1, day);
+  return (
+    date.getFullYear() === year &&
+    date.getMonth() === month - 1 &&
+    date.getDate() === day
+  );
+}
+
+function periodTypeLabel(period: BudgetPeriod): string {
+  return PERIOD_OPTIONS.find(option => option.value === period)?.label ?? period;
+}
+
+function describePeriod(
+  period: BudgetPeriod,
+  startDay: string,
+  weekStart: number,
+  anchorDate: string,
+  rangeStartDate: string,
+  rangeEndDate: string,
+): string {
+  switch (period) {
+    case 'monthly': {
+      const day = Number(startDay || '1');
+      const shortMonthHint = day >= 29 && day <= 31 ? '（短月按当月最后一天）' : '';
+      return `每月 ${startDay || '1'} 日至次月前一日${shortMonthHint}`;
+    }
+    case 'weekly':
+      return `从${WEEKDAY_OPTIONS.find(option => option.value === weekStart)?.label ?? '周一'}起，7 天为一期`;
+    case 'biweekly':
+      return `从 ${anchorDate || '锚点日'} 起，每 14 天为一期`;
+    case 'quarterly':
+      return '自然季度：1/4/7/10 月 1 日起';
+    case 'yearly':
+      return '自然年：1 月 1 日起';
+    case 'once':
+      return `${rangeStartDate || '开始日'} 至 ${rangeEndDate || '结束日'}（含当日）`;
+    default:
+      return '';
+  }
 }
 
 export default function BudgetScreen() {
@@ -51,6 +131,11 @@ export default function BudgetScreen() {
   const [formName, setFormName] = useState('');
   const [formAmount, setFormAmount] = useState('');
   const [formPeriod, setFormPeriod] = useState<BudgetPeriod>('monthly');
+  const [formStartDay, setFormStartDay] = useState('1');
+  const [formWeekStart, setFormWeekStart] = useState(1);
+  const [formAnchorDate, setFormAnchorDate] = useState('');
+  const [formRangeStartDate, setFormRangeStartDate] = useState('');
+  const [formRangeEndDate, setFormRangeEndDate] = useState('');
   const [formCategoryId, setFormCategoryId] = useState<string | undefined>(undefined);
   const [formAlertAt, setFormAlertAt] = useState('80');
 
@@ -68,8 +153,12 @@ export default function BudgetScreen() {
   const budgets = budgetsData ?? [];
   const categoryMap = new Map((categories ?? []).map((category) => [category.id, category]));
   const totalBudgets = budgets.length;
-  const activeBudgets = budgets.filter(b => b.isActive && !b.isOverBudget).length;
-  const overBudgets = budgets.filter(b => b.isOverBudget).length;
+  const activeBudgets = budgets.filter(
+    b => b.isActive && b.isPeriodActive !== false && !b.isOverBudget,
+  ).length;
+  const overBudgets = budgets.filter(
+    b => b.isActive && b.isPeriodActive !== false && b.isOverBudget,
+  ).length;
 
   // 创建 mutation
   const createMutation = useMutation({
@@ -101,20 +190,32 @@ export default function BudgetScreen() {
 
   // 表单操作
   const openCreateModal = () => {
+    const today = todayDateString();
     setEditingBudget(null);
     setFormName('');
     setFormAmount('');
     setFormPeriod('monthly');
+    setFormStartDay('1');
+    setFormWeekStart(1);
+    setFormAnchorDate(today);
+    setFormRangeStartDate(today);
+    setFormRangeEndDate(addDays(today, 30));
     setFormCategoryId(undefined);
     setFormAlertAt('80');
     setShowFormModal(true);
   };
 
   const openEditModal = (budget: BudgetProgress) => {
+    const today = todayDateString();
     setEditingBudget(budget);
     setFormName(budget.name);
     setFormAmount((budget.amountMinor / 100).toFixed(2));
     setFormPeriod(budget.period);
+    setFormStartDay(String(budget.startDay ?? 1));
+    setFormWeekStart(budget.weekStart ?? 1);
+    setFormAnchorDate(budget.anchorDate ?? today);
+    setFormRangeStartDate(budget.rangeStartDate ?? today);
+    setFormRangeEndDate(budget.rangeEndDate ?? addDays(today, 30));
     setFormCategoryId(budget.categoryId);
     setFormAlertAt(String(budget.alertAt));
     setShowFormModal(true);
@@ -140,6 +241,27 @@ export default function BudgetScreen() {
       showError('预警阈值须在 0-100 之间');
       return;
     }
+    if (formPeriod === 'monthly') {
+      const startDay = parseInt(formStartDay, 10);
+      if (!/^\d{1,2}$/.test(formStartDay) || startDay < 1 || startDay > 31) {
+        showError('每月起始日须在 1-31 之间');
+        return;
+      }
+    }
+    if (formPeriod === 'biweekly' && !isValidDateString(formAnchorDate)) {
+      showError('请输入有效的锚点日期（YYYY-MM-DD）');
+      return;
+    }
+    if (formPeriod === 'once') {
+      if (!isValidDateString(formRangeStartDate) || !isValidDateString(formRangeEndDate)) {
+        showError('请输入有效的起止日期（YYYY-MM-DD）');
+        return;
+      }
+      if (formRangeEndDate < formRangeStartDate) {
+        showError('结束日期不能早于开始日期');
+        return;
+      }
+    }
 
     const payload: BudgetInput = {
       name: formName.trim(),
@@ -148,6 +270,16 @@ export default function BudgetScreen() {
       categoryId: formCategoryId,
       alertAt,
     };
+    if (formPeriod === 'monthly') {
+      payload.startDay = parseInt(formStartDay, 10);
+    } else if (formPeriod === 'weekly') {
+      payload.weekStart = formWeekStart;
+    } else if (formPeriod === 'biweekly') {
+      payload.anchorDate = formAnchorDate;
+    } else if (formPeriod === 'once') {
+      payload.rangeStartDate = formRangeStartDate;
+      payload.rangeEndDate = formRangeEndDate;
+    }
 
     if (editingBudget) {
       updateMutation.mutate({ id: editingBudget.id, data: payload });
@@ -171,9 +303,7 @@ export default function BudgetScreen() {
   }, [refetch]);
 
   const getProgressColor = (budget: BudgetProgress) => {
-    if (budget.isOverBudget) { return colors.error; }
-    if (budget.needsAlert) { return '#F59E0B'; }
-    return colors.success;
+    return getBudgetStatusColor(budget.isOverBudget, budget.needsAlert, colors);
   };
 
   const getCategoryIcon = (budget: BudgetProgress) => {
@@ -245,17 +375,27 @@ export default function BudgetScreen() {
                   </View>
                   <View style={styles.budgetTitleGroup}>
                     <Text style={styles.budgetName} numberOfLines={1}>{budget.name}</Text>
-                    {categoryMap.get(budget.categoryId ?? '') && (
-                      <Text style={styles.budgetCategory}>
-                        {categoryMap.get(budget.categoryId ?? '')?.name}
-                      </Text>
-                    )}
+                    <Text style={styles.budgetCategory}>
+                      {periodTypeLabel(budget.period)}
+                      {categoryMap.get(budget.categoryId ?? '')?.name
+                        ? ` · ${categoryMap.get(budget.categoryId ?? '')?.name}`
+                        : ''}
+                    </Text>
                   </View>
                 </View>
                 <View style={styles.badgeRow}>
+                  {budget.isPeriodActive === false && (
+                    <View style={styles.inactiveBadge}>
+                      <Text style={styles.inactiveBadgeText}>
+                        {new Date(budget.periodEndAt).getTime() < Date.now()
+                          ? '已结束'
+                          : '未开始'}
+                      </Text>
+                    </View>
+                  )}
                   <View style={styles.periodBadge}>
-                    <Text style={styles.periodText}>
-                      {budget.period === 'monthly' ? '本月' : '本年'}
+                    <Text style={styles.periodText} numberOfLines={1}>
+                      {budget.periodLabel ?? periodTypeLabel(budget.period)}
                     </Text>
                   </View>
                   <View style={[
@@ -266,7 +406,7 @@ export default function BudgetScreen() {
                       styles.percentText,
                       budget.isOverBudget && styles.overBudgetBadgeText,
                     ]}>
-                      {Math.round(budget.progress * 100)}%
+                      {budget.progressPct ?? Math.round(budget.progress * 100)}%
                     </Text>
                   </View>
                 </View>
@@ -291,6 +431,13 @@ export default function BudgetScreen() {
                   / 预算 ¥{formatAmount(budget.amountMinor)}
                 </Text>
               </View>
+
+              {budget.refundMinor > 0 && (
+                <Text style={styles.budgetRefundText}>
+                  支出 ¥{formatAmount(budget.grossSpentMinor)} − 退款 ¥{formatAmount(budget.refundMinor)} = 已用 ¥{formatAmount(budget.spentMinor)}
+                  {budget.refundMinor > budget.grossSpentMinor ? '（净额下限 0）' : ''}
+                </Text>
+              )}
 
               {/* Over-budget warning */}
               {budget.isOverBudget && (
@@ -358,25 +505,108 @@ export default function BudgetScreen() {
 
               <Text style={styles.inputLabel}>预算周期</Text>
               <View style={styles.periodPicker}>
-                <TouchableOpacity
-                  style={[styles.periodOption, formPeriod === 'monthly' && styles.periodOptionSelected]}
-                  onPress={() => setFormPeriod('monthly')}
-                >
-                  <Text style={[
-                    styles.periodOptionText,
-                    formPeriod === 'monthly' && styles.periodOptionTextSelected,
-                  ]}>月度</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[styles.periodOption, formPeriod === 'yearly' && styles.periodOptionSelected]}
-                  onPress={() => setFormPeriod('yearly')}
-                >
-                  <Text style={[
-                    styles.periodOptionText,
-                    formPeriod === 'yearly' && styles.periodOptionTextSelected,
-                  ]}>年度</Text>
-                </TouchableOpacity>
+                {PERIOD_OPTIONS.map((option) => (
+                  <TouchableOpacity
+                    key={option.value}
+                    style={[
+                      styles.periodOption,
+                      formPeriod === option.value && styles.periodOptionSelected,
+                    ]}
+                    onPress={() => setFormPeriod(option.value)}
+                  >
+                    <Text style={[
+                      styles.periodOptionText,
+                      formPeriod === option.value && styles.periodOptionTextSelected,
+                    ]}>{option.label}</Text>
+                  </TouchableOpacity>
+                ))}
               </View>
+
+              {formPeriod === 'monthly' && (
+                <>
+                  <Text style={styles.inputLabel}>每月起始日（1-31，31 表示月末）</Text>
+                  <TextInput
+                    style={styles.textInput}
+                    value={formStartDay}
+                    onChangeText={setFormStartDay}
+                    placeholder="1"
+                    placeholderTextColor={colors.textTertiary}
+                    keyboardType="number-pad"
+                    maxLength={2}
+                  />
+                </>
+              )}
+
+              {formPeriod === 'weekly' && (
+                <>
+                  <Text style={styles.inputLabel}>每周起始日</Text>
+                  <View style={styles.weekdayPicker}>
+                    {WEEKDAY_OPTIONS.map((option) => (
+                      <TouchableOpacity
+                        key={option.value}
+                        style={[
+                          styles.weekdayOption,
+                          formWeekStart === option.value && styles.weekdayOptionSelected,
+                        ]}
+                        onPress={() => setFormWeekStart(option.value)}
+                      >
+                        <Text style={[
+                          styles.weekdayText,
+                          formWeekStart === option.value && styles.weekdayTextSelected,
+                        ]}>{option.label}</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                </>
+              )}
+
+              {formPeriod === 'biweekly' && (
+                <>
+                  <Text style={styles.inputLabel}>锚点日期（YYYY-MM-DD）</Text>
+                  <TextInput
+                    style={styles.textInput}
+                    value={formAnchorDate}
+                    onChangeText={setFormAnchorDate}
+                    placeholder="如：2026-11-02"
+                    placeholderTextColor={colors.textTertiary}
+                    autoCapitalize="none"
+                  />
+                </>
+              )}
+
+              {formPeriod === 'once' && (
+                <>
+                  <Text style={styles.inputLabel}>开始日期（YYYY-MM-DD）</Text>
+                  <TextInput
+                    style={styles.textInput}
+                    value={formRangeStartDate}
+                    onChangeText={setFormRangeStartDate}
+                    placeholder="如：2026-11-01"
+                    placeholderTextColor={colors.textTertiary}
+                    autoCapitalize="none"
+                  />
+                  <Text style={styles.inputLabel}>结束日期（YYYY-MM-DD，含当日）</Text>
+                  <TextInput
+                    style={styles.textInput}
+                    value={formRangeEndDate}
+                    onChangeText={setFormRangeEndDate}
+                    placeholder="如：2026-11-30"
+                    placeholderTextColor={colors.textTertiary}
+                    autoCapitalize="none"
+                  />
+                </>
+              )}
+
+              <Text style={styles.periodHint}>
+                {describePeriod(
+                  formPeriod,
+                  formStartDay,
+                  formWeekStart,
+                  formAnchorDate,
+                  formRangeStartDate,
+                  formRangeEndDate,
+                )}
+              </Text>
 
               <Text style={styles.inputLabel}>关联分类（可选）</Text>
               <ScrollView
@@ -632,11 +862,25 @@ const createStyles = (colors: ThemeColors) => ({
       borderColor: colors.stroke,
       paddingHorizontal: spacing.sm,
       paddingVertical: spacing.xs,
+      flexShrink: 1,
     },
     periodText: {
       fontSize: 11,
       fontWeight: '700',
       color: colors.textPrimary,
+    },
+    inactiveBadge: {
+      backgroundColor: colors.divider,
+      borderRadius: borderRadius.small,
+      borderWidth: borderWidth.thin,
+      borderColor: colors.stroke,
+      paddingHorizontal: spacing.xs,
+      paddingVertical: 2,
+    },
+    inactiveBadgeText: {
+      fontSize: 10,
+      fontWeight: '800',
+      color: colors.textSecondary,
     },
     percentBadge: {
       backgroundColor: colors.accent,
@@ -686,6 +930,13 @@ const createStyles = (colors: ThemeColors) => ({
       color: colors.textTertiary,
       fontFamily: typography.fontFamily.mono,
       marginLeft: spacing.xs,
+    },
+    budgetRefundText: {
+      fontSize: 12,
+      fontWeight: '600',
+      color: colors.textTertiary,
+      fontFamily: typography.fontFamily.mono,
+      marginBottom: spacing.sm,
     },
 
     // Warning
@@ -782,10 +1033,12 @@ const createStyles = (colors: ThemeColors) => ({
     // Period picker
     periodPicker: {
       flexDirection: 'row',
+      flexWrap: 'wrap',
       gap: spacing.sm,
     },
     periodOption: {
-      flex: 1,
+      flexGrow: 1,
+      flexBasis: '30%',
       paddingVertical: spacing.md,
       borderRadius: borderRadius.button,
       borderWidth: borderWidth.thin,
@@ -803,6 +1056,41 @@ const createStyles = (colors: ThemeColors) => ({
       color: colors.textSecondary,
     },
     periodOptionTextSelected: {
+      color: colors.primary,
+      fontWeight: '800',
+    },
+    periodHint: {
+      fontSize: 12,
+      fontWeight: '600',
+      color: colors.textTertiary,
+      marginTop: spacing.xs,
+      lineHeight: 18,
+    },
+
+    // Weekday picker
+    weekdayPicker: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      gap: spacing.xs,
+    },
+    weekdayOption: {
+      paddingVertical: spacing.sm,
+      paddingHorizontal: spacing.sm,
+      borderRadius: borderRadius.button,
+      borderWidth: borderWidth.thin,
+      borderColor: colors.stroke,
+      backgroundColor: colors.background,
+    },
+    weekdayOptionSelected: {
+      borderWidth: borderWidth.medium,
+      backgroundColor: colors.primaryLight,
+    },
+    weekdayText: {
+      fontSize: 13,
+      fontWeight: '700',
+      color: colors.textSecondary,
+    },
+    weekdayTextSelected: {
       color: colors.primary,
       fontWeight: '800',
     },

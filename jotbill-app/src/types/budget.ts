@@ -2,7 +2,13 @@
  * 预算相关类型定义
  */
 
-export type BudgetPeriod = 'monthly' | 'yearly';
+export type BudgetPeriod =
+  | 'monthly'
+  | 'weekly'
+  | 'biweekly'
+  | 'quarterly'
+  | 'yearly'
+  | 'once';
 
 export interface BudgetData {
   id: number;

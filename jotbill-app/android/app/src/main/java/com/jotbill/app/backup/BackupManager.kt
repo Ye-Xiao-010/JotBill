@@ -533,8 +533,33 @@ internal class BackupManager(
             validateText(row, "id")
             validateText(row, "name")
             validateMinor(requiredLong(row, "amountMinor"), allowNegative = false)
-            if (requiredString(row, "period") !in BUDGET_PERIODS) {
+            val period = requiredString(row, "period")
+            if (period !in BUDGET_PERIODS) {
                 throw BackupException("BACKUP_VALIDATION_FAILED", "预算周期不合法")
+            }
+            val startDay = optionalInt(row, "startDay")
+            if (startDay != null && startDay !in 1..31) {
+                throw BackupException("BACKUP_VALIDATION_FAILED", "预算月起始日不合法")
+            }
+            val weekStart = optionalInt(row, "weekStart")
+            if (weekStart != null && weekStart !in 1..7) {
+                throw BackupException("BACKUP_VALIDATION_FAILED", "预算周起始日不合法")
+            }
+            val anchorAt = optionalLong(row, "anchorAt")
+            val rangeStartAt = optionalLong(row, "rangeStartAt")
+            val rangeEndAt = optionalLong(row, "rangeEndAt")
+            listOfNotNull(anchorAt, rangeStartAt, rangeEndAt).forEach { value ->
+                if (value < 0L) {
+                    throw BackupException("BACKUP_VALIDATION_FAILED", "预算周期时间不合法")
+                }
+            }
+            if (period == "biweekly" && anchorAt == null) {
+                throw BackupException("BACKUP_VALIDATION_FAILED", "双周预算缺少锚点日期")
+            }
+            if (period == "once") {
+                if (rangeStartAt == null || rangeEndAt == null || rangeEndAt < rangeStartAt) {
+                    throw BackupException("BACKUP_VALIDATION_FAILED", "一次性预算区间不合法")
+                }
             }
             val categoryId = optionalString(row, "categoryId")
             if (categoryId != null && categoryId !in categoryIds) {
@@ -795,6 +820,11 @@ internal class BackupManager(
                 put("name", cursor.string("name"))
                 put("amountMinor", cursor.long("amount_minor"))
                 put("period", cursor.string("period"))
+                putNullableInt("startDay", cursor.intOrNull("start_day"))
+                putNullableInt("weekStart", cursor.intOrNull("week_start"))
+                putNullableLong("anchorAt", cursor.longOrNull("anchor_at"))
+                putNullableLong("rangeStartAt", cursor.longOrNull("range_start_at"))
+                putNullableLong("rangeEndAt", cursor.longOrNull("range_end_at"))
                 putNullable("categoryId", cursor.string("category_id"))
                 put("alertAt", cursor.int("alert_at"))
                 put("isActive", cursor.bool("is_active"))
@@ -1070,6 +1100,11 @@ internal class BackupManager(
                 put("name", requiredString(row, "name"))
                 put("amount_minor", requiredLong(row, "amountMinor"))
                 put("period", requiredString(row, "period"))
+                putNullableInt("start_day", optionalInt(row, "startDay"))
+                putNullableInt("week_start", optionalInt(row, "weekStart"))
+                putNullableLong("anchor_at", optionalLong(row, "anchorAt"))
+                putNullableLong("range_start_at", optionalLong(row, "rangeStartAt"))
+                putNullableLong("range_end_at", optionalLong(row, "rangeEndAt"))
                 putNullableString("category_id", optionalString(row, "categoryId"))
                 put("alert_at", requiredInt(row, "alertAt"))
                 put("is_active", requiredBooleanInt(row, "isActive"))
@@ -1588,7 +1623,7 @@ internal class BackupManager(
         val CATEGORY_TYPES = setOf("income", "expense")
         val BILL_TYPES = setOf("income", "expense", "transfer", "refund", "repayment", "fee", "adjustment")
         val SOURCE_TYPES = setOf("ai_vision", "notification", "accessibility", "sms", "import", "manual", "ai_chat")
-        val BUDGET_PERIODS = setOf("monthly", "yearly")
+        val BUDGET_PERIODS = setOf("monthly", "weekly", "biweekly", "quarterly", "yearly", "once")
         val SAFE_SETTING_KEYS = setOf("initialized", "ai_monthly_budget_minor")
     }
 }

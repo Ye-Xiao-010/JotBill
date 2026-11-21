@@ -34,7 +34,7 @@ import { nativeData, nativeRecognition, nativeRuntime } from '../../native';
 import type { RecognitionPermission } from '../../native/runtime';
 import { formatPlatform } from '../../utils/platform';
 import { formatCurrency, formatSignedCurrency, formatTime } from '../../utils/format';
-import { getCategoryIcon, getCategoryColor } from '../../constants/app';
+import { getCategoryIcon, getCategoryColor, getBudgetStatusColor } from '../../constants/app';
 import { groupBillsByDay, limitBillDayGroups, type BillDayGroup } from '../../utils/billGroups';
 import { CACHE_TIME, GC_TIME, QUERY_KEYS } from '../../lib/queryClient';
 import type {
@@ -58,6 +58,8 @@ interface ProgressCardItem {
   color: string;
   labelLeft: string;
   labelRight: string;
+  percent?: number;
+  periodLabel?: string;
 }
 
 interface GoalProgress extends FinancialGoal {
@@ -329,7 +331,9 @@ function ProgressCardCarousel({
                 <View>
                   <Text style={styles.progressCardTitle}>{card.title}</Text>
                   <Text style={styles.progressCardType}>
-                    {card.type === 'budget' ? '预算' : '目标'}
+                    {card.type === 'budget'
+                      ? `预算${card.periodLabel ? ` · ${card.periodLabel}` : ''}`
+                      : '目标'}
                   </Text>
                 </View>
               </View>
@@ -349,7 +353,7 @@ function ProgressCardCarousel({
                       : undefined,
                   ]}
                 >
-                  {Math.round(card.progress)}%
+                  {card.percent ?? Math.round(card.progress)}%
                 </Text>
               </View>
             </View>
@@ -579,23 +583,24 @@ export default function DashboardScreen() {
   const progressCards: ProgressCardItem[] = useMemo(() => {
     const cards: ProgressCardItem[] = [];
 
-    (budgetProgressData ?? []).forEach((b: BudgetProgress) => {
-      cards.push({
-        id: `budget-${b.id}`,
-        type: 'budget',
-        title: b.name,
-        icon: '📊',
-        progress: b.progress * 100,
-        currentAmount: b.spentMinor / 100,
-        totalAmount: b.amountMinor / 100,
-        color: colors.primary,
-        labelLeft: `已用 ¥${(b.spentMinor / 100).toLocaleString()}`,
-        labelRight: `剩余 ¥${Math.max(
-          0,
-          b.remainingMinor / 100,
-        ).toLocaleString()}`,
+    (budgetProgressData ?? [])
+      .filter((b: BudgetProgress) => b.isPeriodActive !== false)
+      .forEach((b: BudgetProgress) => {
+        cards.push({
+          id: `budget-${b.id}`,
+          type: 'budget',
+          title: b.name,
+          icon: '📊',
+          progress: b.progress * 100,
+          currentAmount: b.spentMinor / 100,
+          totalAmount: b.amountMinor / 100,
+          color: getBudgetStatusColor(b.isOverBudget, b.needsAlert, colors),
+          percent: b.progressPct,
+          periodLabel: b.periodLabel,
+          labelLeft: `已用 ${formatCurrency(b.spentMinor / 100)}`,
+          labelRight: `剩余 ${formatCurrency(Math.max(0, b.remainingMinor / 100))}`,
+        });
       });
-    });
 
     (goalProgressData ?? [])
       .filter(g => !g.isCompleted)
@@ -609,6 +614,7 @@ export default function DashboardScreen() {
           currentAmount: g.currentAmountMinor / 100,
           totalAmount: g.targetAmountMinor / 100,
           color: colors.success,
+          percent: Math.round(g.progress),
           labelLeft: `已存 ¥${(g.currentAmountMinor / 100).toLocaleString()}`,
           labelRight: `目标 ¥${(g.targetAmountMinor / 100).toLocaleString()}`,
         });
@@ -616,6 +622,9 @@ export default function DashboardScreen() {
 
     return cards;
   }, [budgetProgressData, goalProgressData, colors]);
+
+  const hasAnyBudgetOrGoal =
+    (budgetProgressData?.length ?? 0) > 0 || (goalProgressData?.length ?? 0) > 0;
 
   // 按本地日期分组（30 条原始数据 → 最多 4 个完整日组 / 12 笔）
   const {
@@ -785,7 +794,9 @@ export default function DashboardScreen() {
           >
             <Text style={styles.progressEmptyIcon}>📊</Text>
             <Text style={styles.progressEmptyText}>
-              设置预算或财务目标来追踪进度
+              {hasAnyBudgetOrGoal
+                ? '当前没有进行中的预算或目标'
+                : '设置预算或财务目标来追踪进度'}
             </Text>
             <Text style={styles.progressEmptyHint}>点击前往设置 →</Text>
           </TouchableOpacity>

@@ -5,6 +5,7 @@ import com.jotbill.app.pending.PendingChangeHub
 import com.jotbill.app.pending.PendingChangeInfo
 import com.jotbill.app.pending.RecentPaymentCooldown
 import com.jotbill.app.pending.RecentResultObservation
+import com.jotbill.app.budget.BudgetReminderNotifier
 import com.jotbill.app.data.CreateBillOutcome
 import com.jotbill.app.data.JotBillDatabase
 import com.jotbill.app.data.LedgerRepository
@@ -1460,6 +1461,10 @@ internal class CheckoutPaymentMatcher(
                 suppressStrongEvidence = true
             )
         }
+        // N-2 强证据自动入账同样绕过 DataModule：提交后补一次预算检查。
+        if (outcome.isAutoCommitted) {
+            runCatching { BudgetReminderNotifier.checkAndNotify(database) }
+        }
         return outcome
     }
 
@@ -1666,7 +1671,7 @@ internal class CheckoutPaymentMatcher(
             )
         // N-1：通知证据放行参与匹配（D-3 整体停用闸已删）。匹配成功后是否自动入账
         // 由 [isNotificationAutoCommitAllowed] 决定，当前仍扣住。
-        return database.withTransaction {
+        val result = database.withTransaction {
             val now = nowMillis()
             val sourceEventKey = sourceEventKey(signal)
             val evidenceDao = database.paymentEvidenceDao()
@@ -1949,6 +1954,11 @@ internal class CheckoutPaymentMatcher(
                 billId = outcome.billId
             )
         }
+        // 自动入账绕过 DataModule：事务提交后补一次预算检查，保证提醒/回落解锁及时。
+        if (result is CheckoutPaymentMatchResult.Accepted && result.billId != null) {
+            runCatching { BudgetReminderNotifier.checkAndNotify(database) }
+        }
+        return result
     }
 
     /**

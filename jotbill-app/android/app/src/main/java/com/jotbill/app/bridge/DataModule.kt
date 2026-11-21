@@ -28,6 +28,8 @@ import com.jotbill.app.pending.PendingChangeHub
 import com.jotbill.app.pending.PendingChangeInfo
 import com.jotbill.app.pending.PendingConfirmService
 import com.jotbill.app.pending.PendingReminderNotifier
+import com.jotbill.app.budget.BudgetPeriods
+import com.jotbill.app.budget.BudgetProgressCalculator
 import com.jotbill.app.budget.BudgetReminderNotifier
 import com.jotbill.app.rules.RuleEngine
 import kotlinx.coroutines.CancellationException
@@ -39,7 +41,6 @@ import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import java.time.LocalDate
-import java.time.ZoneId
 import java.util.UUID
 
 /**
@@ -123,7 +124,7 @@ class DataModule(
                                 .put("budgetId", hit.budget.id)
                                 .put("budgetName", hit.budget.name)
                                 .put("progress", hit.progressPct / 100.0)
-                                .put("isOverBudget", hit.progressPct >= 100)
+                                .put("isOverBudget", hit.isOverBudget)
                         )
                     } catch (error: RuntimeException) {
                         Log.w("DataModule", "onBudgetAlert 推送 JS 失败(RN 可能未就绪)", error)
@@ -768,8 +769,9 @@ class DataModule(
     @ReactMethod
     fun addBudget(inputJson: String, promise: Promise) = launch(promise) {
         val input = parseJson(inputJson)
-        val period = input.optionalString("period") ?: "monthly"
+        val period = input.optionalString("period") ?: BudgetPeriods.MONTHLY
         validateBudgetPeriod(period)
+        val periodConfig = parseBudgetPeriodConfig(input, period, null)
         val amountMinor = input.optionalLong("amountMinor")
             ?: throw BridgeException("INVALID_ARGUMENT", "Missing required field: amountMinor")
         if (amountMinor < 0) {
@@ -782,6 +784,11 @@ class DataModule(
             name = BridgeDtoMapper.requiredString(input, "name"),
             amountMinor = amountMinor,
             period = period,
+            startDay = periodConfig.startDay,
+            weekStart = periodConfig.weekStart,
+            anchorAt = periodConfig.anchorAt,
+            rangeStartAt = periodConfig.rangeStartAt,
+            rangeEndAt = periodConfig.rangeEndAt,
             categoryId = input.optionalString("categoryId"),
             alertAt = alertAt,
             isActive = true,
@@ -790,6 +797,7 @@ class DataModule(
         )
         database.budgetDao().insert(budget)
         events.emit("onBudgetChanged", BridgeDtoMapper.budget(budget))
+        maybeNotifyBudgetAlerts()
         BridgeDtoMapper.budget(budget).toString()
     }
 
@@ -800,6 +808,7 @@ class DataModule(
         val input = parseJson(inputJson)
         val period = input.optionalString("period") ?: existing.period
         validateBudgetPeriod(period)
+        val periodConfig = parseBudgetPeriodConfig(input, period, existing)
         val amountMinor = input.optionalLong("amountMinor") ?: existing.amountMinor
         if (amountMinor < 0) {
             throw BridgeException("INVALID_ARGUMENT", "amountMinor must not be negative")
@@ -808,6 +817,11 @@ class DataModule(
             name = input.optionalString("name") ?: existing.name,
             amountMinor = amountMinor,
             period = period,
+            startDay = periodConfig.startDay,
+            weekStart = periodConfig.weekStart,
+            anchorAt = periodConfig.anchorAt,
+            rangeStartAt = periodConfig.rangeStartAt,
+            rangeEndAt = periodConfig.rangeEndAt,
             categoryId = input.updatedNullableString("categoryId", existing.categoryId),
             alertAt = input.optionalInt("alertAt")?.coerceIn(0, 100) ?: existing.alertAt,
             isActive = input.optionalBoolean("isActive") ?: existing.isActive,
@@ -815,6 +829,7 @@ class DataModule(
         )
         database.budgetDao().update(updated)
         events.emit("onBudgetChanged", BridgeDtoMapper.budget(updated))
+        maybeNotifyBudgetAlerts()
         BridgeDtoMapper.budget(updated).toString()
     }
 
@@ -823,6 +838,7 @@ class DataModule(
         val budget = database.budgetDao().getById(requireId(id, "budget"))
             ?: throw BridgeException("NOT_FOUND", "Budget $id was not found")
         database.budgetDao().delete(budget)
+        BudgetReminderNotifier.clearBudgetState(reactContext, budget.id)
         events.emit("onBudgetChanged", JSONObject().put("id", budget.id).put("deleted", true))
         null
     }
@@ -832,19 +848,31 @@ class DataModule(
         val now = System.currentTimeMillis()
         JSONArray().also { array ->
             database.budgetDao().getActive().forEach { budget ->
-                val (startDate, endDate) = budgetPeriodRange(budget.period, now)
-                val spentMinor = database.billDao().sumExpenses(budget.categoryId, startDate, endDate)
-                val progress = if (budget.amountMinor == 0L) {
-                    if (spentMinor > 0L) 1.0 else 0.0
-                } else {
-                    spentMinor.toDouble() / budget.amountMinor.toDouble()
+                val snapshot = try {
+                    BudgetProgressCalculator.compute(database, budget, now)
+                } catch (error: Exception) {
+                    if (error is CancellationException) throw error
+                    Log.w("DataModule", "预算进度计算失败，跳过: id=${budget.id.take(16)}", error)
+                    return@forEach
                 }
                 array.put(BridgeDtoMapper.budget(budget).apply {
-                    put("spentMinor", spentMinor)
-                    put("remainingMinor", budget.amountMinor - spentMinor)
-                    put("progress", progress)
-                    put("isOverBudget", spentMinor > budget.amountMinor)
-                    put("needsAlert", progress * 100.0 >= budget.alertAt)
+                    put("spentMinor", snapshot.spentMinor)
+                    put("grossSpentMinor", snapshot.grossSpentMinor)
+                    put("refundMinor", snapshot.refundMinor)
+                    put("remainingMinor", snapshot.remainingMinor)
+                    put("progress", snapshot.progress)
+                    put("progressPct", snapshot.progressPct)
+                    put("isOverBudget", snapshot.isOverBudget)
+                    put("periodStartAt", BridgeDtoMapper.formatTimestamp(snapshot.range.startAt))
+                    put("periodEndAt", BridgeDtoMapper.formatTimestamp(snapshot.range.endAt))
+                    put("periodLabel", BudgetPeriods.label(budget, snapshot.range))
+                    put("isPeriodActive", snapshot.isActivePeriod)
+                    put(
+                        "needsAlert",
+                        snapshot.isActivePeriod &&
+                            budget.alertAt in 1..100 &&
+                            snapshot.progress * 100.0 >= budget.alertAt
+                    )
                 })
             }
         }.toString()
@@ -1062,6 +1090,9 @@ class DataModule(
     @ReactMethod
     fun setBudgetReminderEnabled(enabled: Boolean, promise: Promise) = launch(promise) {
         BudgetReminderNotifier.setEnabled(reactContext.applicationContext, enabled)
+        if (enabled) {
+            maybeNotifyBudgetAlerts()
+        }
         null
     }
 
@@ -1125,6 +1156,7 @@ class DataModule(
         }
         events.emit("onPendingChanged", JSONObject().put("pendingId", pending.id).put("deleted", true))
         events.emit("onBillCreated", BridgeDtoMapper.bill(settledBill))
+        maybeNotifyBudgetAlerts()
         val response = BridgeDtoMapper.bill(settledBill)
         // P1-5（2026-10-24 场景审查）：合并路径（同 sourceType+orderId 已有账单）
         // 会丢弃用户本次的修改，RN 侧必须知道以便如实提示，而不是让用户以为
@@ -1273,28 +1305,86 @@ class DataModule(
         else -> "asset"
     }
 
+    private data class BudgetPeriodConfig(
+        val startDay: Int? = null,
+        val weekStart: Int? = null,
+        val anchorAt: Long? = null,
+        val rangeStartAt: Long? = null,
+        val rangeEndAt: Long? = null
+    )
+
     private fun validateBudgetPeriod(period: String) {
-        if (period !in setOf("monthly", "yearly")) {
+        if (period !in BudgetPeriods.supported) {
             throw BridgeException("INVALID_ARGUMENT", "Unsupported budget period: $period")
         }
     }
 
-    private fun budgetPeriodRange(period: String, now: Long): Pair<Long, Long> {
-        val zone = ZoneId.systemDefault()
-        val today = java.time.Instant.ofEpochMilli(now).atZone(zone).toLocalDate()
-        val startDate = when (period) {
-            "monthly" -> today.withDayOfMonth(1)
-            "yearly" -> today.withDayOfYear(1)
+    private fun parseBudgetPeriodConfig(
+        input: JSONObject,
+        period: String,
+        existing: BudgetEntity?
+    ): BudgetPeriodConfig {
+        fun dateField(key: String): LocalDate? {
+            val raw = input.optionalString(key) ?: return null
+            return try {
+                LocalDate.parse(raw)
+            } catch (error: Exception) {
+                throw BridgeException("INVALID_ARGUMENT", "Field $key must be YYYY-MM-DD", error)
+            }
+        }
+
+        return when (period) {
+            BudgetPeriods.MONTHLY -> {
+                val startDay = input.optionalInt("startDay")
+                    ?: existing?.takeIf { it.period == period }?.startDay
+                    ?: 1
+                if (startDay !in 1..31) {
+                    throw BridgeException("INVALID_ARGUMENT", "startDay must be between 1 and 31")
+                }
+                BudgetPeriodConfig(startDay = startDay)
+            }
+            BudgetPeriods.WEEKLY -> {
+                val weekStart = input.optionalInt("weekStart")
+                    ?: existing?.takeIf { it.period == period }?.weekStart
+                    ?: 1
+                if (weekStart !in 1..7) {
+                    throw BridgeException("INVALID_ARGUMENT", "weekStart must be between 1 and 7")
+                }
+                BudgetPeriodConfig(weekStart = weekStart)
+            }
+            BudgetPeriods.BIWEEKLY -> {
+                val anchorAt = dateField("anchorDate")?.let { BudgetPeriods.startOfDay(it) }
+                    ?: existing?.takeIf { it.period == period }?.anchorAt
+                    ?: throw BridgeException(
+                        "INVALID_ARGUMENT",
+                        "anchorDate is required for biweekly budgets"
+                    )
+                BudgetPeriodConfig(anchorAt = anchorAt)
+            }
+            BudgetPeriods.ONCE -> {
+                val startAt = dateField("rangeStartDate")?.let { BudgetPeriods.startOfDay(it) }
+                    ?: existing?.takeIf { it.period == period }?.rangeStartAt
+                    ?: throw BridgeException(
+                        "INVALID_ARGUMENT",
+                        "rangeStartDate is required for one-off budgets"
+                    )
+                val endAt = dateField("rangeEndDate")?.let { BudgetPeriods.endOfDay(it) }
+                    ?: existing?.takeIf { it.period == period }?.rangeEndAt
+                    ?: throw BridgeException(
+                        "INVALID_ARGUMENT",
+                        "rangeEndDate is required for one-off budgets"
+                    )
+                if (endAt < startAt) {
+                    throw BridgeException(
+                        "INVALID_ARGUMENT",
+                        "rangeEndDate must not be before rangeStartDate"
+                    )
+                }
+                BudgetPeriodConfig(rangeStartAt = startAt, rangeEndAt = endAt)
+            }
+            BudgetPeriods.QUARTERLY, BudgetPeriods.YEARLY -> BudgetPeriodConfig()
             else -> throw BridgeException("INVALID_ARGUMENT", "Unsupported budget period: $period")
         }
-        val nextDate = when (period) {
-            "monthly" -> startDate.plusMonths(1)
-            "yearly" -> startDate.plusYears(1)
-            else -> startDate.plusDays(1)
-        }
-        val start = startDate.atStartOfDay(zone).toInstant().toEpochMilli()
-        val end = nextDate.atStartOfDay(zone).toInstant().toEpochMilli() - 1L
-        return start to end
     }
 
     private fun validateCategoryType(type: String) {

@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.Intent
 import com.jotbill.app.data.JotBillDatabaseProvider
 import com.jotbill.app.data.LedgerRepository
+import com.jotbill.app.budget.BudgetReminderNotifier
 import com.jotbill.app.utils.JotBillLog
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -42,6 +43,9 @@ class AutoBookkeepingUndoReceiver : BroadcastReceiver() {
                         TAG,
                         "自动记账撤销${if (deleted) "成功" else "失败"}: billId=${billId.take(8)}"
                     )
+                    if (deleted) {
+                        runCatching { BudgetReminderNotifier.checkAndNotify(database) }
+                    }
                 }
                 (appContext.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager)
                     ?.cancel(billId.hashCode())

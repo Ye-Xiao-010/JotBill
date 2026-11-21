@@ -34,6 +34,9 @@ export default function ProgressBar({
   const clampedProgress = Math.min(100, Math.max(0, progress));
 
   const getProgressColor = () => {
+    // 显式传入的颜色优先：预算页/首页已按自定义 alertAt 与超支状态算好颜色，
+    // 组件内置的 80/100 阈值不得覆盖。
+    if (color) return color;
     if (clampedProgress >= 100) return styles._colors.error;
     if (clampedProgress >= 80) return styles._colors.warning;
     return resolvedColor;

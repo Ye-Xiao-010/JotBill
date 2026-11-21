@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.room.withTransaction
 import com.jotbill.app.bridge.BridgeDtoMapper
 import com.jotbill.app.bridge.sharedJsEventEmitter
+import com.jotbill.app.budget.BudgetReminderNotifier
 import com.jotbill.app.data.CreateBillOutcome
 import com.jotbill.app.data.JotBillDatabase
 import com.jotbill.app.data.LedgerRepository
@@ -150,6 +151,7 @@ class SignalBillWriter(
                 if (tx.bill.type == "expense" || tx.bill.type == "refund") {
                     absorbSameAmountPendingCards(tx.bill, tx.bill.type)
                 }
+                checkBudgetAlerts()
                 JotBillLog.i(
                     TAG,
                     "首笔信号已入账: bill=${tx.bill.id.take(8)}, amount=${tx.bill.amountMinor}, " +
@@ -159,6 +161,7 @@ class SignalBillWriter(
             }
             is Tx.Enriched -> {
                 sharedJsEventEmitter?.emit("onBillUpdated", JSONObject().put("id", tx.billId))
+                checkBudgetAlerts()
                 Outcome.Enriched(tx.billId)
             }
             is Tx.Duplicate -> Outcome.Duplicate(tx.billId)
@@ -199,10 +202,12 @@ class SignalBillWriter(
                 )
                 // 同笔退款可能已由另一通道落了待确认卡：账单落地后吸收，避免双记。
                 absorbSameAmountPendingCards(tx.bill, "refund")
+                checkBudgetAlerts()
                 Outcome.Created(tx.bill.id)
             }
             is Tx.Enriched -> {
                 sharedJsEventEmitter?.emit("onBillUpdated", JSONObject().put("id", tx.billId))
+                checkBudgetAlerts()
                 Outcome.Enriched(tx.billId)
             }
             is Tx.Duplicate -> Outcome.Duplicate(tx.billId)
@@ -704,6 +709,15 @@ class SignalBillWriter(
                 "merchant=${merchantFill != current.merchant}, order=${orderFill != current.orderId}, " +
                 "category=${categoryFill != current.categoryId}, accountUpgrade=$accountUpgrade"
         )
+    }
+
+    /**
+     * 自动入账/补全后重算预算提醒（退款回落也要重新武装档位）。
+     * 失败只记日志，不影响已完成的入账。
+     */
+    private suspend fun checkBudgetAlerts() {
+        runCatching { BudgetReminderNotifier.checkAndNotify(database) }
+            .onFailure { JotBillLog.w(TAG, "预算提醒检查失败", it) }
     }
 
     /**

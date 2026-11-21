@@ -41,7 +41,7 @@ import com.jotbill.app.data.entity.PendingTransactionEntity
 import com.jotbill.app.data.entity.RuleEntity
 import com.jotbill.app.data.entity.TransactionCandidateEntity
 
-const val JOT_BILL_DATABASE_VERSION = 13
+const val JOT_BILL_DATABASE_VERSION = 14
 
 @Database(
     entities = [
@@ -446,6 +446,20 @@ object DatabaseMigrations {
         }
     }
 
+    /**
+     * 2026-11-21：预算支持自定义周期（月起始日/周/双周/季度/一次性区间）。
+     * 既有预算的 period 仍为 monthly/yearly，新列为 null 时按自然月/自然年计算，零迁移风险。
+     */
+    private val migration13To14 = object : Migration(13, 14) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL("ALTER TABLE budgets ADD COLUMN start_day INTEGER")
+            db.execSQL("ALTER TABLE budgets ADD COLUMN week_start INTEGER")
+            db.execSQL("ALTER TABLE budgets ADD COLUMN anchor_at INTEGER")
+            db.execSQL("ALTER TABLE budgets ADD COLUMN range_start_at INTEGER")
+            db.execSQL("ALTER TABLE budgets ADD COLUMN range_end_at INTEGER")
+        }
+    }
+
     val all: Array<Migration> = arrayOf(
         migration1To2,
         migration2To3,
@@ -458,6 +472,7 @@ object DatabaseMigrations {
         migration9To10,
         migration10To11,
         migration11To12,
-        migration12To13
+        migration12To13,
+        migration13To14
     )
 }

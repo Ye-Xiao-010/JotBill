@@ -1568,6 +1568,14 @@ internal object PendingConfirmOverlayManager {
 
     /** 弹窗确认与 App 内确认等价：广播同一组 JS 事件刷新账单/待确认缓存。 */
     private fun emitJsEvents(bill: com.jotbill.app.data.entity.BillEntity, pendingId: String) {
+        val db = database
+        if (db != null) {
+            scope.launch {
+                runCatching {
+                    com.jotbill.app.budget.BudgetReminderNotifier.checkAndNotify(db)
+                }.onFailure { JotBillLog.w(TAG, "预算提醒检查失败", it) }
+            }
+        }
         val emitter = sharedJsEventEmitter ?: return
         try {
             emitter.emit(

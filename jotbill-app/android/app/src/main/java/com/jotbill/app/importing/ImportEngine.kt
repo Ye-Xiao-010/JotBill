@@ -618,6 +618,10 @@ internal class ImportEngine(
                 )
             }
         }
+        // 导入可能包含退款/支出：完成后重算预算提醒，退款回落时重新武装档位。
+        runCatching {
+            com.jotbill.app.budget.BudgetReminderNotifier.checkAndNotify(database)
+        }
         return JSONObject().apply {
             put("status", "import_succeeded")
             put("batchId", batchId)

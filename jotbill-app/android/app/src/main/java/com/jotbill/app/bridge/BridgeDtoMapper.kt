@@ -111,6 +111,11 @@ internal object BridgeDtoMapper {
         put("name", entity.name)
         put("amountMinor", entity.amountMinor)
         put("period", entity.period)
+        putOptional("startDay", entity.startDay)
+        putOptional("weekStart", entity.weekStart)
+        putOptional("anchorDate", entity.anchorAt?.let(::formatLocalDate))
+        putOptional("rangeStartDate", entity.rangeStartAt?.let(::formatLocalDate))
+        putOptional("rangeEndDate", entity.rangeEndAt?.let(::formatLocalDate))
         putOptional("categoryId", entity.categoryId)
         put("alertAt", entity.alertAt)
         put("isActive", entity.isActive)
@@ -351,6 +356,9 @@ internal object BridgeDtoMapper {
     }
 
     fun formatTimestamp(value: Long): String = Instant.ofEpochMilli(value).toString()
+
+    fun formatLocalDate(value: Long): String =
+        Instant.ofEpochMilli(value).atZone(ZoneId.systemDefault()).toLocalDate().toString()
 
     /** 将候选 appliedRules JSON 字符串解析为键名数组；解析失败时返回空数组保持契约稳定。 */
     private fun parseAppliedRules(rawValue: String?): JSONArray {

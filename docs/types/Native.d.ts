@@ -373,13 +373,18 @@ export interface CategoryUpdateInput extends Partial<CategoryInput> {}
 // 第五部分:预算类型(沿用 LiteNote,新增超支提醒)
 // ============================================================================
 
-export type BudgetPeriod = 'monthly' | 'yearly';
+export type BudgetPeriod = 'monthly' | 'weekly' | 'biweekly' | 'quarterly' | 'yearly' | 'once';
 
 export interface Budget {
   id: string;
   name: string;
   amountMinor: number;
   period: BudgetPeriod;
+  startDay?: number;            // 月周期起始日 1..31；31 表示月末
+  weekStart?: number;           // 周周期起始星期 1=周一 … 7=周日；双周由 anchorDate 决定
+  anchorDate?: string;          // 双周锚点日 YYYY-MM-DD
+  rangeStartDate?: string;      // 一次性区间开始日 YYYY-MM-DD
+  rangeEndDate?: string;        // 一次性区间结束日 YYYY-MM-DD（含当日）
   categoryId?: string;
   category?: Category;
   alertAt: number;              // 预警阈值百分比(0-100)
@@ -392,6 +397,11 @@ export interface BudgetInput {
   name: string;
   amountMinor: number;
   period?: BudgetPeriod;
+  startDay?: number;
+  weekStart?: number;
+  anchorDate?: string;
+  rangeStartDate?: string;
+  rangeEndDate?: string;
   categoryId?: string;
   alertAt?: number;
 }
@@ -401,11 +411,18 @@ export interface BudgetUpdateInput extends Partial<BudgetInput> {
 }
 
 export interface BudgetProgress extends Budget {
-  spentMinor: number;
+  spentMinor: number;           // 已用（支出 − 期内退款，下限 0）
+  grossSpentMinor: number;      // 期内支出合计
+  refundMinor: number;          // 期内退款抵扣合计
   remainingMinor: number;
   progress: number;             // 0-1
+  progressPct: number;          // 展示百分比（三端统一向下取整）
   isOverBudget: boolean;
-  needsAlert: boolean;          // 是否需要提醒(80%/100%)
+  needsAlert: boolean;          // 当前周期内达到预警阈值
+  periodStartAt: string;        // 本期开始 ISO 时间
+  periodEndAt: string;          // 本期结束 ISO 时间
+  periodLabel: string;          // 周期展示标签
+  isPeriodActive: boolean;      // 当前是否处于周期内
 }
 
 // ============================================================================

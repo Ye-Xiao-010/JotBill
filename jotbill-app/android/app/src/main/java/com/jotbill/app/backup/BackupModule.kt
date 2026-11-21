@@ -176,6 +176,12 @@ class BackupModule(
             try {
                 val parsed = backupManager.parse(readBackupBytes(filePath), filePath)
                 val result = backupManager.executeRestore(parsed, strategy)
+                // 恢复会整体替换预算与账单：清掉旧档位键后重算，避免旧掩码压制新数据提醒。
+                BudgetReminderNotifier.resetAlertState(reactContext)
+                runCatching { BudgetReminderNotifier.checkAndNotify(database) }
+                    .onFailure {
+                        android.util.Log.w("BackupModule", "恢复后预算提醒检查失败", it)
+                    }
                 withContext(Dispatchers.Main) {
                     promise.resolve(result.toString())
                 }

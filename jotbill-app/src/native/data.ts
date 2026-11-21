@@ -161,13 +161,29 @@ export interface CategoryInput {
 
 export interface CategoryUpdateInput extends Partial<CategoryInput> {}
 
-export type BudgetPeriod = 'monthly' | 'yearly';
+export type BudgetPeriod =
+  | 'monthly'
+  | 'weekly'
+  | 'biweekly'
+  | 'quarterly'
+  | 'yearly'
+  | 'once';
 
 export interface Budget {
   id: string;
   name: string;
   amountMinor: number;
   period: BudgetPeriod;
+  /** 月周期起始日 1..31；31 表示该月最后一天 */
+  startDay?: number;
+  /** 周周期起始星期（1=周一 … 7=周日）；双周由 anchorDate 决定 */
+  weekStart?: number;
+  /** 双周锚点日（YYYY-MM-DD） */
+  anchorDate?: string;
+  /** 一次性区间开始日（YYYY-MM-DD，含当日） */
+  rangeStartDate?: string;
+  /** 一次性区间结束日（YYYY-MM-DD，含当日） */
+  rangeEndDate?: string;
   categoryId?: string;
   alertAt: number;
   isActive: boolean;
@@ -179,6 +195,11 @@ export interface BudgetInput {
   name: string;
   amountMinor: number;
   period?: BudgetPeriod;
+  startDay?: number;
+  weekStart?: number;
+  anchorDate?: string;
+  rangeStartDate?: string;
+  rangeEndDate?: string;
   categoryId?: string;
   alertAt?: number;
 }
@@ -188,11 +209,26 @@ export type BudgetUpdateInput = Partial<BudgetInput> & {
 };
 
 export interface BudgetProgress extends Budget {
+  /** 已用金额（支出 − 期内退款，下限 0） */
   spentMinor: number;
+  /** 期内支出合计（未扣退款） */
+  grossSpentMinor: number;
+  /** 期内退款抵扣合计 */
+  refundMinor: number;
   remainingMinor: number;
   progress: number;
+  /** 展示百分比（0-x 整数，三端统一向下取整，避免 99.5% 显示成 100%） */
+  progressPct: number;
   isOverBudget: boolean;
   needsAlert: boolean;
+  /** 本期开始（ISO 时间） */
+  periodStartAt: string;
+  /** 本期结束（ISO 时间） */
+  periodEndAt: string;
+  /** 周期展示标签，如 11/25–12/24、2026 Q4、2026年 */
+  periodLabel: string;
+  /** 当前是否处于周期内（一次性预算结束后为 false） */
+  isPeriodActive: boolean;
 }
 
 export interface FinancialGoal {

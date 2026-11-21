@@ -44,6 +44,21 @@ export function getCategoryColor(name?: string, fallback: string = '#E5E5E5'): s
   return CATEGORY_ENTRIES.find(c => c.name === name)?.color ?? fallback;
 }
 
+/** 预算状态色：预算页与首页必须同源，避免同一状态两种颜色。 */
+export function getBudgetStatusColor(
+  isOverBudget: boolean,
+  needsAlert: boolean,
+  colors: { error: string; warning: string; success: string },
+): string {
+  if (isOverBudget) {
+    return colors.error;
+  }
+  if (needsAlert) {
+    return colors.warning;
+  }
+  return colors.success;
+}
+
 // 应用主题色
 export const THEME_COLORS = {
   PRIMARY: '#4A90E2',

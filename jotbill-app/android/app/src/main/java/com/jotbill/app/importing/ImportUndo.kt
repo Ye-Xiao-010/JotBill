@@ -46,8 +46,14 @@ internal class ImportUndo(
      * 而 execute 的分块事务仍会继续写入后续 chunk 并最终返回"导入成功"。
      * 锁保证"撤销"与"导入"不可能交错。
      */
-    suspend fun undoLatestCompleted(batchId: String): UndoResult =
-        engine.withLifecycleLock { undoLatestCompletedLocked(batchId) }
+    suspend fun undoLatestCompleted(batchId: String): UndoResult {
+        val result = engine.withLifecycleLock { undoLatestCompletedLocked(batchId) }
+        // 撤销可能移除退款/支出：重算预算提醒并重新武装回落档位。
+        runCatching {
+            com.jotbill.app.budget.BudgetReminderNotifier.checkAndNotify(database)
+        }
+        return result
+    }
 
     private suspend fun undoLatestCompletedLocked(batchId: String): UndoResult {
         val batch = database.importBatchDao().getById(batchId)
@@ -61,7 +67,7 @@ internal class ImportUndo(
             throw UndoException("INVALID_STATE", "只允许撤销最近一批导入")
         }
 
-        return database.withTransaction {
+        val result = database.withTransaction {
             recoverInterruptedBatchesInTransaction()
             val protectedRecords = mutableListOf<ProtectedRecord>()
             var deletedCount = 0
@@ -130,6 +136,7 @@ internal class ImportUndo(
                 protectedRecords = protectedRecords.toList()
             )
         }
+        return result
     }
 
     fun toJson(result: UndoResult): JSONObject = JSONObject().apply {

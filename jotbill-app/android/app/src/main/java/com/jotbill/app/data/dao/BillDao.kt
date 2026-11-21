@@ -380,6 +380,24 @@ interface BillDao {
         endDate: Long
     ): Long
 
+    /**
+     * 预算期内的退款合计（不看分类、不看原单所属期）。
+     * 用户拍板口径：退款只要发生在预算期内，就按金额冲减该期已用。
+     */
+    @Query(
+        """
+        SELECT COALESCE(SUM(amount_minor), 0)
+        FROM bills
+        WHERE type = 'refund'
+          AND occurred_at >= :startDate
+          AND occurred_at <= :endDate
+        """
+    )
+    suspend fun sumRefunds(
+        startDate: Long,
+        endDate: Long
+    ): Long
+
     @Query("SELECT * FROM bills WHERE order_id = :orderId AND amount_minor = :amountMinor LIMIT 1")
     suspend fun findByOrderAndAmount(orderId: String, amountMinor: Long): BillEntity?
 
