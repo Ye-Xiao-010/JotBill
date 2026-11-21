@@ -111,6 +111,28 @@ class LedgerRepositoryConfirmEmitTest {
         assertEquals(1, removed.size)
     }
 
+    @Test
+    fun batchIgnoreOnlyUpdatesSelectedPendingRowsWithMatchingVersions() = runBlocking {
+        database.accountDao().insert(account())
+        val pendingDao = database.pendingTransactionDao()
+        pendingDao.insertIfAbsent(expensePending("selected", version = 1))
+        pendingDao.insertIfAbsent(expensePending("stale", version = 2))
+        pendingDao.insertIfAbsent(expensePending("not-selected", version = 1))
+        pendingDao.insertIfAbsent(expensePending("edit-card", version = 1).copy(appliedRules = "{\"editBillId\":\"b-1\"}"))
+        pendingDao.insertIfAbsent(expensePending("selected-2", version = 1))
+
+        val count = ledger.ignorePendingTransactions(mapOf(
+            "selected" to 1, "selected-2" to 1, "stale" to 1, "edit-card" to 1, "missing" to 1
+        ))
+
+        assertEquals(2, count)
+        assertEquals(setOf("stale", "not-selected"), pendingDao.getPageExcludingEditCards(Int.MAX_VALUE, 0).map { it.id }.toSet())
+        assertEquals(PendingTransactionEntity.STATUS_PENDING, pendingDao.getById("edit-card")?.status)
+        assertEquals(setOf("selected", "selected-2"), received.filter { it.removed }.map { it.pendingId }.toSet())
+        assertEquals(0, database.billDao().count())
+        assertEquals(0L, database.accountDao().getById("acc-1")?.currentBalanceMinor)
+    }
+
     companion object {
         /**
          * Hub 是进程级单例且无移除接口：监听在类级注册一次，

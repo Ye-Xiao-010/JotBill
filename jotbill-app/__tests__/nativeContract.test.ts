@@ -63,6 +63,20 @@ test('Data 模块保留 sourceType 并使用 JSON 边界', async () => {
   expect(result).toEqual(bill);
 });
 
+test('Data 模块多选读取完整待确认快照，忽略时提交原始版本', async () => {
+  const items = Array.from({ length: 51 }, (_, index) => ({ pendingId: `pending-${index}`, version: 2 }));
+  const snapshot = { items, total: 51, page: 1, limit: 51, hasMore: false };
+  const getPendingTransactions = jest.fn().mockResolvedValue(JSON.stringify(snapshot));
+  const ignorePendingTransactions = jest.fn().mockResolvedValue('{"ignoredCount":1}');
+  modules.Data = { getPendingTransactions, ignorePendingTransactions };
+
+  const result = await nativeData.getPendingTransactions({ all: true });
+  expect(getPendingTransactions).toHaveBeenCalledWith('{"all":true}');
+  expect(result.items).toEqual(items);
+  expect(await nativeData.ignorePendingTransactions([result.items[50]])).toEqual({ ignoredCount: 1 });
+  expect(ignorePendingTransactions).toHaveBeenCalledWith('[{"pendingId":"pending-50","version":2}]');
+});
+
 test('Ai 模块暴露预算和成本记录 DTO', async () => {
   const budget = {
     monthlyBudgetMinor: 1000,

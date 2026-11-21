@@ -1029,17 +1029,18 @@ class DataModule(
     @ReactMethod
     fun getPendingTransactions(filterJson: String?, promise: Promise) = launch(promise) {
         val filter = parseJson(filterJson)
-        val page = filter.optInt("page", 1).coerceAtLeast(1)
-        val limit = filter.optInt("limit", 20).coerceIn(1, 100)
+        val all = filter.optBoolean("all")
+        val page = if (all) 1 else filter.optInt("page", 1).coerceAtLeast(1)
+        val limit = if (all) Int.MAX_VALUE else filter.optInt("limit", 20).coerceIn(1, 100)
         val offset = ((page - 1).toLong() * limit).coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
         val pending = database.pendingTransactionDao().getPageExcludingEditCards(limit, offset)
-        val total = database.pendingTransactionDao().countExcludingEditCards()
+        val total = if (all) pending.size else database.pendingTransactionDao().countExcludingEditCards()
         JSONObject().apply {
             put("items", JSONArray().also { array -> pending.forEach { array.put(BridgeDtoMapper.pending(it)) } })
             put("total", total)
             put("page", page)
-            put("limit", limit)
-            put("hasMore", page.toLong() * limit < total.toLong())
+            put("limit", if (all) total else limit)
+            put("hasMore", !all && page.toLong() * limit < total.toLong())
         }.toString()
     }
 
@@ -1060,6 +1061,24 @@ class DataModule(
         }
         events.emit("onPendingChanged", JSONObject().put("pendingId", pending.id).put("ignored", true))
         null
+    }
+
+    @ReactMethod
+    fun ignorePendingTransactions(selectionJson: String, promise: Promise) = launch(promise) {
+        val items = JSONArray(selectionJson)
+        val selection = buildMap {
+            for (index in 0 until items.length()) {
+                val item = items.getJSONObject(index)
+                val id = requireId(item.optString("pendingId"), "pending transaction")
+                val version = item.getInt("version")
+                if (version <= 0) throw BridgeException("INVALID_ARGUMENT", "Invalid pending transaction version")
+                put(id, version)
+            }
+        }
+        val ignoredCount = repository.ignorePendingTransactions(selection)
+        val result = JSONObject().put("ignoredCount", ignoredCount)
+        if (ignoredCount > 0) events.emit("onPendingChanged", result)
+        result.toString()
     }
 
     /** React Native 新版事件发射器要求模块提供这两个订阅计数方法。 */

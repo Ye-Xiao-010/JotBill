@@ -330,6 +330,7 @@ export interface PendingTransaction {
 export interface PendingTransactionFilter {
   page?: number;
   limit?: number;
+  all?: boolean;
 }
 
 export type PendingConfirmationInput = Partial<BillInput> & {
@@ -440,6 +441,7 @@ interface RawDataModule {
   getPendingTransactions(filterJson?: string | null): Promise<string>;
   getPendingTransaction(id: string): Promise<string>;
   ignorePendingTransaction(id: string, version: number): Promise<null>;
+  ignorePendingTransactions(selectionJson: string): Promise<string>;
   confirmPendingTransaction(
     id: string,
     inputJson: string,
@@ -713,6 +715,13 @@ export const nativeData = {
 
   async ignorePendingTransaction(id: string, version: number): Promise<void> {
     await getRawDataModule().ignorePendingTransaction(id, version);
+  },
+
+  async ignorePendingTransactions(
+    selection: Pick<PendingTransaction, 'pendingId' | 'version'>[],
+  ): Promise<{ ignoredCount: number }> {
+    const raw = await getRawDataModule().ignorePendingTransactions(JSON.stringify(selection));
+    return parseJson(raw, 'ignorePendingTransactions');
   },
 
   async confirmPendingTransaction(

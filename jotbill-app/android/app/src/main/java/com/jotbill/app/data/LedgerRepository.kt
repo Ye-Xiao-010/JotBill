@@ -8,6 +8,7 @@ import com.jotbill.app.data.entity.BillEntity
 import com.jotbill.app.data.entity.CheckoutSessionEntity
 import com.jotbill.app.data.entity.PendingTransactionEntity
 import com.jotbill.app.data.entity.TransactionCandidateEntity
+import com.jotbill.app.pending.EditCardMarker
 import com.jotbill.app.pending.PendingChangeHub
 import com.jotbill.app.pending.PendingChangeInfo
 import com.jotbill.app.rules.DuplicateGuard
@@ -605,65 +606,70 @@ class LedgerRepository(private val database: JotBillDatabase) {
         pending: PendingTransactionEntity,
         expectedVersion: Int
     ): Boolean {
+        val ignored = database.withTransaction {
+            val current = database.pendingTransactionDao().getById(pending.id) ?: return@withTransaction null
+            current.takeIf { markPendingIgnored(it, expectedVersion, System.currentTimeMillis()) }
+        } ?: return false
+        emitPendingIgnored(ignored)
+        return true
+    }
+
+    internal suspend fun ignorePendingTransactions(selection: Map<String, Int>): Int {
         val now = System.currentTimeMillis()
-        val result = database.withTransaction {
-            val currentPending = database.pendingTransactionDao().getById(pending.id)
-                ?: return@withTransaction false
-            if (
-                currentPending.status != PendingTransactionEntity.STATUS_PENDING ||
-                currentPending.version != expectedVersion
-            ) {
-                return@withTransaction false
+        val ignored = database.withTransaction {
+            selection.mapNotNull { (id, version) ->
+                val current = database.pendingTransactionDao().getById(id) ?: return@mapNotNull null
+                if (EditCardMarker.isEditCard(current.appliedRules)) return@mapNotNull null
+                current.takeIf { markPendingIgnored(it, version, now) }
             }
-            val relations = loadPendingRelations(currentPending)
-            if (database.pendingTransactionDao()
-                    .markIgnoredIfVersion(currentPending.id, currentPending.version) != 1
-            ) {
-                return@withTransaction false
-            }
-            relations.candidate?.let { candidate ->
-                val resolved = database.transactionCandidateDao().resolveIfVersion(
-                    id = candidate.id,
-                    sessionId = candidate.sessionId,
-                    expectedVersion = candidate.version,
-                    matched = false,
-                    conflictReason = "USER_IGNORED",
-                    appliedRules = decisionRules(candidate.appliedRules, "USER_IGNORED")
-                )
-                if (resolved != 1) {
-                    throw LedgerValidationException("Transaction candidate has changed")
-                }
-            }
-            relations.session?.let { session ->
-                if (session.status !in TERMINAL_SESSION_STATUSES &&
-                    database.checkoutSessionDao().updateTerminalStateIfActive(
-                        id = session.id,
-                        status = "CANCELLED",
-                        journeyState = "DISMISSED",
-                        updatedAt = now
-                    ) != 1
-                ) {
-                    throw LedgerValidationException("Checkout session has changed")
-                }
-            }
-            true
         }
-        if (result) {
-            // 忽略同样是终态：让提醒消费方消除该待确认的系统通知
-            PendingChangeHub.emit(
-                PendingChangeInfo(
-                    pendingId = pending.id,
-                    type = pending.type,
-                    amountMinor = pending.amountMinor,
-                    sourceType = pending.sourceType,
-                    conflictReason = null,
-                    occurredAt = pending.occurredAt,
-                    isNew = false,
-                    removed = true
-                )
+        ignored.forEach(::emitPendingIgnored)
+        return ignored.size
+    }
+
+    private suspend fun markPendingIgnored(current: PendingTransactionEntity, expectedVersion: Int, now: Long): Boolean {
+        if (current.status != PendingTransactionEntity.STATUS_PENDING || current.version != expectedVersion) return false
+        val relations = loadPendingRelations(current)
+        if (database.pendingTransactionDao().markIgnoredIfVersion(current.id, expectedVersion) != 1) return false
+        relations.candidate?.let { candidate ->
+            val resolved = database.transactionCandidateDao().resolveIfVersion(
+                id = candidate.id,
+                sessionId = candidate.sessionId,
+                expectedVersion = candidate.version,
+                matched = false,
+                conflictReason = "USER_IGNORED",
+                appliedRules = decisionRules(candidate.appliedRules, "USER_IGNORED")
             )
+            if (resolved != 1) throw LedgerValidationException("Transaction candidate has changed")
         }
-        return result
+        relations.session?.let { session ->
+            if (session.status !in TERMINAL_SESSION_STATUSES &&
+                database.checkoutSessionDao().updateTerminalStateIfActive(
+                    id = session.id,
+                    status = "CANCELLED",
+                    journeyState = "DISMISSED",
+                    updatedAt = now
+                ) != 1
+            ) {
+                throw LedgerValidationException("Checkout session has changed")
+            }
+        }
+        return true
+    }
+
+    private fun emitPendingIgnored(pending: PendingTransactionEntity) {
+        PendingChangeHub.emit(
+            PendingChangeInfo(
+                pendingId = pending.id,
+                type = pending.type,
+                amountMinor = pending.amountMinor,
+                sourceType = pending.sourceType,
+                conflictReason = null,
+                occurredAt = pending.occurredAt,
+                isNew = false,
+                removed = true
+            )
+        )
     }
 
     suspend fun calibrateAccountBalance(

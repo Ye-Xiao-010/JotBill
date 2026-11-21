@@ -71,12 +71,9 @@ export function addPendingCreatedListener(
 /** 与原生 DataModule 发射的 onPendingChanged 事件对应(确认/忽略后的终态)。 */
 export const PENDING_CHANGED_EVENT = 'onPendingChanged';
 
-/** 原生 onPendingChanged 事件负载(仅含 pendingId 与终态标记,无敏感字段)。 */
-export interface PendingChangedEvent {
-  pendingId: string;
-  ignored?: boolean;
-  deleted?: boolean;
-}
+export type PendingChangedEvent =
+  | { pendingId: string; ignored?: boolean; deleted?: boolean }
+  | { ignoredCount: number };
 
 /** 订阅待确认确认/忽略后的终态事件;返回的句柄用于卸载时 remove。 */
 export function addPendingChangedListener(

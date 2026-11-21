@@ -5,6 +5,8 @@
 import React, { useCallback, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
+  BackHandler,
+  FlatList,
   RefreshControl,
   ScrollView,
   StyleSheet,
@@ -23,6 +25,7 @@ import {
   Clock3,
   Copy,
   Inbox,
+  ListChecks,
   Loader2,
   Pencil,
   RefreshCw,
@@ -83,6 +86,8 @@ export default function ReviewScreen() {
   const queryClient = useQueryClient();
   const styles = useStyles(createStyles);
   const { alert, confirm } = useAlert();
+  const [selecting, setSelecting] = useState(false);
+  const closeSelection = useCallback(() => setSelecting(false), []);
   const [retrySubmittedVersions, setRetrySubmittedVersions] = useState<
     Record<string, number>
   >({});
@@ -90,10 +95,12 @@ export default function ReviewScreen() {
   const pendingQuery = useQuery({
     queryKey: PENDING_QUERY_KEY,
     queryFn: () => nativeData.getPendingTransactions({ page: 1, limit: 50 }),
+    enabled: !selecting,
   });
   const statusQuery = useQuery({
     queryKey: STATUS_QUERY_KEY,
     queryFn: () => nativeRecognition.getRecognitionStatus(),
+    enabled: !selecting,
   });
 
   const invalidateAll = useCallback(() => {
@@ -257,6 +264,10 @@ export default function ReviewScreen() {
     [alert, retryMutation, retrySubmittedVersions],
   );
 
+  if (selecting) {
+    return <PendingBatchSelection onClose={closeSelection} onIgnored={invalidateAll} />;
+  }
+
   return (
     <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
       <View style={styles.header}>
@@ -267,7 +278,16 @@ export default function ReviewScreen() {
           <ChevronLeft size={24} color={styles._colors.textPrimary} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>待确认中心</Text>
-        <Inbox size={21} color={styles._colors.primary} />
+        <TouchableOpacity
+          style={[styles.selectionEntry, !pendingItems.length && styles.actionButtonDisabled]}
+          onPress={() => setSelecting(true)}
+          accessibilityRole="button"
+          accessibilityLabel="多选待确认交易"
+          disabled={!pendingItems.length || pendingQuery.isError || ignoreMutation.isPending || confirmMutation.isPending}
+        >
+          <ListChecks size={16} color={styles._colors.primary} />
+          <Text style={styles.selectionEntryText}>多选</Text>
+        </TouchableOpacity>
       </View>
       <ScrollView
         style={styles.scrollView}
@@ -339,6 +359,136 @@ export default function ReviewScreen() {
           </View>
         )}
       </ScrollView>
+    </SafeAreaView>
+  );
+}
+
+function PendingBatchSelection({ onClose, onIgnored }: { onClose: () => void; onIgnored: () => void }) {
+  const styles = useStyles(createStyles);
+  const { alert, confirm } = useAlert();
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const selectionQuery = useQuery({
+    // Keep the selection snapshot separate from the list invalidated by every new transaction.
+    queryKey: ['review', 'pending-selection'],
+    queryFn: () => nativeData.getPendingTransactions({ all: true }),
+    gcTime: 0,
+    refetchOnMount: 'always',
+    refetchOnReconnect: false,
+  });
+  const items = selectionQuery.data?.items ?? [];
+  const selectedItems = items.filter(item => selected.has(item.pendingId));
+  const allSelected = items.length > 0 && selectedItems.length === items.length;
+  const { mutate: ignoreItems, isPending } = useMutation({
+    retry: false,
+    mutationFn: (records: PendingTransaction[]) =>
+      nativeData.ignorePendingTransactions(records.map(({ pendingId, version }) => ({ pendingId, version }))),
+    onSuccess: ({ ignoredCount }, records) => {
+      onIgnored();
+      onClose();
+      const notIgnored = records.length - ignoredCount;
+      if (notIgnored > 0) {
+        alert('批量忽略结果', `已忽略 ${ignoredCount} 笔，${notIgnored} 笔已变更或已处理。请查看最新列表。`);
+      }
+    },
+    onError: error => alert('批量忽略失败', describeConfirmError(error)),
+  });
+
+  useFocusEffect(useCallback(() => {
+    const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (!isPending) onClose();
+      return true;
+    });
+    return () => subscription.remove();
+  }, [isPending, onClose]));
+
+  const ready = !selectionQuery.isFetching && !selectionQuery.isError;
+  const canSelect = ready && items.length > 0 && !isPending;
+  const canIgnore = canSelect && selectedItems.length > 0;
+
+  const confirmIgnore = () => {
+    if (!canIgnore) return;
+    confirm(
+      '忽略选中的交易？',
+      `将忽略已选的 ${selectedItems.length} 笔待确认交易。这些交易不会入账。`,
+      () => ignoreItems(selectedItems),
+      undefined,
+      { confirmText: '确认忽略', destructive: true },
+    );
+  };
+
+  return (
+    <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
+      <View style={styles.header}>
+        <TouchableOpacity style={styles.iconButton} onPress={onClose} disabled={isPending} accessibilityLabel="取消多选" accessibilityRole="button">
+          <ChevronLeft size={24} color={styles._colors.textPrimary} />
+        </TouchableOpacity>
+        <Text style={styles.headerTitle}>选择要忽略的交易</Text>
+        <TouchableOpacity style={styles.selectionEntry} onPress={onClose} disabled={isPending} accessibilityRole="button">
+          <Text style={styles.selectionEntryText}>取消</Text>
+        </TouchableOpacity>
+      </View>
+      <View style={styles.selectionToolbar}>
+        <TouchableOpacity
+          style={[styles.selectionEntry, !canSelect && styles.actionButtonDisabled]}
+          disabled={!canSelect}
+          accessibilityRole="button"
+          onPress={() => setSelected(allSelected ? new Set() : new Set(items.map(item => item.pendingId)))}
+        >
+          <Text style={styles.selectionEntryText}>{allSelected ? '取消全选' : '全选'}</Text>
+        </TouchableOpacity>
+        <Text style={styles.pendingTime} accessibilityLiveRegion="polite">已选 {selectedItems.length} / {items.length}</Text>
+        <TouchableOpacity
+          style={[styles.ignoreButton, !canIgnore && styles.actionButtonDisabled]}
+          disabled={!canIgnore}
+          accessibilityRole="button"
+          onPress={confirmIgnore}
+        >
+          <Text style={styles.ignoreButtonText}>{isPending ? '忽略中…' : '忽略选中'}</Text>
+        </TouchableOpacity>
+      </View>
+      {selectionQuery.isFetching ? (
+        <LoadingState colors={styles._colors} />
+      ) : selectionQuery.isError ? (
+        <QueryErrorState title="待确认交易读取失败" onRetry={() => selectionQuery.refetch()} colors={styles._colors} />
+      ) : (
+        <FlatList
+          style={styles.scrollView}
+          contentContainerStyle={styles.content}
+          keyExtractor={item => item.pendingId}
+          data={items}
+          ListEmptyComponent={<EmptyState colors={styles._colors} />}
+          renderItem={({ item }) => {
+            const checked = selected.has(item.pendingId);
+            const title = item.merchant || item.productDescription || formatPlatform(item.platform) || SOURCE_LABELS[item.sourceType] || '待确认交易';
+            const amount = item.amountMinor > 0 ? formatAmount(item.amountMinor, item.type) : '金额未知';
+            const details = `${TYPE_LABELS[item.type] ?? item.type} · ${formatTime(item.occurredAt)}`;
+            return (
+              <TouchableOpacity
+                style={[styles.selectionRow, checked && styles.selectionRowChecked]}
+                accessibilityRole="checkbox"
+                accessibilityLabel={`${title}，${amount}，${details}`}
+                accessibilityState={{ checked, disabled: isPending }}
+                disabled={isPending}
+                onPress={() => setSelected(previous => {
+                  const next = new Set(previous);
+                  if (next.has(item.pendingId)) next.delete(item.pendingId);
+                  else next.add(item.pendingId);
+                  return next;
+                })}
+              >
+                <View style={[styles.selectionCheck, checked && styles.selectionCheckChecked]}>
+                  {checked && <Check size={15} color={styles._colors.onPrimary} />}
+                </View>
+                <View style={styles.selectionInfo}>
+                  <Text style={styles.selectionRowTitle} numberOfLines={2}>{title}</Text>
+                  <Text style={styles.pendingTime}>{details}</Text>
+                </View>
+                <Text style={styles.selectionAmount}>{amount}</Text>
+              </TouchableOpacity>
+            );
+          }}
+        />
+      )}
     </SafeAreaView>
   );
 }
@@ -1372,6 +1522,62 @@ const createStyles = (colors: ThemeColors) => ({
       fontWeight: '800',
       color: colors.textPrimary,
     },
+    selectionEntry: {
+      minHeight: 44,
+      minWidth: 44,
+      paddingHorizontal: spacing.xs,
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: spacing.xs,
+    },
+    selectionEntryText: {
+      color: colors.primary,
+      fontSize: 13,
+      fontWeight: '700',
+    },
+    selectionToolbar: {
+      paddingHorizontal: spacing.lg,
+      paddingVertical: spacing.xs,
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      gap: spacing.sm,
+      backgroundColor: colors.surface,
+      borderBottomWidth: borderWidth.hairline,
+      borderBottomColor: colors.divider,
+    },
+    selectionRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: spacing.md,
+      padding: spacing.md,
+      marginBottom: spacing.sm,
+      backgroundColor: colors.surface,
+      borderWidth: borderWidth.thin,
+      borderColor: colors.stroke,
+      borderRadius: borderRadius.card,
+    },
+    selectionRowChecked: {
+      backgroundColor: colors.primaryLight,
+      borderColor: colors.primary,
+    },
+    selectionCheck: {
+      width: 22,
+      height: 22,
+      alignItems: 'center',
+      justifyContent: 'center',
+      borderRadius: borderRadius.small,
+      borderWidth: borderWidth.thin,
+      borderColor: colors.stroke,
+    },
+    selectionCheckChecked: {
+      backgroundColor: colors.primary,
+      borderColor: colors.primary,
+    },
+    selectionInfo: { flex: 1, gap: spacing.xs },
+    selectionRowTitle: { color: colors.textPrimary, fontSize: 15, fontWeight: '700' },
+    selectionAmount: { color: colors.textPrimary, fontSize: 14, fontWeight: '800' },
     truncatedHint: {
       fontSize: 12,
       color: colors.textSecondary,

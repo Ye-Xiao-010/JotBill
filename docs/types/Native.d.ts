@@ -595,6 +595,7 @@ export interface PendingTransaction {
 export interface PendingTransactionFilter {
   page?: number;
   limit?: number;
+  all?: boolean;
 }
 
 export type PendingConfirmationInput = Partial<BillInput>;
@@ -1147,6 +1148,7 @@ export interface DataModule {
   getPendingTransaction(id: string): Promise<PendingTransaction>;
   confirmPendingTransaction(id: string, input: PendingConfirmationInput, version: number): Promise<Bill>;
   ignorePendingTransaction(id: string, version: number): Promise<void>;
+  ignorePendingTransactions(selection: Pick<PendingTransaction, 'pendingId' | 'version'>[]): Promise<{ ignoredCount: number }>;
 
   // 账户
   getAccounts(): Promise<Account[]>;
