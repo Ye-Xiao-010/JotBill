@@ -478,7 +478,7 @@ class AiChatModule(
 
     private suspend fun systemPrompt(latestContent: String): String {
         val prompt = StringBuilder(
-                "你是猫猫招财的本地记账助手。使用简体中文回答。" +
+                "你是招财猫猫的本地记账助手。使用简体中文回答。" +
                 "你只能读取用户提供或系统给出的账单摘要，不得声称已经删除、修改或保存账单。" +
                 "查询账单时调用 query_bills，需要汇总时调用 get_statistics。" +
                 "需要记账时必须调用 create_bills 工具生成待确认账单。" +

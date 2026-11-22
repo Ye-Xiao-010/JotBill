@@ -169,7 +169,7 @@ export default function NotificationPermissionScreen() {
               <Text style={styles.stepBadgeText}>2</Text>
             </View>
             <Text style={styles.stepText}>
-              找到猫猫招财的"支付通知监听"，打开开关
+              找到招财猫猫的"支付通知监听"，打开开关
             </Text>
           </View>
           <View style={styles.stepRow}>

@@ -298,8 +298,8 @@ export default function SettingsScreen({ navigation }: SettingsScreenProps) {
         </View>
 
         <View style={styles.versionInfo}>
-          <Text style={styles.versionText}>猫猫招财</Text>
-          <Text style={styles.copyrightText}>© 2026 猫猫招财</Text>
+          <Text style={styles.versionText}>招财猫猫</Text>
+          <Text style={styles.copyrightText}>© 2026 招财猫猫</Text>
         </View>
       </ScrollView>
     </View>
