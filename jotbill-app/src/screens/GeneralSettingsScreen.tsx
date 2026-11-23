@@ -46,16 +46,33 @@ import { useAlert } from '../providers';
 import { useStyles } from '../hooks';
 import { borderRadius, borderWidth, shadow, spacing } from '../theme';
 import { ThemeColors } from '../theme/colors';
+import { ThemeShape } from '../theme/shape';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 /** 与 RuntimeStatusScreen 同键同源（getRuntimeHealth），两页共享缓存、互相刷新。 */
 const HEALTH_QUERY_KEY = ['runtime-status'] as const;
 
-function StatusBadge({ enabled, colors }: { enabled: boolean | undefined; colors: ThemeColors }) {
+function StatusBadge({
+  enabled,
+  colors,
+  isSoft,
+  isDark,
+}: {
+  enabled: boolean | undefined;
+  colors: ThemeColors;
+  isSoft: boolean;
+  isDark: boolean;
+}) {
   if (enabled === undefined) {
     return (
-      <View style={[badgeStyles.base, { backgroundColor: colors.divider }]}>
-        <Text style={badgeStyles.text}>读取中…</Text>
+      <View
+        style={[
+          badgeStyles.base,
+          isSoft && badgeStyles.softBase,
+          { backgroundColor: isSoft ? colors.surfaceMuted : colors.divider },
+        ]}
+      >
+        <Text style={[badgeStyles.text, isSoft && { color: colors.textTertiary }]}>读取中…</Text>
       </View>
     );
   }
@@ -63,10 +80,26 @@ function StatusBadge({ enabled, colors }: { enabled: boolean | undefined; colors
     <View
       style={[
         badgeStyles.base,
-        { backgroundColor: enabled ? colors.success : colors.warning },
+        isSoft && badgeStyles.softBase,
+        {
+          backgroundColor: isSoft
+            ? (enabled ? colors.incomeLight : colors.warning + '22')
+            : (enabled ? colors.success : colors.warning),
+        },
       ]}
     >
-      <Text style={badgeStyles.text}>{enabled ? '已开启' : '未开启'}</Text>
+      <Text
+        style={[
+          badgeStyles.text,
+          isSoft && {
+            color: enabled
+              ? colors.incomeStrong
+              : (isDark ? colors.warning : '#B45309'),
+          },
+        ]}
+      >
+        {enabled ? '已开启' : '未开启'}
+      </Text>
     </View>
   );
 }
@@ -78,6 +111,12 @@ const badgeStyles = StyleSheet.create({
     borderRadius: borderRadius.small,
     borderWidth: borderWidth.thin,
     borderColor: '#FFFFFF',
+  },
+  softBase: {
+    borderRadius: 999,
+    borderWidth: 0,
+    paddingHorizontal: 10,
+    paddingVertical: 3,
   },
   text: {
     fontSize: 12,
@@ -280,12 +319,12 @@ export default function GeneralSettingsScreen() {
             return (
               <View key={row.id} style={styles.permRow}>
                 <View style={styles.iconBlock}>
-                  <IconComponent size={20} color={styles._colors.stroke} />
+                  <IconComponent size={20} color={styles._isSoft ? styles._colors.primary : styles._colors.stroke} />
                 </View>
                 <View style={styles.permTexts}>
                   <View style={styles.permTitleRow}>
                     <Text style={styles.permLabel}>{row.label}</Text>
-                    <StatusBadge enabled={row.enabled} colors={styles._colors} />
+                    <StatusBadge enabled={row.enabled} colors={styles._colors} isSoft={styles._isSoft} isDark={styles._isDark} />
                   </View>
                   <View style={styles.permActions}>
                     {row.enabled !== true && (
@@ -341,7 +380,7 @@ export default function GeneralSettingsScreen() {
   );
 }
 
-const createStyles = (colors: ThemeColors) => ({
+const createStyles = (colors: ThemeColors, shape: ThemeShape, isDark: boolean) => ({
   ...StyleSheet.create({
     container: {
       flex: 1,
@@ -354,8 +393,8 @@ const createStyles = (colors: ThemeColors) => ({
       paddingHorizontal: spacing.md,
       paddingTop: spacing.xl,
       paddingBottom: spacing.md,
-      backgroundColor: colors.surface,
-      borderBottomWidth: borderWidth.medium,
+      backgroundColor: shape.isSoft ? colors.background : colors.surface,
+      borderBottomWidth: shape.isSoft ? 0 : borderWidth.medium,
       borderBottomColor: colors.stroke,
     },
     iconButton: {
@@ -365,8 +404,8 @@ const createStyles = (colors: ThemeColors) => ({
       justifyContent: 'center',
     },
     headerTitle: {
-      fontSize: 20,
-      fontWeight: '800',
+      fontSize: shape.isSoft ? 18 : 20,
+      fontWeight: shape.isSoft ? '700' : '800',
       color: colors.textPrimary,
     },
     scrollView: { flex: 1 },
@@ -374,13 +413,14 @@ const createStyles = (colors: ThemeColors) => ({
     sectionCard: {
       padding: spacing.lg,
       backgroundColor: colors.surface,
-      borderWidth: borderWidth.thin,
-      borderColor: colors.stroke,
-      borderRadius: borderRadius.card,
+      borderWidth: shape.isSoft ? shape.borderWidth.card : borderWidth.thin,
+      borderColor: shape.isSoft ? colors.cardBorder : colors.stroke,
+      borderRadius: shape.radius.card,
+      ...(shape.isSoft ? shape.elevation.card : {}),
     },
     sectionTitle: {
       fontSize: 15,
-      fontWeight: '800',
+      fontWeight: shape.isSoft ? '700' : '800',
       color: colors.textPrimary,
       marginBottom: spacing.sm,
     },
@@ -389,16 +429,16 @@ const createStyles = (colors: ThemeColors) => ({
       alignItems: 'flex-start',
       gap: spacing.md,
       paddingVertical: spacing.md,
-      borderTopWidth: borderWidth.thin,
-      borderTopColor: colors.stroke,
+      borderTopWidth: shape.isSoft ? StyleSheet.hairlineWidth : borderWidth.thin,
+      borderTopColor: shape.isSoft ? colors.divider : colors.stroke,
     },
     iconBlock: {
       width: 40,
       height: 40,
-      borderRadius: borderRadius.small,
-      borderWidth: borderWidth.thin,
+      borderRadius: shape.isSoft ? 12 : borderRadius.small,
+      borderWidth: shape.isSoft ? 0 : borderWidth.thin,
       borderColor: colors.stroke,
-      backgroundColor: colors.accent,
+      backgroundColor: shape.isSoft ? colors.primaryLight : colors.accent,
       alignItems: 'center',
       justifyContent: 'center',
     },
@@ -411,7 +451,7 @@ const createStyles = (colors: ThemeColors) => ({
     },
     permLabel: {
       fontSize: 15,
-      fontWeight: '700',
+      fontWeight: shape.isSoft ? '600' : '700',
       color: colors.textPrimary,
     },
     permActions: {
@@ -423,16 +463,16 @@ const createStyles = (colors: ThemeColors) => ({
     openButton: {
       paddingHorizontal: spacing.md,
       paddingVertical: spacing.xs + 2,
-      borderRadius: borderRadius.button,
-      borderWidth: borderWidth.thin,
+      borderRadius: shape.isSoft ? shape.radius.pill : borderRadius.button,
+      borderWidth: shape.isSoft ? 0 : borderWidth.thin,
       borderColor: colors.stroke,
       backgroundColor: colors.primary,
-      ...shadow.small,
+      ...(shape.isSoft ? shape.elevation.none : shadow.small),
     },
     openButtonText: {
       fontSize: 13,
       fontWeight: '700',
-      color: '#FFFFFF',
+      color: shape.isSoft ? colors.onPrimary : '#FFFFFF',
     },
     guideLink: {
       flexDirection: 'row',
@@ -452,11 +492,13 @@ const createStyles = (colors: ThemeColors) => ({
     },
     switchLabel: {
       fontSize: 15,
-      fontWeight: '700',
+      fontWeight: shape.isSoft ? '600' : '700',
       color: colors.textPrimary,
       flex: 1,
       marginRight: spacing.md,
     },
   }),
   _colors: colors,
+  _isSoft: shape.isSoft,
+  _isDark: isDark,
 });

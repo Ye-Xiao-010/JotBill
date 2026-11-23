@@ -93,18 +93,20 @@ interface CategoryIconProps {
 export default function CategoryIcon({
   icon,
   size = 22,
-  strokeWidth = 2.5,
+  strokeWidth,
   color,
   fallback = '📝',
   emojiStyle,
 }: CategoryIconProps) {
-  const { colors } = useTheme();
+  const { colors, isSoft } = useTheme();
+  const resolvedStroke = strokeWidth ?? (isSoft ? 2.1 : 2.5);
+  const resolvedColor = color ?? (isSoft ? colors.textPrimary : colors.stroke);
   const Icon = isLucideIconName(icon)
     ? CATEGORY_LUCIDE_ICONS[icon as string]
     : null;
 
   if (Icon) {
-    return <Icon size={size} strokeWidth={strokeWidth} color={color ?? colors.stroke} />;
+    return <Icon size={size} strokeWidth={resolvedStroke} color={resolvedColor} />;
   }
   return (
     <Text style={[{ fontSize: size }, emojiStyle]}>

@@ -15,6 +15,7 @@
 import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import { ThemeColors } from '../../theme/colors';
+import { ThemeShape } from '../../theme/shape';
 import { spacing, borderRadius, borderWidth } from '../../theme/spacing';
 import { useStyles } from '../../hooks';
 import BrutalPressable from './BrutalPressable';
@@ -98,15 +99,15 @@ const QueryErrorBanner: React.FC<QueryErrorBannerProps> = ({
   );
 };
 
-const createStyles = (colors: ThemeColors) => ({
+const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
   ...StyleSheet.create({
     container: {
       margin: spacing.lg,
       marginBottom: 0,
       padding: spacing.md,
-      backgroundColor: colors.surface,
-      borderRadius: borderRadius.card,
-      borderWidth: borderWidth.medium,
+      backgroundColor: shape.isSoft ? colors.expenseLight : colors.surface,
+      borderRadius: shape.isSoft ? shape.radius.card : borderRadius.card,
+      borderWidth: shape.isSoft ? 0 : borderWidth.medium,
       borderColor: colors.error,
     },
     header: {
@@ -119,8 +120,8 @@ const createStyles = (colors: ThemeColors) => ({
     },
     title: {
       fontSize: 14,
-      fontWeight: '800',
-      color: colors.error,
+      fontWeight: shape.isSoft ? '600' : '800',
+      color: shape.isSoft ? colors.expenseStrong : colors.error,
       flex: 1,
     },
     message: {
@@ -133,22 +134,22 @@ const createStyles = (colors: ThemeColors) => ({
       marginTop: spacing.xs,
       fontSize: 12,
       lineHeight: 17,
-      fontWeight: '700',
-      color: colors.error,
+      fontWeight: shape.isSoft ? '600' : '700',
+      color: shape.isSoft ? colors.expenseStrong : colors.error,
     },
     button: {
       alignSelf: 'flex-start',
       marginTop: spacing.md,
       backgroundColor: colors.primary,
-      borderRadius: borderRadius.button,
-      borderWidth: borderWidth.thin,
+      borderRadius: shape.isSoft ? shape.radius.button : borderRadius.button,
+      borderWidth: shape.isSoft ? 0 : borderWidth.thin,
       borderColor: colors.stroke,
       paddingHorizontal: spacing.lg,
       paddingVertical: spacing.sm,
     },
     buttonText: {
       fontSize: 13,
-      fontWeight: '800',
+      fontWeight: shape.isSoft ? '600' : '800',
       color: colors.onPrimary,
     },
   }),

@@ -10,6 +10,7 @@ import {
   StyleSheet,
 } from 'react-native';
 import { ThemeColors } from '../../theme/colors';
+import { ThemeShape } from '../../theme/shape';
 import { spacing, borderRadius, borderWidth, typography } from '../../theme';
 import { useStyles } from '../../hooks';
 import { formatSignedCurrency } from '../../utils/format';
@@ -49,7 +50,11 @@ const BillItem: React.FC<BillItemProps> = ({ bill, onPress }) => {
       <View style={styles.leftSection}>
         <View style={[
           styles.iconContainer,
-          { backgroundColor: isIncome ? styles._colors.income : styles._colors.expense },
+          {
+            backgroundColor: styles._isSoft
+              ? (isIncome ? styles._colors.incomeLight : styles._colors.expenseLight)
+              : (isIncome ? styles._colors.income : styles._colors.expense),
+          },
         ]}>
           <CategoryIcon
             icon={bill.icon}
@@ -81,7 +86,7 @@ const BillItem: React.FC<BillItemProps> = ({ bill, onPress }) => {
   );
 };
 
-const createStyles = (colors: ThemeColors) => ({
+const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
   ...StyleSheet.create({
     container: {
       flexDirection: 'row',
@@ -90,11 +95,12 @@ const createStyles = (colors: ThemeColors) => ({
       backgroundColor: colors.surface,
       marginHorizontal: spacing.lg,
       marginVertical: spacing.xs,
-      borderRadius: borderRadius.card,
+      borderRadius: shape.radius.card,
       paddingHorizontal: spacing.lg,
       paddingVertical: spacing.md,
-      borderWidth: borderWidth.thin,
-      borderColor: colors.stroke,
+      borderWidth: shape.isSoft ? shape.borderWidth.card : borderWidth.thin,
+      borderColor: shape.isSoft ? colors.cardBorder : colors.stroke,
+      ...(shape.isSoft ? shape.elevation.card : {}),
     },
     leftSection: {
       flexDirection: 'row',
@@ -104,8 +110,8 @@ const createStyles = (colors: ThemeColors) => ({
     iconContainer: {
       width: 44,
       height: 44,
-      borderRadius: borderRadius.medium,
-      borderWidth: borderWidth.thin,
+      borderRadius: shape.isSoft ? 14 : borderRadius.medium,
+      borderWidth: shape.isSoft ? 0 : borderWidth.thin,
       borderColor: colors.stroke,
       alignItems: 'center',
       justifyContent: 'center',
@@ -119,7 +125,7 @@ const createStyles = (colors: ThemeColors) => ({
     },
     category: {
       fontSize: 15,
-      fontWeight: '700',
+      fontWeight: shape.isSoft ? '600' : '700',
       color: colors.textPrimary,
       marginBottom: 2,
     },
@@ -127,7 +133,8 @@ const createStyles = (colors: ThemeColors) => ({
       fontSize: 12,
       fontWeight: '500',
       color: colors.textTertiary,
-      fontFamily: typography.fontFamily.mono,
+      fontFamily: shape.isSoft ? undefined : typography.fontFamily.mono,
+      fontVariant: ['tabular-nums'],
       marginBottom: 2,
     },
     description: {
@@ -136,31 +143,33 @@ const createStyles = (colors: ThemeColors) => ({
       color: colors.textSecondary,
     },
     amountBadge: {
-      borderRadius: borderRadius.small,
-      borderWidth: borderWidth.thin,
+      borderRadius: shape.radius.small,
+      borderWidth: shape.isSoft ? 0 : borderWidth.thin,
       borderColor: colors.stroke,
-      paddingHorizontal: spacing.md,
+      paddingHorizontal: shape.isSoft ? 0 : spacing.md,
       paddingVertical: spacing.xs,
     },
     incomeBadge: {
-      backgroundColor: colors.incomeLight,
+      backgroundColor: shape.isSoft ? 'transparent' : colors.incomeLight,
     },
     expenseBadge: {
-      backgroundColor: colors.expenseLight,
+      backgroundColor: shape.isSoft ? 'transparent' : colors.expenseLight,
     },
     amount: {
       fontSize: 15,
-      fontWeight: '800',
-      fontFamily: typography.fontFamily.mono,
+      fontWeight: shape.isSoft ? '700' : '800',
+      fontFamily: shape.isSoft ? undefined : typography.fontFamily.mono,
+      fontVariant: ['tabular-nums'],
     },
     incomeAmount: {
-      color: colors.incomeStrong,
+      color: shape.isSoft ? colors.income : colors.incomeStrong,
     },
     expenseAmount: {
-      color: colors.expenseStrong,
+      color: shape.isSoft ? colors.expense : colors.expenseStrong,
     },
   }),
   _colors: colors,
+  _isSoft: shape.isSoft,
 });
 
 export default BillItem;

@@ -5,6 +5,7 @@
 import React, { useState } from 'react';
 import { View, TextInput, TouchableOpacity, Text, StyleSheet } from 'react-native';
 import { ThemeColors } from '../../theme/colors';
+import { ThemeShape } from '../../theme/shape';
 import { borderRadius, borderWidth, spacing } from '../../theme/spacing';
 import { useStyles } from '../../hooks';
 
@@ -56,37 +57,39 @@ export default function SearchBar({
   );
 }
 
-const createStyles = (colors: ThemeColors) => ({
+const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
   ...StyleSheet.create({
     container: {
       flexDirection: 'row',
       alignItems: 'center',
-      backgroundColor: colors.surface,
-      borderRadius: borderRadius.input,
+      backgroundColor: shape.isSoft ? colors.surfaceMuted : colors.surface,
+      borderRadius: shape.isSoft ? shape.radius.pill : borderRadius.input,
       paddingHorizontal: spacing.md,
-      height: 48,
-      borderWidth: borderWidth.medium,
-      borderColor: colors.stroke,
+      height: shape.isSoft ? 44 : 48,
+      borderWidth: shape.isSoft ? shape.borderWidth.control : borderWidth.medium,
+      borderColor: shape.isSoft ? colors.cardBorder : colors.stroke,
     },
     containerFocused: {
-      borderColor: colors.accent,
+      borderColor: shape.isSoft ? colors.primary : colors.accent,
+      borderWidth: shape.isSoft ? 1.5 : borderWidth.medium,
+      backgroundColor: colors.surface,
     },
     icon: {
-      fontSize: 18,
+      fontSize: 16,
       marginRight: spacing.sm,
     },
     input: {
       flex: 1,
       fontSize: 15,
-      fontWeight: '600',
+      fontWeight: shape.isSoft ? '500' : '600',
       color: colors.textPrimary,
       padding: 0,
     },
     clearButton: {
-      width: 28,
-      height: 28,
-      borderRadius: borderRadius.small,
-      borderWidth: borderWidth.thin,
+      width: 26,
+      height: 26,
+      borderRadius: shape.isSoft ? 13 : borderRadius.small,
+      borderWidth: shape.isSoft ? 0 : borderWidth.thin,
       borderColor: colors.stroke,
       backgroundColor: colors.divider,
       alignItems: 'center',
@@ -95,7 +98,7 @@ const createStyles = (colors: ThemeColors) => ({
     clearIcon: {
       fontSize: 12,
       color: colors.textPrimary,
-      fontWeight: '800',
+      fontWeight: shape.isSoft ? '600' : '800',
     },
   }),
   _colors: colors,

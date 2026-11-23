@@ -11,6 +11,7 @@ import {
   TouchableOpacityProps,
 } from 'react-native';
 import { ThemeColors } from '../../theme/colors';
+import { ThemeShape } from '../../theme/shape';
 import { spacing, borderRadius, borderWidth, shadow } from '../../theme/spacing';
 import { useStyles } from '../../hooks';
 
@@ -40,7 +41,7 @@ const Card: React.FC<CardProps> = ({
       padding: spacing[padding],
       margin: spacing[margin],
     },
-    showShadow && shadow.small,
+    showShadow && styles._elevation,
     style,
   ];
 
@@ -60,16 +61,17 @@ const Card: React.FC<CardProps> = ({
   return <View style={cardStyle}>{children}</View>;
 };
 
-const createStyles = (colors: ThemeColors) => ({
+const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
   ...StyleSheet.create({
     card: {
       backgroundColor: colors.surface,
-      borderRadius: borderRadius.card,
-      borderWidth: borderWidth.medium,
-      borderColor: colors.stroke,
+      borderRadius: shape.isSoft ? shape.radius.card : borderRadius.card,
+      borderWidth: shape.isSoft ? shape.borderWidth.card : borderWidth.medium,
+      borderColor: shape.isSoft ? colors.cardBorder : colors.stroke,
     },
   }),
   _colors: colors,
+  _elevation: shape.isSoft ? shape.elevation.card : shadow.small,
 });
 
 export default Card;

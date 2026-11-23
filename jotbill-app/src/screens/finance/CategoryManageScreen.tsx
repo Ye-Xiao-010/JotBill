@@ -20,6 +20,7 @@ import { useAlert } from '../../providers';
 import { nativeData, type Category } from '../../native';
 import { invalidateCache } from '../../lib/queryClient';
 import { ThemeColors } from '../../theme/colors';
+import { ThemeShape } from '../../theme/shape';
 import { spacing, borderRadius, borderWidth } from '../../theme';
 
 const CategoryManageScreen: React.FC = () => {
@@ -316,7 +317,7 @@ const CategoryManageScreen: React.FC = () => {
   );
 };
 
-const createStyles = (colors: ThemeColors) => ({
+const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
   ...StyleSheet.create({
     container: {
       flex: 1,
@@ -324,8 +325,8 @@ const createStyles = (colors: ThemeColors) => ({
     },
     tabs: {
       flexDirection: 'row',
-      backgroundColor: colors.surface,
-      borderBottomWidth: borderWidth.thin,
+      backgroundColor: shape.isSoft ? colors.background : colors.surface,
+      borderBottomWidth: shape.isSoft ? 0 : borderWidth.thin,
       borderBottomColor: colors.stroke,
       padding: spacing.sm,
       gap: spacing.sm,
@@ -335,27 +336,28 @@ const createStyles = (colors: ThemeColors) => ({
       flex: 1,
       paddingVertical: spacing.md,
       alignItems: 'center',
-      borderRadius: borderRadius.small,
-      borderWidth: borderWidth.thin,
-      borderColor: colors.stroke,
+      borderRadius: shape.isSoft ? shape.radius.button : borderRadius.small,
+      borderWidth: shape.isSoft ? shape.borderWidth.card : borderWidth.thin,
+      borderColor: shape.isSoft ? colors.cardBorder : colors.stroke,
       backgroundColor: colors.surface,
+      ...(shape.isSoft ? shape.elevation.card : {}),
     },
     tabExpenseActive: {
       backgroundColor: colors.expense,
-      borderColor: colors.stroke,
+      borderColor: shape.isSoft ? colors.expense : colors.stroke,
     },
     tabIncomeActive: {
       backgroundColor: colors.income,
-      borderColor: colors.stroke,
+      borderColor: shape.isSoft ? colors.income : colors.stroke,
     },
     tabText: {
       fontSize: 15,
-      fontWeight: '700',
+      fontWeight: shape.isSoft ? '600' : '700',
       color: colors.textSecondary,
     },
     tabTextActive: {
       color: '#FFFFFF',
-      fontWeight: '800',
+      fontWeight: shape.isSoft ? '700' : '800',
     },
     scrollView: {
       flex: 1,
@@ -376,13 +378,14 @@ const createStyles = (colors: ThemeColors) => ({
       margin: spacing.lg,
       padding: spacing.lg,
       backgroundColor: colors.surface,
-      borderRadius: borderRadius.card,
-      borderWidth: borderWidth.thin,
-      borderColor: colors.stroke,
+      borderRadius: shape.radius.card,
+      borderWidth: shape.isSoft ? shape.borderWidth.card : borderWidth.thin,
+      borderColor: shape.isSoft ? colors.cardBorder : colors.stroke,
+      ...(shape.isSoft ? shape.elevation.card : {}),
     },
     sectionTitle: {
       fontSize: 15,
-      fontWeight: '800',
+      fontWeight: shape.isSoft ? '700' : '800',
       color: colors.textPrimary,
       marginBottom: spacing.lg,
     },
@@ -408,22 +411,23 @@ const createStyles = (colors: ThemeColors) => ({
       alignItems: 'center',
       justifyContent: 'center',
       paddingVertical: spacing.sm,
-      borderWidth: borderWidth.thin,
-      borderColor: colors.stroke,
-      borderRadius: borderRadius.small,
-      backgroundColor: colors.background,
+      borderWidth: shape.isSoft ? 1 : borderWidth.thin,
+      borderColor: shape.isSoft ? 'transparent' : colors.stroke,
+      borderRadius: shape.isSoft ? 16 : borderRadius.small,
+      backgroundColor: shape.isSoft ? colors.surfaceMuted : colors.background,
     },
     categoryItemExpanded: {
-      backgroundColor: colors.accent,
-      borderWidth: borderWidth.medium,
+      backgroundColor: shape.isSoft ? colors.primaryLight : colors.accent,
+      borderWidth: shape.isSoft ? 1.5 : borderWidth.medium,
+      borderColor: shape.isSoft ? colors.primary : colors.stroke,
     },
     categoryIconBlock: {
       width: 44,
       height: 44,
-      borderRadius: borderRadius.small,
-      borderWidth: borderWidth.thin,
+      borderRadius: shape.isSoft ? 12 : borderRadius.small,
+      borderWidth: shape.isSoft ? 0 : borderWidth.thin,
       borderColor: colors.stroke,
-      backgroundColor: colors.accent,
+      backgroundColor: shape.isSoft ? colors.surface : colors.accent,
       justifyContent: 'center',
       alignItems: 'center',
       marginBottom: spacing.xs,
@@ -433,13 +437,13 @@ const createStyles = (colors: ThemeColors) => ({
     },
     categoryName: {
       fontSize: 12,
-      fontWeight: '700',
+      fontWeight: shape.isSoft ? '600' : '700',
       color: colors.textPrimary,
       textAlign: 'center',
     },
     categoryMeta: {
       fontSize: 11,
-      fontWeight: '600',
+      fontWeight: shape.isSoft ? '500' : '600',
       color: colors.textTertiary,
       marginTop: spacing.xs,
     },
@@ -447,10 +451,10 @@ const createStyles = (colors: ThemeColors) => ({
       width: '100%',
       marginTop: spacing.sm,
       padding: spacing.md,
-      borderWidth: borderWidth.thin,
+      borderWidth: shape.isSoft ? 0 : borderWidth.thin,
       borderColor: colors.stroke,
-      borderRadius: borderRadius.small,
-      backgroundColor: colors.background,
+      borderRadius: shape.isSoft ? 16 : borderRadius.small,
+      backgroundColor: shape.isSoft ? colors.surfaceMuted : colors.background,
     },
     panelTitleRow: {
       flexDirection: 'row',
@@ -460,7 +464,7 @@ const createStyles = (colors: ThemeColors) => ({
     },
     panelTitle: {
       fontSize: 14,
-      fontWeight: '800',
+      fontWeight: shape.isSoft ? '700' : '800',
       color: colors.textPrimary,
     },
     panelTitleIcon: {
@@ -477,7 +481,7 @@ const createStyles = (colors: ThemeColors) => ({
       alignItems: 'center',
       justifyContent: 'space-between',
       paddingVertical: spacing.sm,
-      borderBottomWidth: borderWidth.thin,
+      borderBottomWidth: shape.isSoft ? StyleSheet.hairlineWidth : borderWidth.thin,
       borderBottomColor: colors.divider,
     },
     childIcon: {
@@ -496,12 +500,12 @@ const createStyles = (colors: ThemeColors) => ({
       gap: spacing.xs,
     },
     rowBtn: {
-      paddingHorizontal: spacing.sm,
-      paddingVertical: 4,
-      borderRadius: borderRadius.small,
-      borderWidth: borderWidth.thin,
+      paddingHorizontal: spacing.sm + 2,
+      paddingVertical: shape.isSoft ? 6 : 4,
+      borderRadius: shape.isSoft ? 10 : borderRadius.small,
+      borderWidth: shape.isSoft ? 0 : borderWidth.thin,
       borderColor: colors.stroke,
-      backgroundColor: colors.background,
+      backgroundColor: shape.isSoft ? colors.surface : colors.background,
     },
     rowBtnText: {
       fontSize: 12,
@@ -509,31 +513,31 @@ const createStyles = (colors: ThemeColors) => ({
       color: colors.textPrimary,
     },
     rowBtnDelete: {
-      paddingHorizontal: spacing.sm,
-      paddingVertical: 4,
-      borderRadius: borderRadius.small,
-      borderWidth: borderWidth.thin,
+      paddingHorizontal: spacing.sm + 2,
+      paddingVertical: shape.isSoft ? 6 : 4,
+      borderRadius: shape.isSoft ? 10 : borderRadius.small,
+      borderWidth: shape.isSoft ? 0 : borderWidth.thin,
       borderColor: colors.error,
-      backgroundColor: colors.error + '15',
+      backgroundColor: shape.isSoft ? colors.expenseLight : colors.error + '15',
     },
     rowBtnTextDelete: {
       fontSize: 12,
       fontWeight: '700',
-      color: colors.error,
+      color: shape.isSoft ? colors.expenseStrong : colors.error,
     },
     panelAddBtn: {
       marginTop: spacing.sm,
       paddingVertical: spacing.sm,
-      borderRadius: borderRadius.small,
-      borderWidth: borderWidth.thin,
-      borderColor: colors.stroke,
+      borderRadius: shape.isSoft ? 12 : borderRadius.small,
+      borderWidth: shape.isSoft ? 1 : borderWidth.thin,
+      borderColor: shape.isSoft ? colors.cardBorder : colors.stroke,
       borderStyle: 'dashed',
       alignItems: 'center',
     },
     panelAddText: {
       fontSize: 13,
-      fontWeight: '800',
-      color: colors.textSecondary,
+      fontWeight: shape.isSoft ? '700' : '800',
+      color: shape.isSoft ? colors.primary : colors.textSecondary,
     },
     panelActions: {
       flexDirection: 'row',
@@ -543,17 +547,17 @@ const createStyles = (colors: ThemeColors) => ({
     addCategoryBtnFull: {
       marginTop: spacing.sm,
       paddingVertical: spacing.md,
-      borderRadius: borderRadius.small,
-      borderWidth: borderWidth.thin,
-      borderColor: colors.stroke,
+      borderRadius: shape.isSoft ? 14 : borderRadius.small,
+      borderWidth: shape.isSoft ? 1 : borderWidth.thin,
+      borderColor: shape.isSoft ? colors.cardBorder : colors.stroke,
       borderStyle: 'dashed',
       alignItems: 'center',
       backgroundColor: 'transparent',
     },
     addLabel: {
       fontSize: 13,
-      fontWeight: '800',
-      color: colors.textTertiary,
+      fontWeight: shape.isSoft ? '700' : '800',
+      color: shape.isSoft ? colors.primary : colors.textTertiary,
     },
   }),
   _colors: colors,

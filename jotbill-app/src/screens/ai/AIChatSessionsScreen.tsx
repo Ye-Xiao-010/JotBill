@@ -15,6 +15,7 @@ import { MessageCircle, Plus, Trash2, ChevronRight, AlertTriangle } from 'lucide
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { useAlert } from '../../providers';
 import { ThemeColors } from '../../theme/colors';
+import { ThemeShape } from '../../theme/shape';
 import { borderRadius, borderWidth, spacing } from '../../theme/spacing';
 import { useStyles } from '../../hooks';
 import { useChatSessions } from '../../hooks/useChatSessions';
@@ -210,7 +211,7 @@ export default function AIChatSessionsScreen() {
   );
 }
 
-const createStyles = (colors: ThemeColors) => ({
+const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
   ...StyleSheet.create({
     container: {
       flex: 1,
@@ -226,13 +227,13 @@ const createStyles = (colors: ThemeColors) => ({
       alignItems: 'center',
       paddingHorizontal: spacing.lg,
       paddingVertical: spacing.md,
-      backgroundColor: colors.surface,
-      borderBottomWidth: borderWidth.thin,
+      backgroundColor: shape.isSoft ? colors.background : colors.surface,
+      borderBottomWidth: shape.isSoft ? 0 : borderWidth.thin,
       borderBottomColor: colors.stroke,
     },
     headerTitle: {
       fontSize: 18,
-      fontWeight: '800',
+      fontWeight: shape.isSoft ? '700' : '800',
       color: colors.textPrimary,
     },
     newChatButton: {
@@ -242,13 +243,13 @@ const createStyles = (colors: ThemeColors) => ({
       backgroundColor: colors.primary,
       paddingVertical: spacing.xs + 2,
       paddingHorizontal: spacing.md,
-      borderRadius: borderRadius.button,
-      borderWidth: borderWidth.thin,
+      borderRadius: shape.isSoft ? shape.radius.pill : borderRadius.button,
+      borderWidth: shape.isSoft ? 0 : borderWidth.thin,
       borderColor: colors.stroke,
     },
     newChatButtonText: {
       fontSize: 14,
-      color: '#FFFFFF',
+      color: shape.isSoft ? colors.onPrimary : '#FFFFFF',
       fontWeight: '700',
     },
     listContent: {
@@ -272,34 +273,35 @@ const createStyles = (colors: ThemeColors) => ({
     retryButton: {
       marginTop: spacing.lg,
       backgroundColor: colors.primary,
-      borderRadius: borderRadius.button,
-      borderWidth: borderWidth.thin,
+      borderRadius: shape.radius.button,
+      borderWidth: shape.isSoft ? 0 : borderWidth.thin,
       borderColor: colors.stroke,
       paddingHorizontal: spacing.xl,
       paddingVertical: spacing.sm,
     },
     retryButtonText: {
       fontSize: 14,
-      fontWeight: '800',
-      color: '#FFFFFF',
+      fontWeight: shape.isSoft ? '700' : '800',
+      color: shape.isSoft ? colors.onPrimary : '#FFFFFF',
     },
     sessionCard: {
       flexDirection: 'row',
       alignItems: 'center',
       backgroundColor: colors.surface,
-      borderRadius: borderRadius.card,
-      borderWidth: borderWidth.thin,
-      borderColor: colors.stroke,
+      borderRadius: shape.radius.card,
+      borderWidth: shape.isSoft ? shape.borderWidth.card : borderWidth.thin,
+      borderColor: shape.isSoft ? colors.cardBorder : colors.stroke,
       padding: spacing.md,
       marginBottom: spacing.sm,
+      ...(shape.isSoft ? shape.elevation.card : {}),
     },
     sessionIcon: {
       width: 40,
       height: 40,
-      borderRadius: borderRadius.small,
-      borderWidth: borderWidth.thin,
+      borderRadius: shape.isSoft ? 12 : borderRadius.small,
+      borderWidth: shape.isSoft ? 0 : borderWidth.thin,
       borderColor: colors.stroke,
-      backgroundColor: colors.accent,
+      backgroundColor: shape.isSoft ? colors.primaryLight : colors.accent,
       alignItems: 'center',
       justifyContent: 'center',
       marginRight: spacing.md,
@@ -309,14 +311,15 @@ const createStyles = (colors: ThemeColors) => ({
     },
     sessionTitle: {
       fontSize: 15,
-      fontWeight: '700',
+      fontWeight: shape.isSoft ? '600' : '700',
       color: colors.textPrimary,
       marginBottom: 2,
     },
     sessionMeta: {
       fontSize: 12,
-      fontWeight: '600',
-      fontFamily: typography.fontFamily.mono,
+      fontWeight: shape.isSoft ? '500' : '600',
+      fontFamily: shape.isSoft ? undefined : typography.fontFamily.mono,
+      fontVariant: ['tabular-nums'],
       color: colors.textTertiary,
     },
     sessionActions: {

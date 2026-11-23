@@ -11,6 +11,7 @@ import {
   Dimensions,
 } from 'react-native';
 import { ThemeColors } from '../../theme/colors';
+import { ThemeShape } from '../../theme/shape';
 import { spacing, borderRadius, borderWidth, shadow } from '../../theme/spacing';
 import { useStyles } from '../../hooks';
 
@@ -116,14 +117,19 @@ const Toast: React.FC<ToastProps> = ({
       <Animated.View
         style={[
           styles.toast,
-          { backgroundColor: toastConfig.bg },
+          !styles._isSoft && { backgroundColor: toastConfig.bg },
           {
             opacity: fadeAnim,
             transform: [{ translateY }],
           },
         ]}
       >
-        <View style={styles.iconContainer}>
+        <View
+          style={[
+            styles.iconContainer,
+            styles._isSoft && { backgroundColor: toastConfig.bg },
+          ]}
+        >
           <Text style={styles.icon}>{toastConfig.icon}</Text>
         </View>
         <Text style={styles.message} numberOfLines={3}>
@@ -134,7 +140,7 @@ const Toast: React.FC<ToastProps> = ({
   );
 };
 
-const createStyles = (colors: ThemeColors) => ({
+const createStyles = (colors: ThemeColors, shape: ThemeShape, isDark: boolean) => ({
   ...StyleSheet.create({
     container: {
       position: 'absolute',
@@ -147,40 +153,42 @@ const createStyles = (colors: ThemeColors) => ({
     toast: {
       flexDirection: 'row',
       alignItems: 'center',
-      paddingHorizontal: spacing.lg,
-      paddingVertical: spacing.md,
-      borderRadius: borderRadius.button,
-      borderWidth: borderWidth.medium,
+      paddingHorizontal: shape.isSoft ? 16 : spacing.lg,
+      paddingVertical: shape.isSoft ? 10 : spacing.md,
+      borderRadius: shape.isSoft ? shape.radius.pill : borderRadius.button,
+      borderWidth: shape.isSoft ? 0 : borderWidth.medium,
       borderColor: colors.stroke,
+      backgroundColor: shape.isSoft ? (isDark ? '#F3F4F7' : '#1C1F27') : colors.primary,
       maxWidth: screenWidth - spacing.lg * 2,
-      minWidth: 200,
-      ...shadow.medium,
+      minWidth: shape.isSoft ? undefined : 200,
+      ...(shape.isSoft ? shape.elevation.floating : shadow.medium),
     },
     iconContainer: {
-      width: 28,
-      height: 28,
-      borderRadius: borderRadius.small,
-      borderWidth: borderWidth.thin,
+      width: shape.isSoft ? 22 : 28,
+      height: shape.isSoft ? 22 : 28,
+      borderRadius: shape.isSoft ? 11 : borderRadius.small,
+      borderWidth: shape.isSoft ? 0 : borderWidth.thin,
       borderColor: 'rgba(255, 255, 255, 0.4)',
       backgroundColor: 'rgba(255, 255, 255, 0.2)',
       alignItems: 'center',
       justifyContent: 'center',
-      marginRight: spacing.md,
+      marginRight: shape.isSoft ? 10 : spacing.md,
     },
     icon: {
-      fontSize: 14,
+      fontSize: shape.isSoft ? 12 : 14,
       color: '#FFFFFF',
-      fontWeight: '800',
+      fontWeight: shape.isSoft ? '700' : '800',
     },
     message: {
-      flex: 1,
-      fontSize: 15,
-      color: '#FFFFFF',
-      fontWeight: '700',
-      lineHeight: 21,
+      flexShrink: 1,
+      fontSize: shape.isSoft ? 13 : 15,
+      color: shape.isSoft ? (isDark ? '#12141A' : '#FFFFFF') : '#FFFFFF',
+      fontWeight: shape.isSoft ? '500' : '700',
+      lineHeight: shape.isSoft ? 19 : 21,
     },
   }),
   _colors: colors,
+  _isSoft: shape.isSoft,
 });
 
 export default Toast;

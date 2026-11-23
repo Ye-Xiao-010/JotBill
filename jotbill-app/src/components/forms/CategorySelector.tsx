@@ -10,6 +10,7 @@ import {
   StyleSheet,
 } from 'react-native';
 import { ThemeColors } from '../../theme/colors';
+import { ThemeShape } from '../../theme/shape';
 import { spacing, borderRadius, borderWidth } from '../../theme';
 import { useToast, useStyles } from '../../hooks';
 import CategoryIcon from '../business/CategoryIcon';
@@ -79,15 +80,15 @@ export const CategorySelector: React.FC<CategorySelectorProps> = ({
   );
 };
 
-const createStyles = (colors: ThemeColors) => ({
+const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
   ...StyleSheet.create({
     container: {
       marginBottom: spacing.lg,
     },
     label: {
       fontSize: 14,
-      fontWeight: '700',
-      color: colors.textPrimary,
+      fontWeight: shape.isSoft ? '600' : '700',
+      color: shape.isSoft ? colors.textSecondary : colors.textPrimary,
       marginBottom: spacing.md,
     },
     categoryGrid: {
@@ -100,15 +101,16 @@ const createStyles = (colors: ThemeColors) => ({
       aspectRatio: 1,
       justifyContent: 'center',
       alignItems: 'center',
-      borderRadius: borderRadius.medium,
-      borderWidth: borderWidth.medium,
+      borderRadius: shape.isSoft ? 16 : borderRadius.medium,
+      borderWidth: shape.isSoft ? 0 : borderWidth.medium,
       borderColor: colors.stroke,
-      backgroundColor: colors.surface,
+      backgroundColor: shape.isSoft ? colors.surfaceMuted : colors.surface,
       padding: spacing.sm,
     },
     categoryItemSelected: {
-      backgroundColor: colors.accent,
-      borderColor: colors.stroke,
+      backgroundColor: shape.isSoft ? colors.primaryLight : colors.accent,
+      borderWidth: shape.isSoft ? 1.5 : borderWidth.medium,
+      borderColor: shape.isSoft ? colors.primary : colors.stroke,
     },
     categoryIcon: {
       fontSize: 24,
@@ -121,7 +123,8 @@ const createStyles = (colors: ThemeColors) => ({
       fontWeight: '600',
     },
     categoryNameSelected: {
-      fontWeight: '800',
+      color: shape.isSoft ? colors.primary : colors.textPrimary,
+      fontWeight: shape.isSoft ? '700' : '800',
     },
   }),
   _colors: colors,

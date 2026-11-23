@@ -11,6 +11,7 @@ import {
 } from 'react-native';
 import { AppVersionInfo } from '../services/update/appVersion';
 import { ThemeColors } from '../theme/colors';
+import { ThemeShape } from '../theme/shape';
 import { borderRadius, borderWidth, spacing, shadow } from '../theme/spacing';
 import { useStyles } from '../hooks';
 import { typography } from '../theme';
@@ -74,7 +75,7 @@ export function UpdateModal({
   );
 }
 
-const createStyles = (colors: ThemeColors) => ({
+const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
   ...StyleSheet.create({
     overlay: {
       flex: 1,
@@ -85,22 +86,22 @@ const createStyles = (colors: ThemeColors) => ({
     container: {
       width: '80%',
       backgroundColor: colors.surface,
-      borderRadius: borderRadius.card,
-      borderWidth: borderWidth.thick,
-      borderColor: colors.stroke,
+      borderRadius: shape.radius.modal,
+      borderWidth: shape.isSoft ? shape.borderWidth.card : borderWidth.thick,
+      borderColor: shape.isSoft ? colors.cardBorder : colors.stroke,
       padding: spacing.xl,
-      ...shadow.medium,
+      ...(shape.isSoft ? shape.elevation.floating : shadow.medium),
     },
     title: {
       fontSize: 18,
-      fontWeight: '800',
+      fontWeight: shape.isSoft ? '700' : '800',
       color: colors.textPrimary,
       textAlign: 'center',
       marginBottom: spacing.md,
     },
     updateLog: {
       fontSize: 14,
-      fontWeight: '600',
+      fontWeight: shape.isSoft ? '500' : '600',
       color: colors.textSecondary,
       lineHeight: 20,
       marginBottom: spacing.lg,
@@ -110,23 +111,24 @@ const createStyles = (colors: ThemeColors) => ({
     },
     progressBar: {
       width: '100%',
-      height: 10,
-      backgroundColor: colors.divider,
-      borderRadius: borderRadius.small,
-      borderWidth: borderWidth.thin,
+      height: shape.isSoft ? 8 : 10,
+      backgroundColor: shape.isSoft ? colors.surfaceMuted : colors.divider,
+      borderRadius: shape.isSoft ? 999 : borderRadius.small,
+      borderWidth: shape.isSoft ? 0 : borderWidth.thin,
       borderColor: colors.stroke,
       overflow: 'hidden',
     },
     progressFill: {
       height: '100%',
       backgroundColor: colors.primary,
-      borderRadius: borderRadius.small,
+      borderRadius: shape.isSoft ? 999 : borderRadius.small,
     },
     progressText: {
       marginTop: spacing.sm,
       fontSize: 14,
       fontWeight: '700',
-      fontFamily: typography.fontFamily.mono,
+      fontFamily: shape.isSoft ? undefined : typography.fontFamily.mono,
+      fontVariant: ['tabular-nums'],
       color: colors.textSecondary,
     },
     buttons: {
@@ -137,10 +139,10 @@ const createStyles = (colors: ThemeColors) => ({
     cancelBtn: {
       flex: 1,
       paddingVertical: spacing.md,
-      borderRadius: borderRadius.button,
-      borderWidth: borderWidth.thin,
+      borderRadius: shape.radius.button,
+      borderWidth: shape.isSoft ? 0 : borderWidth.thin,
       borderColor: colors.stroke,
-      backgroundColor: colors.accent,
+      backgroundColor: shape.isSoft ? colors.surfaceMuted : colors.accent,
       alignItems: 'center',
     },
     cancelText: {
@@ -151,17 +153,17 @@ const createStyles = (colors: ThemeColors) => ({
     confirmBtn: {
       flex: 1,
       paddingVertical: spacing.md,
-      borderRadius: borderRadius.button,
-      borderWidth: borderWidth.medium,
+      borderRadius: shape.radius.button,
+      borderWidth: shape.isSoft ? 0 : borderWidth.medium,
       borderColor: colors.stroke,
       backgroundColor: colors.primary,
       alignItems: 'center',
-      ...shadow.small,
+      ...(shape.isSoft ? shape.elevation.none : shadow.small),
     },
     confirmText: {
       fontSize: 15,
       fontWeight: '700',
-      color: '#FFFFFF',
+      color: shape.isSoft ? colors.onPrimary : '#FFFFFF',
     },
   }),
   _colors: colors,

@@ -5,6 +5,7 @@
 import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import { ThemeColors } from '../../theme/colors';
+import { ThemeShape } from '../../theme/shape';
 import { borderRadius, borderWidth, spacing } from '../../theme/spacing';
 import { useStyles } from '../../hooks';
 
@@ -20,19 +21,35 @@ export interface BadgeProps {
 export default function Badge({ label, variant = 'default', size = 'medium', style }: BadgeProps) {
   const styles = useStyles(createStyles);
   const isSmall = size === 'small';
+  const isSoft = styles._isSoft;
+  const c = styles._colors;
 
   const getVariantStyle = () => {
+    if (isSoft) {
+      switch (variant) {
+        case 'success':
+          return { bg: c.incomeLight, text: c.incomeStrong };
+        case 'warning':
+          return { bg: styles._isDark ? '#2E2410' : '#FFF5E6', text: styles._isDark ? '#FBBF24' : '#B45309' };
+        case 'error':
+          return { bg: c.expenseLight, text: c.expenseStrong };
+        case 'info':
+          return { bg: c.primaryLight, text: c.primaryDark };
+        default:
+          return { bg: c.surfaceMuted, text: c.textSecondary };
+      }
+    }
     switch (variant) {
       case 'success':
-        return { bg: styles._colors.success, text: '#FFFFFF' };
+        return { bg: c.success, text: '#FFFFFF' };
       case 'warning':
-        return { bg: styles._colors.accent, text: styles._colors.textPrimary };
+        return { bg: c.accent, text: c.textPrimary };
       case 'error':
-        return { bg: styles._colors.error, text: '#FFFFFF' };
+        return { bg: c.error, text: '#FFFFFF' };
       case 'info':
-        return { bg: styles._colors.primary, text: '#FFFFFF' };
+        return { bg: c.primary, text: '#FFFFFF' };
       default:
-        return { bg: styles._colors.divider, text: styles._colors.textPrimary };
+        return { bg: c.divider, text: c.textPrimary };
     }
   };
 
@@ -55,7 +72,7 @@ export default function Badge({ label, variant = 'default', size = 'medium', sty
           styles.label,
           {
             color: variantStyle.text,
-            fontSize: isSmall ? 10 : 12,
+            fontSize: isSmall ? 11 : 12,
           },
         ]}
       >
@@ -65,17 +82,19 @@ export default function Badge({ label, variant = 'default', size = 'medium', sty
   );
 }
 
-const createStyles = (colors: ThemeColors) => ({
+const createStyles = (colors: ThemeColors, shape: ThemeShape, isDark: boolean) => ({
   ...StyleSheet.create({
     badge: {
-      borderRadius: borderRadius.small,
-      borderWidth: borderWidth.thin,
+      borderRadius: shape.isSoft ? shape.radius.tag : borderRadius.small,
+      borderWidth: shape.isSoft ? 0 : borderWidth.thin,
       borderColor: colors.stroke,
       alignSelf: 'flex-start',
     },
     label: {
-      fontWeight: '700',
+      fontWeight: shape.isSoft ? '600' : '700',
     },
   }),
   _colors: colors,
+  _isSoft: shape.isSoft,
+  _isDark: isDark,
 });

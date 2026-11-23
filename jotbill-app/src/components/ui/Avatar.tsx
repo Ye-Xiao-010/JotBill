@@ -5,6 +5,7 @@
 import React from 'react';
 import { View, Text, Image, StyleSheet } from 'react-native';
 import { ThemeColors } from '../../theme/colors';
+import { ThemeShape } from '../../theme/shape';
 import { borderRadius, borderWidth } from '../../theme/spacing';
 import { useStyles } from '../../hooks';
 
@@ -41,6 +42,8 @@ export default function Avatar({ source, name, size = 'medium', style }: AvatarP
     return (parts[0].charAt(0) + parts[parts.length - 1].charAt(0)).toUpperCase();
   };
 
+  const resolvedRadius = styles._isSoft ? avatarSize / 2 : borderRadius.medium;
+
   if (source) {
     return (
       <Image
@@ -50,7 +53,7 @@ export default function Avatar({ source, name, size = 'medium', style }: AvatarP
           {
             width: avatarSize,
             height: avatarSize,
-            borderRadius: borderRadius.medium,
+            borderRadius: resolvedRadius,
           },
           style,
         ]}
@@ -65,7 +68,7 @@ export default function Avatar({ source, name, size = 'medium', style }: AvatarP
         {
           width: avatarSize,
           height: avatarSize,
-          borderRadius: borderRadius.medium,
+          borderRadius: resolvedRadius,
         },
         style,
       ]}
@@ -75,24 +78,25 @@ export default function Avatar({ source, name, size = 'medium', style }: AvatarP
   );
 }
 
-const createStyles = (colors: ThemeColors) => ({
+const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
   ...StyleSheet.create({
     avatar: {
-      backgroundColor: colors.divider,
-      borderWidth: borderWidth.medium,
+      backgroundColor: shape.isSoft ? colors.surfaceMuted : colors.divider,
+      borderWidth: shape.isSoft ? 0 : borderWidth.medium,
       borderColor: colors.stroke,
     },
     placeholder: {
-      backgroundColor: colors.accent,
-      borderWidth: borderWidth.medium,
+      backgroundColor: shape.isSoft ? colors.primaryLight : colors.accent,
+      borderWidth: shape.isSoft ? 0 : borderWidth.medium,
       borderColor: colors.stroke,
       alignItems: 'center',
       justifyContent: 'center',
     },
     initials: {
-      color: colors.textPrimary,
-      fontWeight: '800',
+      color: shape.isSoft ? colors.primary : colors.textPrimary,
+      fontWeight: shape.isSoft ? '700' : '800',
     },
   }),
   _colors: colors,
+  _isSoft: shape.isSoft,
 });

@@ -5,6 +5,7 @@
 import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import { ThemeColors } from '../../theme/colors';
+import { ThemeShape } from '../../theme/shape';
 import { spacing, borderRadius, borderWidth, shadow } from '../../theme/spacing';
 import { useStyles } from '../../hooks';
 import BrutalPressable from './BrutalPressable';
@@ -50,7 +51,7 @@ export default function EmptyState({
   );
 }
 
-const createStyles = (colors: ThemeColors) => ({
+const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
   ...StyleSheet.create({
     container: {
       flex: 1,
@@ -58,36 +59,36 @@ const createStyles = (colors: ThemeColors) => ({
       justifyContent: 'center',
       padding: spacing.xxl,
       backgroundColor: colors.surface,
-      borderRadius: borderRadius.card,
-      borderWidth: borderWidth.medium,
-      borderColor: colors.stroke,
-      ...shadow.small,
+      borderRadius: shape.isSoft ? shape.radius.card : borderRadius.card,
+      borderWidth: shape.isSoft ? shape.borderWidth.card : borderWidth.medium,
+      borderColor: shape.isSoft ? colors.cardBorder : colors.stroke,
+      ...(shape.isSoft ? shape.elevation.card : shadow.small),
     },
     iconBlock: {
-      width: 80,
-      height: 80,
-      borderRadius: borderRadius.medium,
-      borderWidth: borderWidth.medium,
+      width: 76,
+      height: 76,
+      borderRadius: shape.isSoft ? 26 : borderRadius.medium,
+      borderWidth: shape.isSoft ? 0 : borderWidth.medium,
       borderColor: colors.stroke,
-      backgroundColor: colors.accent,
+      backgroundColor: shape.isSoft ? colors.primaryLight : colors.accent,
       alignItems: 'center',
       justifyContent: 'center',
       marginBottom: spacing.lg,
     },
     icon: {
-      fontSize: 40,
+      fontSize: 36,
     },
     title: {
-      fontSize: 18,
-      fontWeight: '800',
+      fontSize: shape.isSoft ? 17 : 18,
+      fontWeight: shape.isSoft ? '600' : '800',
       color: colors.textPrimary,
       textAlign: 'center',
       marginBottom: spacing.sm,
     },
     description: {
-      fontSize: 14,
-      fontWeight: '500',
-      color: colors.textSecondary,
+      fontSize: 13.5,
+      fontWeight: shape.isSoft ? '400' : '500',
+      color: colors.textTertiary,
       textAlign: 'center',
       lineHeight: 20,
       marginBottom: spacing.lg,
@@ -95,16 +96,16 @@ const createStyles = (colors: ThemeColors) => ({
     button: {
       marginTop: spacing.md,
       backgroundColor: colors.primary,
-      borderRadius: borderRadius.button,
-      borderWidth: borderWidth.medium,
+      borderRadius: shape.isSoft ? shape.radius.button : borderRadius.button,
+      borderWidth: shape.isSoft ? 0 : borderWidth.medium,
       borderColor: colors.stroke,
       paddingHorizontal: spacing.xl,
       paddingVertical: spacing.md,
     },
     buttonText: {
       fontSize: 15,
-      fontWeight: '800',
-      color: '#FFFFFF',
+      fontWeight: shape.isSoft ? '600' : '800',
+      color: colors.onPrimary,
     },
   }),
   _colors: colors,

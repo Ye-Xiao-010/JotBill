@@ -4,10 +4,17 @@
  * colors = themes[themeName][isDark ? 'dark' : 'light']。
  * 两个维度分别持久化，重启后保留。
  */
-import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useMemo } from 'react';
 import { useColorScheme } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { themes, ThemeColors, ThemeName } from '../theme/colors';
+import {
+  themes,
+  getThemeStyleVariant,
+  type ThemeColors,
+  type ThemeName,
+  type ThemeStyleVariant,
+} from '../theme/colors';
+import { getThemeShape, type ThemeShape } from '../theme/shape';
 
 type ThemeMode = 'light' | 'dark' | 'system';
 
@@ -16,8 +23,14 @@ interface ThemeContextType {
   themeMode: ThemeMode;
   /** 实际使用的主题（light 或 dark） */
   isDark: boolean;
-  /** 当前主题风格（blocks / mint / sunset / ink） */
+  /** 当前主题风格（blocks / mint / sunset / ink / soft） */
   themeName: ThemeName;
+  /** 当前主题家族（brutal 积木风 / soft 柔光） */
+  styleVariant: ThemeStyleVariant;
+  /** 便捷判断：当前是否为柔光主题 */
+  isSoft: boolean;
+  /** 主题形状与层级 token */
+  shape: ThemeShape;
   /** 当前主题颜色 */
   colors: ThemeColors;
   /** 设置主题模式 */
@@ -46,6 +59,9 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
 
   const paletteSet = themes[themeName] ?? themes.blocks;
   const colors: ThemeColors = isDark ? paletteSet.dark : paletteSet.light;
+  const styleVariant = getThemeStyleVariant(themeName);
+  const isSoft = styleVariant === 'soft';
+  const shape = useMemo(() => getThemeShape(styleVariant, isDark), [styleVariant, isDark]);
 
   // 加载保存的主题设置（模式 + 风格）
   useEffect(() => {
@@ -102,7 +118,20 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <ThemeContext.Provider value={{ themeMode, isDark, themeName, colors, setThemeMode, toggleTheme, setThemeName }}>
+    <ThemeContext.Provider
+      value={{
+        themeMode,
+        isDark,
+        themeName,
+        styleVariant,
+        isSoft,
+        shape,
+        colors,
+        setThemeMode,
+        toggleTheme,
+        setThemeName,
+      }}
+    >
       {children}
     </ThemeContext.Provider>
   );

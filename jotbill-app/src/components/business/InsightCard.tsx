@@ -5,6 +5,7 @@
 import React from 'react';
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import { ThemeColors } from '../../theme/colors';
+import { ThemeShape } from '../../theme/shape';
 import { borderRadius, borderWidth, spacing, shadow } from '../../theme/spacing';
 import { useStyles } from '../../hooks';
 
@@ -72,17 +73,17 @@ export default function InsightCard({
   );
 }
 
-const createStyles = (colors: ThemeColors) => ({
+const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
   ...StyleSheet.create({
     container: {
-      borderRadius: borderRadius.card,
-      borderWidth: borderWidth.medium,
-      borderColor: colors.stroke,
+      borderRadius: shape.radius.card,
+      borderWidth: shape.isSoft ? shape.borderWidth.card : borderWidth.medium,
+      borderColor: shape.isSoft ? colors.cardBorder : colors.stroke,
       backgroundColor: colors.surface,
       padding: spacing.lg,
       marginBottom: spacing.md,
       position: 'relative',
-      ...shadow.small,
+      ...(shape.isSoft ? shape.elevation.card : shadow.small),
     },
     dismissButton: {
       position: 'absolute',
@@ -90,16 +91,17 @@ const createStyles = (colors: ThemeColors) => ({
       right: spacing.sm,
       width: 28,
       height: 28,
-      borderRadius: borderRadius.small,
-      borderWidth: borderWidth.thin,
+      borderRadius: shape.isSoft ? 14 : borderRadius.small,
+      borderWidth: shape.isSoft ? 0 : borderWidth.thin,
       borderColor: colors.stroke,
+      backgroundColor: shape.isSoft ? colors.surfaceMuted : 'transparent',
       alignItems: 'center',
       justifyContent: 'center',
       zIndex: 1,
     },
     dismissIcon: {
       fontSize: 12,
-      color: colors.textPrimary,
+      color: shape.isSoft ? colors.textSecondary : colors.textPrimary,
       fontWeight: '800',
     },
     contentRow: {
@@ -108,8 +110,8 @@ const createStyles = (colors: ThemeColors) => ({
     iconContainer: {
       width: 44,
       height: 44,
-      borderRadius: borderRadius.medium,
-      borderWidth: borderWidth.thin,
+      borderRadius: shape.isSoft ? 14 : borderRadius.medium,
+      borderWidth: shape.isSoft ? 0 : borderWidth.thin,
       borderColor: colors.stroke,
       alignItems: 'center',
       justifyContent: 'center',
@@ -138,8 +140,8 @@ const createStyles = (colors: ThemeColors) => ({
       marginTop: spacing.sm,
       alignSelf: 'flex-start',
       backgroundColor: colors.primaryLight,
-      borderRadius: borderRadius.small,
-      borderWidth: borderWidth.thin,
+      borderRadius: shape.isSoft ? shape.radius.pill : borderRadius.small,
+      borderWidth: shape.isSoft ? 0 : borderWidth.thin,
       borderColor: colors.stroke,
       paddingHorizontal: spacing.md,
       paddingVertical: spacing.xs,

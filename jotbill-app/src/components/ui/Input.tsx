@@ -13,6 +13,7 @@ import {
   TextStyle,
 } from 'react-native';
 import { ThemeColors } from '../../theme/colors';
+import { ThemeShape } from '../../theme/shape';
 import { spacing, borderRadius, borderWidth } from '../../theme/spacing';
 import { useStyles } from '../../hooks';
 
@@ -76,29 +77,31 @@ const Input: React.FC<InputProps> = ({
   );
 };
 
-const createStyles = (colors: ThemeColors) => ({
+const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
   ...StyleSheet.create({
     container: {
       marginBottom: spacing.md,
     },
     label: {
       fontSize: 14,
-      fontWeight: '700',
+      fontWeight: shape.isSoft ? '600' : '700',
       color: colors.textPrimary,
       marginBottom: spacing.sm,
     },
     required: {
       color: colors.error,
-      fontWeight: '800',
+      fontWeight: shape.isSoft ? '600' : '800',
     },
     inputContainer: {
-      borderWidth: borderWidth.medium,
-      borderColor: colors.stroke,
-      borderRadius: borderRadius.input,
-      backgroundColor: colors.surface,
+      borderWidth: shape.isSoft ? 1 : borderWidth.medium,
+      borderColor: shape.isSoft ? colors.cardBorder : colors.stroke,
+      borderRadius: shape.isSoft ? shape.radius.input : borderRadius.input,
+      backgroundColor: shape.isSoft ? colors.surfaceMuted : colors.surface,
     },
     focused: {
-      borderColor: colors.accent,
+      borderColor: shape.isSoft ? colors.primary : colors.accent,
+      borderWidth: shape.isSoft ? 1.5 : borderWidth.medium,
+      backgroundColor: shape.isSoft ? colors.surface : colors.surface,
     },
     error: {
       borderColor: colors.error,
@@ -107,13 +110,13 @@ const createStyles = (colors: ThemeColors) => ({
       paddingHorizontal: spacing.md,
       paddingVertical: spacing.md,
       fontSize: 15,
-      fontWeight: '600',
+      fontWeight: shape.isSoft ? '500' : '600',
       color: colors.textPrimary,
       minHeight: 48,
     },
     errorText: {
       fontSize: 12,
-      fontWeight: '600',
+      fontWeight: shape.isSoft ? '500' : '600',
       color: colors.error,
       marginTop: spacing.xs,
     },

@@ -48,9 +48,10 @@ import { formatPlatform } from '../../utils/platform';
 import { formatCurrency } from '../../utils/format';
 import AccountIcon from '../../components/business/AccountIcon';
 import { accountDisplayName, resolveAccountIcon } from '../../constants/accountIcons';
-import { useAlert } from '../../providers';
+import { useAlert, useTheme } from '../../providers';
 import { borderRadius, borderWidth, spacing } from '../../theme/spacing';
 import { ThemeColors } from '../../theme/colors';
+import { ThemeShape } from '../../theme/shape';
 import { useStyles } from '../../hooks';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { typography } from '../../theme';
@@ -365,6 +366,7 @@ export default function ReviewScreen() {
 
 function PendingBatchSelection({ onClose, onIgnored }: { onClose: () => void; onIgnored: () => void }) {
   const styles = useStyles(createStyles);
+  const { isSoft } = useTheme();
   const { alert, confirm } = useAlert();
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const selectionQuery = useQuery({
@@ -415,6 +417,91 @@ function PendingBatchSelection({ onClose, onIgnored }: { onClose: () => void; on
       { confirmText: '确认忽略', destructive: true },
     );
   };
+
+  if (isSoft) {
+    return (
+      <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
+        <View style={styles.header}>
+          <TouchableOpacity
+            style={styles.selectionEntry}
+            onPress={onClose}
+            disabled={isPending}
+            accessibilityLabel="取消多选"
+            accessibilityRole="button"
+          >
+            <Text style={styles.softCancelText}>取消</Text>
+          </TouchableOpacity>
+          <Text style={styles.headerTitle}>选择要忽略的交易</Text>
+          <TouchableOpacity
+            style={[styles.selectionEntry, !canSelect && styles.actionButtonDisabled]}
+            disabled={!canSelect}
+            accessibilityRole="button"
+            onPress={() => setSelected(allSelected ? new Set() : new Set(items.map(item => item.pendingId)))}
+          >
+            <Text style={styles.selectionEntryText}>{allSelected ? '取消全选' : '全选'}</Text>
+          </TouchableOpacity>
+        </View>
+        {selectionQuery.isFetching ? (
+          <LoadingState colors={styles._colors} />
+        ) : selectionQuery.isError ? (
+          <QueryErrorState title="待确认交易读取失败" onRetry={() => selectionQuery.refetch()} colors={styles._colors} />
+        ) : (
+          <FlatList
+            style={styles.scrollView}
+            contentContainerStyle={[styles.content, { paddingBottom: 104 }]}
+            keyExtractor={item => item.pendingId}
+            data={items}
+            ListEmptyComponent={<EmptyState colors={styles._colors} />}
+            renderItem={({ item }) => {
+              const checked = selected.has(item.pendingId);
+              const title = item.merchant || item.productDescription || formatPlatform(item.platform) || SOURCE_LABELS[item.sourceType] || '待确认交易';
+              const amount = item.amountMinor > 0 ? formatAmount(item.amountMinor, item.type) : '金额未知';
+              const details = `${SOURCE_LABELS[item.sourceType] ?? item.sourceType} · ${formatTime(item.occurredAt)}`;
+              return (
+                <TouchableOpacity
+                  style={[styles.selectionRow, checked && styles.selectionRowChecked]}
+                  accessibilityRole="checkbox"
+                  accessibilityLabel={`${title}，${amount}，${details}`}
+                  accessibilityState={{ checked, disabled: isPending }}
+                  disabled={isPending}
+                  activeOpacity={0.8}
+                  onPress={() => setSelected(previous => {
+                    const next = new Set(previous);
+                    if (next.has(item.pendingId)) next.delete(item.pendingId);
+                    else next.add(item.pendingId);
+                    return next;
+                  })}
+                >
+                  <View style={[styles.selectionCheck, checked && styles.selectionCheckChecked]}>
+                    {checked && <Check size={14} color={styles._colors.onPrimary} strokeWidth={2.8} />}
+                  </View>
+                  <View style={styles.selectionInfo}>
+                    <Text style={styles.selectionRowTitle} numberOfLines={2}>{title}</Text>
+                    <Text style={styles.pendingTime}>{details}</Text>
+                  </View>
+                  <Text style={styles.selectionAmount}>{amount}</Text>
+                </TouchableOpacity>
+              );
+            }}
+          />
+        )}
+        <View style={styles.softSelectBar}>
+          <Text style={styles.softSelectCount} accessibilityLiveRegion="polite">
+            已选 <Text style={styles.softSelectCountBold}>{selectedItems.length}</Text> / {items.length}
+          </Text>
+          <TouchableOpacity
+            style={[styles.softDangerBtn, !canIgnore && styles.actionButtonDisabled]}
+            disabled={!canIgnore}
+            accessibilityRole="button"
+            onPress={confirmIgnore}
+            activeOpacity={0.82}
+          >
+            <Text style={styles.softDangerBtnText}>{isPending ? '忽略中…' : '忽略选中'}</Text>
+          </TouchableOpacity>
+        </View>
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
@@ -502,9 +589,44 @@ function RecognitionStatusCard({
   colors: ThemeColors;
 }) {
   const styles = useStyles(createStyles);
+  const { isSoft } = useTheme();
   const aiActive = status?.aiRequesting === true;
   const activeSessions = status?.activeSessions ?? 0;
   const pendingCount = status?.pendingCount ?? 0;
+
+  if (isSoft) {
+    return (
+      <View style={styles.softMetricsRow}>
+        <View style={styles.softMetricCard}>
+          <Text style={styles.softMetricLabel}>待确认</Text>
+          <Text style={styles.softMetricValue}>{pendingCount}</Text>
+        </View>
+        <View style={styles.softMetricCard}>
+          <Text style={styles.softMetricLabel}>活跃会话</Text>
+          <Text style={styles.softMetricValue}>{activeSessions}</Text>
+        </View>
+        <View style={styles.softMetricCard}>
+          <Text style={styles.softMetricLabel}>AI 状态</Text>
+          <View style={styles.softIdleRow}>
+            <View
+              style={[
+                styles.softStatusDot,
+                { backgroundColor: aiActive ? colors.primary : colors.income },
+              ]}
+            />
+            <Text
+              style={[
+                styles.softMetricStatusText,
+                aiActive && { color: colors.primary },
+              ]}
+            >
+              {aiActive ? '识别中' : '空闲'}
+            </Text>
+          </View>
+        </View>
+      </View>
+    );
+  }
 
   return (
     <View style={styles.statusCard}>
@@ -631,6 +753,7 @@ function PendingCard({
 }: PendingCardProps) {
   const [editing, setEditing] = useState(false);
   const styles = useStyles(createStyles);
+  const { isSoft } = useTheme();
 
   /**
    * 账户名解析：把 `pending.accountId` 翻成人看得懂的名字。
@@ -706,6 +829,187 @@ function PendingCard({
    * 不存在比"存在但点不动"更干净。
    */
   const canRetryRecognition = isRetryRecognitionAvailable(pending);
+
+  if (isSoft) {
+    const cardTitle =
+      pending.merchant ||
+      pending.productDescription ||
+      formatPlatform(pending.platform) ||
+      sourceLabel;
+    const isDuplicateConflict = Boolean(
+      pending.conflictReason && /DUP|重复/i.test(pending.conflictReason),
+    );
+    const isIncomeType = pending.type === 'income' || pending.type === 'refund';
+
+    return (
+      <View style={styles.pendingCard}>
+        {/* 顶部来源胶囊 + 时间 */}
+        <View style={styles.softCardTop}>
+          <View style={styles.softSourceChip}>
+            <Bell size={12} color={colors.textTertiary} strokeWidth={2.2} />
+            <Text style={styles.softSourceChipText} numberOfLines={1}>
+              {sourceLabel}
+              {pending.platform ? ` · ${formatPlatform(pending.platform)}` : ''}
+            </Text>
+          </View>
+          <Text style={styles.pendingTime}>{timeLabel}</Text>
+        </View>
+
+        {/* 主体行：商户/标题 + 类型 + 大号金额 */}
+        <View style={styles.softCardMain}>
+          <View style={styles.softCardMainLeft}>
+            <Text style={styles.softCardTitle} numberOfLines={1}>
+              {cardTitle}
+            </Text>
+            <Text style={styles.softCardSub} numberOfLines={1}>
+              {TYPE_LABELS[pending.type] ?? pending.type}
+              {pending.productDescription && pending.productDescription !== cardTitle
+                ? ` · ${pending.productDescription}`
+                : ''}
+            </Text>
+          </View>
+          <Text
+            style={[
+              styles.softCardAmount,
+              isIncomeType ? { color: colors.income } : { color: colors.expense },
+            ]}
+          >
+            {isAiFailedPlaceholder ? '金额未知' : amountLabel}
+          </Text>
+        </View>
+
+        {/* 冲突 / 缺账户原因提示卡 */}
+        {hasConflict ? (
+          <View
+            style={[
+              styles.softReasonBox,
+              isDuplicateConflict ? styles.softReasonInfo : styles.softReasonWarn,
+            ]}
+          >
+            {isDuplicateConflict ? (
+              <Copy size={14} color={colors.primary} strokeWidth={2.2} style={{ marginTop: 2 }} />
+            ) : (
+              <AlertCircle size={14} color={colors.warning} strokeWidth={2.2} style={{ marginTop: 2 }} />
+            )}
+            <Text style={styles.softReasonText}>{conflictLabel}</Text>
+          </View>
+        ) : null}
+
+        {/* 账户与关键元信息 */}
+        <View style={styles.softMetaGrid}>
+          <View style={styles.softMetaCell}>
+            <Text style={styles.softMetaLabel}>付款账户</Text>
+            {accountHit ? (
+              <View style={styles.softAccountRow}>
+                <AccountIcon
+                  icon={accountHit.icon}
+                  name={accountHit.name}
+                  subtype={accountHit.subtype}
+                  size={16}
+                />
+                <Text style={styles.softMetaVal} numberOfLines={1}>
+                  {accountHit.name}
+                </Text>
+              </View>
+            ) : (
+              <View style={styles.softAccountRow}>
+                <AlertCircle size={13} color={colors.warning} strokeWidth={2.3} />
+                <Text style={styles.softMetaValWarn} numberOfLines={1}>
+                  {pending.accountId ? '已停用或已删除' : '未选择 · 请先编辑'}
+                </Text>
+              </View>
+            )}
+          </View>
+          <View style={styles.softMetaCell}>
+            <Text style={styles.softMetaLabel}>类型</Text>
+            <Text style={styles.softMetaVal} numberOfLines={1}>
+              {TYPE_LABELS[pending.type] ?? pending.type}
+              {mergedSignalCount > 0 ? ` · 归并${mergedSignalCount}条` : ''}
+            </Text>
+          </View>
+        </View>
+
+        {pending.orderId ? (
+          <Text style={styles.softOrderText} numberOfLines={1}>
+            订单号：{pending.orderId}
+          </Text>
+        ) : null}
+
+        {pending.sessionId ? (
+          <EvidenceSection
+            evidences={evidences}
+            loading={evidenceQuery.isLoading}
+            error={evidenceQuery.isError}
+            onRetry={() => evidenceQuery.refetch()}
+            colors={colors}
+          />
+        ) : null}
+
+        {editing ? (
+          <PendingEditPanel
+            pending={pending}
+            submitting={isConfirming}
+            onCancel={() => setEditing(false)}
+            onSubmit={(input) => onConfirmWithInput(pending, input)}
+          />
+        ) : null}
+
+        {/* 柔光底部操作栏：左 忽略，右 编辑 + 确认入账 */}
+        <View style={styles.softActionRow}>
+          <TouchableOpacity
+            style={[styles.softGhostBtn, isIgnoring && styles.actionButtonDisabled]}
+            onPress={() => onIgnore(pending)}
+            disabled={isIgnoring || isConfirming}
+            activeOpacity={0.75}
+          >
+            <Text style={styles.softGhostBtnText}>
+              {isIgnoring ? '忽略中…' : '忽略'}
+            </Text>
+          </TouchableOpacity>
+          <View style={{ flex: 1 }} />
+          {pending.candidateId && canRetryRecognition ? (
+            <TouchableOpacity
+              style={[
+                styles.softTintBtn,
+                (isRetrying || retryBlocked) && styles.actionButtonDisabled,
+              ]}
+              onPress={() => onRetry(pending)}
+              disabled={isRetrying || isConfirming || isIgnoring || retryBlocked}
+              activeOpacity={0.78}
+            >
+              <RefreshCw size={14} color={colors.primaryDark} strokeWidth={2.2} />
+              <Text style={styles.softTintBtnText}>
+                {isRetrying ? '重试中…' : retryBlocked ? '已提交' : '重试'}
+              </Text>
+            </TouchableOpacity>
+          ) : null}
+          <TouchableOpacity
+            style={[styles.softTintBtn, editing && styles.actionButtonDisabled]}
+            onPress={() => setEditing(current => !current)}
+            disabled={isConfirming || isIgnoring}
+            activeOpacity={0.78}
+          >
+            <Pencil size={14} color={colors.primaryDark} strokeWidth={2.2} />
+            <Text style={styles.softTintBtnText}>{editing ? '收起' : '编辑'}</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[
+              styles.softPrimaryBtn,
+              (isConfirming || isAiFailedPlaceholder) && styles.actionButtonDisabled,
+            ]}
+            onPress={() => onConfirm(pending)}
+            disabled={isConfirming || isIgnoring || isAiFailedPlaceholder}
+            activeOpacity={0.82}
+          >
+            <Check size={15} color={colors.onPrimary} strokeWidth={2.5} />
+            <Text style={styles.softPrimaryBtnText}>
+              {isAiFailedPlaceholder ? '识别失败' : isConfirming ? '确认中…' : '确认入账'}
+            </Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    );
+  }
 
   return (
     <View style={styles.pendingCard}>
@@ -1497,7 +1801,7 @@ function describeConfirmError(error: unknown): string {
   return cleaned ? cleaned : '操作失败，请稍后重试';
 }
 
-const createStyles = (colors: ThemeColors) => ({
+const createStyles = (colors: ThemeColors, shape: ThemeShape, isDark: boolean) => ({
   ...StyleSheet.create({
     container: { flex: 1, backgroundColor: colors.background },
     header: {
@@ -1505,21 +1809,22 @@ const createStyles = (colors: ThemeColors) => ({
       alignItems: 'center',
       justifyContent: 'space-between',
       paddingHorizontal: spacing.md,
-      paddingTop: spacing.xl,
+      paddingTop: shape.isSoft ? spacing.sm : spacing.xl,
       paddingBottom: spacing.md,
-      backgroundColor: colors.surface,
-      borderBottomWidth: borderWidth.medium,
+      backgroundColor: shape.isSoft ? colors.background : colors.surface,
+      borderBottomWidth: shape.isSoft ? 0 : borderWidth.medium,
       borderBottomColor: colors.stroke,
     },
     iconButton: {
       width: 40,
       height: 40,
+      borderRadius: shape.isSoft ? 14 : 0,
       alignItems: 'center',
       justifyContent: 'center',
     },
     headerTitle: {
-      fontSize: 20,
-      fontWeight: '800',
+      fontSize: shape.isSoft ? 18 : 20,
+      fontWeight: shape.isSoft ? '600' : '800',
       color: colors.textPrimary,
     },
     selectionEntry: {
@@ -1533,8 +1838,243 @@ const createStyles = (colors: ThemeColors) => ({
     },
     selectionEntryText: {
       color: colors.primary,
-      fontSize: 13,
+      fontSize: shape.isSoft ? 14 : 13,
+      fontWeight: shape.isSoft ? '600' : '700',
+    },
+    softCancelText: {
+      color: colors.textSecondary,
+      fontSize: 14,
+      fontWeight: '600',
+    },
+    softSelectBar: {
+      position: 'absolute',
+      left: 12,
+      right: 12,
+      bottom: 14,
+      paddingVertical: 12,
+      paddingLeft: 18,
+      paddingRight: 12,
+      borderRadius: 24,
+      backgroundColor: isDark ? 'rgba(23,26,33,0.95)' : 'rgba(255,255,255,0.95)',
+      borderWidth: shape.borderWidth.card,
+      borderColor: colors.cardBorder,
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      ...shape.elevation.floating,
+    },
+    softSelectCount: {
+      fontSize: 14,
+      color: colors.textSecondary,
+    },
+    softSelectCountBold: {
       fontWeight: '700',
+      color: colors.textPrimary,
+      fontVariant: ['tabular-nums'],
+    },
+    softDangerBtn: {
+      height: 38,
+      paddingHorizontal: 16,
+      borderRadius: 14,
+      backgroundColor: colors.expense,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    softDangerBtnText: {
+      fontSize: 14,
+      fontWeight: '600',
+      color: '#FFFFFF',
+    },
+    softMetricsRow: {
+      flexDirection: 'row',
+      gap: 8,
+    },
+    softMetricCard: {
+      flex: 1,
+      padding: 12,
+      borderRadius: 18,
+      backgroundColor: colors.surface,
+      borderWidth: shape.borderWidth.card,
+      borderColor: colors.cardBorder,
+      gap: 2,
+      ...shape.elevation.card,
+    },
+    softMetricLabel: {
+      fontSize: 12,
+      color: colors.textTertiary,
+    },
+    softMetricValue: {
+      fontSize: 18,
+      fontWeight: '700',
+      color: colors.textPrimary,
+      fontVariant: ['tabular-nums'],
+    },
+    softIdleRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 6,
+      marginTop: 2,
+    },
+    softStatusDot: {
+      width: 7,
+      height: 7,
+      borderRadius: 4,
+    },
+    softMetricStatusText: {
+      fontSize: 15,
+      fontWeight: '600',
+      color: colors.textPrimary,
+    },
+    softCardTop: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      marginBottom: 10,
+      gap: 8,
+    },
+    softSourceChip: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 5,
+      backgroundColor: colors.surfaceMuted,
+      paddingHorizontal: 9,
+      paddingVertical: 3,
+      borderRadius: 999,
+      flexShrink: 1,
+    },
+    softSourceChipText: {
+      fontSize: 12,
+      fontWeight: '500',
+      color: colors.textSecondary,
+    },
+    softCardMain: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      gap: 12,
+    },
+    softCardMainLeft: {
+      flex: 1,
+      gap: 2,
+    },
+    softCardTitle: {
+      fontSize: 16,
+      fontWeight: '600',
+      color: colors.textPrimary,
+    },
+    softCardSub: {
+      fontSize: 12,
+      color: colors.textTertiary,
+    },
+    softCardAmount: {
+      fontSize: 22,
+      fontWeight: '700',
+      fontVariant: ['tabular-nums'],
+    },
+    softReasonBox: {
+      flexDirection: 'row',
+      alignItems: 'flex-start',
+      gap: 8,
+      marginTop: 12,
+      paddingHorizontal: 12,
+      paddingVertical: 10,
+      borderRadius: 14,
+    },
+    softReasonWarn: {
+      backgroundColor: isDark ? '#2E2410' : '#FFF5E6',
+    },
+    softReasonInfo: {
+      backgroundColor: colors.primaryLight,
+    },
+    softReasonText: {
+      flex: 1,
+      fontSize: 12.5,
+      lineHeight: 18,
+      color: colors.textSecondary,
+    },
+    softMetaGrid: {
+      flexDirection: 'row',
+      gap: 10,
+      marginTop: 12,
+    },
+    softMetaCell: {
+      flex: 1,
+      gap: 3,
+    },
+    softMetaLabel: {
+      fontSize: 12,
+      color: colors.textTertiary,
+    },
+    softAccountRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 5,
+    },
+    softMetaVal: {
+      fontSize: 14,
+      fontWeight: '500',
+      color: colors.textPrimary,
+      flexShrink: 1,
+    },
+    softMetaValWarn: {
+      fontSize: 13.5,
+      fontWeight: '500',
+      color: isDark ? '#FBBF24' : '#B45309',
+      flexShrink: 1,
+    },
+    softOrderText: {
+      fontSize: 11.5,
+      color: colors.textTertiary,
+      marginTop: 8,
+    },
+    softActionRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 8,
+      marginTop: 14,
+      paddingTop: 12,
+      borderTopWidth: StyleSheet.hairlineWidth,
+      borderTopColor: colors.divider,
+    },
+    softGhostBtn: {
+      height: 36,
+      paddingHorizontal: 10,
+      borderRadius: 12,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    softGhostBtnText: {
+      fontSize: 14,
+      fontWeight: '500',
+      color: colors.textTertiary,
+    },
+    softTintBtn: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 5,
+      height: 36,
+      paddingHorizontal: 14,
+      borderRadius: 14,
+      backgroundColor: colors.primaryLight,
+    },
+    softTintBtnText: {
+      fontSize: 13.5,
+      fontWeight: '600',
+      color: colors.primaryDark,
+    },
+    softPrimaryBtn: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 5,
+      height: 36,
+      paddingHorizontal: 14,
+      borderRadius: 14,
+      backgroundColor: colors.primary,
+    },
+    softPrimaryBtnText: {
+      fontSize: 13.5,
+      fontWeight: '600',
+      color: colors.onPrimary,
     },
     selectionToolbar: {
       paddingHorizontal: spacing.lg,
@@ -1554,30 +2094,32 @@ const createStyles = (colors: ThemeColors) => ({
       padding: spacing.md,
       marginBottom: spacing.sm,
       backgroundColor: colors.surface,
-      borderWidth: borderWidth.thin,
-      borderColor: colors.stroke,
-      borderRadius: borderRadius.card,
+      borderWidth: shape.isSoft ? shape.borderWidth.card : borderWidth.thin,
+      borderColor: shape.isSoft ? colors.cardBorder : colors.stroke,
+      borderRadius: shape.isSoft ? shape.radius.card : borderRadius.card,
+      ...(shape.isSoft ? shape.elevation.card : {}),
     },
     selectionRowChecked: {
-      backgroundColor: colors.primaryLight,
+      backgroundColor: shape.isSoft ? colors.surface : colors.primaryLight,
+      borderWidth: shape.isSoft ? 2 : borderWidth.thin,
       borderColor: colors.primary,
     },
     selectionCheck: {
-      width: 22,
-      height: 22,
+      width: shape.isSoft ? 24 : 22,
+      height: shape.isSoft ? 24 : 22,
       alignItems: 'center',
       justifyContent: 'center',
-      borderRadius: borderRadius.small,
-      borderWidth: borderWidth.thin,
-      borderColor: colors.stroke,
+      borderRadius: shape.isSoft ? 12 : borderRadius.small,
+      borderWidth: shape.isSoft ? 2 : borderWidth.thin,
+      borderColor: shape.isSoft ? colors.stroke : colors.stroke,
     },
     selectionCheckChecked: {
       backgroundColor: colors.primary,
       borderColor: colors.primary,
     },
     selectionInfo: { flex: 1, gap: spacing.xs },
-    selectionRowTitle: { color: colors.textPrimary, fontSize: 15, fontWeight: '700' },
-    selectionAmount: { color: colors.textPrimary, fontSize: 14, fontWeight: '800' },
+    selectionRowTitle: { color: colors.textPrimary, fontSize: 15, fontWeight: shape.isSoft ? '600' : '700' },
+    selectionAmount: { color: shape.isSoft ? colors.expense : colors.textPrimary, fontSize: shape.isSoft ? 16 : 14, fontWeight: shape.isSoft ? '700' : '800', fontVariant: ['tabular-nums'] },
     truncatedHint: {
       fontSize: 12,
       color: colors.textSecondary,
@@ -1642,31 +2184,33 @@ const createStyles = (colors: ThemeColors) => ({
       padding: spacing.xl,
       alignItems: 'center',
       backgroundColor: colors.surface,
-      borderWidth: borderWidth.thin,
-      borderColor: colors.stroke,
-      borderRadius: borderRadius.card,
+      borderWidth: shape.isSoft ? shape.borderWidth.card : borderWidth.thin,
+      borderColor: shape.isSoft ? colors.cardBorder : colors.stroke,
+      borderRadius: shape.isSoft ? shape.radius.card : borderRadius.card,
+      ...(shape.isSoft ? shape.elevation.card : {}),
     },
     emptyTitle: {
       marginTop: spacing.md,
       fontSize: 16,
-      fontWeight: '800',
+      fontWeight: shape.isSoft ? '600' : '800',
       color: colors.textPrimary,
     },
     emptyText: {
       marginTop: spacing.xs,
       fontSize: 13,
-      fontWeight: '500',
-      color: colors.textSecondary,
+      fontWeight: shape.isSoft ? '400' : '500',
+      color: colors.textTertiary,
       textAlign: 'center',
       lineHeight: 20,
     },
     list: { gap: spacing.md },
     pendingCard: {
-      padding: spacing.lg,
+      padding: shape.isSoft ? 14 : spacing.lg,
       backgroundColor: colors.surface,
-      borderWidth: borderWidth.thin,
-      borderColor: colors.stroke,
-      borderRadius: borderRadius.card,
+      borderWidth: shape.isSoft ? shape.borderWidth.card : borderWidth.thin,
+      borderColor: shape.isSoft ? colors.cardBorder : colors.stroke,
+      borderRadius: shape.isSoft ? shape.radius.card : borderRadius.card,
+      ...(shape.isSoft ? shape.elevation.card : {}),
     },
     pendingHeader: {
       flexDirection: 'row',
@@ -1713,10 +2257,10 @@ const createStyles = (colors: ThemeColors) => ({
     evidenceSection: {
       marginTop: spacing.sm,
       padding: spacing.sm,
-      backgroundColor: colors.background,
-      borderWidth: borderWidth.thin,
+      backgroundColor: shape.isSoft ? colors.surfaceMuted : colors.background,
+      borderWidth: shape.isSoft ? 0 : borderWidth.thin,
       borderColor: colors.stroke,
-      borderRadius: borderRadius.medium,
+      borderRadius: shape.isSoft ? 14 : borderRadius.medium,
       gap: spacing.xs,
     },
     evidenceHeader: {
@@ -1883,21 +2427,21 @@ const createStyles = (colors: ThemeColors) => ({
     editPanel: {
       marginTop: spacing.sm,
       padding: spacing.md,
-      backgroundColor: colors.background,
-      borderWidth: borderWidth.thin,
+      backgroundColor: shape.isSoft ? colors.surfaceMuted : colors.background,
+      borderWidth: shape.isSoft ? 0 : borderWidth.thin,
       borderColor: colors.stroke,
-      borderRadius: borderRadius.medium,
+      borderRadius: shape.isSoft ? 16 : borderRadius.medium,
       gap: spacing.xs,
     },
     editTitle: {
       fontSize: 13,
-      fontWeight: '800',
+      fontWeight: shape.isSoft ? '600' : '800',
       color: colors.textPrimary,
       marginBottom: spacing.xs,
     },
     editLabel: {
       fontSize: 12,
-      fontWeight: '700',
+      fontWeight: shape.isSoft ? '500' : '700',
       color: colors.textSecondary,
       marginTop: spacing.xs,
     },
@@ -1907,16 +2451,17 @@ const createStyles = (colors: ThemeColors) => ({
       gap: spacing.sm,
     },
     chip: {
-      paddingHorizontal: spacing.sm,
-      paddingVertical: spacing.xs,
-      borderRadius: borderRadius.small,
-      borderWidth: borderWidth.thin,
+      paddingHorizontal: shape.isSoft ? 12 : spacing.sm,
+      paddingVertical: shape.isSoft ? 6 : spacing.xs,
+      borderRadius: shape.isSoft ? 999 : borderRadius.small,
+      borderWidth: shape.isSoft ? 0 : borderWidth.thin,
       borderColor: colors.stroke,
       backgroundColor: colors.surface,
     },
     chipSelected: {
-      backgroundColor: colors.accent,
-      borderWidth: borderWidth.medium,
+      backgroundColor: shape.isSoft ? colors.primaryLight : colors.accent,
+      borderWidth: shape.isSoft ? 1.5 : borderWidth.medium,
+      borderColor: shape.isSoft ? colors.primary : colors.stroke,
     },
     chipInner: {
       flexDirection: 'row',
@@ -1925,18 +2470,18 @@ const createStyles = (colors: ThemeColors) => ({
     },
     chipText: {
       fontSize: 12,
-      fontWeight: '700',
+      fontWeight: shape.isSoft ? '600' : '700',
       color: colors.textPrimary,
     },
     editInput: {
       backgroundColor: colors.surface,
-      borderWidth: borderWidth.thin,
-      borderColor: colors.stroke,
-      borderRadius: borderRadius.medium,
+      borderWidth: shape.isSoft ? 1 : borderWidth.thin,
+      borderColor: shape.isSoft ? colors.cardBorder : colors.stroke,
+      borderRadius: shape.isSoft ? 12 : borderRadius.medium,
       paddingHorizontal: spacing.md,
       paddingVertical: spacing.sm,
       fontSize: 14,
-      fontWeight: '600',
+      fontWeight: shape.isSoft ? '500' : '600',
       color: colors.textPrimary,
     },
     editHint: {
@@ -1999,14 +2544,14 @@ const createStyles = (colors: ThemeColors) => ({
       alignItems: 'center',
       justifyContent: 'center',
       paddingVertical: spacing.sm,
-      borderRadius: borderRadius.medium,
-      borderWidth: borderWidth.thin,
+      borderRadius: shape.isSoft ? 14 : borderRadius.medium,
+      borderWidth: shape.isSoft ? 0 : borderWidth.thin,
       borderColor: colors.stroke,
       backgroundColor: colors.surface,
     },
     editCancelButtonText: {
       fontSize: 13,
-      fontWeight: '700',
+      fontWeight: shape.isSoft ? '600' : '700',
       color: colors.textSecondary,
     },
     editConfirmButton: {
@@ -2014,14 +2559,14 @@ const createStyles = (colors: ThemeColors) => ({
       alignItems: 'center',
       justifyContent: 'center',
       paddingVertical: spacing.sm,
-      borderRadius: borderRadius.medium,
-      borderWidth: borderWidth.thin,
+      borderRadius: shape.isSoft ? 14 : borderRadius.medium,
+      borderWidth: shape.isSoft ? 0 : borderWidth.thin,
       borderColor: colors.stroke,
       backgroundColor: colors.primary,
     },
     editConfirmButtonText: {
       fontSize: 13,
-      fontWeight: '800',
+      fontWeight: shape.isSoft ? '600' : '800',
       color: colors.onPrimary,
     },
   }),

@@ -16,6 +16,7 @@ import {
   Platform,
 } from 'react-native';
 import { ThemeColors } from '../../theme/colors';
+import { ThemeShape } from '../../theme/shape';
 import { spacing, borderRadius, borderWidth, shadow } from '../../theme/spacing';
 import { useStyles } from '../../hooks';
 
@@ -115,7 +116,7 @@ const Modal: React.FC<ModalProps> = ({
   );
 };
 
-const createStyles = (colors: ThemeColors) => ({
+const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
   ...StyleSheet.create({
     keyboardAvoiding: {
       flex: 1,
@@ -149,27 +150,27 @@ const createStyles = (colors: ThemeColors) => ({
     },
     modal: {
       backgroundColor: colors.surface,
-      borderRadius: borderRadius.card,
-      borderWidth: borderWidth.thick,
-      borderColor: colors.stroke,
+      borderRadius: shape.isSoft ? 24 : borderRadius.card,
+      borderWidth: shape.isSoft ? shape.borderWidth.card : borderWidth.thick,
+      borderColor: shape.isSoft ? colors.cardBorder : colors.stroke,
       overflow: 'hidden',
-      ...shadow.medium,
+      ...(shape.isSoft ? shape.elevation.floating : shadow.medium),
     },
     bottomSheetModal: {
       flex: 1,
-      borderTopLeftRadius: borderRadius.xlarge,
-      borderTopRightRadius: borderRadius.xlarge,
+      borderTopLeftRadius: shape.isSoft ? shape.radius.sheet : borderRadius.xlarge,
+      borderTopRightRadius: shape.isSoft ? shape.radius.sheet : borderRadius.xlarge,
       borderBottomLeftRadius: 0,
       borderBottomRightRadius: 0,
-      borderWidth: borderWidth.thin,
+      borderWidth: shape.isSoft ? shape.borderWidth.card : borderWidth.thin,
       borderBottomWidth: 0,
-      ...shadow.soft,
+      ...(shape.isSoft ? shape.elevation.floating : shadow.soft),
     },
     bottomSheetGrabber: {
       width: 40,
-      height: 4,
+      height: shape.isSoft ? 5 : 4,
       borderRadius: borderRadius.round,
-      backgroundColor: colors.divider,
+      backgroundColor: shape.isSoft ? colors.stroke : colors.divider,
       alignSelf: 'center',
       marginTop: spacing.sm,
     },
@@ -179,31 +180,31 @@ const createStyles = (colors: ThemeColors) => ({
       justifyContent: 'space-between',
       paddingHorizontal: spacing.lg,
       paddingVertical: spacing.md,
-      borderBottomWidth: borderWidth.thin,
-      borderBottomColor: colors.stroke,
+      borderBottomWidth: shape.isSoft ? StyleSheet.hairlineWidth : borderWidth.thin,
+      borderBottomColor: shape.isSoft ? colors.divider : colors.stroke,
     },
     titleContainer: {
       flex: 1,
     },
     title: {
-      fontSize: 20,
-      fontWeight: '800',
+      fontSize: shape.isSoft ? 18 : 20,
+      fontWeight: shape.isSoft ? '700' : '800',
       color: colors.textPrimary,
     },
     closeButton: {
-      width: 44,
-      height: 44,
-      borderRadius: borderRadius.small,
-      borderWidth: borderWidth.thin,
+      width: shape.isSoft ? 36 : 44,
+      height: shape.isSoft ? 36 : 44,
+      borderRadius: shape.isSoft ? 12 : borderRadius.small,
+      borderWidth: shape.isSoft ? 0 : borderWidth.thin,
       borderColor: colors.stroke,
       alignItems: 'center',
       justifyContent: 'center',
-      backgroundColor: colors.surface,
+      backgroundColor: shape.isSoft ? colors.surfaceMuted : colors.surface,
     },
     closeIcon: {
-      fontSize: 16,
-      color: colors.textPrimary,
-      fontWeight: '800',
+      fontSize: 15,
+      color: shape.isSoft ? colors.textSecondary : colors.textPrimary,
+      fontWeight: shape.isSoft ? '600' : '800',
     },
     content: {
       padding: spacing.lg,

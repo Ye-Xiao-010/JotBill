@@ -5,6 +5,7 @@
 import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import { ThemeColors } from '../../theme/colors';
+import { ThemeShape } from '../../theme/shape';
 import { borderRadius, borderWidth, spacing, shadow } from '../../theme/spacing';
 import { useStyles } from '../../hooks';
 import { formatSignedCurrency } from '../../utils/format';
@@ -41,7 +42,11 @@ export default function TransactionItem({
     <View style={styles.inner}>
       <View style={[
         styles.iconContainer,
-        { backgroundColor: isIncome ? styles._colors.income : styles._colors.expense },
+        {
+          backgroundColor: styles._isSoft
+            ? (isIncome ? styles._colors.incomeLight : styles._colors.expenseLight)
+            : (isIncome ? styles._colors.income : styles._colors.expense),
+        },
       ]}>
         <CategoryIcon
           icon={categoryIcon}
@@ -94,15 +99,16 @@ export default function TransactionItem({
   return <View style={styles.container}>{content}</View>;
 }
 
-const createStyles = (colors: ThemeColors) => ({
+const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
   ...StyleSheet.create({
     container: {
       backgroundColor: colors.surface,
-      borderRadius: borderRadius.card,
-      borderWidth: borderWidth.medium,
-      borderColor: colors.stroke,
+      borderRadius: shape.radius.card,
+      borderWidth: shape.isSoft ? shape.borderWidth.card : borderWidth.medium,
+      borderColor: shape.isSoft ? colors.cardBorder : colors.stroke,
       padding: spacing.md,
       marginBottom: spacing.sm,
+      ...(shape.isSoft ? shape.elevation.card : {}),
     },
     inner: {
       flexDirection: 'row',
@@ -111,8 +117,8 @@ const createStyles = (colors: ThemeColors) => ({
     iconContainer: {
       width: 44,
       height: 44,
-      borderRadius: borderRadius.medium,
-      borderWidth: borderWidth.thin,
+      borderRadius: shape.isSoft ? 14 : borderRadius.medium,
+      borderWidth: shape.isSoft ? 0 : borderWidth.thin,
       borderColor: colors.stroke,
       alignItems: 'center',
       justifyContent: 'center',
@@ -132,34 +138,35 @@ const createStyles = (colors: ThemeColors) => ({
     },
     category: {
       fontSize: 15,
-      fontWeight: '700',
+      fontWeight: shape.isSoft ? '600' : '700',
       color: colors.textPrimary,
       flex: 1,
       marginRight: spacing.sm,
     },
     amountBadge: {
-      borderRadius: borderRadius.small,
-      borderWidth: borderWidth.thin,
+      borderRadius: shape.isSoft ? shape.radius.small : borderRadius.small,
+      borderWidth: shape.isSoft ? 0 : borderWidth.thin,
       borderColor: colors.stroke,
-      paddingHorizontal: spacing.sm,
+      paddingHorizontal: shape.isSoft ? 0 : spacing.sm,
       paddingVertical: 2,
     },
     incomeBadge: {
-      backgroundColor: colors.incomeLight,
+      backgroundColor: shape.isSoft ? 'transparent' : colors.incomeLight,
     },
     expenseBadge: {
-      backgroundColor: colors.expenseLight,
+      backgroundColor: shape.isSoft ? 'transparent' : colors.expenseLight,
     },
     amount: {
       fontSize: 15,
-      fontWeight: '800',
-      fontFamily: typography.fontFamily.mono,
+      fontWeight: shape.isSoft ? '700' : '800',
+      fontFamily: shape.isSoft ? undefined : typography.fontFamily.mono,
+      fontVariant: ['tabular-nums'],
     },
     incomeAmount: {
-      color: colors.incomeStrong,
+      color: shape.isSoft ? colors.income : colors.incomeStrong,
     },
     expenseAmount: {
-      color: colors.expenseStrong,
+      color: shape.isSoft ? colors.expense : colors.expenseStrong,
     },
     subRow: {
       flexDirection: 'row',
@@ -177,8 +184,10 @@ const createStyles = (colors: ThemeColors) => ({
       fontSize: 12,
       fontWeight: '500',
       color: colors.textTertiary,
-      fontFamily: typography.fontFamily.mono,
+      fontFamily: shape.isSoft ? undefined : typography.fontFamily.mono,
+      fontVariant: ['tabular-nums'],
     },
   }),
   _colors: colors,
+  _isSoft: shape.isSoft,
 });

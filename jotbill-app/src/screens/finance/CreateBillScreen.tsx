@@ -17,18 +17,39 @@ import {
 } from 'react-native';
 import { useQueryClient } from '@tanstack/react-query';
 import { Text } from 'react-native';
-import { Check, ChevronDown } from 'lucide-react-native';
-import { Toast } from '../../components';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import {
+  ArrowUpDown,
+  Calendar,
+  Check,
+  ChevronDown,
+  CreditCard,
+  Pencil,
+  Plus,
+  X,
+} from 'lucide-react-native';
+import { Toast, SegmentedControl } from '../../components';
 import { AddCategoryModal, ConfirmModal } from '../../components/modals';
+import SoftBillKeypad from '../../components/finance/SoftBillKeypad';
 import CategoryIcon from '../../components/business/CategoryIcon';
 import AccountIcon from '../../components/business/AccountIcon';
 import { accountDisplayName, resolveAccountIcon } from '../../constants/accountIcons';
-import { DEFAULT_CATEGORIES } from '../../constants/app';
+import { DEFAULT_CATEGORIES, getCategoryColor } from '../../constants/app';
 import { useToast, useCategories, useStyles } from '../../hooks';
+import { useTheme } from '../../providers';
 import { nativeData, type Account, type Bill, type Category } from '../../native';
 import { invalidateCache, QUERY_KEYS, CACHE_TIME } from '../../lib/queryClient';
 import { findDuplicateBills } from '../../lib/billDuplicateCheck';
+import {
+  applyKeypadInput,
+  evaluateAmountExpression,
+  formatExpressionPreview,
+  hasExpressionOperator,
+  type KeypadKey,
+} from '../../utils/amountExpression';
+import { formatTime } from '../../utils/format';
 import { ThemeColors } from '../../theme/colors';
+import { ThemeShape } from '../../theme/shape';
 import { spacing, borderRadius, borderWidth, shadow, typography } from '../../theme';
 
 
@@ -80,6 +101,9 @@ interface CreateBillScreenProps {
 const CreateBillScreen: React.FC<CreateBillScreenProps> = ({ navigation, route }) => {
   const { toastState, showSuccess, showError, hideToast } = useToast();
   const styles = useStyles(createStyles);
+  const { isSoft, isDark, colors } = useTheme();
+  const insets = useSafeAreaInsets();
+  const [showNoteEditor, setShowNoteEditor] = useState(false);
 
   const editingBill = route?.params?.bill;
   const initialType = route?.params?.initialType;
@@ -422,25 +446,41 @@ const CreateBillScreen: React.FC<CreateBillScreenProps> = ({ navigation, route }
     type === 'repayment' ? account.kind === 'liability' : true,
   );
 
-  /** 表单校验：金额合法且有上限；账户必填；非转账类必选分类；转账/还款必选双账户且源≠目标、还款目标为负债。 */
-  const validateForm = () => {
+  /** 解析表单金额（柔光主题支持 + / − 计算表达式） */
+  const resolveNumericAmount = (): { valid: boolean; value: number; error?: string } => {
     const trimmedAmount = amount.trim();
-    // ⚠️ 原来写的是 `!amount || parseFloat(amount) <= 0`：parseFloat('abc') 返回
-    // NaN，而 `NaN <= 0` 为 false ⇒ 校验通过 ⇒ amountMinor = NaN ⇒ 原生
-    // assertMinorUnit 抛英文 "amountMinor must be a safe integer minor unit"，
-    // 用户填的是"12块"却收到一句天书。改用 Number.isFinite 兜住 NaN。
-    // 另外补小数位与上限校验：此前无上限，一笔亿元账单会直接落库并把余额扣成大额负数。
-    const parsedAmount = Number(trimmedAmount);
-    if (!trimmedAmount || !Number.isFinite(parsedAmount) || parsedAmount <= 0) {
-      showError('请输入有效的金额');
-      return false;
+    if (!trimmedAmount) {
+      return { valid: false, value: 0, error: '请输入有效的金额' };
     }
-    if (!/^\d+(\.\d{1,2})?$/.test(trimmedAmount)) {
-      showError('金额最多两位小数');
-      return false;
+    if (isSoft && hasExpressionOperator(trimmedAmount)) {
+      const evaluated = evaluateAmountExpression(trimmedAmount);
+      if (!Number.isFinite(evaluated) || evaluated <= 0) {
+        return { valid: false, value: 0, error: '请输入有效的金额' };
+      }
+      if (evaluated > 99_999_999.99) {
+        return { valid: false, value: 0, error: '金额过大（上限 9999 万）' };
+      }
+      return { valid: true, value: evaluated };
+    }
+    const cleaned = isSoft ? trimmedAmount.replace(/[+-]$/, '') : trimmedAmount;
+    const parsedAmount = Number(cleaned);
+    if (!cleaned || !Number.isFinite(parsedAmount) || parsedAmount <= 0) {
+      return { valid: false, value: 0, error: '请输入有效的金额' };
+    }
+    if (!/^\d+(\.\d{1,2})?$/.test(cleaned)) {
+      return { valid: false, value: 0, error: '金额最多两位小数' };
     }
     if (parsedAmount > 99_999_999.99) {
-      showError('金额过大（上限 9999 万）');
+      return { valid: false, value: 0, error: '金额过大（上限 9999 万）' };
+    }
+    return { valid: true, value: parsedAmount };
+  };
+
+  /** 表单校验：金额合法且有上限；账户必填；非转账类必选分类；转账/还款必选双账户且源≠目标、还款目标为负债。 */
+  const validateForm = () => {
+    const resolved = resolveNumericAmount();
+    if (!resolved.valid) {
+      showError(resolved.error || '请输入有效的金额');
       return false;
     }
     if (isTransferLike) {
@@ -479,11 +519,12 @@ const CreateBillScreen: React.FC<CreateBillScreenProps> = ({ navigation, route }
     return true;
   };
 
-  const handleSave = async () => {
+  const handleSave = async (continueAfterSave: boolean = false) => {
     if (!validateForm()) return;
+    const numericAmount = resolveNumericAmount().value;
     try {
       setLoading(true);
-      const amountMinor = Math.round(parseFloat(amount) * 100);
+      const amountMinor = Math.round(numericAmount * 100);
       const billData = {
         amountMinor,
         // 类型锁定的编辑（退款/手续费等）保留原类型，仅允许修改金额/备注/分类/账户
@@ -511,7 +552,7 @@ const CreateBillScreen: React.FC<CreateBillScreenProps> = ({ navigation, route }
         return;
       }
 
-      // 创建路径的完整收尾（P15 幂等键 + 缓存失效 + 提示 + 返回）——
+      // 创建路径的完整收尾（P15 幂等键 + 缓存失效 + 提示 + 返回/再记）——
       // M8 查重命中后的弹窗确认路径复用同一份，避免两处漂移。
       const completeCreate = async () => {
         await nativeData.addBill({
@@ -520,7 +561,15 @@ const CreateBillScreen: React.FC<CreateBillScreenProps> = ({ navigation, route }
         });
         invalidateCache.bills();
         showSuccess('账单创建成功');
-        navigation.goBack();
+        if (continueAfterSave) {
+          // 再记一笔：清空金额与备注，并刷新 P15 幂等键，避免下一笔误撞同键
+          clientRequestIdRef.current = generateClientRequestId();
+          setAmount('');
+          setDescription('');
+          setShowNoteEditor(false);
+        } else {
+          navigation.goBack();
+        }
       };
 
       // M8：手动录入保存前查重（与 AI 提案同款「同日同额同向」判据，共享实现）——
@@ -534,7 +583,7 @@ const CreateBillScreen: React.FC<CreateBillScreenProps> = ({ navigation, route }
             String(today.getMonth() + 1).padStart(2, '0')
           }-${String(today.getDate()).padStart(2, '0')}`;
           duplicates = await findDuplicateBills([{
-            amount: parseFloat(amount),
+            amount: numericAmount,
             type: type as 'income' | 'expense',
             date: dateText,
             description: description.trim(),
@@ -574,6 +623,537 @@ const CreateBillScreen: React.FC<CreateBillScreenProps> = ({ navigation, route }
     }
   };
 
+
+  const handleSoftKeyPress = (key: KeypadKey) => {
+    setShowNoteEditor(false);
+    setAmount(prev => applyKeypadInput(prev, key));
+  };
+
+  const handleSwapTransferAccounts = () => {
+    if (type === 'repayment') {
+      const source = selectableAccounts.find(a => a.id === selectedAccountId);
+      if (source && source.kind !== 'liability') {
+        showError('还款的目标账户必须是负债账户（信用卡/花呗等）');
+        return;
+      }
+    }
+    const prevSource = selectedAccountId;
+    setSelectedAccountId(selectedTargetAccountId);
+    setSelectedTargetAccountId(prevSource);
+  };
+
+  const renderSharedModals = () => (
+    <>
+      {/* 账户选择弹窗：主账户 / 转账目标账户共用，按目标过滤候选 */}
+      <Modal
+        visible={accountPickerTarget !== null}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setAccountPickerTarget(null)}
+      >
+        <TouchableOpacity
+          style={styles.accountModalOverlay}
+          activeOpacity={1}
+          onPress={() => setAccountPickerTarget(null)}
+        >
+          <View style={styles.accountModalCard}>
+            <Text style={styles.accountModalTitle}>
+              {accountPickerTarget === 'target'
+                ? (type === 'repayment' ? '选择还款目标（限负债账户）' : '选择转入账户')
+                : (isTransferLike ? '选择转出账户' : '选择账户')}
+            </Text>
+            <ScrollView style={styles.accountModalScroll}>
+              {(accountPickerTarget === 'target'
+                ? selectableTargetAccounts
+                : selectableAccounts
+              ).map(account => {
+                const isSelected =
+                  accountPickerTarget === 'target'
+                    ? selectedTargetAccountId === account.id
+                    : selectedAccountId === account.id;
+                return (
+                  <TouchableOpacity
+                    key={account.id}
+                    style={[
+                      styles.accountModalItem,
+                      isSelected && styles.accountModalItemSelected,
+                    ]}
+                    onPress={() => {
+                      if (accountPickerTarget === 'target') {
+                        setSelectedTargetAccountId(account.id);
+                      } else {
+                        setSelectedAccountId(account.id);
+                      }
+                      setAccountPickerTarget(null);
+                    }}
+                  >
+                    <AccountIcon
+                      icon={account.icon}
+                      name={account.name}
+                      subtype={account.subtype}
+                      size={26}
+                    />
+                    <View style={styles.accountModalItemText}>
+                      <Text style={styles.accountModalItemName} numberOfLines={1}>
+                        {account.name}
+                      </Text>
+                      <Text style={styles.accountModalItemKind}>
+                        {account.kind === 'liability' ? '负债' : '资产'}
+                      </Text>
+                    </View>
+                    {isSelected ? (
+                      <Check size={18} color={styles._colors.primary} />
+                    ) : null}
+                  </TouchableOpacity>
+                );
+              })}
+              {accountPickerTarget === 'target' && selectableTargetAccounts.length === 0 ? (
+                <Text style={styles.accountModalEmpty}>
+                  没有可用的负债账户。请先在「账户管理」添加信用卡或消费信贷账户。
+                </Text>
+              ) : null}
+            </ScrollView>
+            <TouchableOpacity
+              style={styles.accountModalCancel}
+              onPress={() => setAccountPickerTarget(null)}
+            >
+              <Text style={styles.accountModalCancelText}>取消</Text>
+            </TouchableOpacity>
+          </View>
+        </TouchableOpacity>
+      </Modal>
+
+      <AddCategoryModal
+        visible={showAddCategoryModal}
+        onClose={() => setShowAddCategoryModal(false)}
+        onSuccess={handleAddCategorySuccess}
+        billType={type === 'income' ? 'income' : 'expense'}
+      />
+
+      <ConfirmModal
+        visible={showDeleteConfirm}
+        title="删除分类"
+        message={`确定要删除分类"${categoryToDelete?.name}"吗？`}
+        confirmText="删除"
+        cancelText="取消"
+        onConfirm={handleConfirmDelete}
+        onCancel={() => { setShowDeleteConfirm(false); setCategoryToDelete(null); }}
+      />
+      {/* M8：疑似重复二次确认（命中"同日同额同向"既有账单时先弹） */}
+      <ConfirmModal
+        visible={showDuplicateConfirm}
+        title="疑似重复"
+        message={`当日已有同金额同方向的账单：${duplicateHint}，确定仍要入账吗？`}
+        confirmText="仍要入账"
+        cancelText="取消"
+        onConfirm={handleDuplicateConfirm}
+        onCancel={() => {
+          setShowDuplicateConfirm(false);
+          pendingDuplicateActionRef.current = null;
+        }}
+      />
+    </>
+  );
+
+  if (isSoft) {
+    const hasOp = hasExpressionOperator(amount);
+    const evaluated = evaluateAmountExpression(amount);
+    const displayAmount = !amount
+      ? '0.00'
+      : hasOp
+        ? `${evaluated < 0 ? '-' : ''}${Math.abs(evaluated).toLocaleString('zh-CN', {
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2,
+          })}`
+        : amount;
+    const exprPreview = formatExpressionPreview(amount);
+    const selectedSourceAccount = selectableAccounts.find(a => a.id === selectedAccountId);
+    const selectedTargetAccount = selectableAccounts.find(a => a.id === selectedTargetAccountId);
+    const timeLabel = editingBill
+      ? formatTime(editingBill.occurredAt) || '已记录'
+      : `今天 ${formatTime(new Date().toISOString())}`;
+
+    return (
+      <View style={styles.softModalRoot}>
+        <TouchableOpacity
+          style={styles.softBackdrop}
+          activeOpacity={1}
+          onPress={() => navigation.goBack()}
+          accessibilityLabel="关闭记账弹层"
+        />
+        <View
+          style={[
+            styles.softSheet,
+            { paddingBottom: Math.max(insets.bottom, 14) },
+          ]}
+          {...typeSwipeResponder.panHandlers}
+        >
+          <View style={styles.softGrabber} />
+          <View style={styles.softSheetHeader}>
+            <TouchableOpacity
+              style={styles.softCloseBtn}
+              onPress={() => navigation.goBack()}
+              activeOpacity={0.75}
+              accessibilityLabel="关闭"
+              accessibilityRole="button"
+            >
+              <X size={18} color={colors.textSecondary} strokeWidth={2} />
+            </TouchableOpacity>
+            <View style={styles.softSegmentWrap}>
+              <SegmentedControl
+                options={FORM_TYPE_OPTIONS.map(o => ({ key: o.value, label: o.label }))}
+                selectedKey={type}
+                onSelect={(key) => {
+                  if (!editingTypeLocked) handleTypeChange(key as BillFormType);
+                }}
+              />
+            </View>
+            <View style={styles.softHeaderSpacer} />
+          </View>
+
+          {editingTypeLocked ? (
+            <Text style={styles.softLockHint}>
+              退款/手续费类型不可更改（仅可修改金额、备注、分类、账户）。
+            </Text>
+          ) : null}
+
+          {/* 金额主显示区（右对齐等宽大字 + 算式回显） */}
+          <View style={styles.softAmountBlock}>
+            <Text style={styles.softAmountExpr} numberOfLines={1}>
+              {exprPreview || ' '}
+            </Text>
+            <View style={styles.softAmountLine}>
+              <Text style={styles.softCurrency}>¥</Text>
+              <Text
+                style={[
+                  styles.softAmountValue,
+                  !amount && styles.softAmountEmpty,
+                  amount && type === 'expense' && styles.softAmountExpense,
+                  amount && type === 'income' && styles.softAmountIncome,
+                ]}
+                numberOfLines={1}
+                adjustsFontSizeToFit
+                minimumFontScale={0.6}
+              >
+                {displayAmount}
+              </Text>
+            </View>
+          </View>
+
+          {/* 元信息胶囊条 */}
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            style={styles.softChipScroll}
+            contentContainerStyle={styles.softChipRow}
+          >
+            <View style={styles.softMetaChip}>
+              <Calendar size={14} color={colors.textTertiary} strokeWidth={2} />
+              <Text style={styles.softMetaChipText}>{timeLabel}</Text>
+            </View>
+            {!isTransferLike ? (
+              <TouchableOpacity
+                style={[
+                  styles.softMetaChip,
+                  !selectedSourceAccount && styles.softMetaChipWarn,
+                ]}
+                onPress={() =>
+                  selectableAccounts.length === 0
+                    ? navigation.navigate('Accounts')
+                    : setAccountPickerTarget('source')
+                }
+                activeOpacity={0.75}
+              >
+                {selectedSourceAccount ? (
+                  <AccountIcon
+                    icon={selectedSourceAccount.icon}
+                    name={selectedSourceAccount.name}
+                    subtype={selectedSourceAccount.subtype}
+                    size={15}
+                  />
+                ) : (
+                  <CreditCard size={14} color={colors.textTertiary} strokeWidth={2} />
+                )}
+                <Text style={styles.softMetaChipText} numberOfLines={1}>
+                  {selectableAccounts.length === 0
+                    ? '去添加账户'
+                    : selectedSourceAccount
+                      ? accountDisplayName(
+                          selectedSourceAccount.name,
+                          resolveAccountIcon(selectedSourceAccount.icon, selectedSourceAccount.name),
+                        )
+                      : '选择账户'}
+                </Text>
+              </TouchableOpacity>
+            ) : null}
+            <TouchableOpacity
+              style={[styles.softMetaChip, (showNoteEditor || !!description) && styles.softMetaChipActive]}
+              onPress={() => setShowNoteEditor(v => !v)}
+              activeOpacity={0.75}
+            >
+              <Pencil size={14} color={description ? colors.primary : colors.textTertiary} strokeWidth={2} />
+              <Text
+                style={[
+                  styles.softMetaChipText,
+                  description && { color: colors.primaryDark },
+                ]}
+                numberOfLines={1}
+              >
+                {description.trim() || '备注'}
+              </Text>
+            </TouchableOpacity>
+          </ScrollView>
+
+          {showNoteEditor ? (
+            <View style={styles.softNoteInputRow}>
+              <TextInput
+                style={styles.softNoteInput}
+                value={description}
+                onChangeText={setDescription}
+                placeholder="写点备注（商户、商品等）..."
+                placeholderTextColor={colors.textQuaternary}
+                autoFocus
+                returnKeyType="done"
+                onSubmitEditing={() => setShowNoteEditor(false)}
+              />
+              <TouchableOpacity
+                style={styles.softNoteDoneBtn}
+                onPress={() => setShowNoteEditor(false)}
+              >
+                <Text style={styles.softNoteDoneText}>完成</Text>
+              </TouchableOpacity>
+            </View>
+          ) : null}
+
+          {/* 中部内容区：分类网格 或 转账/还款账户卡片 */}
+          <ScrollView
+            style={styles.softBodyScroll}
+            contentContainerStyle={styles.softBodyContent}
+            showsVerticalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
+          >
+            <Animated.View
+              style={{
+                opacity: swipeOpacity,
+                transform: [{ translateX: swipeTranslateX }],
+              }}
+            >
+              {isTransferLike ? (
+                <View style={styles.softXferWrap}>
+                  <TouchableOpacity
+                    style={styles.softXferRow}
+                    onPress={() =>
+                      selectableAccounts.length === 0
+                        ? navigation.navigate('Accounts')
+                        : setAccountPickerTarget('source')
+                    }
+                    activeOpacity={0.78}
+                  >
+                    <View style={styles.softXferIconWrap}>
+                      {selectedSourceAccount ? (
+                        <AccountIcon
+                          icon={selectedSourceAccount.icon}
+                          name={selectedSourceAccount.name}
+                          subtype={selectedSourceAccount.subtype}
+                          size={24}
+                        />
+                      ) : (
+                        <CreditCard size={20} color={colors.textTertiary} />
+                      )}
+                    </View>
+                    <View style={styles.softXferText}>
+                      <Text style={styles.softXferLabel}>转出账户</Text>
+                      <Text style={styles.softXferValue} numberOfLines={1}>
+                        {selectedSourceAccount ? selectedSourceAccount.name : '点击选择转出账户'}
+                      </Text>
+                    </View>
+                    <ChevronDown size={18} color={colors.textTertiary} />
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={styles.softXferSwap}
+                    onPress={handleSwapTransferAccounts}
+                    activeOpacity={0.8}
+                    accessibilityLabel="交换转出与转入账户"
+                  >
+                    <ArrowUpDown size={16} color={colors.primary} strokeWidth={2.2} />
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={styles.softXferRow}
+                    onPress={() => setAccountPickerTarget('target')}
+                    activeOpacity={0.78}
+                  >
+                    <View style={styles.softXferIconWrap}>
+                      {selectedTargetAccount ? (
+                        <AccountIcon
+                          icon={selectedTargetAccount.icon}
+                          name={selectedTargetAccount.name}
+                          subtype={selectedTargetAccount.subtype}
+                          size={24}
+                        />
+                      ) : (
+                        <CreditCard size={20} color={colors.textTertiary} />
+                      )}
+                    </View>
+                    <View style={styles.softXferText}>
+                      <Text style={styles.softXferLabel}>
+                        {type === 'repayment' ? '还款到（限负债账户）' : '转入账户'}
+                      </Text>
+                      <Text style={styles.softXferValue} numberOfLines={1}>
+                        {selectedTargetAccount
+                          ? selectedTargetAccount.name
+                          : type === 'repayment'
+                            ? '选择信用卡 / 负债账户'
+                            : '点击选择转入账户'}
+                      </Text>
+                    </View>
+                    <ChevronDown size={18} color={colors.textTertiary} />
+                  </TouchableOpacity>
+
+                  <Text style={styles.softXferTip}>
+                    {type === 'repayment'
+                      ? '还款会同时减少转出账户余额与负债账户欠款。'
+                      : '转账不计入收支统计，只调整两个账户余额。'}
+                  </Text>
+                </View>
+              ) : (
+                (() => {
+                  const allCats = getCategoryList();
+                  const topLevel = allCats.filter(cat => !cat.parentId);
+                  const rows: Category[][] = [];
+                  for (let i = 0; i < topLevel.length; i += 5) {
+                    rows.push(topLevel.slice(i, i + 5));
+                  }
+                  if (rows.length === 0) rows.push([]);
+                  return rows.map((rowCats, rowIndex) => (
+                    <View key={`soft-cat-row-${rowIndex}`} style={styles.softCatRowWrap}>
+                      <View style={styles.softCatRow}>
+                        {rowCats.map(category => {
+                          const children = allCats.filter(cat => cat.parentId === category.id);
+                          const childSelected = children.some(cat => cat.id === selectedCategory?.id);
+                          const topLevelSelected =
+                            selectedCategory?.id === category.id || childSelected;
+                          const expanded = expandedBillCategoryId === category.id;
+                          const baseColor = category.color || getCategoryColor(category.name, '#4F46E5');
+                          const tintBg = /^#[0-9a-fA-F]{6}$/.test(baseColor)
+                            ? `${baseColor}${isDark ? '33' : '22'}`
+                            : colors.surfaceMuted;
+
+                          return (
+                            <TouchableOpacity
+                              key={category.id}
+                              style={styles.softCatItem}
+                              onPress={() => {
+                                setSelectedCategory(category);
+                                if (children.length > 0) {
+                                  if (expanded || childSelected) {
+                                    setExpandedBillCategoryId(null);
+                                  } else {
+                                    setExpandedBillCategoryId(category.id);
+                                  }
+                                } else {
+                                  setExpandedBillCategoryId(null);
+                                }
+                              }}
+                              onLongPress={() => handleCategoryLongPress(category)}
+                              delayLongPress={500}
+                              activeOpacity={0.75}
+                            >
+                              <View
+                                style={[
+                                  styles.softCatTile,
+                                  {
+                                    backgroundColor: topLevelSelected ? baseColor : tintBg,
+                                  },
+                                ]}
+                              >
+                                <CategoryIcon
+                                  icon={category.icon}
+                                  size={22}
+                                  emojiStyle={styles.softCatEmoji}
+                                />
+                              </View>
+                              <Text
+                                style={[
+                                  styles.softCatName,
+                                  topLevelSelected && styles.softCatNameSelected,
+                                ]}
+                                numberOfLines={1}
+                              >
+                                {category.name}
+                              </Text>
+                            </TouchableOpacity>
+                          );
+                        })}
+                        {rowIndex === rows.length - 1 ? (
+                          <TouchableOpacity
+                            style={styles.softCatItem}
+                            onPress={handleOtherClick}
+                            activeOpacity={0.75}
+                          >
+                            <View style={[styles.softCatTile, { backgroundColor: colors.surfaceMuted }]}>
+                              <Plus size={20} color={colors.textSecondary} strokeWidth={2} />
+                            </View>
+                            <Text style={styles.softCatName} numberOfLines={1}>其他</Text>
+                          </TouchableOpacity>
+                        ) : null}
+                      </View>
+
+                      {expandedBillCategoryId &&
+                      rowCats.some(cat => cat.id === expandedBillCategoryId) ? (
+                        <View style={styles.softChildChipArea}>
+                          {sortChildren(
+                            allCats.filter(cat => cat.parentId === expandedBillCategoryId),
+                          ).map(child => {
+                            const active = selectedCategory?.id === child.id;
+                            return (
+                              <TouchableOpacity
+                                key={child.id}
+                                style={[
+                                  styles.softChildChip,
+                                  active && styles.softChildChipSelected,
+                                ]}
+                                onPress={() => setSelectedCategory(child)}
+                                activeOpacity={0.75}
+                              >
+                                <Text
+                                  style={[
+                                    styles.softChildChipText,
+                                    active && styles.softChildChipTextSelected,
+                                  ]}
+                                >
+                                  {child.name}
+                                </Text>
+                              </TouchableOpacity>
+                            );
+                          })}
+                        </View>
+                      ) : null}
+                    </View>
+                  ));
+                })()
+              )}
+            </Animated.View>
+          </ScrollView>
+
+          {/* 底部内置 4×4 计算键盘 */}
+          {!showNoteEditor ? (
+            <SoftBillKeypad
+              onKey={handleSoftKeyPress}
+              onSave={() => { void handleSave(false); }}
+              onSaveAndContinue={() => { void handleSave(true); }}
+              saveLabel={isEditing ? '更新' : '保存'}
+              showContinue={!isEditing}
+              disabled={loading}
+            />
+          ) : null}
+        </View>
+
+        {renderSharedModals()}
+      </View>
+    );
+  }
 
   return (
     <View style={styles.container} {...typeSwipeResponder.panHandlers}>
@@ -816,7 +1396,7 @@ const CreateBillScreen: React.FC<CreateBillScreenProps> = ({ navigation, route }
         <TouchableOpacity style={styles.cancelButton} onPress={() => navigation.goBack()} activeOpacity={0.8}>
           <Text style={styles.cancelButtonText}>取消</Text>
         </TouchableOpacity>
-        <TouchableOpacity style={styles.saveButton} onPress={handleSave} disabled={loading} activeOpacity={0.8}>
+        <TouchableOpacity style={styles.saveButton} onPress={() => { void handleSave(false); }} disabled={loading} activeOpacity={0.8}>
           {/* 文案此前写"下一步"，但 handleSave 没有任何后续步骤：直接提交并 goBack。
             与行为不符的按钮会让人以为还有一屏内容。 */}
           <Text style={styles.saveButtonText}>{isEditing ? '更新账单' : '保存'}</Text>
@@ -826,120 +1406,280 @@ const CreateBillScreen: React.FC<CreateBillScreenProps> = ({ navigation, route }
       {/* Toast 已提升为全局单例（ToastProvider），此处不再重复渲染 ——
           否则本页面与全局 Toast 会同时显示同一条提示。 */}
 
-      {/* 账户选择弹窗：主账户 / 转账目标账户共用，按目标过滤候选 */}
-      <Modal
-        visible={accountPickerTarget !== null}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setAccountPickerTarget(null)}
-      >
-        <TouchableOpacity
-          style={styles.accountModalOverlay}
-          activeOpacity={1}
-          onPress={() => setAccountPickerTarget(null)}
-        >
-          <View style={styles.accountModalCard}>
-            <Text style={styles.accountModalTitle}>
-              {accountPickerTarget === 'target'
-                ? (type === 'repayment' ? '选择还款目标（限负债账户）' : '选择转入账户')
-                : (isTransferLike ? '选择转出账户' : '选择账户')}
-            </Text>
-            <ScrollView style={styles.accountModalScroll}>
-              {(accountPickerTarget === 'target'
-                ? selectableTargetAccounts
-                : selectableAccounts
-              ).map(account => {
-                const isSelected =
-                  accountPickerTarget === 'target'
-                    ? selectedTargetAccountId === account.id
-                    : selectedAccountId === account.id;
-                return (
-                  <TouchableOpacity
-                    key={account.id}
-                    style={[
-                      styles.accountModalItem,
-                      isSelected && styles.accountModalItemSelected,
-                    ]}
-                    onPress={() => {
-                      if (accountPickerTarget === 'target') {
-                        setSelectedTargetAccountId(account.id);
-                      } else {
-                        setSelectedAccountId(account.id);
-                      }
-                      setAccountPickerTarget(null);
-                    }}
-                  >
-                    <AccountIcon
-                      icon={account.icon}
-                      name={account.name}
-                      subtype={account.subtype}
-                      size={26}
-                    />
-                    <View style={styles.accountModalItemText}>
-                      <Text style={styles.accountModalItemName} numberOfLines={1}>
-                        {account.name}
-                      </Text>
-                      <Text style={styles.accountModalItemKind}>
-                        {account.kind === 'liability' ? '负债' : '资产'}
-                      </Text>
-                    </View>
-                    {isSelected ? (
-                      <Check size={18} color={styles._colors.primary} />
-                    ) : null}
-                  </TouchableOpacity>
-                );
-              })}
-              {accountPickerTarget === 'target' && selectableTargetAccounts.length === 0 ? (
-                <Text style={styles.accountModalEmpty}>
-                  没有可用的负债账户。请先在「账户管理」添加信用卡或消费信贷账户。
-                </Text>
-              ) : null}
-            </ScrollView>
-            <TouchableOpacity
-              style={styles.accountModalCancel}
-              onPress={() => setAccountPickerTarget(null)}
-            >
-              <Text style={styles.accountModalCancelText}>取消</Text>
-            </TouchableOpacity>
-          </View>
-        </TouchableOpacity>
-      </Modal>
-
-      <AddCategoryModal
-        visible={showAddCategoryModal}
-        onClose={() => setShowAddCategoryModal(false)}
-        onSuccess={handleAddCategorySuccess}
-        billType={type === 'income' ? 'income' : 'expense'}
-      />
-
-      <ConfirmModal
-        visible={showDeleteConfirm}
-        title="删除分类"
-        message={`确定要删除分类"${categoryToDelete?.name}"吗？`}
-        confirmText="删除"
-        cancelText="取消"
-        onConfirm={handleConfirmDelete}
-        onCancel={() => { setShowDeleteConfirm(false); setCategoryToDelete(null); }}
-      />
-      {/* M8：疑似重复二次确认（命中"同日同额同向"既有账单时先弹） */}
-      <ConfirmModal
-        visible={showDuplicateConfirm}
-        title="疑似重复"
-        message={`当日已有同金额同方向的账单：${duplicateHint}，确定仍要入账吗？`}
-        confirmText="仍要入账"
-        cancelText="取消"
-        onConfirm={handleDuplicateConfirm}
-        onCancel={() => {
-          setShowDuplicateConfirm(false);
-          pendingDuplicateActionRef.current = null;
-        }}
-      />
+      {renderSharedModals()}
     </View>
   );
 };
 
-const createStyles = (colors: ThemeColors) => ({
+const createStyles = (colors: ThemeColors, shape: ThemeShape, isDark: boolean) => ({
   ...StyleSheet.create({
+    softModalRoot: {
+      flex: 1,
+      justifyContent: 'flex-end',
+    },
+    softBackdrop: {
+      ...StyleSheet.absoluteFillObject,
+      backgroundColor: colors.overlay,
+    },
+    softSheet: {
+      height: '92%',
+      backgroundColor: isDark ? '#151820' : colors.surface,
+      borderTopLeftRadius: shape.radius.sheet,
+      borderTopRightRadius: shape.radius.sheet,
+      paddingHorizontal: 16,
+      paddingTop: 8,
+      ...shape.elevation.floating,
+    },
+    softGrabber: {
+      width: 40,
+      height: 5,
+      borderRadius: 999,
+      backgroundColor: colors.stroke,
+      alignSelf: 'center',
+      marginBottom: 10,
+    },
+    softSheetHeader: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 8,
+    },
+    softCloseBtn: {
+      width: 34,
+      height: 34,
+      borderRadius: 12,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    softSegmentWrap: {
+      flex: 1,
+    },
+    softHeaderSpacer: {
+      width: 34,
+    },
+    softLockHint: {
+      fontSize: 12,
+      color: colors.textTertiary,
+      marginTop: 8,
+      textAlign: 'center',
+    },
+    softAmountBlock: {
+      paddingTop: 18,
+      paddingBottom: 12,
+      paddingHorizontal: 4,
+      alignItems: 'flex-end',
+    },
+    softAmountExpr: {
+      fontSize: 13,
+      color: colors.textTertiary,
+      fontVariant: ['tabular-nums'],
+      minHeight: 18,
+    },
+    softAmountLine: {
+      flexDirection: 'row',
+      alignItems: 'baseline',
+      justifyContent: 'flex-end',
+    },
+    softCurrency: {
+      fontSize: 24,
+      fontWeight: '600',
+      color: colors.textTertiary,
+      marginRight: 4,
+    },
+    softAmountValue: {
+      fontSize: 44,
+      fontWeight: '700',
+      letterSpacing: -0.8,
+      color: colors.textPrimary,
+      fontVariant: ['tabular-nums'],
+    },
+    softAmountEmpty: {
+      color: colors.textQuaternary,
+    },
+    softAmountExpense: {
+      color: colors.expense,
+    },
+    softAmountIncome: {
+      color: colors.income,
+    },
+    softChipScroll: {
+      flexGrow: 0,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: colors.divider,
+    },
+    softChipRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 8,
+      paddingBottom: 12,
+    },
+    softMetaChip: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 6,
+      height: 32,
+      paddingHorizontal: 12,
+      borderRadius: 999,
+      backgroundColor: colors.surfaceMuted,
+      maxWidth: 168,
+    },
+    softMetaChipActive: {
+      backgroundColor: colors.primaryLight,
+    },
+    softMetaChipWarn: {
+      backgroundColor: isDark ? '#2E2410' : '#FFF5E6',
+    },
+    softMetaChipText: {
+      fontSize: 13,
+      fontWeight: '500',
+      color: colors.textSecondary,
+      flexShrink: 1,
+    },
+    softNoteInputRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 8,
+      paddingVertical: 10,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: colors.divider,
+    },
+    softNoteInput: {
+      flex: 1,
+      height: 40,
+      paddingHorizontal: 12,
+      borderRadius: 12,
+      backgroundColor: colors.surfaceMuted,
+      fontSize: 14,
+      color: colors.textPrimary,
+    },
+    softNoteDoneBtn: {
+      paddingHorizontal: 14,
+      height: 40,
+      borderRadius: 12,
+      backgroundColor: colors.primary,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    softNoteDoneText: {
+      fontSize: 14,
+      fontWeight: '600',
+      color: colors.onPrimary,
+    },
+    softBodyScroll: {
+      flex: 1,
+    },
+    softBodyContent: {
+      paddingVertical: 14,
+    },
+    softCatRowWrap: {
+      marginBottom: 12,
+    },
+    softCatRow: {
+      flexDirection: 'row',
+    },
+    softCatItem: {
+      width: '20%',
+      alignItems: 'center',
+      gap: 6,
+    },
+    softCatTile: {
+      width: 48,
+      height: 48,
+      borderRadius: 16,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    softCatEmoji: {
+      fontSize: 22,
+    },
+    softCatName: {
+      fontSize: 12,
+      fontWeight: '400',
+      color: colors.textSecondary,
+      textAlign: 'center',
+    },
+    softCatNameSelected: {
+      color: colors.textPrimary,
+      fontWeight: '600',
+    },
+    softChildChipArea: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      gap: 8,
+      marginTop: 10,
+      padding: 10,
+      borderRadius: 14,
+      backgroundColor: colors.surfaceMuted,
+    },
+    softChildChip: {
+      paddingHorizontal: 12,
+      paddingVertical: 6,
+      borderRadius: 999,
+      backgroundColor: colors.surface,
+    },
+    softChildChipSelected: {
+      backgroundColor: colors.primary,
+    },
+    softChildChipText: {
+      fontSize: 12.5,
+      fontWeight: '500',
+      color: colors.textSecondary,
+    },
+    softChildChipTextSelected: {
+      color: colors.onPrimary,
+      fontWeight: '600',
+    },
+    softXferWrap: {
+      gap: 10,
+      position: 'relative',
+    },
+    softXferRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 12,
+      padding: 14,
+      borderRadius: 18,
+      backgroundColor: colors.surfaceMuted,
+    },
+    softXferIconWrap: {
+      width: 40,
+      height: 40,
+      borderRadius: 14,
+      backgroundColor: colors.surface,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    softXferText: {
+      flex: 1,
+      gap: 2,
+    },
+    softXferLabel: {
+      fontSize: 12,
+      color: colors.textTertiary,
+    },
+    softXferValue: {
+      fontSize: 15,
+      fontWeight: '600',
+      color: colors.textPrimary,
+    },
+    softXferSwap: {
+      position: 'absolute',
+      right: 18,
+      top: 52,
+      width: 34,
+      height: 34,
+      borderRadius: 17,
+      backgroundColor: colors.surface,
+      alignItems: 'center',
+      justifyContent: 'center',
+      zIndex: 2,
+      ...shape.elevation.floating,
+    },
+    softXferTip: {
+      fontSize: 12,
+      color: colors.textTertiary,
+      paddingHorizontal: 4,
+      marginTop: 2,
+    },
     container: { flex: 1, backgroundColor: colors.background },
     scrollView: { flex: 1 },
     content: { padding: spacing.lg, paddingBottom: 100 },
@@ -1058,22 +1798,22 @@ const createStyles = (colors: ThemeColors) => ({
     // 账户选择弹窗
     accountModalOverlay: {
       flex: 1,
-      backgroundColor: 'rgba(0,0,0,0.45)',
+      backgroundColor: colors.overlay,
       justifyContent: 'flex-end',
     },
     accountModalCard: {
-      backgroundColor: colors.background,
-      borderTopLeftRadius: borderRadius.card,
-      borderTopRightRadius: borderRadius.card,
-      borderWidth: borderWidth.medium,
-      borderColor: colors.stroke,
+      backgroundColor: shape.isSoft ? colors.surface : colors.background,
+      borderTopLeftRadius: shape.isSoft ? shape.radius.sheet : borderRadius.card,
+      borderTopRightRadius: shape.isSoft ? shape.radius.sheet : borderRadius.card,
+      borderWidth: shape.isSoft ? shape.borderWidth.card : borderWidth.medium,
+      borderColor: shape.isSoft ? colors.cardBorder : colors.stroke,
       padding: spacing.lg,
       paddingBottom: spacing.xl,
       maxHeight: '70%',
     },
     accountModalTitle: {
       fontSize: 16,
-      fontWeight: '800',
+      fontWeight: shape.isSoft ? '700' : '800',
       color: colors.textPrimary,
       marginBottom: spacing.md,
       textAlign: 'center',
@@ -1083,32 +1823,33 @@ const createStyles = (colors: ThemeColors) => ({
       flexDirection: 'row',
       alignItems: 'center',
       gap: spacing.md,
-      paddingVertical: spacing.sm,
-      paddingHorizontal: spacing.xs,
-      borderBottomWidth: borderWidth.thin,
+      paddingVertical: spacing.md,
+      paddingHorizontal: spacing.sm,
+      borderRadius: shape.isSoft ? 14 : 0,
+      borderBottomWidth: shape.isSoft ? StyleSheet.hairlineWidth : borderWidth.thin,
       borderBottomColor: colors.divider,
     },
     accountModalItemSelected: { backgroundColor: colors.primaryLight },
     accountModalItemText: { flex: 1 },
-    accountModalItemName: { fontSize: 15, fontWeight: '700', color: colors.textPrimary },
-    accountModalItemKind: { marginTop: 2, fontSize: 12, fontWeight: '600', color: colors.textSecondary },
+    accountModalItemName: { fontSize: 15, fontWeight: shape.isSoft ? '600' : '700', color: colors.textPrimary },
+    accountModalItemKind: { marginTop: 2, fontSize: 12, fontWeight: shape.isSoft ? '400' : '600', color: colors.textTertiary },
     accountModalEmpty: {
       paddingVertical: spacing.lg,
       fontSize: 13,
-      fontWeight: '600',
+      fontWeight: shape.isSoft ? '500' : '600',
       color: colors.textSecondary,
       textAlign: 'center',
     },
     accountModalCancel: {
       marginTop: spacing.md,
-      paddingVertical: spacing.sm,
+      paddingVertical: shape.isSoft ? 12 : spacing.sm,
       alignItems: 'center',
-      borderRadius: borderRadius.button,
-      borderWidth: borderWidth.thin,
+      borderRadius: shape.isSoft ? shape.radius.button : borderRadius.button,
+      borderWidth: shape.isSoft ? 0 : borderWidth.thin,
       borderColor: colors.stroke,
-      backgroundColor: colors.surface,
+      backgroundColor: shape.isSoft ? colors.surfaceMuted : colors.surface,
     },
-    accountModalCancelText: { fontSize: 14, fontWeight: '700', color: colors.textPrimary },
+    accountModalCancelText: { fontSize: 14, fontWeight: shape.isSoft ? '600' : '700', color: colors.textPrimary },
       categoryGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.md },
       // 批 6:按行分块的容器,行内 4 个正方形瓷贴;展开的子分类区插在行后
       categoryRowGrid: {

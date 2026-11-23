@@ -11,6 +11,7 @@ import {
 } from 'react-native';
 import Modal from './Modal';
 import { ThemeColors } from '../../theme/colors';
+import { ThemeShape } from '../../theme/shape';
 import { spacing, borderRadius, borderWidth, shadow } from '../../theme/spacing';
 import { useStyles } from '../../hooks';
 
@@ -126,7 +127,7 @@ const Alert: React.FC<AlertProps> = ({
   );
 };
 
-const createStyles = (colors: ThemeColors) => ({
+const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
   ...StyleSheet.create({
     alertContent: {
       alignItems: 'center',
@@ -135,8 +136,8 @@ const createStyles = (colors: ThemeColors) => ({
     iconContainer: {
       width: 56,
       height: 56,
-      borderRadius: borderRadius.medium,
-      borderWidth: borderWidth.medium,
+      borderRadius: shape.isSoft ? 18 : borderRadius.medium,
+      borderWidth: shape.isSoft ? 0 : borderWidth.medium,
       borderColor: colors.stroke,
       alignItems: 'center',
       justifyContent: 'center',
@@ -144,19 +145,19 @@ const createStyles = (colors: ThemeColors) => ({
     },
     icon: {
       fontSize: 26,
-      fontWeight: '800',
+      fontWeight: shape.isSoft ? '700' : '800',
       color: '#FFFFFF',
     },
     title: {
-      fontSize: 20,
-      fontWeight: '800',
+      fontSize: shape.isSoft ? 18 : 20,
+      fontWeight: shape.isSoft ? '700' : '800',
       color: colors.textPrimary,
       textAlign: 'center',
       marginBottom: spacing.md,
     },
     message: {
       fontSize: 15,
-      fontWeight: '500',
+      fontWeight: shape.isSoft ? '400' : '500',
       color: colors.textSecondary,
       textAlign: 'center',
       lineHeight: 22,
@@ -171,13 +172,13 @@ const createStyles = (colors: ThemeColors) => ({
     button: {
       flex: 1,
       paddingVertical: spacing.md,
-      borderRadius: borderRadius.button,
-      borderWidth: borderWidth.medium,
+      borderRadius: shape.isSoft ? shape.radius.button : borderRadius.button,
+      borderWidth: shape.isSoft ? 0 : borderWidth.medium,
       borderColor: colors.stroke,
       alignItems: 'center',
       justifyContent: 'center',
-      minHeight: 48,
-      ...shadow.small,
+      minHeight: 46,
+      ...(shape.isSoft ? shape.elevation.none : shadow.small),
     },
     singleButton: {
       flex: 1,
@@ -186,20 +187,20 @@ const createStyles = (colors: ThemeColors) => ({
       backgroundColor: colors.primary,
     },
     cancelButton: {
-      backgroundColor: colors.surface,
+      backgroundColor: shape.isSoft ? colors.surfaceMuted : colors.surface,
     },
     destructiveButton: {
       backgroundColor: colors.error,
     },
     buttonText: {
       fontSize: 15,
-      fontWeight: '800',
+      fontWeight: shape.isSoft ? '600' : '800',
     },
     defaultButtonText: {
-      color: '#FFFFFF',
+      color: colors.onPrimary,
     },
     cancelButtonText: {
-      color: colors.textPrimary,
+      color: shape.isSoft ? colors.textSecondary : colors.textPrimary,
     },
     destructiveButtonText: {
       color: '#FFFFFF',

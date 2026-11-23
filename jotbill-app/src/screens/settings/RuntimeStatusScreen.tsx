@@ -6,6 +6,7 @@ import { Activity, CheckCircle2, ChevronLeft, Database, FileText, Layers3, Walle
 import { nativeRuntime } from '../../native';
 import { borderRadius, borderWidth, spacing } from '../../theme/spacing';
 import { ThemeColors } from '../../theme/colors';
+import { ThemeShape } from '../../theme/shape';
 import { useStyles } from '../../hooks';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { typography } from '../../theme';
@@ -182,29 +183,79 @@ export default function RuntimeStatusScreen() {
   );
 }
 
-const createStyles = (colors: ThemeColors) => ({
+const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
   ...StyleSheet.create({
     container: { flex: 1, backgroundColor: colors.background },
-    header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.md, paddingTop: spacing.xl, paddingBottom: spacing.md, backgroundColor: colors.surface, borderBottomWidth: borderWidth.medium, borderBottomColor: colors.stroke },
+    header: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      paddingHorizontal: spacing.md,
+      paddingTop: spacing.xl,
+      paddingBottom: spacing.md,
+      backgroundColor: shape.isSoft ? colors.background : colors.surface,
+      borderBottomWidth: shape.isSoft ? 0 : borderWidth.medium,
+      borderBottomColor: colors.stroke,
+    },
     iconButton: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
-    headerTitle: { fontSize: 20, fontWeight: '800', color: colors.textPrimary },
+    headerTitle: { fontSize: shape.isSoft ? 18 : 20, fontWeight: shape.isSoft ? '700' : '800', color: colors.textPrimary },
     scrollView: { flex: 1 },
     content: { padding: spacing.lg, gap: spacing.md },
-    healthCard: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, padding: spacing.lg, backgroundColor: colors.surface, borderWidth: borderWidth.medium, borderColor: colors.stroke, borderRadius: borderRadius.card },
-    healthIcon: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.primaryLight, borderRadius: borderRadius.small },
+    healthCard: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: spacing.md,
+      padding: spacing.lg,
+      backgroundColor: colors.surface,
+      borderWidth: shape.isSoft ? shape.borderWidth.card : borderWidth.medium,
+      borderColor: shape.isSoft ? colors.cardBorder : colors.stroke,
+      borderRadius: shape.radius.card,
+      ...(shape.isSoft ? shape.elevation.card : {}),
+    },
+    healthIcon: {
+      width: 44,
+      height: 44,
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: shape.isSoft ? colors.incomeLight : colors.primaryLight,
+      borderRadius: shape.isSoft ? 14 : borderRadius.small,
+    },
     healthMain: { flex: 1 },
-    healthTitle: { fontSize: 16, fontWeight: '800', color: colors.textPrimary },
+    healthTitle: { fontSize: 16, fontWeight: shape.isSoft ? '700' : '800', color: colors.textPrimary },
     healthMeta: { marginTop: 4, fontSize: 12, color: colors.textSecondary },
     grid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.md },
-    statCard: { width: '47%', minHeight: 112, padding: spacing.md, justifyContent: 'space-between', backgroundColor: colors.surface, borderWidth: borderWidth.thin, borderColor: colors.stroke, borderRadius: borderRadius.card },
-    statValue: { fontSize: 26, fontWeight: '900', color: colors.textPrimary, fontFamily: typography.fontFamily.mono },
-    statLabel: { fontSize: 12, fontWeight: '700', color: colors.textSecondary },
-    detailCard: { padding: spacing.lg, backgroundColor: colors.surface, borderWidth: borderWidth.thin, borderColor: colors.stroke, borderRadius: borderRadius.card },
-    detailTitle: { marginBottom: spacing.md, fontSize: 16, fontWeight: '800', color: colors.textPrimary },
+    statCard: {
+      width: '47%',
+      minHeight: 112,
+      padding: spacing.md,
+      justifyContent: 'space-between',
+      backgroundColor: colors.surface,
+      borderWidth: shape.isSoft ? shape.borderWidth.card : borderWidth.thin,
+      borderColor: shape.isSoft ? colors.cardBorder : colors.stroke,
+      borderRadius: shape.radius.card,
+      ...(shape.isSoft ? shape.elevation.card : {}),
+    },
+    statValue: {
+      fontSize: 26,
+      fontWeight: shape.isSoft ? '800' : '900',
+      color: colors.textPrimary,
+      fontFamily: shape.isSoft ? undefined : typography.fontFamily.mono,
+      fontVariant: ['tabular-nums'],
+    },
+    statLabel: { fontSize: 12, fontWeight: shape.isSoft ? '600' : '700', color: colors.textSecondary },
+    detailCard: {
+      padding: spacing.lg,
+      backgroundColor: colors.surface,
+      borderWidth: shape.isSoft ? shape.borderWidth.card : borderWidth.thin,
+      borderColor: shape.isSoft ? colors.cardBorder : colors.stroke,
+      borderRadius: shape.radius.card,
+      ...(shape.isSoft ? shape.elevation.card : {}),
+    },
+    detailTitle: { marginBottom: spacing.md, fontSize: 16, fontWeight: shape.isSoft ? '700' : '800', color: colors.textPrimary },
     detailRow: { flexDirection: 'row', justifyContent: 'space-between', gap: spacing.md, paddingVertical: spacing.sm, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.divider },
     detailLabel: { fontSize: 13, color: colors.textSecondary },
-    detailValue: { flexShrink: 1, fontSize: 13, fontWeight: '700', color: colors.textPrimary, textAlign: 'right' },
-    linkText: { fontSize: 13, fontWeight: '800', color: colors.primary },
+    detailValue: { flexShrink: 1, fontSize: 13, fontWeight: shape.isSoft ? '600' : '700', color: colors.textPrimary, textAlign: 'right', fontVariant: ['tabular-nums'] },
+    linkText: { fontSize: 13, fontWeight: shape.isSoft ? '700' : '800', color: colors.primary },
     linkTextDisabled: { color: colors.textSecondary },
   }),
   _colors: colors,

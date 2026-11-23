@@ -64,7 +64,7 @@ export default function AccountIcon({
   size = 22,
   color,
 }: AccountIconProps) {
-  const { colors } = useTheme();
+  const { colors, isSoft } = useTheme();
   const match: AccountIconMatch | null = resolveAccountIcon(icon, name);
 
   if (match) {
@@ -85,5 +85,11 @@ export default function AccountIcon({
   }
 
   const Icon = SUBTYPE_ICONS[subtype ?? 'other'] ?? CircleEllipsis;
-  return <Icon size={size} strokeWidth={2.5} color={color ?? colors.stroke} />;
+  return (
+    <Icon
+      size={size}
+      strokeWidth={isSoft ? 2.1 : 2.5}
+      color={color ?? (isSoft ? colors.textPrimary : colors.stroke)}
+    />
+  );
 }

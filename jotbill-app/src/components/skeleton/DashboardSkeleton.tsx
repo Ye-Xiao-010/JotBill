@@ -5,6 +5,7 @@
 import React from 'react';
 import { View, StyleSheet, ScrollView } from 'react-native';
 import { ThemeColors } from '../../theme/colors';
+import { ThemeShape } from '../../theme/shape';
 import { borderRadius, borderWidth, spacing, shadow } from '../../theme/spacing';
 import { useStyles } from '../../hooks';
 import { Skeleton, SkeletonText } from './Skeleton';
@@ -118,7 +119,7 @@ export function DashboardSkeleton({
   );
 }
 
-const createStyles = (colors: ThemeColors) => ({
+const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
   ...StyleSheet.create({
     container: {
       flex: 1,
@@ -127,7 +128,7 @@ const createStyles = (colors: ThemeColors) => ({
     content: {
       paddingHorizontal: spacing.lg,
       paddingTop: spacing.xxl,
-      paddingBottom: 80,
+      paddingBottom: shape.isSoft ? 104 : 80,
     },
     header: {
       flexDirection: 'row',
@@ -136,13 +137,13 @@ const createStyles = (colors: ThemeColors) => ({
       marginBottom: spacing.xxl,
     },
     overviewCard: {
-      backgroundColor: colors.primaryDark,
-      borderRadius: borderRadius.card,
-      borderWidth: borderWidth.thin,
+      backgroundColor: shape.isSoft ? colors.primary : colors.primaryDark,
+      borderRadius: shape.isSoft ? shape.radius.hero : borderRadius.card,
+      borderWidth: shape.isSoft ? 0 : borderWidth.thin,
       borderColor: colors.stroke,
       padding: spacing.xl,
       marginBottom: spacing.xxl,
-      ...shadow.soft,
+      ...(shape.isSoft ? shape.elevation.hero : shadow.soft),
     },
     overviewHeader: {
       flexDirection: 'row',
@@ -150,7 +151,7 @@ const createStyles = (colors: ThemeColors) => ({
       alignItems: 'flex-start',
     },
     overviewDivider: {
-      height: borderWidth.thin,
+      height: shape.isSoft ? StyleSheet.hairlineWidth : borderWidth.thin,
       backgroundColor: 'rgba(255, 255, 255, 0.3)',
       marginVertical: spacing.lg,
     },
@@ -163,12 +164,12 @@ const createStyles = (colors: ThemeColors) => ({
     },
     budgetCard: {
       backgroundColor: colors.surface,
-      borderRadius: borderRadius.card,
-      borderWidth: borderWidth.thin,
-      borderColor: colors.stroke,
+      borderRadius: shape.radius.card,
+      borderWidth: shape.isSoft ? shape.borderWidth.card : borderWidth.thin,
+      borderColor: shape.isSoft ? colors.cardBorder : colors.stroke,
       padding: spacing.lg,
       marginBottom: spacing.xxl,
-      ...shadow.soft,
+      ...(shape.isSoft ? shape.elevation.card : shadow.soft),
     },
     budgetHeader: {
       flexDirection: 'row',
@@ -177,16 +178,16 @@ const createStyles = (colors: ThemeColors) => ({
       marginBottom: spacing.md,
     },
     percentBadge: {
-      backgroundColor: colors.divider,
-      borderRadius: borderRadius.small,
-      borderWidth: borderWidth.thin,
+      backgroundColor: shape.isSoft ? colors.surfaceMuted : colors.divider,
+      borderRadius: shape.isSoft ? shape.radius.pill : borderRadius.small,
+      borderWidth: shape.isSoft ? 0 : borderWidth.thin,
       borderColor: colors.stroke,
       paddingHorizontal: spacing.md,
       paddingVertical: spacing.xs,
     },
     progressContainer: {
-      borderRadius: borderRadius.small,
-      borderWidth: borderWidth.thin,
+      borderRadius: shape.isSoft ? shape.radius.pill : borderRadius.small,
+      borderWidth: shape.isSoft ? 0 : borderWidth.thin,
       borderColor: colors.stroke,
       overflow: 'hidden',
       marginBottom: spacing.md,
@@ -221,25 +222,26 @@ const createStyles = (colors: ThemeColors) => ({
     },
     viewAllSkeleton: {
       backgroundColor: colors.surface,
-      borderRadius: borderRadius.small,
-      borderWidth: borderWidth.thin,
+      borderRadius: shape.isSoft ? shape.radius.pill : borderRadius.small,
+      borderWidth: shape.isSoft ? 0 : borderWidth.thin,
       borderColor: colors.stroke,
       paddingHorizontal: spacing.md,
       paddingVertical: spacing.xs,
     },
     transactionList: {
       backgroundColor: colors.surface,
-      borderRadius: borderRadius.card,
-      borderWidth: borderWidth.hairline,
-      borderColor: colors.divider,
+      borderRadius: shape.radius.card,
+      borderWidth: shape.isSoft ? shape.borderWidth.card : borderWidth.hairline,
+      borderColor: shape.isSoft ? colors.cardBorder : colors.divider,
       overflow: 'hidden',
+      ...(shape.isSoft ? shape.elevation.card : {}),
     },
     transactionItem: {
       backgroundColor: colors.surface,
       padding: spacing.md,
     },
     transactionItemBorder: {
-      borderTopWidth: borderWidth.hairline,
+      borderTopWidth: shape.isSoft ? StyleSheet.hairlineWidth : borderWidth.hairline,
       borderTopColor: colors.divider,
     },
     transactionContent: {
@@ -257,12 +259,12 @@ const createStyles = (colors: ThemeColors) => ({
       flex: 1,
     },
     amountBadge: {
-      borderRadius: borderRadius.small,
-      borderWidth: borderWidth.thin,
+      borderRadius: shape.isSoft ? shape.radius.small : borderRadius.small,
+      borderWidth: shape.isSoft ? 0 : borderWidth.thin,
       borderColor: colors.stroke,
-      paddingHorizontal: spacing.md,
+      paddingHorizontal: shape.isSoft ? spacing.sm : spacing.md,
       paddingVertical: spacing.xs,
-      backgroundColor: colors.divider,
+      backgroundColor: shape.isSoft ? colors.surfaceMuted : colors.divider,
     },
   }),
   _colors: colors,

@@ -5,6 +5,7 @@
 import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import { ThemeColors } from '../../theme/colors';
+import { ThemeShape } from '../../theme/shape';
 import { borderRadius, borderWidth, spacing, shadow } from '../../theme/spacing';
 import { useStyles } from '../../hooks';
 import BrutalPressable from '../ui/BrutalPressable';
@@ -81,15 +82,16 @@ export default function AccountCard({
   );
 }
 
-const createStyles = (colors: ThemeColors) => ({
+const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
   ...StyleSheet.create({
     container: {
-      borderRadius: borderRadius.card,
-      borderWidth: borderWidth.thick,
+      borderRadius: shape.radius.card,
+      borderWidth: shape.isSoft ? 0 : borderWidth.thick,
       borderColor: colors.stroke,
       padding: spacing.lg,
       minWidth: 200,
       marginRight: spacing.md,
+      ...(shape.isSoft ? shape.elevation.card : {}),
     },
     header: {
       flexDirection: 'row',
@@ -99,9 +101,9 @@ const createStyles = (colors: ThemeColors) => ({
     iconContainer: {
       width: 44,
       height: 44,
-      borderRadius: borderRadius.medium,
+      borderRadius: shape.isSoft ? 14 : borderRadius.medium,
       backgroundColor: 'rgba(255, 255, 255, 0.25)',
-      borderWidth: borderWidth.thin,
+      borderWidth: shape.isSoft ? 0 : borderWidth.thin,
       borderColor: 'rgba(255, 255, 255, 0.4)',
       alignItems: 'center',
       justifyContent: 'center',
@@ -135,9 +137,10 @@ const createStyles = (colors: ThemeColors) => ({
     },
     balance: {
       fontSize: 24,
-      fontWeight: '900',
+      fontWeight: shape.isSoft ? '800' : '900',
       color: '#FFFFFF',
-      fontFamily: typography.fontFamily.mono,
+      fontFamily: shape.isSoft ? undefined : typography.fontFamily.mono,
+      fontVariant: ['tabular-nums'],
     },
   }),
   _colors: colors,

@@ -30,6 +30,7 @@ import { nativeAutoBookkeeping } from '../../native';
 import { QUERY_KEYS } from '../../lib/queryClient';
 import { borderRadius, borderWidth, spacing } from '../../theme/spacing';
 import { ThemeColors } from '../../theme/colors';
+import { ThemeShape } from '../../theme/shape';
 import { useStyles } from '../../hooks';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -138,7 +139,7 @@ export default function AutoBookkeepingScreen() {
           style={styles.backButton}
           onPress={() => navigation.goBack()}
         >
-          <ChevronLeft size={24} color={styles._colors.stroke} />
+          <ChevronLeft size={24} color={styles._isSoft ? styles._colors.textPrimary : styles._colors.stroke} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>自动记账</Text>
         <View style={styles.backButton} />
@@ -169,7 +170,7 @@ export default function AutoBookkeepingScreen() {
         <View style={styles.sectionCard}>
           <View style={styles.masterRow}>
             <View style={styles.iconContainer}>
-              <Zap size={20} color={styles._colors.stroke} />
+              <Zap size={20} color={styles._isSoft ? styles._colors.primary : styles._colors.stroke} />
             </View>
             <View style={styles.masterText}>
               <Text style={styles.sectionTitle}>付完钱自动记账</Text>
@@ -327,7 +328,7 @@ export default function AutoBookkeepingScreen() {
   );
 }
 
-const createStyles = (colors: ThemeColors) => ({
+const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
   ...StyleSheet.create({
     container: {
       flex: 1,
@@ -347,8 +348,8 @@ const createStyles = (colors: ThemeColors) => ({
       justifyContent: 'center',
     },
     headerTitle: {
-      fontSize: 17,
-      fontWeight: '900',
+      fontSize: shape.isSoft ? 18 : 17,
+      fontWeight: shape.isSoft ? '700' : '900',
       color: colors.textPrimary,
     },
     scrollView: {
@@ -361,10 +362,11 @@ const createStyles = (colors: ThemeColors) => ({
     sectionCard: {
       padding: spacing.lg,
       backgroundColor: colors.surface,
-      borderWidth: borderWidth.thin,
-      borderColor: colors.stroke,
-      borderRadius: borderRadius.card,
+      borderWidth: shape.isSoft ? shape.borderWidth.card : borderWidth.thin,
+      borderColor: shape.isSoft ? colors.cardBorder : colors.stroke,
+      borderRadius: shape.radius.card,
       gap: spacing.sm,
+      ...(shape.isSoft ? shape.elevation.card : {}),
     },
     masterRow: {
       flexDirection: 'row',
@@ -374,8 +376,8 @@ const createStyles = (colors: ThemeColors) => ({
     iconContainer: {
       width: 40,
       height: 40,
-      borderRadius: borderRadius.small,
-      borderWidth: borderWidth.thin,
+      borderRadius: shape.isSoft ? 12 : borderRadius.small,
+      borderWidth: shape.isSoft ? 0 : borderWidth.thin,
       borderColor: colors.stroke,
       backgroundColor: colors.primaryLight,
       alignItems: 'center',
@@ -387,7 +389,7 @@ const createStyles = (colors: ThemeColors) => ({
     },
     sectionTitle: {
       fontSize: 15,
-      fontWeight: '800',
+      fontWeight: shape.isSoft ? '700' : '800',
       color: colors.textPrimary,
     },
     sectionText: {
@@ -404,7 +406,7 @@ const createStyles = (colors: ThemeColors) => ({
     },
     channelLabel: {
       fontSize: 14,
-      fontWeight: '700',
+      fontWeight: shape.isSoft ? '600' : '700',
       color: colors.textPrimary,
     },
     warningCard: {
@@ -412,19 +414,19 @@ const createStyles = (colors: ThemeColors) => ({
       alignItems: 'flex-start',
       gap: spacing.sm,
       padding: spacing.lg,
-      backgroundColor: colors.surface,
-      borderWidth: borderWidth.thick,
+      backgroundColor: shape.isSoft ? colors.expenseLight : colors.surface,
+      borderWidth: shape.isSoft ? 0 : borderWidth.thick,
       borderColor: colors.error,
-      borderRadius: borderRadius.card,
+      borderRadius: shape.radius.card,
     },
     warningTitle: {
       fontSize: 14,
-      fontWeight: '800',
-      color: colors.error,
+      fontWeight: shape.isSoft ? '700' : '800',
+      color: shape.isSoft ? colors.expenseStrong : colors.error,
     },
     warningText: {
       fontSize: 12,
-      fontWeight: '600',
+      fontWeight: shape.isSoft ? '500' : '600',
       color: colors.textSecondary,
       lineHeight: 18,
       marginTop: 2,
@@ -433,16 +435,16 @@ const createStyles = (colors: ThemeColors) => ({
       marginTop: spacing.sm,
       alignSelf: 'flex-start',
       paddingHorizontal: spacing.md,
-      paddingVertical: spacing.xs,
-      borderRadius: borderRadius.small,
-      borderWidth: borderWidth.thin,
+      paddingVertical: spacing.xs + 2,
+      borderRadius: shape.isSoft ? shape.radius.pill : borderRadius.small,
+      borderWidth: shape.isSoft ? 0 : borderWidth.thin,
       borderColor: colors.stroke,
-      backgroundColor: colors.primaryLight,
+      backgroundColor: shape.isSoft ? colors.surface : colors.primaryLight,
     },
     warningActionText: {
       fontSize: 12,
-      fontWeight: '800',
-      color: colors.textPrimary,
+      fontWeight: shape.isSoft ? '700' : '800',
+      color: shape.isSoft ? colors.expenseStrong : colors.textPrimary,
     },
     privacyRow: {
       flexDirection: 'row',
@@ -452,10 +454,11 @@ const createStyles = (colors: ThemeColors) => ({
     privacyText: {
       flex: 1,
       fontSize: 12,
-      fontWeight: '600',
+      fontWeight: shape.isSoft ? '500' : '600',
       color: colors.textSecondary,
       lineHeight: 18,
     },
   }),
   _colors: colors,
+  _isSoft: shape.isSoft,
 });

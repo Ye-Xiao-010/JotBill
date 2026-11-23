@@ -5,6 +5,7 @@
 import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import { ThemeColors } from '../../theme/colors';
+import { ThemeShape } from '../../theme/shape';
 import { borderRadius, borderWidth, spacing } from '../../theme/spacing';
 import { useStyles } from '../../hooks';
 import BrutalPressable from '../ui/BrutalPressable';
@@ -49,16 +50,17 @@ export default function QuickAction({
   );
 }
 
-const createStyles = (colors: ThemeColors) => ({
+const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
   ...StyleSheet.create({
     container: {
       alignItems: 'center',
       padding: spacing.md,
-      borderRadius: borderRadius.card,
-      borderWidth: borderWidth.medium,
-      borderColor: colors.stroke,
+      borderRadius: shape.radius.card,
+      borderWidth: shape.isSoft ? shape.borderWidth.card : borderWidth.medium,
+      borderColor: shape.isSoft ? colors.cardBorder : colors.stroke,
       backgroundColor: colors.surface,
       minWidth: 80,
+      ...(shape.isSoft ? shape.elevation.card : {}),
     },
     containerDisabled: {
       opacity: 0.5,
@@ -66,8 +68,8 @@ const createStyles = (colors: ThemeColors) => ({
     iconContainer: {
       width: 48,
       height: 48,
-      borderRadius: borderRadius.medium,
-      borderWidth: borderWidth.thin,
+      borderRadius: shape.isSoft ? 16 : borderRadius.medium,
+      borderWidth: shape.isSoft ? 0 : borderWidth.thin,
       borderColor: colors.stroke,
       alignItems: 'center',
       justifyContent: 'center',

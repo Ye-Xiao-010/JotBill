@@ -5,6 +5,7 @@
 import React, { useEffect, useRef } from 'react';
 import { View, Animated, StyleSheet, ViewStyle } from 'react-native';
 import { ThemeColors } from '../../theme/colors';
+import { ThemeShape } from '../../theme/shape';
 import { borderRadius, borderWidth } from '../../theme/spacing';
 import { useStyles } from '../../hooks';
 
@@ -103,17 +104,18 @@ export function SkeletonCard({
   return <View style={[styles.card, style]}>{children}</View>;
 }
 
-const createStyles = (colors: ThemeColors) => ({
+const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
   ...StyleSheet.create({
     skeleton: {
-      backgroundColor: colors.divider,
+      backgroundColor: shape.isSoft ? colors.surfaceMuted : colors.divider,
     },
     card: {
       backgroundColor: colors.surface,
-      borderRadius: borderRadius.card,
-      borderWidth: borderWidth.thin,
-      borderColor: colors.stroke,
+      borderRadius: shape.radius.card,
+      borderWidth: shape.isSoft ? shape.borderWidth.card : borderWidth.thin,
+      borderColor: shape.isSoft ? colors.cardBorder : colors.stroke,
       padding: 16,
+      ...(shape.isSoft ? shape.elevation.card : {}),
     },
   }),
   _colors: colors,

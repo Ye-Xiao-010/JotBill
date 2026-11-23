@@ -498,15 +498,141 @@ const inkDark: ThemePalette = {
   gradientPrimaryEnd: '#D4D4D4',
 };
 
+/* ================================================================
+ * soft 柔光（现代柔和风：靛蓝主色 + 招财金点缀，大圆角、去粗描边）
+ * WCAG AA 实测：
+ * - light: textPrimary/bg 16.90:1, textTertiary/bg 4.97:1,
+ *          income/surface 5.02:1, expense/surface 4.83:1,
+ *          onPrimary/primary 6.29:1, incomeStrong/Light 6.33:1,
+ *          expenseStrong/Light 5.66:1
+ * - dark:  textPrimary/bg 17.31:1, textTertiary/bg 6.18:1,
+ *          income/surface 9.99:1, expense/surface 6.29:1,
+ *          onPrimary/primary 6.62:1, incomeStrong/Light 7.99:1,
+ *          expenseStrong/Light 5.64:1
+ * ============================================================== */
+const softLight: ThemePalette = {
+  primary: '#4F46E5',
+  primaryLight: '#EEF0FF',
+  primaryDark: '#4338CA',
+
+  secondary: '#8B5CF6',
+  accent: '#F5A524',
+  success: '#16A34A',
+  successLight: '#E3F6EA',
+  warning: '#F59E0B',
+  error: '#DC2626',
+
+  pink: '#EC4899',
+  lime: '#84CC16',
+  cyan: '#0EA5E9',
+  orange: '#F97316',
+
+  stroke: '#E4E7EE',
+  strokeLight: '#D5D9E2',
+
+  textPrimary: '#12141A',
+  textSecondary: '#454A57',
+  textTertiary: '#646A78',
+  textQuaternary: '#A0A5B1',
+  divider: '#ECEEF3',
+  background: '#F4F5F9',
+  surface: '#FFFFFF',
+  surfaceMuted: '#EEF0F6',
+
+  income: '#15803D',
+  expense: '#DC2626',
+  incomeLight: '#E3F6EA',
+  expenseLight: '#FDECEC',
+  incomeStrong: '#166534',
+  expenseStrong: '#B91C1C',
+
+  onPrimary: '#FFFFFF',
+  onPrimaryMuted: 'rgba(255, 255, 255, 0.85)',
+  onPrimarySubtle: 'rgba(255, 255, 255, 0.72)',
+  onPrimaryDivider: 'rgba(255, 255, 255, 0.22)',
+
+  cardBackground: '#FFFFFF',
+  cardBorder: '#E4E7EE',
+
+  shadow: '#12141A',
+  shadowDark: '#12141A',
+  overlay: 'rgba(18, 20, 26, 0.38)',
+  overlayLight: 'rgba(18, 20, 26, 0.20)',
+
+  gradientPrimaryStart: '#5850EC',
+  gradientPrimaryEnd: '#6052E5',
+};
+
+const softDark: ThemePalette = {
+  primary: '#8B8DFB',
+  primaryLight: '#23264A',
+  primaryDark: '#A5A7FF',
+
+  secondary: '#A78BFA',
+  accent: '#F7B955',
+  success: '#4ADE80',
+  successLight: '#143222',
+  warning: '#FBBF24',
+  error: '#F87171',
+
+  pink: '#F472B6',
+  lime: '#A3E635',
+  cyan: '#38BDF8',
+  orange: '#FB923C',
+
+  stroke: '#232731',
+  strokeLight: '#2A2F3A',
+
+  textPrimary: '#F3F4F7',
+  textSecondary: '#C5C9D3',
+  textTertiary: '#8D93A1',
+  textQuaternary: '#5C6270',
+  divider: '#252932',
+  background: '#0E1014',
+  surface: '#171A21',
+  surfaceMuted: '#1E222B',
+
+  income: '#4ADE80',
+  expense: '#F87171',
+  incomeLight: '#143222',
+  expenseLight: '#3A1A1E',
+  incomeStrong: '#4ADE80',
+  expenseStrong: '#F87171',
+
+  onPrimary: '#0E1014',
+  onPrimaryMuted: 'rgba(14, 16, 20, 0.78)',
+  onPrimarySubtle: 'rgba(14, 16, 20, 0.62)',
+  onPrimaryDivider: 'rgba(14, 16, 20, 0.20)',
+
+  cardBackground: '#171A21',
+  cardBorder: '#232731',
+
+  shadow: '#000000',
+  shadowDark: '#000000',
+  overlay: 'rgba(0, 0, 0, 0.60)',
+  overlayLight: 'rgba(0, 0, 0, 0.36)',
+
+  gradientPrimaryStart: '#3B36B8',
+  gradientPrimaryEnd: '#5B4FD9',
+};
+
 /** 主题注册表：satisfies 保证每套色板字段完整，缺 token 编译期报错 */
 export const themes = {
   blocks: { light: blocksLight, dark: blocksDark },
   mint: { light: mintLight, dark: mintDark },
   sunset: { light: sunsetLight, dark: sunsetDark },
   ink: { light: inkLight, dark: inkDark },
+  soft: { light: softLight, dark: softDark },
 } satisfies Record<string, { light: ThemePalette; dark: ThemePalette }>;
 
 export type ThemeName = keyof typeof themes;
+
+/** 主题视觉家族：brutal = 积木风粗描边；soft = 柔光大圆角层次 */
+export type ThemeStyleVariant = 'brutal' | 'soft';
+
+export function getThemeStyleVariant(name: ThemeName): ThemeStyleVariant {
+  return name === 'soft' ? 'soft' : 'brutal';
+}
 
 /** 主题展示名（设置页选择器等 UI 使用） */
 export const THEME_LABELS: Record<ThemeName, string> = {
@@ -514,6 +640,7 @@ export const THEME_LABELS: Record<ThemeName, string> = {
   mint: '薄荷账本',
   sunset: '落日橙',
   ink: '墨黑',
+  soft: '柔光',
 };
 
 // 兼容旧导入：默认 blocks 浅色

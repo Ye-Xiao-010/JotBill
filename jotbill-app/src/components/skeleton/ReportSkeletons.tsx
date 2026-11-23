@@ -27,6 +27,7 @@
 import React from 'react';
 import { View, StyleSheet } from 'react-native';
 import { ThemeColors } from '../../theme/colors';
+import { ThemeShape } from '../../theme/shape';
 import { borderRadius, borderWidth, spacing } from '../../theme/spacing';
 import { useStyles } from '../../hooks';
 import { Skeleton, SkeletonText, SkeletonCard } from './Skeleton';
@@ -172,7 +173,7 @@ export function CalendarSkeleton({
   );
 }
 
-const createStyles = (colors: ThemeColors) => ({
+const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
   ...StyleSheet.create({
     container: {
       flex: 1,
@@ -194,11 +195,12 @@ const createStyles = (colors: ThemeColors) => ({
       marginTop: spacing.md,
     },
     balanceCard: {
-      backgroundColor: colors.primary,
-      borderRadius: borderRadius.card,
-      borderWidth: borderWidth.medium,
+      backgroundColor: shape.isSoft ? '#1F2333' : colors.primary,
+      borderRadius: shape.isSoft ? shape.radius.hero : borderRadius.card,
+      borderWidth: shape.isSoft ? 0 : borderWidth.medium,
       borderColor: colors.stroke,
       padding: spacing.xl,
+      ...(shape.isSoft ? shape.elevation.hero : {}),
     },
     // 余额卡是主色底，骨架要提亮才看得见（用白/半透明白）
     onPrimary: {

@@ -12,6 +12,7 @@ import {
   ScrollView,
 } from 'react-native';
 import { ThemeColors } from '../../theme/colors';
+import { ThemeShape } from '../../theme/shape';
 import { spacing, borderRadius, borderWidth, shadow } from '../../theme';
 import { useToast, useStyles } from '../../hooks';
 import { nativeData, type Category } from '../../native';
@@ -170,7 +171,7 @@ export const AddCategoryModal: React.FC<AddCategoryModalProps> = ({
   );
 };
 
-const createStyles = (colors: ThemeColors) => ({
+const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
   ...StyleSheet.create({
     content: {
       maxHeight: 400,
@@ -183,19 +184,19 @@ const createStyles = (colors: ThemeColors) => ({
     },
     label: {
       fontSize: 14,
-      fontWeight: '700',
-      color: colors.textPrimary,
+      fontWeight: shape.isSoft ? '600' : '700',
+      color: shape.isSoft ? colors.textSecondary : colors.textPrimary,
       marginBottom: spacing.sm,
     },
     input: {
-      borderWidth: borderWidth.medium,
+      borderWidth: shape.isSoft ? 0 : borderWidth.medium,
       borderColor: colors.stroke,
-      borderRadius: borderRadius.input,
+      borderRadius: shape.radius.input,
       padding: spacing.md,
       fontSize: 15,
       fontWeight: '600',
       color: colors.textPrimary,
-      backgroundColor: colors.surface,
+      backgroundColor: shape.isSoft ? colors.surfaceMuted : colors.surface,
     },
     parentHint: {
       fontSize: 14,
@@ -211,17 +212,18 @@ const createStyles = (colors: ThemeColors) => ({
     iconOption: {
       width: 48,
       height: 48,
-      borderRadius: borderRadius.medium,
-      backgroundColor: colors.background,
+      borderRadius: shape.isSoft ? 14 : borderRadius.medium,
+      backgroundColor: shape.isSoft ? colors.surfaceMuted : colors.background,
       justifyContent: 'center',
       alignItems: 'center',
-      borderWidth: borderWidth.thin,
+      borderWidth: shape.isSoft ? 0 : borderWidth.thin,
       borderColor: colors.stroke,
       margin: 4,
     },
     iconOptionSelected: {
-      backgroundColor: colors.accent,
-      borderWidth: borderWidth.medium,
+      backgroundColor: shape.isSoft ? colors.primaryLight : colors.accent,
+      borderWidth: shape.isSoft ? 1.5 : borderWidth.medium,
+      borderColor: shape.isSoft ? colors.primary : colors.stroke,
     },
     iconText: {
       fontSize: 22,
@@ -229,24 +231,24 @@ const createStyles = (colors: ThemeColors) => ({
     footer: {
       flexDirection: 'row',
       paddingTop: spacing.md,
-      borderTopWidth: borderWidth.thin,
-      borderTopColor: colors.stroke,
+      borderTopWidth: shape.isSoft ? StyleSheet.hairlineWidth : borderWidth.thin,
+      borderTopColor: shape.isSoft ? colors.divider : colors.stroke,
       gap: spacing.md,
     },
     button: {
       flex: 1,
       paddingVertical: spacing.md,
-      borderRadius: borderRadius.button,
-      borderWidth: borderWidth.medium,
+      borderRadius: shape.radius.button,
+      borderWidth: shape.isSoft ? 0 : borderWidth.medium,
       borderColor: colors.stroke,
       alignItems: 'center',
-      ...shadow.small,
+      ...(shape.isSoft ? shape.elevation.none : shadow.small),
     },
     cancelButton: {
-      backgroundColor: colors.surface,
+      backgroundColor: shape.isSoft ? colors.surfaceMuted : colors.surface,
     },
     cancelButtonText: {
-      color: colors.textPrimary,
+      color: shape.isSoft ? colors.textSecondary : colors.textPrimary,
       fontSize: 15,
       fontWeight: '700',
     },
@@ -254,9 +256,9 @@ const createStyles = (colors: ThemeColors) => ({
       backgroundColor: colors.primary,
     },
     saveButtonText: {
-      color: '#FFFFFF',
+      color: shape.isSoft ? colors.onPrimary : '#FFFFFF',
       fontSize: 15,
-      fontWeight: '800',
+      fontWeight: shape.isSoft ? '700' : '800',
     },
   }),
   _colors: colors,

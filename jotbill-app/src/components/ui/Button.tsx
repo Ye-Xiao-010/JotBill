@@ -12,6 +12,7 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { ThemeColors } from '../../theme/colors';
+import { ThemeShape } from '../../theme/shape';
 import { spacing, borderRadius, borderWidth, shadow } from '../../theme/spacing';
 import { useStyles } from '../../hooks';
 
@@ -69,7 +70,7 @@ const Button: React.FC<ButtonProps> = ({
       {loading ? (
         <ActivityIndicator
           size="small"
-          color={variant === 'primary' ? '#FFFFFF' : styles._colors.primary}
+          color={variant === 'primary' ? styles._colors.onPrimary : styles._colors.primary}
         />
       ) : (
         <>
@@ -81,16 +82,16 @@ const Button: React.FC<ButtonProps> = ({
   );
 };
 
-const createStyles = (colors: ThemeColors) => ({
+const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
   ...StyleSheet.create({
     button: {
       flexDirection: 'row',
       alignItems: 'center',
       justifyContent: 'center',
-      borderRadius: borderRadius.button,
-      borderWidth: borderWidth.medium,
-      borderColor: colors.stroke,
-      ...shadow.small,
+      borderRadius: shape.isSoft ? shape.radius.button : borderRadius.button,
+      borderWidth: shape.isSoft ? 0 : borderWidth.medium,
+      borderColor: shape.isSoft ? colors.cardBorder : colors.stroke,
+      ...(shape.isSoft ? shape.elevation.none : shadow.small),
     },
 
     // 变体样式
@@ -98,11 +99,12 @@ const createStyles = (colors: ThemeColors) => ({
       backgroundColor: colors.primary,
     },
     secondary: {
-      backgroundColor: colors.accent,
+      backgroundColor: shape.isSoft ? colors.primaryLight : colors.accent,
     },
     outline: {
       backgroundColor: colors.surface,
-      borderColor: colors.stroke,
+      borderWidth: shape.isSoft ? 1 : borderWidth.medium,
+      borderColor: shape.isSoft ? colors.cardBorder : colors.stroke,
     },
     text: {
       backgroundColor: 'transparent',
@@ -130,14 +132,14 @@ const createStyles = (colors: ThemeColors) => ({
 
     // 文本样式
     buttonText: {
-      fontWeight: '800',
+      fontWeight: shape.isSoft ? shape.fontWeight.semibold : '800',
       textAlign: 'center',
     },
     primaryText: {
-      color: '#FFFFFF',
+      color: colors.onPrimary,
     },
     secondaryText: {
-      color: colors.textPrimary,
+      color: shape.isSoft ? colors.primaryDark : colors.textPrimary,
     },
     outlineText: {
       color: colors.textPrimary,
@@ -159,8 +161,8 @@ const createStyles = (colors: ThemeColors) => ({
 
     // 禁用状态
     disabled: {
-      backgroundColor: colors.divider,
-      borderColor: colors.textTertiary,
+      backgroundColor: shape.isSoft ? colors.surfaceMuted : colors.divider,
+      borderColor: shape.isSoft ? 'transparent' : colors.textTertiary,
       shadowOpacity: 0,
       elevation: 0,
     },

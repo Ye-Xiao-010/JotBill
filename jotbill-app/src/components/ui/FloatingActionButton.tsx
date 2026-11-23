@@ -13,6 +13,7 @@ import {
   GestureResponderEvent,
 } from 'react-native';
 import { ThemeColors } from '../../theme/colors';
+import { ThemeShape } from '../../theme/shape';
 import { spacing, borderRadius, borderWidth } from '../../theme/spacing';
 import { useStyles } from '../../hooks';
 
@@ -45,9 +46,10 @@ export const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({
   };
 
   const currentSize = sizeStyles[size];
-  const shadowOffset = size === 'small' ? 3 : 4;
-  const bgColor = backgroundColor || styles._colors.accent;
-  const txtColor = iconColor || styles._colors.textPrimary;
+  const isSoft = styles._isSoft;
+  const shadowOffset = isSoft ? 0 : size === 'small' ? 3 : 4;
+  const bgColor = backgroundColor || (isSoft ? styles._colors.primary : styles._colors.accent);
+  const txtColor = iconColor || (isSoft ? styles._colors.onPrimary : styles._colors.textPrimary);
 
   const handlePressIn = () => {
     Animated.timing(anim, {
@@ -73,6 +75,12 @@ export const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({
     inputRange: [0, 1],
     outputRange: [0, shadowOffset],
   });
+  const scale = anim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [1, 0.94],
+  });
+
+  const btnRadius = isSoft ? currentSize.width / 2 : borderRadius.medium;
 
   return (
     <View
@@ -85,19 +93,21 @@ export const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({
         style,
       ]}
     >
-      {/* 实心阴影层 */}
-      <View
-        style={[
-          styles.shadowLayer,
-          {
-            width: currentSize.width,
-            height: currentSize.height,
-            borderRadius: borderRadius.medium,
-            top: shadowOffset,
-            left: shadowOffset,
-          },
-        ]}
-      />
+      {/* 实心阴影层（仅粗野模式） */}
+      {!isSoft && (
+        <View
+          style={[
+            styles.shadowLayer,
+            {
+              width: currentSize.width,
+              height: currentSize.height,
+              borderRadius: borderRadius.medium,
+              top: shadowOffset,
+              left: shadowOffset,
+            },
+          ]}
+        />
+      )}
       {/* 按钮主体 */}
       <Pressable
         onPress={onPress}
@@ -111,9 +121,9 @@ export const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({
             {
               width: currentSize.width,
               height: currentSize.height,
-              borderRadius: borderRadius.medium,
+              borderRadius: btnRadius,
               backgroundColor: disabled ? styles._colors.divider : bgColor,
-              transform: [{ translateX }, { translateY }],
+              transform: isSoft ? [{ scale }] : [{ translateX }, { translateY }],
             },
           ]}
         >
@@ -134,11 +144,11 @@ export const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({
   );
 };
 
-const createStyles = (colors: ThemeColors) => ({
+const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
   ...StyleSheet.create({
     container: {
       position: 'absolute',
-      bottom: 80,
+      bottom: shape.isSoft ? 104 : 80,
       right: spacing.lg,
       zIndex: 999,
     },
@@ -149,14 +159,16 @@ const createStyles = (colors: ThemeColors) => ({
     button: {
       justifyContent: 'center',
       alignItems: 'center',
-      borderWidth: borderWidth.thick,
+      borderWidth: shape.isSoft ? 0 : borderWidth.thick,
       borderColor: colors.stroke,
+      ...(shape.isSoft ? shape.elevation.floating : {}),
     },
     icon: {
-      fontWeight: '800',
+      fontWeight: shape.isSoft ? '700' : '800',
     },
   }),
   _colors: colors,
+  _isSoft: shape.isSoft,
 });
 
 export default FloatingActionButton;

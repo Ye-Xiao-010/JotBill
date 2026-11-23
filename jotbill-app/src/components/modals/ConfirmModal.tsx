@@ -11,6 +11,7 @@ import {
   Modal,
 } from 'react-native';
 import { ThemeColors } from '../../theme/colors';
+import { ThemeShape } from '../../theme/shape';
 import { spacing, borderRadius, borderWidth, shadow } from '../../theme';
 import { useStyles } from '../../hooks';
 
@@ -72,7 +73,7 @@ export const ConfirmModal: React.FC<ConfirmModalProps> = ({
   );
 };
 
-const createStyles = (colors: ThemeColors) => ({
+const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
   ...StyleSheet.create({
     overlay: {
       flex: 1,
@@ -83,16 +84,16 @@ const createStyles = (colors: ThemeColors) => ({
     },
     modalContainer: {
       backgroundColor: colors.surface,
-      borderRadius: borderRadius.card,
-      borderWidth: borderWidth.thick,
-      borderColor: colors.stroke,
+      borderRadius: shape.radius.modal,
+      borderWidth: shape.isSoft ? shape.borderWidth.card : borderWidth.thick,
+      borderColor: shape.isSoft ? colors.cardBorder : colors.stroke,
       width: '85%',
       padding: spacing.xl,
-      ...shadow.medium,
+      ...(shape.isSoft ? shape.elevation.floating : shadow.medium),
     },
     title: {
-      fontSize: 20,
-      fontWeight: '800',
+      fontSize: shape.isSoft ? 18 : 20,
+      fontWeight: shape.isSoft ? '700' : '800',
       color: colors.textPrimary,
       marginBottom: spacing.md,
       textAlign: 'center',
@@ -112,28 +113,28 @@ const createStyles = (colors: ThemeColors) => ({
     button: {
       flex: 1,
       paddingVertical: spacing.md,
-      borderRadius: borderRadius.button,
-      borderWidth: borderWidth.medium,
+      borderRadius: shape.radius.button,
+      borderWidth: shape.isSoft ? 0 : borderWidth.medium,
       borderColor: colors.stroke,
       alignItems: 'center',
       minHeight: 48,
       justifyContent: 'center',
-      ...shadow.small,
+      ...(shape.isSoft ? shape.elevation.none : shadow.small),
     },
     cancelButton: {
-      backgroundColor: colors.surface,
+      backgroundColor: shape.isSoft ? colors.surfaceMuted : colors.surface,
     },
     cancelButtonText: {
       fontSize: 16,
       fontWeight: '700',
-      color: colors.textPrimary,
+      color: shape.isSoft ? colors.textSecondary : colors.textPrimary,
     },
     confirmButton: {
       backgroundColor: colors.error,
     },
     confirmButtonText: {
       fontSize: 16,
-      fontWeight: '800',
+      fontWeight: shape.isSoft ? '700' : '800',
       color: '#FFFFFF',
     },
   }),

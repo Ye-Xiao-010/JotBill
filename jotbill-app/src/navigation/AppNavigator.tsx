@@ -2,13 +2,13 @@
  * 应用导航器 - Neo-Brutalism 风格
  * 粗描边 Tab Bar + 糖果色活跃态 + 方圆角"+"按钮 + 实心阴影
  */
-import React, { useState, useMemo } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import React, { useState, useMemo, useEffect } from 'react';
+import { Keyboard, View, Text, TouchableOpacity, StyleSheet } from 'react-native';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { NavigationContainer, DefaultTheme, DarkTheme } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import * as Sentry from '@sentry/react-native';
-import { Home, BarChart3, MessageCircle, User } from 'lucide-react-native';
+import { Home, BarChart3, MessageCircle, Sparkles, User, Plus } from 'lucide-react-native';
 
 // 导入屏幕组件
 import SettingsScreen from '../screens/SettingsScreen';
@@ -36,8 +36,10 @@ import AutoBookkeepingScreen from '../screens/settings/AutoBookkeepingScreen';
 import ReviewScreen from '../screens/review/ReviewScreen';
 
 import { useTheme } from '../providers';
+import { SoftGradient } from '../components/ui';
 import { spacing, borderRadius, borderWidth } from '../theme/spacing';
 import { ThemeColors } from '../theme/colors';
+import { ThemeShape } from '../theme/shape';
 import '../types/navigation';
 
 const Stack = createNativeStackNavigator();
@@ -217,10 +219,168 @@ const tabStyles = StyleSheet.create({
   },
 });
 
+// 柔光主题悬浮胶囊底栏：大圆角半透明胶囊 + 浅底药丸活跃态 + 圆形渐变 FAB
+function SoftBottomTabBar({
+  activeTab,
+  onTabPress,
+  colors,
+  shape,
+  isDark,
+}: {
+  activeTab: string;
+  onTabPress: (key: string) => void;
+  colors: ThemeColors;
+  shape: ThemeShape;
+  isDark: boolean;
+}) {
+  const insets = useSafeAreaInsets();
+  const [keyboardVisible, setKeyboardVisible] = useState(false);
+
+  useEffect(() => {
+    const showSub = Keyboard.addListener('keyboardDidShow', () => setKeyboardVisible(true));
+    const hideSub = Keyboard.addListener('keyboardDidHide', () => setKeyboardVisible(false));
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+  }, []);
+
+  const softStyles = useMemo(() => StyleSheet.create({
+    wrapper: {
+      position: 'absolute',
+      left: 12,
+      right: 12,
+      bottom: Math.max(insets.bottom, 12),
+      height: 68,
+      borderRadius: 26,
+      backgroundColor: isDark ? 'rgba(23, 26, 33, 0.94)' : 'rgba(255, 255, 255, 0.94)',
+      borderWidth: isDark ? 1 : StyleSheet.hairlineWidth,
+      borderColor: isDark ? colors.cardBorder : 'rgba(18, 20, 26, 0.06)',
+      flexDirection: 'row',
+      alignItems: 'center',
+      ...shape.elevation.floating,
+    },
+    tab: {
+      flex: 1,
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 3,
+      height: '100%',
+    },
+    tabPill: {
+      width: 52,
+      height: 30,
+      borderRadius: 999,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    tabPillActive: {
+      backgroundColor: colors.primaryLight,
+    },
+    tabLabel: {
+      fontSize: 11,
+      fontWeight: '500',
+      color: colors.textTertiary,
+    },
+    tabLabelActive: {
+      color: colors.primary,
+      fontWeight: '600',
+    },
+    fabSlot: {
+      flex: 1,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    fabRing: {
+      marginTop: -28,
+      width: 60,
+      height: 60,
+      borderRadius: 30,
+      backgroundColor: colors.background,
+      alignItems: 'center',
+      justifyContent: 'center',
+      ...shape.elevation.hero,
+    },
+    fabGradient: {
+      width: 52,
+      height: 52,
+      borderRadius: 26,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+  }), [colors, shape, isDark, insets.bottom]);
+
+  if (keyboardVisible) {
+    return null;
+  }
+
+  const softTabs = [
+    { key: 'dashboard', label: '首页', Icon: Home },
+    { key: 'reports', label: '统计', Icon: BarChart3 },
+    { key: 'add', label: '记账', Icon: Plus },
+    { key: 'ai', label: 'AI 助手', Icon: Sparkles },
+    { key: 'settings', label: '我的', Icon: User },
+  ];
+
+  return (
+    <View style={softStyles.wrapper}>
+      {softTabs.map((tab) => {
+        if (tab.key === 'add') {
+          return (
+            <TouchableOpacity
+              key={tab.key}
+              onPress={() => onTabPress('add')}
+              style={softStyles.fabSlot}
+              activeOpacity={0.85}
+              accessibilityLabel="记一笔"
+              accessibilityRole="button"
+            >
+              <View style={softStyles.fabRing}>
+                <SoftGradient
+                  colors={[colors.gradientPrimaryStart, colors.primary, colors.gradientPrimaryEnd]}
+                  style={softStyles.fabGradient}
+                >
+                  <Plus size={26} color="#FFFFFF" strokeWidth={2.5} />
+                </SoftGradient>
+              </View>
+            </TouchableOpacity>
+          );
+        }
+
+        const isActive = activeTab === tab.key;
+        const Icon = tab.Icon;
+        const iconColor = isActive ? colors.primary : colors.textTertiary;
+
+        return (
+          <TouchableOpacity
+            key={tab.key}
+            onPress={() => onTabPress(tab.key)}
+            style={softStyles.tab}
+            activeOpacity={0.75}
+            accessibilityRole="tab"
+            accessibilityState={{ selected: isActive }}
+          >
+            <View style={[softStyles.tabPill, isActive && softStyles.tabPillActive]}>
+              <Icon
+                size={21}
+                color={iconColor}
+                strokeWidth={isActive ? shape.iconStrokeWidth.active : shape.iconStrokeWidth.regular}
+              />
+            </View>
+            <Text style={[softStyles.tabLabel, isActive && softStyles.tabLabelActive]}>
+              {tab.label}
+            </Text>
+          </TouchableOpacity>
+        );
+      })}
+    </View>
+  );
+}
+
 // 主导航容器组件
 function MainNavigator({ navigation }: { navigation: any }) {
   const [activeTab, setActiveTab] = useState('dashboard');
-  const { colors } = useTheme();
+  const { colors, shape, isSoft, isDark } = useTheme();
 
   const dynamicStyles = useMemo(() => StyleSheet.create({
     container: {
@@ -247,7 +407,7 @@ function MainNavigator({ navigation }: { navigation: any }) {
   const renderScreen = () => {
     switch (activeTab) {
       case 'dashboard':
-        return <DashboardScreen />;
+        return <DashboardScreen onSelectTab={setActiveTab} />;
       case 'reports':
         return <ReportsScreen />;
       case 'settings':
@@ -255,53 +415,86 @@ function MainNavigator({ navigation }: { navigation: any }) {
       case 'ai':
         return <AIChatScreen />;
       default:
-        return <DashboardScreen />;
+        return <DashboardScreen onSelectTab={setActiveTab} />;
     }
   };
 
   return (
-    <SafeAreaView style={dynamicStyles.container} edges={['top', 'bottom']}>
+    <SafeAreaView
+      style={dynamicStyles.container}
+      edges={isSoft ? ['top'] : ['top', 'bottom']}
+    >
       <View style={styles.content}>
         {renderScreen()}
       </View>
-      <BottomTabBar activeTab={activeTab} onTabPress={handleTabPress} colors={colors} />
+      {isSoft ? (
+        <SoftBottomTabBar
+          activeTab={activeTab}
+          onTabPress={handleTabPress}
+          colors={colors}
+          shape={shape}
+          isDark={isDark}
+        />
+      ) : (
+        <BottomTabBar activeTab={activeTab} onTabPress={handleTabPress} colors={colors} />
+      )}
     </SafeAreaView>
   );
 }
 
 // 根导航器
 export default function AppNavigator() {
-  const { isDark, colors } = useTheme();
+  const { isDark, isSoft, colors } = useTheme();
 
-  // Neo-Brutalism 导航主题
+  // 导航主题
   const navigationTheme = useMemo(() => ({
     ...(isDark ? DarkTheme : DefaultTheme),
     colors: {
       ...(isDark ? DarkTheme.colors : DefaultTheme.colors),
       primary: colors.primary,
       background: colors.background,
-      card: colors.surface,
+      card: isSoft ? colors.background : colors.surface,
       text: colors.textPrimary,
-      border: colors.stroke,
+      border: isSoft ? colors.divider : colors.stroke,
     },
-  }), [isDark, colors]);
+  }), [isDark, isSoft, colors]);
 
-  // Neo-Brutalism Stack Header 样式
+  // Stack Header 样式：柔光去粗黑底边，积木风保持 3px 描边
   const stackScreenOptions = useMemo(() => ({
     headerShown: false,
-    headerStyle: {
-      backgroundColor: colors.surface,
-      borderBottomWidth: borderWidth.medium,
-      borderBottomColor: colors.stroke,
-    } as any,
+    headerStyle: isSoft
+      ? ({
+          backgroundColor: colors.background,
+        } as any)
+      : ({
+          backgroundColor: colors.surface,
+          borderBottomWidth: borderWidth.medium,
+          borderBottomColor: colors.stroke,
+        } as any),
     headerTitleStyle: {
       fontSize: 18,
-      fontWeight: '800' as const,
+      fontWeight: (isSoft ? '700' : '800') as '700' | '800',
       color: colors.textPrimary,
     },
     headerTintColor: colors.textPrimary,
     headerShadowVisible: false,
-  }), [colors]);
+  }), [colors, isSoft]);
+
+  const billModalOptions = useMemo(
+    () => (title: string) =>
+      isSoft
+        ? {
+            headerShown: false,
+            presentation: 'transparentModal' as const,
+            animation: 'slide_from_bottom' as const,
+            contentStyle: { backgroundColor: 'transparent' },
+          }
+        : {
+            headerShown: true,
+            title,
+          },
+    [isSoft],
+  );
 
   return (
     <NavigationContainer theme={navigationTheme}>
@@ -321,18 +514,12 @@ export default function AppNavigator() {
         <Stack.Screen
           name="CreateBill"
           component={CreateBillScreen}
-          options={{
-            headerShown: true,
-            title: '创建账单',
-          }}
+          options={billModalOptions('创建账单')}
         />
         <Stack.Screen
           name="EditBill"
           component={CreateBillScreen}
-          options={{
-            headerShown: true,
-            title: '编辑账单',
-          }}
+          options={billModalOptions('编辑账单')}
         />
         <Stack.Screen
           name="AllBills"

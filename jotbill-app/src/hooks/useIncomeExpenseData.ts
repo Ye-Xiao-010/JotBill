@@ -143,7 +143,7 @@ export function useDailyBills(date: string | null) {
 /**
  * 获取某年12个月的收支数据（月收支视图用）
  */
-export function useMonthlyGridData(year: number) {
+export function useMonthlyGridData(year: number, enabled = true) {
   const query = useQuery({
     queryKey: QUERY_KEYS.monthlyGrid(year),
     queryFn: async () => {
@@ -156,6 +156,7 @@ export function useMonthlyGridData(year: number) {
     },
     staleTime: CACHE_TIME.STATISTICS,
     gcTime: GC_TIME.DEFAULT,
+    enabled,
   });
 
   const monthlyData = useMemo(() => {

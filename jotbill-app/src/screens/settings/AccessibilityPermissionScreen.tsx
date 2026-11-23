@@ -29,6 +29,7 @@ import { QUERY_KEYS } from '../../lib/queryClient';
 import { useAlert } from '../../providers';
 import { borderRadius, borderWidth, spacing } from '../../theme/spacing';
 import { ThemeColors } from '../../theme/colors';
+import { ThemeShape } from '../../theme/shape';
 import { useStyles } from '../../hooks';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -200,7 +201,7 @@ export default function AccessibilityPermissionScreen() {
   );
 }
 
-const createStyles = (colors: ThemeColors) => ({
+const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
   ...StyleSheet.create({
     container: { flex: 1, backgroundColor: colors.background },
     header: {
@@ -210,8 +211,8 @@ const createStyles = (colors: ThemeColors) => ({
       paddingHorizontal: spacing.md,
       paddingTop: spacing.xl,
       paddingBottom: spacing.md,
-      backgroundColor: colors.surface,
-      borderBottomWidth: borderWidth.medium,
+      backgroundColor: shape.isSoft ? colors.background : colors.surface,
+      borderBottomWidth: shape.isSoft ? 0 : borderWidth.medium,
       borderBottomColor: colors.stroke,
     },
     iconButton: {
@@ -221,8 +222,8 @@ const createStyles = (colors: ThemeColors) => ({
       justifyContent: 'center',
     },
     headerTitle: {
-      fontSize: 20,
-      fontWeight: '800',
+      fontSize: shape.isSoft ? 18 : 20,
+      fontWeight: shape.isSoft ? '700' : '800',
       color: colors.textPrimary,
     },
     scrollView: { flex: 1 },
@@ -232,9 +233,10 @@ const createStyles = (colors: ThemeColors) => ({
       alignItems: 'center',
       padding: spacing.lg,
       backgroundColor: colors.surface,
-      borderWidth: borderWidth.medium,
-      borderColor: colors.stroke,
-      borderRadius: borderRadius.card,
+      borderWidth: shape.isSoft ? shape.borderWidth.card : borderWidth.medium,
+      borderColor: shape.isSoft ? colors.cardBorder : colors.stroke,
+      borderRadius: shape.radius.card,
+      ...(shape.isSoft ? shape.elevation.card : {}),
     },
     statusIconRow: {
       flexDirection: 'row',
@@ -245,7 +247,7 @@ const createStyles = (colors: ThemeColors) => ({
     statusMain: { flex: 1 },
     statusTitle: {
       fontSize: 16,
-      fontWeight: '800',
+      fontWeight: shape.isSoft ? '700' : '800',
       color: colors.textPrimary,
       marginBottom: 4,
     },
@@ -258,13 +260,14 @@ const createStyles = (colors: ThemeColors) => ({
     sectionCard: {
       padding: spacing.lg,
       backgroundColor: colors.surface,
-      borderWidth: borderWidth.thin,
-      borderColor: colors.stroke,
-      borderRadius: borderRadius.card,
+      borderWidth: shape.isSoft ? shape.borderWidth.card : borderWidth.thin,
+      borderColor: shape.isSoft ? colors.cardBorder : colors.stroke,
+      borderRadius: shape.radius.card,
+      ...(shape.isSoft ? shape.elevation.card : {}),
     },
     sectionTitle: {
       fontSize: 15,
-      fontWeight: '800',
+      fontWeight: shape.isSoft ? '700' : '800',
       color: colors.textPrimary,
       marginBottom: spacing.sm,
     },
@@ -283,8 +286,8 @@ const createStyles = (colors: ThemeColors) => ({
     stepBadge: {
       width: 24,
       height: 24,
-      borderRadius: borderRadius.small,
-      borderWidth: borderWidth.thin,
+      borderRadius: shape.isSoft ? 12 : borderRadius.small,
+      borderWidth: shape.isSoft ? 0 : borderWidth.thin,
       borderColor: colors.stroke,
       backgroundColor: colors.primaryLight,
       alignItems: 'center',
@@ -292,8 +295,8 @@ const createStyles = (colors: ThemeColors) => ({
     },
     stepBadgeText: {
       fontSize: 13,
-      fontWeight: '800',
-      color: colors.textPrimary,
+      fontWeight: shape.isSoft ? '700' : '800',
+      color: shape.isSoft ? colors.primaryDark : colors.textPrimary,
     },
     stepText: {
       flex: 1,
@@ -310,7 +313,7 @@ const createStyles = (colors: ThemeColors) => ({
     privacyText: {
       flex: 1,
       fontSize: 12,
-      fontWeight: '600',
+      fontWeight: shape.isSoft ? '500' : '600',
       color: colors.textSecondary,
       lineHeight: 18,
     },
@@ -324,8 +327,8 @@ const createStyles = (colors: ThemeColors) => ({
       justifyContent: 'center',
       gap: spacing.sm,
       paddingVertical: spacing.md,
-      borderRadius: borderRadius.medium,
-      borderWidth: borderWidth.medium,
+      borderRadius: shape.radius.button,
+      borderWidth: shape.isSoft ? 0 : borderWidth.medium,
       borderColor: colors.stroke,
       backgroundColor: colors.primary,
     },
@@ -334,8 +337,8 @@ const createStyles = (colors: ThemeColors) => ({
     },
     primaryButtonText: {
       fontSize: 15,
-      fontWeight: '800',
-      color: '#FFFFFF',
+      fontWeight: shape.isSoft ? '700' : '800',
+      color: shape.isSoft ? colors.onPrimary : '#FFFFFF',
     },
     secondaryButton: {
       flexDirection: 'row',
@@ -343,10 +346,11 @@ const createStyles = (colors: ThemeColors) => ({
       justifyContent: 'center',
       gap: spacing.sm,
       paddingVertical: spacing.md,
-      borderRadius: borderRadius.medium,
-      borderWidth: borderWidth.thin,
-      borderColor: colors.stroke,
+      borderRadius: shape.radius.button,
+      borderWidth: shape.isSoft ? shape.borderWidth.card : borderWidth.thin,
+      borderColor: shape.isSoft ? colors.cardBorder : colors.stroke,
       backgroundColor: colors.surface,
+      ...(shape.isSoft ? shape.elevation.card : {}),
     },
     secondaryButtonText: {
       fontSize: 14,

@@ -17,6 +17,7 @@ import { useNavigation } from '@react-navigation/native';
 import { useQuery, useMutation } from '@tanstack/react-query';
 import { ChevronLeft, Plus, Trash2, Pencil } from 'lucide-react-native';
 import { ThemeColors } from '../theme/colors';
+import { ThemeShape } from '../theme/shape';
 import { spacing, borderRadius, borderWidth, shadow } from '../theme/spacing';
 import { ProgressBar, BrutalPressable } from '../components/ui';
 import CategoryIcon from '../components/business/CategoryIcon';
@@ -119,7 +120,7 @@ function describePeriod(
 export default function BudgetScreen() {
   const navigation = useNavigation();
   const styles = useStyles(createStyles);
-  const { colors } = useTheme();
+  const { colors, isSoft } = useTheme();
   const { confirm } = useAlert();
   const { showError } = useToast();
 
@@ -319,7 +320,7 @@ export default function BudgetScreen() {
         </TouchableOpacity>
         <Text style={styles.headerTitle}>预算管理</Text>
         <TouchableOpacity onPress={openCreateModal} style={styles.addButton}>
-          <Plus size={20} color={colors.textPrimary} strokeWidth={3} />
+          <Plus size={20} color={isSoft ? colors.primary : colors.textPrimary} strokeWidth={isSoft ? 2.4 : 3} />
         </TouchableOpacity>
       </View>
 
@@ -417,8 +418,8 @@ export default function BudgetScreen() {
                 <ProgressBar
                   progress={Math.min(budget.progress * 100, 100)}
                   color={getProgressColor(budget)}
-                  backgroundColor={colors.divider}
-                  height={14}
+                  backgroundColor={isSoft ? colors.surfaceMuted : colors.divider}
+                  height={isSoft ? 8 : 14}
                 />
               </View>
 
@@ -672,7 +673,7 @@ export default function BudgetScreen() {
   );
 }
 
-const createStyles = (colors: ThemeColors) => ({
+const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
   ...StyleSheet.create({
     container: {
       flex: 1,
@@ -687,8 +688,8 @@ const createStyles = (colors: ThemeColors) => ({
       paddingHorizontal: spacing.md,
       paddingTop: spacing.xl,
       paddingBottom: spacing.md,
-      backgroundColor: colors.surface,
-      borderBottomWidth: borderWidth.medium,
+      backgroundColor: shape.isSoft ? colors.background : colors.surface,
+      borderBottomWidth: shape.isSoft ? 0 : borderWidth.medium,
       borderBottomColor: colors.stroke,
     },
     backButton: {
@@ -698,17 +699,17 @@ const createStyles = (colors: ThemeColors) => ({
       justifyContent: 'center',
     },
     headerTitle: {
-      fontSize: 20,
-      fontWeight: '800',
+      fontSize: shape.isSoft ? 18 : 20,
+      fontWeight: shape.isSoft ? '700' : '800',
       color: colors.textPrimary,
     },
     addButton: {
       width: 40,
       height: 40,
-      borderRadius: borderRadius.small,
-      borderWidth: borderWidth.thin,
+      borderRadius: shape.isSoft ? 12 : borderRadius.small,
+      borderWidth: shape.isSoft ? 0 : borderWidth.thin,
       borderColor: colors.stroke,
-      backgroundColor: colors.accent,
+      backgroundColor: shape.isSoft ? colors.primaryLight : colors.accent,
       alignItems: 'center',
       justifyContent: 'center',
     },
@@ -719,22 +720,23 @@ const createStyles = (colors: ThemeColors) => ({
       alignItems: 'center',
       justifyContent: 'space-around',
       marginHorizontal: spacing.lg,
-      marginTop: spacing.lg,
+      marginTop: shape.isSoft ? spacing.sm : spacing.lg,
       paddingVertical: spacing.md,
       backgroundColor: colors.surface,
-      borderRadius: borderRadius.card,
-      borderWidth: borderWidth.thin,
-      borderColor: colors.stroke,
-      ...shadow.small,
+      borderRadius: shape.radius.card,
+      borderWidth: shape.isSoft ? shape.borderWidth.card : borderWidth.thin,
+      borderColor: shape.isSoft ? colors.cardBorder : colors.stroke,
+      ...(shape.isSoft ? shape.elevation.card : shadow.small),
     },
     summaryItem: {
       alignItems: 'center',
     },
     summaryNumber: {
       fontSize: 22,
-      fontWeight: '900',
+      fontWeight: shape.isSoft ? '800' : '900',
       color: colors.textPrimary,
-      fontFamily: typography.fontFamily.mono,
+      fontFamily: shape.isSoft ? undefined : typography.fontFamily.mono,
+      fontVariant: ['tabular-nums'],
     },
     summaryLabel: {
       fontSize: 12,
@@ -743,7 +745,7 @@ const createStyles = (colors: ThemeColors) => ({
       marginTop: 2,
     },
     summaryDivider: {
-      width: 1,
+      width: shape.isSoft ? StyleSheet.hairlineWidth : 1,
       height: 28,
       backgroundColor: colors.divider,
     },
@@ -763,10 +765,10 @@ const createStyles = (colors: ThemeColors) => ({
       padding: spacing.xxxl,
       marginTop: spacing.xxl,
       backgroundColor: colors.surface,
-      borderRadius: borderRadius.card,
-      borderWidth: borderWidth.medium,
-      borderColor: colors.stroke,
-      ...shadow.medium,
+      borderRadius: shape.radius.card,
+      borderWidth: shape.isSoft ? shape.borderWidth.card : borderWidth.medium,
+      borderColor: shape.isSoft ? colors.cardBorder : colors.stroke,
+      ...(shape.isSoft ? shape.elevation.card : shadow.medium),
     },
     emptyIcon: {
       fontSize: 56,
@@ -774,7 +776,7 @@ const createStyles = (colors: ThemeColors) => ({
     },
     emptyText: {
       fontSize: 18,
-      fontWeight: '800',
+      fontWeight: shape.isSoft ? '700' : '800',
       color: colors.textPrimary,
       marginBottom: spacing.sm,
     },
@@ -789,26 +791,26 @@ const createStyles = (colors: ThemeColors) => ({
       backgroundColor: colors.primary,
       paddingHorizontal: spacing.xl,
       paddingVertical: spacing.md,
-      borderRadius: borderRadius.button,
-      borderWidth: borderWidth.medium,
+      borderRadius: shape.radius.button,
+      borderWidth: shape.isSoft ? 0 : borderWidth.medium,
       borderColor: colors.stroke,
-      ...shadow.small,
+      ...(shape.isSoft ? shape.elevation.none : shadow.small),
     },
     emptyButtonText: {
       fontSize: 15,
-      fontWeight: '800',
-      color: '#FFFFFF',
+      fontWeight: shape.isSoft ? '700' : '800',
+      color: shape.isSoft ? colors.onPrimary : '#FFFFFF',
     },
 
     // ===== Budget Card =====
     budgetCard: {
       backgroundColor: colors.surface,
-      borderRadius: borderRadius.card,
-      borderWidth: borderWidth.medium,
-      borderColor: colors.stroke,
+      borderRadius: shape.radius.card,
+      borderWidth: shape.isSoft ? shape.borderWidth.card : borderWidth.medium,
+      borderColor: shape.isSoft ? colors.cardBorder : colors.stroke,
       padding: spacing.lg,
       marginBottom: spacing.md,
-      ...shadow.small,
+      ...(shape.isSoft ? shape.elevation.card : shadow.small),
     },
     budgetHeader: {
       flexDirection: 'row',
@@ -825,10 +827,10 @@ const createStyles = (colors: ThemeColors) => ({
     budgetIconBox: {
       width: 44,
       height: 44,
-      borderRadius: borderRadius.medium,
-      borderWidth: borderWidth.thin,
+      borderRadius: shape.isSoft ? 14 : borderRadius.medium,
+      borderWidth: shape.isSoft ? 0 : borderWidth.thin,
       borderColor: colors.stroke,
-      backgroundColor: colors.accent + '30',
+      backgroundColor: shape.isSoft ? colors.primaryLight : colors.accent + '30',
       alignItems: 'center',
       justifyContent: 'center',
     },
@@ -840,12 +842,12 @@ const createStyles = (colors: ThemeColors) => ({
     },
     budgetName: {
       fontSize: 16,
-      fontWeight: '800',
+      fontWeight: shape.isSoft ? '700' : '800',
       color: colors.textPrimary,
     },
     budgetCategory: {
       fontSize: 12,
-      fontWeight: '600',
+      fontWeight: shape.isSoft ? '500' : '600',
       color: colors.textTertiary,
       marginTop: 2,
     },
@@ -856,9 +858,9 @@ const createStyles = (colors: ThemeColors) => ({
       marginLeft: spacing.sm,
     },
     periodBadge: {
-      backgroundColor: colors.primaryLight,
-      borderRadius: borderRadius.small,
-      borderWidth: borderWidth.thin,
+      backgroundColor: shape.isSoft ? colors.surfaceMuted : colors.primaryLight,
+      borderRadius: shape.isSoft ? shape.radius.pill : borderRadius.small,
+      borderWidth: shape.isSoft ? 0 : borderWidth.thin,
       borderColor: colors.stroke,
       paddingHorizontal: spacing.sm,
       paddingVertical: spacing.xs,
@@ -866,26 +868,26 @@ const createStyles = (colors: ThemeColors) => ({
     },
     periodText: {
       fontSize: 11,
-      fontWeight: '700',
-      color: colors.textPrimary,
+      fontWeight: shape.isSoft ? '600' : '700',
+      color: shape.isSoft ? colors.textSecondary : colors.textPrimary,
     },
     inactiveBadge: {
-      backgroundColor: colors.divider,
-      borderRadius: borderRadius.small,
-      borderWidth: borderWidth.thin,
+      backgroundColor: shape.isSoft ? colors.surfaceMuted : colors.divider,
+      borderRadius: shape.isSoft ? shape.radius.pill : borderRadius.small,
+      borderWidth: shape.isSoft ? 0 : borderWidth.thin,
       borderColor: colors.stroke,
-      paddingHorizontal: spacing.xs,
+      paddingHorizontal: spacing.xs + 2,
       paddingVertical: 2,
     },
     inactiveBadgeText: {
       fontSize: 10,
-      fontWeight: '800',
+      fontWeight: shape.isSoft ? '700' : '800',
       color: colors.textSecondary,
     },
     percentBadge: {
-      backgroundColor: colors.accent,
-      borderRadius: borderRadius.small,
-      borderWidth: borderWidth.thin,
+      backgroundColor: shape.isSoft ? colors.primaryLight : colors.accent,
+      borderRadius: shape.isSoft ? shape.radius.pill : borderRadius.small,
+      borderWidth: shape.isSoft ? 0 : borderWidth.thin,
       borderColor: colors.stroke,
       paddingHorizontal: spacing.md,
       paddingVertical: spacing.xs,
@@ -895,9 +897,10 @@ const createStyles = (colors: ThemeColors) => ({
     },
     percentText: {
       fontSize: 13,
-      fontWeight: '800',
-      color: colors.textPrimary,
-      fontFamily: typography.fontFamily.mono,
+      fontWeight: shape.isSoft ? '700' : '800',
+      color: shape.isSoft ? colors.primaryDark : colors.textPrimary,
+      fontFamily: shape.isSoft ? undefined : typography.fontFamily.mono,
+      fontVariant: ['tabular-nums'],
     },
     overBudgetBadgeText: {
       color: '#FFFFFF',
@@ -905,8 +908,8 @@ const createStyles = (colors: ThemeColors) => ({
 
     // Progress
     budgetProgressContainer: {
-      borderRadius: borderRadius.small,
-      borderWidth: borderWidth.thin,
+      borderRadius: shape.isSoft ? 999 : borderRadius.small,
+      borderWidth: shape.isSoft ? 0 : borderWidth.thin,
       borderColor: colors.stroke,
       overflow: 'hidden',
       marginBottom: spacing.sm,
@@ -920,40 +923,44 @@ const createStyles = (colors: ThemeColors) => ({
     },
     budgetAmountSpent: {
       fontSize: 16,
-      fontWeight: '900',
+      fontWeight: shape.isSoft ? '800' : '900',
       color: colors.textPrimary,
-      fontFamily: typography.fontFamily.mono,
+      fontFamily: shape.isSoft ? undefined : typography.fontFamily.mono,
+      fontVariant: ['tabular-nums'],
     },
     budgetAmountTotal: {
       fontSize: 13,
       fontWeight: '600',
       color: colors.textTertiary,
-      fontFamily: typography.fontFamily.mono,
+      fontFamily: shape.isSoft ? undefined : typography.fontFamily.mono,
+      fontVariant: ['tabular-nums'],
       marginLeft: spacing.xs,
     },
     budgetRefundText: {
       fontSize: 12,
       fontWeight: '600',
       color: colors.textTertiary,
-      fontFamily: typography.fontFamily.mono,
+      fontFamily: shape.isSoft ? undefined : typography.fontFamily.mono,
+      fontVariant: ['tabular-nums'],
       marginBottom: spacing.sm,
     },
 
     // Warning
     warningBar: {
-      backgroundColor: colors.error + '15',
-      borderRadius: borderRadius.small,
-      borderWidth: borderWidth.thin,
+      backgroundColor: shape.isSoft ? colors.expenseLight : colors.error + '15',
+      borderRadius: shape.isSoft ? 12 : borderRadius.small,
+      borderWidth: shape.isSoft ? 0 : borderWidth.thin,
       borderColor: colors.error,
-      paddingVertical: spacing.xs,
+      paddingVertical: spacing.xs + 2,
       paddingHorizontal: spacing.md,
       marginBottom: spacing.sm,
     },
     warningText: {
       fontSize: 13,
       fontWeight: '700',
-      color: colors.error,
-      fontFamily: typography.fontFamily.mono,
+      color: shape.isSoft ? colors.expenseStrong : colors.error,
+      fontFamily: shape.isSoft ? undefined : typography.fontFamily.mono,
+      fontVariant: ['tabular-nums'],
       textAlign: 'center',
     },
 
@@ -967,9 +974,9 @@ const createStyles = (colors: ThemeColors) => ({
       flexDirection: 'row',
       alignItems: 'center',
       gap: spacing.xs,
-      backgroundColor: colors.surface,
-      borderRadius: borderRadius.button,
-      borderWidth: borderWidth.thin,
+      backgroundColor: shape.isSoft ? colors.surfaceMuted : colors.surface,
+      borderRadius: shape.isSoft ? 12 : borderRadius.button,
+      borderWidth: shape.isSoft ? 0 : borderWidth.thin,
       borderColor: colors.stroke,
       paddingHorizontal: spacing.md,
       paddingVertical: spacing.sm,
@@ -998,36 +1005,36 @@ const createStyles = (colors: ThemeColors) => ({
     },
     modalContent: {
       backgroundColor: colors.surface,
-      borderRadius: borderRadius.card,
-      borderWidth: borderWidth.medium,
-      borderColor: colors.stroke,
+      borderRadius: shape.radius.modal,
+      borderWidth: shape.isSoft ? shape.borderWidth.card : borderWidth.medium,
+      borderColor: shape.isSoft ? colors.cardBorder : colors.stroke,
       padding: spacing.xl,
-      ...shadow.large,
+      ...(shape.isSoft ? shape.elevation.floating : shadow.large),
     },
     modalTitle: {
-      fontSize: 20,
-      fontWeight: '800',
+      fontSize: shape.isSoft ? 18 : 20,
+      fontWeight: shape.isSoft ? '700' : '800',
       color: colors.textPrimary,
       marginBottom: spacing.lg,
       textAlign: 'center',
     },
     inputLabel: {
       fontSize: 13,
-      fontWeight: '700',
+      fontWeight: shape.isSoft ? '600' : '700',
       color: colors.textSecondary,
       marginBottom: spacing.xs,
       marginTop: spacing.md,
     },
     textInput: {
-      borderWidth: borderWidth.thin,
+      borderWidth: shape.isSoft ? 0 : borderWidth.thin,
       borderColor: colors.stroke,
-      borderRadius: borderRadius.input,
+      borderRadius: shape.radius.input,
       paddingHorizontal: spacing.md,
       paddingVertical: spacing.md,
       fontSize: 15,
       fontWeight: '600',
       color: colors.textPrimary,
-      backgroundColor: colors.background,
+      backgroundColor: shape.isSoft ? colors.surfaceMuted : colors.background,
     },
 
     // Period picker
@@ -1040,24 +1047,25 @@ const createStyles = (colors: ThemeColors) => ({
       flexGrow: 1,
       flexBasis: '30%',
       paddingVertical: spacing.md,
-      borderRadius: borderRadius.button,
-      borderWidth: borderWidth.thin,
-      borderColor: colors.stroke,
+      borderRadius: shape.isSoft ? 12 : borderRadius.button,
+      borderWidth: shape.isSoft ? 1 : borderWidth.thin,
+      borderColor: shape.isSoft ? 'transparent' : colors.stroke,
       alignItems: 'center',
-      backgroundColor: colors.background,
+      backgroundColor: shape.isSoft ? colors.surfaceMuted : colors.background,
     },
     periodOptionSelected: {
-      borderWidth: borderWidth.medium,
+      borderWidth: shape.isSoft ? 1.5 : borderWidth.medium,
+      borderColor: shape.isSoft ? colors.primary : colors.stroke,
       backgroundColor: colors.primaryLight,
     },
     periodOptionText: {
       fontSize: 15,
-      fontWeight: '700',
+      fontWeight: shape.isSoft ? '600' : '700',
       color: colors.textSecondary,
     },
     periodOptionTextSelected: {
       color: colors.primary,
-      fontWeight: '800',
+      fontWeight: shape.isSoft ? '700' : '800',
     },
     periodHint: {
       fontSize: 12,
@@ -1076,33 +1084,34 @@ const createStyles = (colors: ThemeColors) => ({
     weekdayOption: {
       paddingVertical: spacing.sm,
       paddingHorizontal: spacing.sm,
-      borderRadius: borderRadius.button,
-      borderWidth: borderWidth.thin,
-      borderColor: colors.stroke,
-      backgroundColor: colors.background,
+      borderRadius: shape.isSoft ? 10 : borderRadius.button,
+      borderWidth: shape.isSoft ? 1 : borderWidth.thin,
+      borderColor: shape.isSoft ? 'transparent' : colors.stroke,
+      backgroundColor: shape.isSoft ? colors.surfaceMuted : colors.background,
     },
     weekdayOptionSelected: {
-      borderWidth: borderWidth.medium,
+      borderWidth: shape.isSoft ? 1.5 : borderWidth.medium,
+      borderColor: shape.isSoft ? colors.primary : colors.stroke,
       backgroundColor: colors.primaryLight,
     },
     weekdayText: {
       fontSize: 13,
-      fontWeight: '700',
+      fontWeight: shape.isSoft ? '600' : '700',
       color: colors.textSecondary,
     },
     weekdayTextSelected: {
       color: colors.primary,
-      fontWeight: '800',
+      fontWeight: shape.isSoft ? '700' : '800',
     },
 
     // Category picker
     categoryScroll: {
       maxHeight: 160,
       marginTop: spacing.xs,
-      borderWidth: borderWidth.thin,
+      borderWidth: shape.isSoft ? 0 : borderWidth.thin,
       borderColor: colors.stroke,
-      borderRadius: borderRadius.input,
-      backgroundColor: colors.background,
+      borderRadius: shape.radius.input,
+      backgroundColor: shape.isSoft ? colors.surfaceMuted : colors.background,
     },
     categoryChip: {
       flexDirection: 'row',
@@ -1126,7 +1135,7 @@ const createStyles = (colors: ThemeColors) => ({
     },
     categoryChipTextSelected: {
       color: colors.primary,
-      fontWeight: '800',
+      fontWeight: shape.isSoft ? '700' : '800',
     },
 
     // Modal Actions
@@ -1138,33 +1147,34 @@ const createStyles = (colors: ThemeColors) => ({
     cancelButton: {
       flex: 1,
       paddingVertical: spacing.md,
-      borderRadius: borderRadius.button,
-      borderWidth: borderWidth.thin,
+      borderRadius: shape.radius.button,
+      borderWidth: shape.isSoft ? 0 : borderWidth.thin,
       borderColor: colors.stroke,
+      backgroundColor: shape.isSoft ? colors.surfaceMuted : 'transparent',
       alignItems: 'center',
     },
     cancelButtonText: {
       fontSize: 15,
       fontWeight: '700',
-      color: colors.textPrimary,
+      color: shape.isSoft ? colors.textSecondary : colors.textPrimary,
     },
     submitButton: {
       flex: 1,
       paddingVertical: spacing.md,
-      borderRadius: borderRadius.button,
-      borderWidth: borderWidth.medium,
+      borderRadius: shape.radius.button,
+      borderWidth: shape.isSoft ? 0 : borderWidth.medium,
       borderColor: colors.stroke,
       backgroundColor: colors.primary,
       alignItems: 'center',
-      ...shadow.small,
+      ...(shape.isSoft ? shape.elevation.none : shadow.small),
     },
     submitButtonDisabled: {
       opacity: 0.5,
     },
     submitButtonText: {
       fontSize: 15,
-      fontWeight: '800',
-      color: '#FFFFFF',
+      fontWeight: shape.isSoft ? '700' : '800',
+      color: shape.isSoft ? colors.onPrimary : '#FFFFFF',
     },
   }),
 });

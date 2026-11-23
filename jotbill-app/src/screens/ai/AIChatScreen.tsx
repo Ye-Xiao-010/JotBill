@@ -21,18 +21,21 @@ import {
   GestureResponderEvent,
   PanResponderGestureState,
   Image,
+  Keyboard as RNKeyboard,
   NativeScrollEvent,
   NativeSyntheticEvent,
 } from 'react-native';
-import { Camera, Mic, Send, Square, X, Check, Edit2, Trash2, Keyboard, Menu, SquarePen, ChevronLeft, Pin, ChevronDown, Plus } from 'lucide-react-native';
+import { Camera, Mic, Send, Square, X, Check, Edit2, Trash2, Keyboard, Menu, SquarePen, ChevronLeft, ChevronRight, Pin, ChevronDown, Plus, Sparkles, Pencil } from 'lucide-react-native';
 import { launchCamera, launchImageLibrary, ImagePickerResponse } from 'react-native-image-picker';
 import ImageViewing from 'react-native-image-viewing';
 import { ThemeColors } from '../../theme/colors';
+import { ThemeShape } from '../../theme/shape';
 import { borderRadius, borderWidth, spacing, shadow } from '../../theme/spacing';
+import { SoftGradient } from '../../components/ui';
 import { useStyles } from '../../hooks';
 import { useChatSessions } from '../../hooks/useChatSessions';
 import { useRoute, useNavigation } from '@react-navigation/native';
-import { useAlert } from '../../providers';
+import { useAlert, useTheme } from '../../providers';
 import { aiService } from '../../services/ai';
 import { audioRecorderService } from '../../services/audio/audioRecorderService';
 import type { RecordingProgress } from '../../services/audio/audioRecorderService';
@@ -482,7 +485,77 @@ interface BillCardProps {
 }
 
 function BillCard({ bill, onEdit, onDelete, colors }: BillCardProps) {
+  const { isSoft, shape } = useTheme();
   const isExpense = bill.type === 'expense';
+
+  if (isSoft) {
+    return (
+      <View style={billCardStyles.container}>
+        <View
+          style={[
+            billCardStyles.card,
+            {
+              backgroundColor: colors.surface,
+              borderRadius: shape.radius.card,
+              borderWidth: shape.borderWidth.card,
+              borderColor: colors.cardBorder,
+              ...shape.elevation.card,
+            },
+          ]}
+        >
+          <Text style={[billCardStyles.date, { color: colors.textTertiary }]}>{bill.date}</Text>
+          <View style={billCardStyles.content}>
+            <View
+              style={[
+                billCardStyles.categoryIcon,
+                {
+                  borderRadius: 14,
+                  backgroundColor: isExpense ? colors.expenseLight : colors.incomeLight,
+                },
+              ]}
+            >
+              <Text style={billCardStyles.categoryIconText}>
+                {bill.categoryIcon || (isExpense ? '💰' : '💵')}
+              </Text>
+            </View>
+            <View style={billCardStyles.info}>
+              <Text style={[billCardStyles.categoryName, { color: colors.textPrimary }]}>{bill.categoryName}</Text>
+              <Text style={[billCardStyles.description, { color: colors.textTertiary }]}>{bill.description}</Text>
+            </View>
+            <Text
+              style={[
+                billCardStyles.amount,
+                {
+                  color: isExpense ? colors.expense : colors.income,
+                  fontVariant: ['tabular-nums'],
+                },
+              ]}
+            >
+              {formatSignedCurrency(Number(bill.amount), !isExpense)}
+            </Text>
+          </View>
+          <View style={[billCardStyles.actions, { marginTop: 12, paddingTop: 10, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.divider }]}>
+            <TouchableOpacity
+              style={[billCardStyles.actionButton, { backgroundColor: colors.primaryLight, borderWidth: 0, borderRadius: 12 }]}
+              onPress={() => onEdit(bill)}
+            >
+              <Edit2 size={14} color={colors.primaryDark} />
+              <Text style={[billCardStyles.actionButtonText, { color: colors.primaryDark }]}>修改</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[billCardStyles.actionButton, { backgroundColor: colors.expenseLight, borderWidth: 0, borderRadius: 12 }]}
+              onPress={() => onDelete(bill.id)}
+            >
+              <Trash2 size={14} color={colors.expenseStrong} />
+              <Text style={[billCardStyles.actionButtonText, { color: colors.expenseStrong }]}>
+                删除
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </View>
+    );
+  }
 
   return (
     <View style={billCardStyles.container}>
@@ -900,10 +973,28 @@ const chatSkeletonStyles = StyleSheet.create({
   },
 });
 
+const SOFT_SUGGESTIONS = [
+  { key: 's1', icon: 'sparkles' as const, prompt: '这个月吃饭花了多少？' },
+  { key: 's2', icon: 'pencil' as const, prompt: '帮我记一笔：午饭 28 元' },
+  { key: 's3', icon: 'sparkles' as const, prompt: '和上个月比怎么样？' },
+];
+
 export default function AIChatScreen() {
   const styles = useStyles(createStyles);
+  const { isSoft, shape, colors } = useTheme();
   const insets = useSafeAreaInsets();
   const { alert, confirm } = useAlert();
+  const [softKeyboardVisible, setSoftKeyboardVisible] = useState(false);
+
+  useEffect(() => {
+    if (!isSoft) return;
+    const showSub = RNKeyboard.addListener('keyboardDidShow', () => setSoftKeyboardVisible(true));
+    const hideSub = RNKeyboard.addListener('keyboardDidHide', () => setSoftKeyboardVisible(false));
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+  }, [isSoft]);
   const route = useRoute();
   const navigation = useNavigation();
   const routeSessionId = (route.params as any)?.sessionId as string | undefined;
@@ -2198,6 +2289,49 @@ export default function AIChatScreen() {
       );
     }
 
+    if (isSoft && !item.isUser && item.id === 'welcome' && item.content === WELCOME_MESSAGE) {
+      return (
+        <View style={styles.softWelcomeWrap}>
+          <View style={styles.softWelcomeHead}>
+            <View style={styles.softWelcomeAvatarWrap}>
+              <SoftGradient
+                colors={[colors.gradientPrimaryStart, colors.primary, colors.gradientPrimaryEnd]}
+                style={styles.softWelcomeAvatar}
+              >
+                <Sparkles size={28} color="#FFFFFF" strokeWidth={1.8} />
+              </SoftGradient>
+              <View style={styles.softWelcomeDot} />
+            </View>
+            <Text style={styles.softWelcomeTitle}>嗨，我是招财猫猫</Text>
+            <Text style={styles.softWelcomeDesc}>
+              问我账单与花销，或者直接说「午饭 28」。我生成的账单都会先待你确认，不会直接改你的账本。
+            </Text>
+          </View>
+          <View style={styles.softSuggestionList}>
+            {SOFT_SUGGESTIONS.map(sug => (
+              <TouchableOpacity
+                key={sug.key}
+                style={styles.softSuggestionCard}
+                onPress={() => handleSend(sug.prompt)}
+                disabled={isLoading}
+                activeOpacity={0.78}
+              >
+                {sug.icon === 'pencil' ? (
+                  <Pencil size={16} color={colors.primary} strokeWidth={2} />
+                ) : (
+                  <Sparkles size={16} color={colors.primary} strokeWidth={2} />
+                )}
+                <Text style={styles.softSuggestionText} numberOfLines={1}>
+                  {sug.prompt}
+                </Text>
+                <ChevronRight size={16} color={colors.textQuaternary} strokeWidth={2} />
+              </TouchableOpacity>
+            ))}
+          </View>
+        </View>
+      );
+    }
+
     return (
       <View
         style={[styles.messageBubble, item.isUser ? styles.userBubble : styles.aiBubble]}
@@ -2264,7 +2398,21 @@ export default function AIChatScreen() {
             <Menu size={22} color={styles._colors.textPrimary} />
           </TouchableOpacity>
         )}
-        <Text style={styles.headerTitle} numberOfLines={1}>AI 助手</Text>
+        {isSoft ? (
+          <View style={styles.softHeaderTitleWrap}>
+            <Text style={styles.softHeaderTitle} numberOfLines={1}>AI 助手</Text>
+            {defaultAIConfig?.name ? (
+              <View style={styles.softProviderPill}>
+                <View style={styles.softProviderDot} />
+                <Text style={styles.softProviderText} numberOfLines={1}>
+                  {defaultAIConfig.name}
+                </Text>
+              </View>
+            ) : null}
+          </View>
+        ) : (
+          <Text style={styles.headerTitle} numberOfLines={1}>AI 助手</Text>
+        )}
         <TouchableOpacity
           style={styles.headerButton}
           onPress={handleNewChat}
@@ -2377,7 +2525,19 @@ export default function AIChatScreen() {
       )}
 
       {/* 输入区域 */}
-      <View style={[styles.inputContainer, { paddingBottom: spacing.lg + insets.bottom }]}>
+      <View
+        style={[
+          styles.inputContainer,
+          isSoft
+            ? {
+                marginBottom:
+                  !isStackMode && !softKeyboardVisible
+                    ? Math.max(insets.bottom, 12) + 80
+                    : Math.max(insets.bottom, 10),
+              }
+            : { paddingBottom: spacing.lg + insets.bottom },
+        ]}
+      >
         {/* 图片上传按钮 */}
         <TouchableOpacity
           style={[styles.mediaButton, isRecording && styles.buttonDisabled]}
@@ -2385,7 +2545,7 @@ export default function AIChatScreen() {
           activeOpacity={0.7}
           disabled={isLoading || isRecording}
         >
-          <Camera size={24} color={styles._colors.primary} strokeWidth={2} />
+          <Camera size={isSoft ? 20 : 24} color={isSoft ? styles._colors.textSecondary : styles._colors.primary} strokeWidth={2} />
         </TouchableOpacity>
 
         {/* 语音模式：按住说话按钮 */}
@@ -2412,8 +2572,8 @@ export default function AIChatScreen() {
               style={styles.input}
               value={inputText}
               onChangeText={setInputText}
-              placeholder="点击输入文字"
-              placeholderTextColor={styles._colors.textTertiary}
+              placeholder={isSoft ? '问问账单，或说「午饭 28」' : '点击输入文字'}
+              placeholderTextColor={isSoft ? styles._colors.textQuaternary : styles._colors.textTertiary}
               multiline
               maxLength={500}
               editable={!isLoading}
@@ -2428,7 +2588,7 @@ export default function AIChatScreen() {
             onPress={() => streamRef.current?.stop()}
             activeOpacity={0.7}
           >
-            <Square size={18} color="#FFFFFF" fill="#FFFFFF" strokeWidth={2} />
+            <Square size={16} color={isSoft ? styles._colors.onPrimary : '#FFFFFF'} fill={isSoft ? styles._colors.onPrimary : '#FFFFFF'} strokeWidth={2} />
           </TouchableOpacity>
         ) : !isVoiceMode && (inputText.trim() || pendingImages.length > 0) ? (
           <TouchableOpacity
@@ -2436,7 +2596,7 @@ export default function AIChatScreen() {
             onPress={() => handleSend()}
             activeOpacity={0.7}
           >
-            <Send size={20} color="#FFFFFF" strokeWidth={2} />
+            <Send size={isSoft ? 17 : 20} color={isSoft ? styles._colors.onPrimary : '#FFFFFF'} strokeWidth={2.2} />
           </TouchableOpacity>
         ) : (
           <TouchableOpacity
@@ -2446,9 +2606,9 @@ export default function AIChatScreen() {
             disabled={isRecording}
           >
             {isVoiceMode ? (
-              <Keyboard size={22} color={styles._colors.textSecondary} strokeWidth={2} />
+              <Keyboard size={isSoft ? 20 : 22} color={styles._colors.textSecondary} strokeWidth={2} />
             ) : (
-              <Mic size={22} color={styles._colors.textSecondary} strokeWidth={2} />
+              <Mic size={isSoft ? 20 : 22} color={styles._colors.textSecondary} strokeWidth={2} />
             )}
           </TouchableOpacity>
         )}
@@ -2485,21 +2645,47 @@ export default function AIChatScreen() {
           <Animated.View
             style={[
               sidebarStyles.panel,
-              { width: SIDEBAR_WIDTH, backgroundColor: styles._colors.surface, borderRightColor: styles._colors.stroke },
+              {
+                width: SIDEBAR_WIDTH,
+                backgroundColor: styles._colors.surface,
+                borderRightWidth: isSoft ? shape.borderWidth.card : borderWidth.thick,
+                borderRightColor: isSoft ? styles._colors.cardBorder : styles._colors.stroke,
+              },
+              isSoft && shape.elevation.floating,
               { transform: [{ translateX: sidebarAnim }] },
             ]}
           >
             {/* 侧边栏头部 */}
-            <View style={[sidebarStyles.panelHeader, { borderBottomColor: styles._colors.stroke }]}>
+            <View
+              style={[
+                sidebarStyles.panelHeader,
+                {
+                  borderBottomWidth: isSoft ? StyleSheet.hairlineWidth : borderWidth.thin,
+                  borderBottomColor: isSoft ? styles._colors.divider : styles._colors.stroke,
+                },
+              ]}
+            >
               <Text style={[sidebarStyles.panelTitle, { color: styles._colors.textPrimary }]}>
                 对话记录
               </Text>
               <TouchableOpacity
                 onPress={handleNewChat}
                 activeOpacity={0.7}
-                style={[sidebarStyles.newChatBtn, { borderColor: styles._colors.stroke, backgroundColor: styles._colors.accent }]}
+                style={[
+                  sidebarStyles.newChatBtn,
+                  isSoft
+                    ? {
+                        borderWidth: 0,
+                        borderRadius: 12,
+                        backgroundColor: styles._colors.primaryLight,
+                      }
+                    : {
+                        borderColor: styles._colors.stroke,
+                        backgroundColor: styles._colors.accent,
+                      },
+                ]}
               >
-                <SquarePen size={18} color={styles._colors.textPrimary} />
+                <SquarePen size={18} color={isSoft ? styles._colors.primary : styles._colors.textPrimary} />
               </TouchableOpacity>
             </View>
 
@@ -2551,9 +2737,10 @@ export default function AIChatScreen() {
                         key={s.id}
                         style={[
                           sidebarStyles.sessionItem,
+                          isSoft && { borderRadius: 12, borderWidth: 0 },
                           s.id === sessionId && {
                             backgroundColor: styles._colors.primaryLight,
-                            borderColor: styles._colors.stroke,
+                            borderColor: isSoft ? 'transparent' : styles._colors.stroke,
                           },
                         ]}
                         onPress={() => handleSelectSession(s.id)}
@@ -2593,7 +2780,20 @@ export default function AIChatScreen() {
         onRequestClose={() => setRenameModalVisible(false)}
       >
         <View style={sidebarStyles.renameOverlay}>
-          <View style={[sidebarStyles.renameCard, { backgroundColor: styles._colors.surface, borderColor: styles._colors.stroke }]}>
+          <View
+            style={[
+              sidebarStyles.renameCard,
+              {
+                backgroundColor: styles._colors.surface,
+                borderColor: isSoft ? styles._colors.cardBorder : styles._colors.stroke,
+              },
+              isSoft && {
+                borderRadius: 24,
+                borderWidth: shape.borderWidth.card,
+                ...shape.elevation.floating,
+              },
+            ]}
+          >
             <Text style={[sidebarStyles.renameTitle, { color: styles._colors.textPrimary }]}>
               重命名会话
             </Text>
@@ -2602,8 +2802,12 @@ export default function AIChatScreen() {
                 sidebarStyles.renameInput,
                 {
                   color: styles._colors.textPrimary,
-                  borderColor: styles._colors.stroke,
-                  backgroundColor: styles._colors.background,
+                  borderColor: isSoft ? 'transparent' : styles._colors.stroke,
+                  backgroundColor: isSoft ? styles._colors.surfaceMuted : styles._colors.background,
+                },
+                isSoft && {
+                  borderWidth: 0,
+                  borderRadius: 14,
                 },
               ]}
               value={renameText}
@@ -2615,16 +2819,36 @@ export default function AIChatScreen() {
             />
             <View style={sidebarStyles.renameActions}>
               <TouchableOpacity
-                style={[sidebarStyles.renameCancelBtn, { borderColor: styles._colors.stroke }]}
+                style={[
+                  sidebarStyles.renameCancelBtn,
+                  isSoft
+                    ? {
+                        borderWidth: 0,
+                        borderRadius: 14,
+                        backgroundColor: styles._colors.surfaceMuted,
+                      }
+                    : { borderColor: styles._colors.stroke },
+                ]}
                 onPress={() => setRenameModalVisible(false)}
               >
                 <Text style={{ color: styles._colors.textSecondary, fontSize: 15, fontWeight: '700' }}>取消</Text>
               </TouchableOpacity>
               <TouchableOpacity
-                style={[sidebarStyles.renameConfirmBtn, { backgroundColor: styles._colors.primary, borderColor: styles._colors.stroke }]}
+                style={[
+                  sidebarStyles.renameConfirmBtn,
+                  {
+                    backgroundColor: styles._colors.primary,
+                    borderColor: isSoft ? 'transparent' : styles._colors.stroke,
+                  },
+                  isSoft && {
+                    borderWidth: 0,
+                    borderRadius: 14,
+                    ...shape.elevation.none,
+                  },
+                ]}
                 onPress={handleRenameConfirm}
               >
-                <Text style={{ color: '#FFFFFF', fontSize: 15, fontWeight: '700' }}>确定</Text>
+                <Text style={{ color: isSoft ? styles._colors.onPrimary : '#FFFFFF', fontSize: 15, fontWeight: '700' }}>确定</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -2648,16 +2872,27 @@ export default function AIChatScreen() {
               sidebarStyles.contextCard,
               {
                 backgroundColor: styles._colors.surface,
-                borderColor: styles._colors.stroke,
+                borderColor: isSoft ? styles._colors.cardBorder : styles._colors.stroke,
                 top: Math.min(
                   (contextMenu?.pageY ?? 0) - 20,
                   Dimensions.get('window').height - 220,
                 ),
               },
+              isSoft && {
+                borderRadius: 16,
+                borderWidth: shape.borderWidth.card,
+                ...shape.elevation.floating,
+              },
             ]}
           >
             <TouchableOpacity
-              style={[sidebarStyles.contextItem, { borderBottomColor: styles._colors.stroke }]}
+              style={[
+                sidebarStyles.contextItem,
+                {
+                  borderBottomWidth: isSoft ? StyleSheet.hairlineWidth : borderWidth.thin,
+                  borderBottomColor: isSoft ? styles._colors.divider : styles._colors.stroke,
+                },
+              ]}
               onPress={handleActionRename}
               activeOpacity={0.6}
             >
@@ -2667,7 +2902,13 @@ export default function AIChatScreen() {
               </Text>
             </TouchableOpacity>
             <TouchableOpacity
-              style={[sidebarStyles.contextItem, { borderBottomColor: styles._colors.stroke }]}
+              style={[
+                sidebarStyles.contextItem,
+                {
+                  borderBottomWidth: isSoft ? StyleSheet.hairlineWidth : borderWidth.thin,
+                  borderBottomColor: isSoft ? styles._colors.divider : styles._colors.stroke,
+                },
+              ]}
               onPress={handleActionTogglePin}
               activeOpacity={0.6}
             >
@@ -2677,12 +2918,12 @@ export default function AIChatScreen() {
               </Text>
             </TouchableOpacity>
             <TouchableOpacity
-              style={sidebarStyles.contextItem}
+              style={[sidebarStyles.contextItem, isSoft && { borderBottomWidth: 0 }]}
               onPress={handleActionDelete}
               activeOpacity={0.6}
             >
-              <Trash2 size={17} color="#FF3B30" />
-              <Text style={[sidebarStyles.contextItemText, { color: '#FF3B30' }]}>
+              <Trash2 size={17} color={isSoft ? styles._colors.error : '#FF3B30'} />
+              <Text style={[sidebarStyles.contextItemText, { color: isSoft ? styles._colors.error : '#FF3B30' }]}>
                 删除
               </Text>
             </TouchableOpacity>
@@ -2699,7 +2940,7 @@ export default function AIChatScreen() {
   );
 }
 
-const createStyles = (colors: ThemeColors) => ({
+const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
   ...StyleSheet.create({
     container: {
       flex: 1,
@@ -2709,11 +2950,109 @@ const createStyles = (colors: ThemeColors) => ({
       flexDirection: 'row',
       alignItems: 'center',
       justifyContent: 'space-between',
-      paddingHorizontal: spacing.sm,
+      paddingHorizontal: shape.isSoft ? spacing.md : spacing.sm,
       paddingVertical: spacing.sm,
-      backgroundColor: colors.surface,
-      borderBottomWidth: borderWidth.thin,
+      backgroundColor: shape.isSoft ? colors.background : colors.surface,
+      borderBottomWidth: shape.isSoft ? 0 : borderWidth.thin,
       borderBottomColor: colors.stroke,
+    },
+    softHeaderTitleWrap: {
+      flex: 1,
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 8,
+    },
+    softHeaderTitle: {
+      fontSize: 18,
+      fontWeight: '700',
+      color: colors.textPrimary,
+    },
+    softProviderPill: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 4,
+      backgroundColor: colors.surfaceMuted,
+      paddingHorizontal: 8,
+      paddingVertical: 3,
+      borderRadius: 999,
+      maxWidth: 110,
+    },
+    softProviderDot: {
+      width: 6,
+      height: 6,
+      borderRadius: 3,
+      backgroundColor: colors.income,
+    },
+    softProviderText: {
+      fontSize: 11.5,
+      fontWeight: '500',
+      color: colors.textTertiary,
+    },
+    softWelcomeWrap: {
+      paddingTop: 12,
+      paddingBottom: 16,
+    },
+    softWelcomeHead: {
+      alignItems: 'center',
+      paddingHorizontal: 16,
+      marginBottom: 18,
+    },
+    softWelcomeAvatarWrap: {
+      position: 'relative',
+      marginBottom: 12,
+    },
+    softWelcomeAvatar: {
+      width: 64,
+      height: 64,
+      borderRadius: 24,
+      alignItems: 'center',
+      justifyContent: 'center',
+      ...shape.elevation.hero,
+    },
+    softWelcomeDot: {
+      position: 'absolute',
+      right: -3,
+      bottom: -3,
+      width: 18,
+      height: 18,
+      borderRadius: 9,
+      backgroundColor: colors.accent,
+      borderWidth: 3,
+      borderColor: colors.background,
+    },
+    softWelcomeTitle: {
+      fontSize: 18,
+      fontWeight: '700',
+      color: colors.textPrimary,
+    },
+    softWelcomeDesc: {
+      fontSize: 13,
+      color: colors.textTertiary,
+      textAlign: 'center',
+      lineHeight: 20,
+      marginTop: 6,
+    },
+    softSuggestionList: {
+      gap: 8,
+    },
+    softSuggestionCard: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 10,
+      paddingHorizontal: 14,
+      paddingVertical: 12,
+      borderRadius: 16,
+      backgroundColor: colors.surface,
+      borderWidth: shape.borderWidth.card,
+      borderColor: colors.cardBorder,
+      ...shape.elevation.card,
+    },
+    softSuggestionText: {
+      flex: 1,
+      fontSize: 14,
+      fontWeight: '500',
+      color: colors.textPrimary,
     },
     messageListContainer: {
       flex: 1,
@@ -2765,32 +3104,35 @@ const createStyles = (colors: ThemeColors) => ({
       backgroundColor: colors.divider,
     },
     messageContent: {
-      maxWidth: '80%',
-      borderRadius: borderRadius.card,
-      borderWidth: borderWidth.thin,
-      borderColor: colors.stroke,
-      padding: spacing.md,
+      maxWidth: '82%',
+      borderRadius: shape.isSoft ? shape.radius.card : borderRadius.card,
+      borderWidth: shape.isSoft ? shape.borderWidth.card : borderWidth.thin,
+      borderColor: shape.isSoft ? colors.cardBorder : colors.stroke,
+      paddingHorizontal: shape.isSoft ? 14 : spacing.md,
+      paddingVertical: shape.isSoft ? 10 : spacing.md,
     },
     userContent: {
       backgroundColor: colors.primary,
-      borderBottomRightRadius: spacing.xs,
+      borderWidth: shape.isSoft ? 0 : borderWidth.thin,
+      borderBottomRightRadius: shape.isSoft ? 6 : spacing.xs,
     },
     aiContent: {
       backgroundColor: colors.surface,
-      borderBottomLeftRadius: spacing.xs,
+      borderBottomLeftRadius: shape.isSoft ? 6 : spacing.xs,
+      ...(shape.isSoft ? shape.elevation.card : {}),
     },
     errorContent: {
-      backgroundColor: '#FFEBEE',
-      borderBottomLeftRadius: spacing.xs,
+      backgroundColor: shape.isSoft ? colors.expenseLight : '#FFEBEE',
+      borderBottomLeftRadius: shape.isSoft ? 6 : spacing.xs,
     },
     messageText: {
-      fontSize: 15,
-      fontWeight: '600',
+      fontSize: shape.isSoft ? 14.5 : 15,
+      fontWeight: shape.isSoft ? '400' : '600',
       color: colors.textPrimary,
       lineHeight: 22,
     },
     userText: {
-      color: '#FFFFFF',
+      color: shape.isSoft ? colors.onPrimary : '#FFFFFF',
     },
     chatImage: {
       width: 200,
@@ -2818,14 +3160,17 @@ const createStyles = (colors: ThemeColors) => ({
       justifyContent: 'space-between',
       paddingHorizontal: spacing.lg,
       paddingVertical: spacing.sm,
-      backgroundColor: colors.primary + '1A',
-      borderTopWidth: borderWidth.thin,
+      marginHorizontal: shape.isSoft ? 12 : 0,
+      marginBottom: shape.isSoft ? 8 : 0,
+      borderRadius: shape.isSoft ? 16 : 0,
+      backgroundColor: shape.isSoft ? colors.primaryLight : colors.primary + '1A',
+      borderTopWidth: shape.isSoft ? 0 : borderWidth.thin,
       borderTopColor: colors.stroke,
     },
     pendingText: {
       fontSize: 14,
-      fontWeight: '700',
-      color: colors.primary,
+      fontWeight: shape.isSoft ? '600' : '700',
+      color: shape.isSoft ? colors.primaryDark : colors.primary,
     },
     saveAllButton: {
       flexDirection: 'row',
@@ -2834,14 +3179,14 @@ const createStyles = (colors: ThemeColors) => ({
       backgroundColor: colors.primary,
       paddingVertical: spacing.xs + 2,
       paddingHorizontal: spacing.md,
-      borderRadius: borderRadius.button,
-      borderWidth: borderWidth.thin,
+      borderRadius: shape.isSoft ? 12 : borderRadius.button,
+      borderWidth: shape.isSoft ? 0 : borderWidth.thin,
       borderColor: colors.stroke,
     },
     saveAllButtonText: {
       fontSize: 14,
-      color: '#FFFFFF',
-      fontWeight: '700',
+      color: shape.isSoft ? colors.onPrimary : '#FFFFFF',
+      fontWeight: shape.isSoft ? '600' : '700',
     },
     pendingImagesContainer: {
       backgroundColor: colors.surface,
@@ -2899,48 +3244,53 @@ const createStyles = (colors: ThemeColors) => ({
       alignItems: 'center',
       flexGrow: 0,
       flexShrink: 0,
-      padding: spacing.md,
-      paddingBottom: spacing.lg,
+      padding: shape.isSoft ? 6 : spacing.md,
+      paddingLeft: shape.isSoft ? 8 : spacing.md,
+      paddingBottom: shape.isSoft ? 6 : spacing.lg,
+      marginHorizontal: shape.isSoft ? 12 : 0,
+      borderRadius: shape.isSoft ? 24 : 0,
       backgroundColor: colors.surface,
-      borderTopWidth: borderWidth.thin,
-      borderTopColor: colors.stroke,
-      gap: spacing.sm,
+      borderTopWidth: shape.isSoft ? shape.borderWidth.card : borderWidth.thin,
+      borderWidth: shape.isSoft ? shape.borderWidth.card : 0,
+      borderColor: shape.isSoft ? colors.cardBorder : colors.stroke,
+      gap: shape.isSoft ? 6 : spacing.sm,
+      ...(shape.isSoft ? shape.elevation.floating : {}),
     },
     mediaButton: {
-      width: 48,
-      height: 48,
-      borderRadius: borderRadius.medium,
-      backgroundColor: colors.background,
+      width: shape.isSoft ? 36 : 48,
+      height: shape.isSoft ? 36 : 48,
+      borderRadius: shape.isSoft ? 12 : borderRadius.medium,
+      backgroundColor: shape.isSoft ? 'transparent' : colors.background,
       alignItems: 'center',
       justifyContent: 'center',
-      borderWidth: borderWidth.thin,
+      borderWidth: shape.isSoft ? 0 : borderWidth.thin,
       borderColor: colors.stroke,
     },
     inputWrapper: {
       flex: 1,
-      backgroundColor: colors.background,
-      borderRadius: borderRadius.input,
-      borderWidth: borderWidth.thin,
+      backgroundColor: shape.isSoft ? 'transparent' : colors.background,
+      borderRadius: shape.isSoft ? 16 : borderRadius.input,
+      borderWidth: shape.isSoft ? 0 : borderWidth.thin,
       borderColor: colors.stroke,
-      paddingHorizontal: spacing.md,
-      paddingVertical: spacing.xs,
-      minHeight: 48,
+      paddingHorizontal: shape.isSoft ? 6 : spacing.md,
+      paddingVertical: shape.isSoft ? 0 : spacing.xs,
+      minHeight: shape.isSoft ? 38 : 48,
       justifyContent: 'center',
     },
     input: {
-      fontSize: 15,
-      fontWeight: '600',
+      fontSize: shape.isSoft ? 14 : 15,
+      fontWeight: shape.isSoft ? '400' : '600',
       color: colors.textPrimary,
-      textAlignVertical: 'top',
+      textAlignVertical: 'center',
       maxHeight: 100,
-      paddingVertical: spacing.sm,
+      paddingVertical: shape.isSoft ? 6 : spacing.sm,
     },
     sendButton: {
-      width: 48,
-      height: 48,
-      borderRadius: borderRadius.medium,
-      backgroundColor: colors.income,
-      borderWidth: borderWidth.thin,
+      width: shape.isSoft ? 38 : 48,
+      height: shape.isSoft ? 38 : 48,
+      borderRadius: shape.isSoft ? 19 : borderRadius.medium,
+      backgroundColor: shape.isSoft ? colors.primary : colors.income,
+      borderWidth: shape.isSoft ? 0 : borderWidth.thin,
       borderColor: colors.stroke,
       alignItems: 'center',
       justifyContent: 'center',
@@ -3027,12 +3377,12 @@ const createStyles = (colors: ThemeColors) => ({
     // 按住说话按钮
     voiceInputWrapper: {
       flex: 1,
-      height: 48,
-      backgroundColor: colors.background,
-      borderRadius: borderRadius.input,
+      height: shape.isSoft ? 38 : 48,
+      backgroundColor: shape.isSoft ? colors.surfaceMuted : colors.background,
+      borderRadius: shape.isSoft ? 999 : borderRadius.input,
       alignItems: 'center',
       justifyContent: 'center',
-      borderWidth: borderWidth.thin,
+      borderWidth: shape.isSoft ? 0 : borderWidth.thin,
       borderColor: colors.stroke,
     },
     voiceInputWrapperActive: {
@@ -3044,8 +3394,8 @@ const createStyles = (colors: ThemeColors) => ({
       borderColor: '#FF3B30',
     },
     voiceInputText: {
-      fontSize: 15,
-      fontWeight: '700',
+      fontSize: shape.isSoft ? 14 : 15,
+      fontWeight: shape.isSoft ? '600' : '700',
       color: colors.textSecondary,
     },
     voiceInputTextActive: {
@@ -3053,13 +3403,13 @@ const createStyles = (colors: ThemeColors) => ({
     },
     // 模式切换按钮
     modeButton: {
-      width: 48,
-      height: 48,
-      borderRadius: borderRadius.medium,
-      backgroundColor: colors.background,
+      width: shape.isSoft ? 38 : 48,
+      height: shape.isSoft ? 38 : 48,
+      borderRadius: shape.isSoft ? 19 : borderRadius.medium,
+      backgroundColor: shape.isSoft ? colors.surfaceMuted : colors.background,
       alignItems: 'center',
       justifyContent: 'center',
-      borderWidth: borderWidth.thin,
+      borderWidth: shape.isSoft ? 0 : borderWidth.thin,
       borderColor: colors.stroke,
     },
   }),

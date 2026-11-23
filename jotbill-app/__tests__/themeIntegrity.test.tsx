@@ -53,15 +53,15 @@ function hue(hex: string): number {
 describe('主题注册表完整性', () => {
   const allPalettes = Object.values(themes).flatMap(set => [set.light, set.dark]);
 
-  it('4 套主题 × 2 模式 = 8 块色板', () => {
-    expect(Object.keys(themes)).toHaveLength(4);
+  it('5 套主题 × 2 模式 = 10 块色板', () => {
+    expect(Object.keys(themes)).toHaveLength(5);
     for (const set of Object.values(themes)) {
       expect(set.light).toBeDefined();
       expect(set.dark).toBeDefined();
     }
   });
 
-  it('8 块色板键集合严格一致且无空值', () => {
+  it('10 块色板键集合严格一致且无空值', () => {
     const referenceKeys = Object.keys(themes.blocks.light).sort();
     for (const palette of allPalettes) {
       expect(Object.keys(palette).sort()).toEqual(referenceKeys);
@@ -187,6 +187,31 @@ describe('ThemeProvider 持久化与默认值', () => {
     await AsyncStorage.setItem('@app_theme_name', 'neon');
     await mountProvider();
     expect(captured!.themeName).toBe('blocks');
+    expect(captured!.styleVariant).toBe('brutal');
+    expect(captured!.isSoft).toBe(false);
     expect(captured!.colors.primary).toBe(themes.blocks.light.primary);
+  });
+
+  it('切换至 soft 主题：styleVariant / isSoft / shape 正确切换，浅/深描边符合规范', async () => {
+    await mountProvider();
+    expect(captured!.styleVariant).toBe('brutal');
+    expect(captured!.shape.borderWidth.card).toBe(2);
+
+    await ReactTestRenderer.act(async () => {
+      captured!.setThemeName('soft');
+    });
+    expect(captured!.themeName).toBe('soft');
+    expect(captured!.styleVariant).toBe('soft');
+    expect(captured!.isSoft).toBe(true);
+    expect(captured!.shape.radius.card).toBe(20);
+    expect(captured!.shape.borderWidth.card).toBe(0);
+    expect(captured!.colors.primary).toBe(themes.soft.light.primary);
+
+    await ReactTestRenderer.act(async () => {
+      captured!.setThemeMode('dark');
+    });
+    expect(captured!.isDark).toBe(true);
+    expect(captured!.shape.borderWidth.card).toBe(1);
+    expect(captured!.colors.primary).toBe(themes.soft.dark.primary);
   });
 });

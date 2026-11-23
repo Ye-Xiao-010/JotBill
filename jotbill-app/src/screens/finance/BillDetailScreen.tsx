@@ -14,6 +14,7 @@ import {
 import { useFocusEffect, useNavigation, useRoute } from '@react-navigation/native';
 import { skipToken, useQuery } from '@tanstack/react-query';
 import { ThemeColors } from '../../theme/colors';
+import { ThemeShape } from '../../theme/shape';
 import { borderRadius, borderWidth, spacing, shadow } from '../../theme/spacing';
 import { nativeData } from '../../native';
 import { invalidateCache, QUERY_KEYS } from '../../lib/queryClient';
@@ -164,10 +165,31 @@ export default function BillDetailScreen() {
       <ScrollView style={styles.scrollView} contentContainerStyle={styles.content}>
         {/* 金额区域 */}
         <View style={styles.amountSection}>
-          <View style={styles.categoryIconBlock}>
+          <View
+            style={[
+              styles.categoryIconBlock,
+              styles._isSoft && {
+                backgroundColor: isPositive
+                  ? styles._colors.incomeLight
+                  : styles._colors.expenseLight,
+              },
+            ]}
+          >
             <CategoryIcon icon={category?.icon} size={32} emojiStyle={styles.categoryEmoji} />
           </View>
-          <Text style={[styles.typeBadge, { backgroundColor: isPositive ? styles._colors.income + '20' : styles._colors.expense + '20', color: amountColor }]}>
+          <Text
+            style={[
+              styles.typeBadge,
+              {
+                backgroundColor: styles._isSoft
+                  ? (isPositive ? styles._colors.incomeLight : styles._colors.expenseLight)
+                  : (isPositive ? styles._colors.income + '20' : styles._colors.expense + '20'),
+                color: styles._isSoft
+                  ? (isPositive ? styles._colors.incomeStrong : styles._colors.expenseStrong)
+                  : amountColor,
+              },
+            ]}
+          >
             {typeLabel}
           </Text>
           <Text
@@ -250,7 +272,7 @@ export default function BillDetailScreen() {
   );
 }
 
-const createStyles = (colors: ThemeColors) => ({
+const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
   ...StyleSheet.create({
     container: {
       flex: 1,
@@ -282,17 +304,18 @@ const createStyles = (colors: ThemeColors) => ({
       alignItems: 'center',
       paddingVertical: spacing.xl,
       backgroundColor: colors.surface,
-      borderRadius: borderRadius.card,
-      borderWidth: borderWidth.thin,
-      borderColor: colors.stroke,
+      borderRadius: shape.radius.card,
+      borderWidth: shape.isSoft ? shape.borderWidth.card : borderWidth.thin,
+      borderColor: shape.isSoft ? colors.cardBorder : colors.stroke,
       marginBottom: spacing.lg,
       padding: spacing.xl,
+      ...(shape.isSoft ? shape.elevation.card : {}),
     },
     categoryIconBlock: {
       width: 64,
       height: 64,
-      borderRadius: borderRadius.medium,
-      borderWidth: borderWidth.medium,
+      borderRadius: shape.isSoft ? 20 : borderRadius.medium,
+      borderWidth: shape.isSoft ? 0 : borderWidth.medium,
       borderColor: colors.stroke,
       backgroundColor: colors.accent,
       alignItems: 'center',
@@ -304,11 +327,11 @@ const createStyles = (colors: ThemeColors) => ({
     },
     typeBadge: {
       fontSize: 13,
-      fontWeight: '800',
+      fontWeight: shape.isSoft ? '700' : '800',
       paddingHorizontal: spacing.md,
       paddingVertical: spacing.xs,
-      borderRadius: borderRadius.small,
-      borderWidth: borderWidth.thin,
+      borderRadius: shape.isSoft ? shape.radius.pill : borderRadius.small,
+      borderWidth: shape.isSoft ? 0 : borderWidth.thin,
       borderColor: colors.stroke,
       overflow: 'hidden',
       marginBottom: spacing.sm,
@@ -316,23 +339,24 @@ const createStyles = (colors: ThemeColors) => ({
     amount: {
       fontSize: 40,
       fontWeight: '800',
-      fontFamily: typography.fontFamily.mono,
+      fontFamily: shape.isSoft ? undefined : typography.fontFamily.mono,
+      fontVariant: ['tabular-nums'],
       letterSpacing: -1,
       marginBottom: spacing.sm,
     },
     categoryLabel: {
       fontSize: 14,
-      fontWeight: '700',
+      fontWeight: shape.isSoft ? '600' : '700',
       color: colors.textSecondary,
     },
     detailCard: {
       backgroundColor: colors.surface,
-      borderRadius: borderRadius.card,
-      borderWidth: borderWidth.medium,
-      borderColor: colors.stroke,
+      borderRadius: shape.radius.card,
+      borderWidth: shape.isSoft ? shape.borderWidth.card : borderWidth.medium,
+      borderColor: shape.isSoft ? colors.cardBorder : colors.stroke,
       overflow: 'hidden',
       marginBottom: spacing.lg,
-      ...shadow.small,
+      ...(shape.isSoft ? shape.elevation.card : shadow.small),
     },
     detailRow: {
       flexDirection: 'row',
@@ -343,7 +367,7 @@ const createStyles = (colors: ThemeColors) => ({
     },
     detailLabel: {
       fontSize: 14,
-      fontWeight: '700',
+      fontWeight: shape.isSoft ? '500' : '700',
       color: colors.textTertiary,
     },
     detailValueContainer: {
@@ -367,18 +391,19 @@ const createStyles = (colors: ThemeColors) => ({
     },
     detailValue: {
       fontSize: 14,
-      fontWeight: '700',
+      fontWeight: shape.isSoft ? '600' : '700',
       color: colors.textPrimary,
     },
     detailValueCourier: {
       fontSize: 14,
-      fontWeight: '700',
-      fontFamily: typography.fontFamily.mono,
+      fontWeight: shape.isSoft ? '600' : '700',
+      fontFamily: shape.isSoft ? undefined : typography.fontFamily.mono,
+      fontVariant: ['tabular-nums'],
       color: colors.textPrimary,
     },
     divider: {
-      height: borderWidth.thin,
-      backgroundColor: colors.stroke,
+      height: shape.isSoft ? StyleSheet.hairlineWidth : borderWidth.thin,
+      backgroundColor: shape.isSoft ? colors.divider : colors.stroke,
       marginHorizontal: spacing.lg,
     },
     bottomActions: {
@@ -387,8 +412,8 @@ const createStyles = (colors: ThemeColors) => ({
       padding: spacing.lg,
       paddingBottom: spacing.xxl,
       backgroundColor: colors.surface,
-      borderTopWidth: borderWidth.thin,
-      borderTopColor: colors.stroke,
+      borderTopWidth: shape.isSoft ? StyleSheet.hairlineWidth : borderWidth.thin,
+      borderTopColor: shape.isSoft ? colors.divider : colors.stroke,
     },
     adjustmentActions: {
       display: 'none',
@@ -396,34 +421,35 @@ const createStyles = (colors: ThemeColors) => ({
     editButton: {
       flex: 1,
       height: 48,
-      borderRadius: borderRadius.button,
+      borderRadius: shape.radius.button,
       backgroundColor: colors.primary,
-      borderWidth: borderWidth.thin,
+      borderWidth: shape.isSoft ? 0 : borderWidth.thin,
       borderColor: colors.stroke,
       alignItems: 'center',
       justifyContent: 'center',
-      ...shadow.small,
+      ...(shape.isSoft ? shape.elevation.none : shadow.small),
     },
     editButtonText: {
       fontSize: 16,
-      fontWeight: '800',
+      fontWeight: shape.isSoft ? '700' : '800',
       color: colors.onPrimary,
     },
     deleteButton: {
       flex: 1,
       height: 48,
-      borderRadius: borderRadius.button,
-      backgroundColor: colors.error + '15',
-      borderWidth: borderWidth.thin,
+      borderRadius: shape.radius.button,
+      backgroundColor: shape.isSoft ? colors.expenseLight : colors.error + '15',
+      borderWidth: shape.isSoft ? 0 : borderWidth.thin,
       borderColor: colors.error,
       alignItems: 'center',
       justifyContent: 'center',
     },
     deleteButtonText: {
       fontSize: 16,
-      fontWeight: '800',
-      color: colors.error,
+      fontWeight: shape.isSoft ? '700' : '800',
+      color: shape.isSoft ? colors.expenseStrong : colors.error,
     },
   }),
   _colors: colors,
+  _isSoft: shape.isSoft,
 });

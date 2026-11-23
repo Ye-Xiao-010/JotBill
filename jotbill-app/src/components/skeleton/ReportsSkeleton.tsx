@@ -5,6 +5,7 @@
 import React from 'react';
 import { View, StyleSheet, ScrollView } from 'react-native';
 import { ThemeColors } from '../../theme/colors';
+import { ThemeShape } from '../../theme/shape';
 import { borderRadius, borderWidth, spacing } from '../../theme/spacing';
 import { useStyles } from '../../hooks';
 import { Skeleton, SkeletonText } from './Skeleton';
@@ -92,7 +93,7 @@ export function CategoryListSkeleton() {
   );
 }
 
-const createStyles = (colors: ThemeColors) => ({
+const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
   ...StyleSheet.create({
     container: {
       flex: 1,
@@ -106,7 +107,7 @@ const createStyles = (colors: ThemeColors) => ({
       alignItems: 'center',
       paddingHorizontal: spacing.lg,
       paddingVertical: spacing.md,
-      backgroundColor: colors.surface,
+      backgroundColor: shape.isSoft ? colors.background : colors.surface,
       gap: spacing.sm,
     },
     headerActions: {
@@ -119,21 +120,21 @@ const createStyles = (colors: ThemeColors) => ({
       justifyContent: 'center',
       gap: spacing.md,
       paddingVertical: spacing.lg,
-      backgroundColor: colors.surface,
+      backgroundColor: shape.isSoft ? colors.background : colors.surface,
     },
     totalSection: {
       alignItems: 'center',
       paddingVertical: spacing.xxl,
-      backgroundColor: colors.surface,
+      backgroundColor: shape.isSoft ? colors.background : colors.surface,
     },
     analysisTabs: {
       flexDirection: 'row',
       justifyContent: 'center',
       gap: spacing.xl,
       paddingVertical: spacing.md,
-      backgroundColor: colors.surface,
-      borderBottomWidth: borderWidth.thin,
-      borderBottomColor: colors.stroke,
+      backgroundColor: shape.isSoft ? colors.background : colors.surface,
+      borderBottomWidth: shape.isSoft ? StyleSheet.hairlineWidth : borderWidth.thin,
+      borderBottomColor: shape.isSoft ? colors.divider : colors.stroke,
     },
     section: {
       marginTop: spacing.lg,
@@ -147,11 +148,12 @@ const createStyles = (colors: ThemeColors) => ({
     },
     chartContainer: {
       backgroundColor: colors.surface,
-      borderRadius: borderRadius.card,
-      borderWidth: borderWidth.thin,
-      borderColor: colors.stroke,
+      borderRadius: shape.radius.card,
+      borderWidth: shape.isSoft ? shape.borderWidth.card : borderWidth.thin,
+      borderColor: shape.isSoft ? colors.cardBorder : colors.stroke,
       padding: spacing.lg,
       minHeight: 200,
+      ...(shape.isSoft ? shape.elevation.card : {}),
     },
     chartArea: {
       marginBottom: spacing.md,
@@ -163,16 +165,17 @@ const createStyles = (colors: ThemeColors) => ({
     },
     categoryList: {
       backgroundColor: colors.surface,
-      borderRadius: borderRadius.card,
-      borderWidth: borderWidth.thin,
-      borderColor: colors.stroke,
+      borderRadius: shape.radius.card,
+      borderWidth: shape.isSoft ? shape.borderWidth.card : borderWidth.thin,
+      borderColor: shape.isSoft ? colors.cardBorder : colors.stroke,
       padding: spacing.md,
+      ...(shape.isSoft ? shape.elevation.card : {}),
     },
     categoryItem: {
       flexDirection: 'row',
       alignItems: 'center',
       paddingVertical: spacing.md,
-      borderBottomWidth: borderWidth.thin,
+      borderBottomWidth: shape.isSoft ? StyleSheet.hairlineWidth : borderWidth.thin,
       borderBottomColor: colors.divider,
     },
     categoryRight: {

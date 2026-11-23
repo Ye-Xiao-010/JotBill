@@ -15,6 +15,7 @@ import {
   StyleSheet,
   StyleProp,
 } from 'react-native';
+import { useTheme } from '../../providers';
 
 interface BrutalPressableProps {
   children: React.ReactNode;
@@ -36,6 +37,7 @@ export default function BrutalPressable({
   shadowOffset = 4,
   duration = 120,
 }: BrutalPressableProps) {
+  const { isSoft, shape } = useTheme();
   const pressAnim = useRef(new Animated.Value(0)).current;
 
   const handlePressIn = useCallback(() => {
@@ -63,6 +65,26 @@ export default function BrutalPressable({
     inputRange: [0, 1],
     outputRange: [0, shadowOffset],
   });
+
+  const scale = pressAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [1, shape.pressScale],
+  });
+
+  // 柔光主题：去掉实心黑偏移底块，改用轻缩放按压反馈
+  if (isSoft) {
+    return (
+      <Pressable
+        onPress={onPress}
+        onPressIn={handlePressIn}
+        onPressOut={handlePressOut}
+      >
+        <Animated.View style={[style, { transform: [{ scale }] }]}>
+          {children}
+        </Animated.View>
+      </Pressable>
+    );
+  }
 
   // 提取 borderRadius 用于阴影层
   const flatStyle = StyleSheet.flatten(style) || {};

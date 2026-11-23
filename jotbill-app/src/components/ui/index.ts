@@ -30,3 +30,7 @@ export type { QueryErrorBannerProps } from './QueryErrorBanner';
 
 // Neo-Brutalism 组件
 export { default as BrutalPressable } from './BrutalPressable';
+
+// 柔光主题组件
+export { default as SoftGradient } from './SoftGradient';
+export type { SoftGradientProps } from './SoftGradient';

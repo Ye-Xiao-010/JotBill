@@ -17,15 +17,29 @@ import {
 } from 'react-native';
 import { useFocusEffect, useIsFocused, useNavigation } from '@react-navigation/native';
 import { useQuery } from '@tanstack/react-query';
-import { TriangleAlert, X } from 'lucide-react-native';
+import {
+  Bell,
+  ChevronRight,
+  Download,
+  Eye,
+  EyeOff,
+  Inbox,
+  PieChart as PieChartIcon,
+  Search,
+  Sparkles,
+  TriangleAlert,
+  X,
+  Zap,
+} from 'lucide-react-native';
 import { ThemeColors } from '../../theme/colors';
+import { ThemeShape } from '../../theme/shape';
 import {
   borderRadius,
   borderWidth,
   spacing,
   shadow,
 } from '../../theme/spacing';
-import { ProgressBar, QueryErrorBanner } from '../../components/ui';
+import { ProgressBar, QueryErrorBanner, SoftGradient } from '../../components/ui';
 import { DashboardSkeleton } from '../../components/skeleton';
 import CategoryIcon from '../../components/business/CategoryIcon';
 import { useDashboard, useStyles } from '../../hooks';
@@ -131,11 +145,17 @@ function DayTradeGroup({
   group,
   categoryById,
   styles,
+  isSoft,
+  isDark,
+  colors,
   onPressBill,
 }: {
   group: BillDayGroup;
   categoryById: Map<string, Category>;
   styles: any;
+  isSoft: boolean;
+  isDark: boolean;
+  colors: ThemeColors;
   onPressBill: (bill: Bill) => void;
 }) {
   const label = getDayLabel(group.date);
@@ -174,7 +194,14 @@ function DayTradeGroup({
               label.isYesterday && styles.dayBadgeYesterday,
             ]}
           >
-            <Text style={styles.dayBadgeText}>{label.badge}</Text>
+            <Text
+              style={[
+                styles.dayBadgeText,
+                isSoft && label.isToday && styles.dayBadgeTodayText,
+              ]}
+            >
+              {label.badge}
+            </Text>
           </View>
           <Text style={styles.dayDate} numberOfLines={1}>
             {label.dateText}
@@ -225,6 +252,13 @@ function DayTradeGroup({
           }
           const meta = metaParts.filter(Boolean).join(' · ');
 
+          const isAuto = bill.sourceType !== 'manual';
+          const rawCategoryColor = category?.color || getCategoryColor(category?.name, '#64748B');
+          const softTileBg =
+            /^#[0-9a-fA-F]{6}$/.test(rawCategoryColor)
+              ? `${rawCategoryColor}${isDark ? '33' : '22'}`
+              : colors.surfaceMuted;
+
           return (
             <TouchableOpacity
               key={bill.id}
@@ -245,7 +279,7 @@ function DayTradeGroup({
                   style={[
                     styles.transactionIcon,
                     {
-                      backgroundColor: getCategoryColor(category?.name),
+                      backgroundColor: isSoft ? softTileBg : getCategoryColor(category?.name),
                     },
                   ]}
                 >
@@ -259,10 +293,20 @@ function DayTradeGroup({
                   <Text style={styles.transactionTitle} numberOfLines={1}>
                     {description}
                   </Text>
-                  {meta ? (
-                    <Text style={styles.transactionMeta} numberOfLines={1}>
-                      {meta}
-                    </Text>
+                  {(meta || (isSoft && isAuto)) ? (
+                    <View style={styles.transactionMetaRow}>
+                      {meta ? (
+                        <Text style={styles.transactionMeta} numberOfLines={1}>
+                          {meta}
+                        </Text>
+                      ) : null}
+                      {isSoft && isAuto ? (
+                        <View style={styles.autoTag}>
+                          <Zap size={10} color={colors.primary} strokeWidth={2.4} />
+                          <Text style={styles.autoTagText}>自动</Text>
+                        </View>
+                      ) : null}
+                    </View>
                   ) : null}
                 </View>
               </View>
@@ -497,10 +541,15 @@ function RecognitionPermissionBanner() {
   );
 }
 
-export default function DashboardScreen() {
+export interface DashboardScreenProps {
+  onSelectTab?: (tab: string) => void;
+}
+
+export default function DashboardScreen({ onSelectTab }: DashboardScreenProps = {}) {
   const navigation = useNavigation();
   const styles = useStyles(createStyles);
-  const { colors } = useTheme();
+  const { colors, isSoft, isDark } = useTheme();
+  const [hideAmounts, setHideAmounts] = useState(false);
   // 预算与目标卡片默认关闭；偏好读取完成后才允许发起预算/目标请求
   const {
     showDashboardBudget,
@@ -668,6 +717,23 @@ export default function DashboardScreen() {
     } as never);
   };
 
+  const embeddedBudgetCard = isSoft && budgetEnabled
+    ? progressCards.find(card => card.type === 'budget') ?? null
+    : null;
+  const remainingProgressCards = embeddedBudgetCard
+    ? progressCards.filter(card => card.id !== embeddedBudgetCard.id)
+    : progressCards;
+
+  const formattedExpenseParts = useMemo(() => {
+    const abs = Math.abs(monthExpense);
+    const fixed = abs.toLocaleString('zh-CN', {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    });
+    const [intPart, decPart] = fixed.split('.');
+    return { sign: monthExpense < 0 ? '-' : '', intPart, decPart };
+  }, [monthExpense]);
+
   if (isLoading) {
     return <DashboardSkeleton showBudgetCard={budgetEnabled} />;
   }
@@ -681,12 +747,42 @@ export default function DashboardScreen() {
       }
       showsVerticalScrollIndicator={false}
     >
-      <View style={styles.header}>
-        <View>
-          <Text style={styles.headerTitle}>{monthName}</Text>
-          <Text style={styles.headerSubtitle}>{yearName}</Text>
+      {isSoft ? (
+        <View style={styles.softHeader}>
+          <View>
+            <Text style={styles.softHeaderTitle}>{monthName}</Text>
+            <Text style={styles.softHeaderSubtitle}>{yearName}年</Text>
+          </View>
+          <View style={styles.softHeaderActions}>
+            <TouchableOpacity
+              style={styles.softIconButton}
+              onPress={handleViewAllBills}
+              activeOpacity={0.75}
+              accessibilityLabel="搜索账单"
+              accessibilityRole="button"
+            >
+              <Search size={20} color={colors.textSecondary} strokeWidth={2} />
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.softIconButton}
+              onPress={() => navigation.navigate('Review' as never)}
+              activeOpacity={0.75}
+              accessibilityLabel={pendingCount > 0 ? `${pendingCount} 笔交易待确认` : '待确认中心'}
+              accessibilityRole="button"
+            >
+              <Bell size={20} color={colors.textSecondary} strokeWidth={2} />
+              {pendingCount > 0 ? <View style={styles.softBellDot} /> : null}
+            </TouchableOpacity>
+          </View>
         </View>
-      </View>
+      ) : (
+        <View style={styles.header}>
+          <View>
+            <Text style={styles.headerTitle}>{monthName}</Text>
+            <Text style={styles.headerSubtitle}>{yearName}</Text>
+          </View>
+        </View>
+      )}
 
       <RecognitionPermissionBanner />
 
@@ -700,80 +796,265 @@ export default function DashboardScreen() {
         style={styles.errorBanner}
       />
 
-      {/* 待确认入口：有待确认卡时才出现，0 笔不占位 */}
-      {pendingCount > 0 ? (
-        <TouchableOpacity
-          style={styles.pendingBanner}
-          onPress={() => navigation.navigate('Review' as never)}
-          activeOpacity={0.8}
-          accessibilityLabel={`${pendingCount} 笔交易待确认，点击前往处理`}
-          accessibilityRole="button"
-        >
-          <View style={styles.pendingBadge}>
-            <Text style={styles.pendingBadgeText}>{pendingCount}</Text>
-          </View>
-          <Text style={styles.pendingText}>有待确认的交易</Text>
-          <Text style={styles.pendingAction}>去处理 →</Text>
-        </TouchableOpacity>
-      ) : null}
-
-      <View style={styles.overviewCard}>
-        <View style={styles.overviewContent}>
-          <View style={styles.overviewLabelRow}>
-            <Text style={styles.overviewLabel}>本月支出</Text>
-            <TouchableOpacity
-              onPress={handleViewExpense}
-              activeOpacity={0.75}
-              accessibilityLabel="查看支出明细"
-              accessibilityRole="button"
-            >
-              <Text style={styles.overviewLink}>支出明细 →</Text>
-            </TouchableOpacity>
-          </View>
-          <Text
-            style={styles.overviewBalance}
-            numberOfLines={1}
-            adjustsFontSizeToFit
-            minimumFontScale={0.6}
+      {isSoft ? (
+        <>
+          {/* 柔光 Hero 主卡：渐变底 + 金额主视觉 + 收入/结余 + 内嵌预算条 */}
+          <SoftGradient
+            glow
+            colors={[colors.gradientPrimaryStart, colors.primary, colors.gradientPrimaryEnd]}
+            style={styles.softHeroCard}
           >
-            {formatCurrency(monthExpense)}
-          </Text>
+            <View style={styles.softHeroTopRow}>
+              <View style={styles.softHeroLabelGroup}>
+                <Text style={styles.softHeroLabel}>本月支出</Text>
+                <TouchableOpacity
+                  onPress={() => setHideAmounts(v => !v)}
+                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                  accessibilityLabel={hideAmounts ? '显示金额' : '隐藏金额'}
+                  accessibilityRole="button"
+                >
+                  {hideAmounts ? (
+                    <EyeOff size={15} color="rgba(255,255,255,0.8)" strokeWidth={2} />
+                  ) : (
+                    <Eye size={15} color="rgba(255,255,255,0.8)" strokeWidth={2} />
+                  )}
+                </TouchableOpacity>
+              </View>
+              <TouchableOpacity
+                style={styles.softHeroPillLink}
+                onPress={handleViewExpense}
+                activeOpacity={0.8}
+                accessibilityLabel="查看支出明细"
+                accessibilityRole="button"
+              >
+                <Text style={styles.softHeroPillText}>明细</Text>
+                <ChevronRight size={13} color="rgba(255,255,255,0.9)" strokeWidth={2.4} />
+              </TouchableOpacity>
+            </View>
 
-          <View style={styles.overviewDivider} />
+            <Text
+              style={styles.softHeroAmount}
+              numberOfLines={1}
+              adjustsFontSizeToFit
+              minimumFontScale={0.65}
+            >
+              {hideAmounts ? (
+                <>
+                  <Text style={styles.softHeroCurrency}>¥ </Text>
+                  ••••
+                </>
+              ) : (
+                <>
+                  {formattedExpenseParts.sign}
+                  <Text style={styles.softHeroCurrency}>¥</Text>
+                  {formattedExpenseParts.intPart}
+                  <Text style={styles.softHeroDecimal}>.{formattedExpenseParts.decPart}</Text>
+                </>
+              )}
+            </Text>
 
-          <View style={styles.overviewStats}>
+            <View style={styles.softHeroStats}>
+              <TouchableOpacity
+                style={styles.softHeroStatItem}
+                onPress={handleViewIncome}
+                activeOpacity={0.75}
+                accessibilityLabel={`本月收入 ${formatCurrency(monthIncome)}`}
+                accessibilityRole="button"
+              >
+                <Text style={styles.softHeroStatLabel}>收入</Text>
+                <Text style={styles.softHeroStatValue} numberOfLines={1}>
+                  {hideAmounts ? '••••' : formatCurrency(monthIncome)}
+                </Text>
+              </TouchableOpacity>
+              <View style={styles.softHeroStatDivider} />
+              <View style={styles.softHeroStatItem}>
+                <Text style={styles.softHeroStatLabel}>结余</Text>
+                <Text style={styles.softHeroStatValue} numberOfLines={1}>
+                  {hideAmounts ? '••••' : formatCurrency(monthBalance)}
+                </Text>
+              </View>
+            </View>
+
+            {embeddedBudgetCard ? (
+              <TouchableOpacity
+                style={styles.softHeroBudget}
+                onPress={() => navigation.navigate('Budgets' as never)}
+                activeOpacity={0.85}
+              >
+                <View style={styles.softHeroBudgetRow}>
+                  <Text style={styles.softHeroBudgetText} numberOfLines={1}>
+                    {embeddedBudgetCard.title} ·{' '}
+                    <Text style={styles.softHeroBudgetBold}>
+                      {embeddedBudgetCard.percent ?? Math.round(embeddedBudgetCard.progress)}%
+                    </Text>
+                  </Text>
+                  <Text style={styles.softHeroBudgetText} numberOfLines={1}>
+                    {hideAmounts ? '••' : embeddedBudgetCard.labelRight}
+                  </Text>
+                </View>
+                <View style={styles.softHeroBudgetTrack}>
+                  <View
+                    style={[
+                      styles.softHeroBudgetFill,
+                      { width: `${Math.min(100, Math.max(0, embeddedBudgetCard.progress))}%` },
+                    ]}
+                  />
+                </View>
+              </TouchableOpacity>
+            ) : null}
+          </SoftGradient>
+
+          {/* 柔光待确认暖色提示卡 */}
+          {pendingCount > 0 ? (
             <TouchableOpacity
-              style={styles.statBlock}
-              onPress={handleViewIncome}
-              activeOpacity={0.75}
-              accessibilityLabel={`本月收入 ${formatCurrency(monthIncome)}`}
+              style={styles.softPendingCard}
+              onPress={() => navigation.navigate('Review' as never)}
+              activeOpacity={0.85}
+              accessibilityLabel={`${pendingCount} 笔交易待确认，点击前往处理`}
               accessibilityRole="button"
             >
-              <Text style={styles.statLabel}>本月收入</Text>
-              <Text style={styles.statValue} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>
-                {formatCurrency(monthIncome)}
-              </Text>
+              <View style={styles.softPendingIconBox}>
+                <Inbox size={20} color={colors.warning} strokeWidth={2} />
+                <View style={styles.softPendingCountBadge}>
+                  <Text style={styles.softPendingCountText}>{pendingCount}</Text>
+                </View>
+              </View>
+              <View style={styles.softPendingBody}>
+                <Text style={styles.softPendingTitle}>{pendingCount} 笔交易待确认</Text>
+                <Text style={styles.softPendingSub} numberOfLines={1}>
+                  账户不明或疑似重复，确认后才会入账
+                </Text>
+              </View>
+              <ChevronRight size={18} color={colors.textQuaternary} strokeWidth={2} />
             </TouchableOpacity>
-            <View style={styles.statDivider} />
-            <View style={styles.statBlock}>
-              <Text style={styles.statLabel}>本月结余</Text>
-              <Text style={styles.statValue} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>
-                {formatCurrency(monthBalance)}
+          ) : null}
+
+          {/* 柔光 4 快捷入口 */}
+          <View style={styles.softQuickRow}>
+            {[
+              {
+                key: 'import',
+                label: '导入账单',
+                color: isDark ? '#38BDF8' : '#0EA5E9',
+                Icon: Download,
+                onPress: () => navigation.navigate('Import' as never),
+              },
+              {
+                key: 'ai',
+                label: 'AI 记账',
+                color: isDark ? '#A78BFA' : '#8B5CF6',
+                Icon: Sparkles,
+                onPress: () => (onSelectTab ? onSelectTab('ai') : navigation.navigate('AIChat' as never)),
+              },
+              {
+                key: 'budget',
+                label: '预算',
+                color: isDark ? '#FBBF24' : '#F59E0B',
+                Icon: PieChartIcon,
+                onPress: () => navigation.navigate('Budgets' as never),
+              },
+              {
+                key: 'auto',
+                label: '自动记账',
+                color: isDark ? '#34D399' : '#10B981',
+                Icon: Zap,
+                onPress: () => navigation.navigate('AutoBookkeeping' as never),
+              },
+            ].map(({ key, label, color, Icon, onPress }) => (
+              <TouchableOpacity
+                key={key}
+                style={styles.softQuickItem}
+                onPress={onPress}
+                activeOpacity={0.78}
+                accessibilityRole="button"
+                accessibilityLabel={label}
+              >
+                <View style={styles.softQuickIconBox}>
+                  <Icon size={22} color={color} strokeWidth={2} />
+                </View>
+                <Text style={styles.softQuickLabel}>{label}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        </>
+      ) : (
+        <>
+          {/* 待确认入口：有待确认卡时才出现，0 笔不占位 */}
+          {pendingCount > 0 ? (
+            <TouchableOpacity
+              style={styles.pendingBanner}
+              onPress={() => navigation.navigate('Review' as never)}
+              activeOpacity={0.8}
+              accessibilityLabel={`${pendingCount} 笔交易待确认，点击前往处理`}
+              accessibilityRole="button"
+            >
+              <View style={styles.pendingBadge}>
+                <Text style={styles.pendingBadgeText}>{pendingCount}</Text>
+              </View>
+              <Text style={styles.pendingText}>有待确认的交易</Text>
+              <Text style={styles.pendingAction}>去处理 →</Text>
+            </TouchableOpacity>
+          ) : null}
+
+          <View style={styles.overviewCard}>
+            <View style={styles.overviewContent}>
+              <View style={styles.overviewLabelRow}>
+                <Text style={styles.overviewLabel}>本月支出</Text>
+                <TouchableOpacity
+                  onPress={handleViewExpense}
+                  activeOpacity={0.75}
+                  accessibilityLabel="查看支出明细"
+                  accessibilityRole="button"
+                >
+                  <Text style={styles.overviewLink}>支出明细 →</Text>
+                </TouchableOpacity>
+              </View>
+              <Text
+                style={styles.overviewBalance}
+                numberOfLines={1}
+                adjustsFontSizeToFit
+                minimumFontScale={0.6}
+              >
+                {formatCurrency(monthExpense)}
               </Text>
+
+              <View style={styles.overviewDivider} />
+
+              <View style={styles.overviewStats}>
+                <TouchableOpacity
+                  style={styles.statBlock}
+                  onPress={handleViewIncome}
+                  activeOpacity={0.75}
+                  accessibilityLabel={`本月收入 ${formatCurrency(monthIncome)}`}
+                  accessibilityRole="button"
+                >
+                  <Text style={styles.statLabel}>本月收入</Text>
+                  <Text style={styles.statValue} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>
+                    {formatCurrency(monthIncome)}
+                  </Text>
+                </TouchableOpacity>
+                <View style={styles.statDivider} />
+                <View style={styles.statBlock}>
+                  <Text style={styles.statLabel}>本月结余</Text>
+                  <Text style={styles.statValue} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>
+                    {formatCurrency(monthBalance)}
+                  </Text>
+                </View>
+              </View>
             </View>
           </View>
-        </View>
-      </View>
+        </>
+      )}
 
       {/* 预算与目标：默认隐藏，仅在「设置 → 显示」开启后渲染并请求数据 */}
       {budgetEnabled ? (
-        progressCards.length > 0 ? (
+        remainingProgressCards.length > 0 ? (
           <ProgressCardCarousel
-            cards={progressCards}
+            cards={remainingProgressCards}
             styles={styles}
             colors={colors}
           />
-        ) : isBudgetsError || isGoalsError ? (
+        ) : embeddedBudgetCard ? null : isBudgetsError || isGoalsError ? (
           <QueryErrorBanner
             error={budgetsError ?? goalsError}
             title="预算与目标加载失败"
@@ -813,7 +1094,9 @@ export default function DashboardScreen() {
             accessibilityLabel="查看全部交易"
             accessibilityRole="button"
           >
-            <Text style={styles.viewAllText}>查看全部 →</Text>
+            <Text style={styles.viewAllText}>
+              {isSoft ? '查看全部 ›' : '查看全部 →'}
+            </Text>
           </TouchableOpacity>
         </View>
 
@@ -825,6 +1108,9 @@ export default function DashboardScreen() {
                 group={group}
                 categoryById={categoryById}
                 styles={styles}
+                isSoft={isSoft}
+                isDark={isDark}
+                colors={colors}
                 onPressBill={handleViewBillDetail}
               />
             ))}
@@ -836,7 +1122,9 @@ export default function DashboardScreen() {
                 accessibilityLabel="查看更早的交易"
                 accessibilityRole="button"
               >
-                <Text style={styles.moreDaysText}>查看更早的交易 →</Text>
+                <Text style={styles.moreDaysText}>
+                  {isSoft ? '查看更早的交易 ›' : '查看更早的交易 →'}
+                </Text>
               </TouchableOpacity>
             ) : null}
           </>
@@ -863,7 +1151,7 @@ export default function DashboardScreen() {
   );
 }
 
-const createStyles = (colors: ThemeColors) => ({
+const createStyles = (colors: ThemeColors, shape: ThemeShape, isDark: boolean) => ({
   ...StyleSheet.create({
     container: {
       flex: 1,
@@ -871,8 +1159,240 @@ const createStyles = (colors: ThemeColors) => ({
     },
     content: {
       paddingHorizontal: spacing.lg,
-      paddingTop: spacing.xxl,
-      paddingBottom: spacing.xxxxl,
+      paddingTop: shape.isSoft ? spacing.md : spacing.xxl,
+      paddingBottom: shape.isSoft ? 116 : spacing.xxxxl,
+    },
+    softHeader: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      marginBottom: spacing.md,
+      paddingHorizontal: spacing.xs,
+    },
+    softHeaderTitle: {
+      fontSize: 22,
+      fontWeight: '700',
+      color: colors.textPrimary,
+      letterSpacing: -0.3,
+    },
+    softHeaderSubtitle: {
+      fontSize: 12,
+      fontWeight: '500',
+      color: colors.textTertiary,
+      marginTop: 2,
+    },
+    softHeaderActions: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: spacing.xs,
+    },
+    softIconButton: {
+      width: 40,
+      height: 40,
+      borderRadius: 14,
+      alignItems: 'center',
+      justifyContent: 'center',
+      position: 'relative',
+    },
+    softBellDot: {
+      position: 'absolute',
+      top: 9,
+      right: 10,
+      width: 8,
+      height: 8,
+      borderRadius: 4,
+      backgroundColor: colors.expense,
+      borderWidth: 1.5,
+      borderColor: colors.background,
+    },
+    softHeroCard: {
+      borderRadius: shape.radius.hero,
+      paddingHorizontal: 20,
+      paddingTop: 18,
+      paddingBottom: 16,
+      marginBottom: 14,
+      ...shape.elevation.hero,
+    },
+    softHeroTopRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+    },
+    softHeroLabelGroup: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 6,
+    },
+    softHeroLabel: {
+      fontSize: 13,
+      fontWeight: '500',
+      color: 'rgba(255,255,255,0.84)',
+    },
+    softHeroPillLink: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 2,
+      paddingHorizontal: 10,
+      paddingVertical: 4,
+      borderRadius: 999,
+      backgroundColor: 'rgba(255,255,255,0.16)',
+    },
+    softHeroPillText: {
+      fontSize: 12,
+      fontWeight: '500',
+      color: 'rgba(255,255,255,0.92)',
+    },
+    softHeroAmount: {
+      fontSize: 36,
+      fontWeight: '700',
+      color: '#FFFFFF',
+      letterSpacing: -0.8,
+      marginTop: 6,
+      marginBottom: 14,
+      fontVariant: ['tabular-nums'],
+    },
+    softHeroCurrency: {
+      fontSize: 22,
+      fontWeight: '600',
+    },
+    softHeroDecimal: {
+      fontSize: 22,
+      fontWeight: '600',
+      color: 'rgba(255,255,255,0.82)',
+    },
+    softHeroStats: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 16,
+    },
+    softHeroStatItem: {
+      gap: 2,
+    },
+    softHeroStatLabel: {
+      fontSize: 12,
+      color: 'rgba(255,255,255,0.74)',
+    },
+    softHeroStatValue: {
+      fontSize: 15,
+      fontWeight: '600',
+      color: '#FFFFFF',
+      fontVariant: ['tabular-nums'],
+    },
+    softHeroStatDivider: {
+      width: 1,
+      height: 28,
+      backgroundColor: 'rgba(255,255,255,0.22)',
+    },
+    softHeroBudget: {
+      marginTop: 14,
+      paddingHorizontal: 14,
+      paddingVertical: 11,
+      borderRadius: 16,
+      backgroundColor: 'rgba(255,255,255,0.13)',
+    },
+    softHeroBudgetRow: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      gap: 8,
+    },
+    softHeroBudgetText: {
+      fontSize: 11.5,
+      color: 'rgba(255,255,255,0.86)',
+      fontVariant: ['tabular-nums'],
+      flexShrink: 1,
+    },
+    softHeroBudgetBold: {
+      fontWeight: '700',
+      color: '#FFFFFF',
+    },
+    softHeroBudgetTrack: {
+      height: 6,
+      borderRadius: 999,
+      backgroundColor: 'rgba(255,255,255,0.2)',
+      marginTop: 8,
+      overflow: 'hidden',
+    },
+    softHeroBudgetFill: {
+      height: '100%',
+      borderRadius: 999,
+      backgroundColor: '#FFC35C',
+    },
+    softPendingCard: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 12,
+      padding: 12,
+      borderRadius: 20,
+      backgroundColor: isDark ? '#2E2410' : '#FFF5E6',
+      marginBottom: 14,
+    },
+    softPendingIconBox: {
+      width: 40,
+      height: 40,
+      borderRadius: 14,
+      backgroundColor: colors.surface,
+      alignItems: 'center',
+      justifyContent: 'center',
+      position: 'relative',
+    },
+    softPendingCountBadge: {
+      position: 'absolute',
+      top: -4,
+      right: -4,
+      minWidth: 18,
+      height: 18,
+      borderRadius: 9,
+      backgroundColor: colors.expense,
+      paddingHorizontal: 4,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    softPendingCountText: {
+      fontSize: 10.5,
+      fontWeight: '700',
+      color: '#FFFFFF',
+      fontVariant: ['tabular-nums'],
+    },
+    softPendingBody: {
+      flex: 1,
+      gap: 2,
+    },
+    softPendingTitle: {
+      fontSize: 14,
+      fontWeight: '600',
+      color: colors.textPrimary,
+    },
+    softPendingSub: {
+      fontSize: 12,
+      color: colors.textTertiary,
+    },
+    softQuickRow: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      gap: 8,
+      marginBottom: 20,
+    },
+    softQuickItem: {
+      flex: 1,
+      alignItems: 'center',
+      gap: 6,
+    },
+    softQuickIconBox: {
+      width: 52,
+      height: 52,
+      borderRadius: 18,
+      backgroundColor: colors.surface,
+      borderWidth: shape.borderWidth.card,
+      borderColor: colors.cardBorder,
+      alignItems: 'center',
+      justifyContent: 'center',
+      ...shape.elevation.card,
+    },
+    softQuickLabel: {
+      fontSize: 12,
+      fontWeight: '500',
+      color: colors.textSecondary,
     },
     header: {
       marginBottom: spacing.xl,
@@ -890,10 +1410,10 @@ const createStyles = (colors: ThemeColors) => ({
       marginTop: spacing.xs,
     },
     permissionBanner: {
-      backgroundColor: colors.surface,
-      borderWidth: borderWidth.thin,
+      backgroundColor: shape.isSoft ? (isDark ? '#2E2410' : '#FFF5E6') : colors.surface,
+      borderWidth: shape.isSoft ? 0 : borderWidth.thin,
       borderColor: colors.warning,
-      borderRadius: borderRadius.card,
+      borderRadius: shape.isSoft ? shape.radius.card : borderRadius.card,
       marginBottom: spacing.lg,
       paddingHorizontal: spacing.md,
     },
@@ -1037,11 +1557,11 @@ const createStyles = (colors: ThemeColors) => ({
     },
     progressCard: {
       backgroundColor: colors.surface,
-      borderRadius: borderRadius.card,
-      borderWidth: borderWidth.thin,
-      borderColor: colors.stroke,
+      borderRadius: shape.isSoft ? shape.radius.card : borderRadius.card,
+      borderWidth: shape.isSoft ? shape.borderWidth.card : borderWidth.thin,
+      borderColor: shape.isSoft ? colors.cardBorder : colors.stroke,
       padding: spacing.lg,
-      ...shadow.soft,
+      ...(shape.isSoft ? shape.elevation.card : shadow.soft),
     },
     progressCardHeader: {
       flexDirection: 'row',
@@ -1202,27 +1722,27 @@ const createStyles = (colors: ThemeColors) => ({
       fontSize: 18,
     },
     sectionTitle: {
-      fontSize: 20,
-      fontWeight: '700',
+      fontSize: shape.isSoft ? 17 : 20,
+      fontWeight: shape.isSoft ? '600' : '700',
       color: colors.textPrimary,
     },
     viewAllButton: {
-      paddingHorizontal: spacing.md,
+      paddingHorizontal: shape.isSoft ? spacing.xs : spacing.md,
       paddingVertical: spacing.xs,
-      minHeight: 44,
+      minHeight: 40,
       justifyContent: 'center',
     },
     viewAllText: {
       fontSize: 13,
-      fontWeight: '700',
-      color: colors.primary,
+      fontWeight: shape.isSoft ? '500' : '700',
+      color: shape.isSoft ? colors.textTertiary : colors.primary,
     },
     dayGroup: {
       marginBottom: spacing.lg,
     },
     dayHeader: {
       flexDirection: 'row',
-      alignItems: 'flex-end',
+      alignItems: 'center',
       justifyContent: 'space-between',
       gap: spacing.sm,
       paddingHorizontal: spacing.xs,
@@ -1238,63 +1758,69 @@ const createStyles = (colors: ThemeColors) => ({
       minWidth: 38,
       paddingHorizontal: spacing.sm,
       paddingVertical: 3,
-      borderRadius: borderRadius.small,
-      borderWidth: borderWidth.hairline,
+      borderRadius: shape.isSoft ? shape.radius.tag : borderRadius.small,
+      borderWidth: shape.isSoft ? 0 : borderWidth.hairline,
       borderColor: colors.stroke,
       backgroundColor: colors.surfaceMuted,
       alignItems: 'center',
     },
     dayBadgeToday: {
-      backgroundColor: colors.accent,
+      backgroundColor: shape.isSoft ? colors.primaryLight : colors.accent,
     },
     dayBadgeYesterday: {
-      backgroundColor: colors.primaryLight,
+      backgroundColor: shape.isSoft ? colors.surfaceMuted : colors.primaryLight,
     },
     dayBadgeText: {
-      fontSize: 11,
-      fontWeight: '800',
-      color: colors.textPrimary,
+      fontSize: shape.isSoft ? 12 : 11,
+      fontWeight: shape.isSoft ? '600' : '800',
+      color: shape.isSoft ? colors.textSecondary : colors.textPrimary,
       letterSpacing: 0.2,
     },
+    dayBadgeTodayText: {
+      color: colors.primaryDark,
+    },
     dayDate: {
-      fontSize: 14,
-      fontWeight: '700',
-      color: colors.textPrimary,
+      fontSize: shape.isSoft ? 13 : 14,
+      fontWeight: shape.isSoft ? '400' : '700',
+      color: shape.isSoft ? colors.textTertiary : colors.textPrimary,
       fontVariant: ['tabular-nums'],
     },
     dayTotals: {
-      alignItems: 'flex-end',
-      gap: 1,
+      flexDirection: shape.isSoft ? 'row' : 'column',
+      alignItems: shape.isSoft ? 'center' : 'flex-end',
+      gap: shape.isSoft ? 8 : 1,
       flexShrink: 0,
     },
     dayExpenseTotal: {
       fontSize: 12,
-      fontWeight: '700',
-      color: colors.expense,
+      fontWeight: shape.isSoft ? '500' : '700',
+      color: shape.isSoft ? colors.textTertiary : colors.expense,
       fontVariant: ['tabular-nums'],
     },
     dayIncomeTotal: {
-      fontSize: 11,
-      fontWeight: '600',
-      color: colors.income,
+      fontSize: shape.isSoft ? 12 : 11,
+      fontWeight: shape.isSoft ? '500' : '600',
+      color: shape.isSoft ? colors.textTertiary : colors.income,
       fontVariant: ['tabular-nums'],
     },
     dayCard: {
       backgroundColor: colors.surface,
-      borderRadius: borderRadius.card,
-      borderWidth: borderWidth.hairline,
-      borderColor: colors.divider,
+      borderRadius: shape.isSoft ? shape.radius.card : borderRadius.card,
+      borderWidth: shape.isSoft ? shape.borderWidth.card : borderWidth.hairline,
+      borderColor: shape.isSoft ? colors.cardBorder : colors.divider,
       overflow: 'hidden',
+      ...(shape.isSoft ? shape.elevation.card : {}),
     },
     transactionItem: {
       flexDirection: 'row',
       alignItems: 'center',
       justifyContent: 'space-between',
-      padding: spacing.md,
+      paddingHorizontal: shape.isSoft ? 14 : spacing.md,
+      paddingVertical: 12,
       backgroundColor: colors.surface,
     },
     transactionItemBorder: {
-      borderTopWidth: borderWidth.hairline,
+      borderTopWidth: StyleSheet.hairlineWidth,
       borderTopColor: colors.divider,
     },
     transactionLeft: {
@@ -1304,35 +1830,55 @@ const createStyles = (colors: ThemeColors) => ({
       paddingRight: spacing.sm,
     },
     transactionIcon: {
-      width: 42,
-      height: 42,
-      borderRadius: borderRadius.medium,
-      borderWidth: borderWidth.hairline,
+      width: shape.isSoft ? 40 : 42,
+      height: shape.isSoft ? 40 : 42,
+      borderRadius: shape.isSoft ? 14 : borderRadius.medium,
+      borderWidth: shape.isSoft ? 0 : borderWidth.hairline,
       borderColor: colors.stroke,
       alignItems: 'center',
       justifyContent: 'center',
       marginRight: spacing.md,
     },
     transactionIconText: {
-      fontSize: 21,
+      fontSize: 20,
     },
     transactionInfo: {
       flex: 1,
     },
     transactionTitle: {
       fontSize: 15,
-      fontWeight: '600',
+      fontWeight: shape.isSoft ? '500' : '600',
       color: colors.textPrimary,
-      marginBottom: spacing.xs,
+      marginBottom: 2,
+    },
+    transactionMetaRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 6,
     },
     transactionMeta: {
       fontSize: 12,
       fontWeight: '400',
       color: colors.textTertiary,
+      flexShrink: 1,
+    },
+    autoTag: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 2,
+      backgroundColor: colors.primaryLight,
+      paddingHorizontal: 5,
+      paddingVertical: 1,
+      borderRadius: 6,
+    },
+    autoTagText: {
+      fontSize: 10.5,
+      fontWeight: '600',
+      color: colors.primary,
     },
     transactionAmount: {
-      fontSize: 15,
-      fontWeight: '700',
+      fontSize: shape.isSoft ? 16 : 15,
+      fontWeight: shape.isSoft ? '600' : '700',
       fontVariant: ['tabular-nums'],
     },
     incomeAmount: {
@@ -1346,24 +1892,25 @@ const createStyles = (colors: ThemeColors) => ({
       justifyContent: 'center',
       minHeight: 44,
       paddingVertical: spacing.md,
-      borderRadius: borderRadius.card,
-      borderWidth: borderWidth.hairline,
+      borderRadius: shape.isSoft ? shape.radius.pill : borderRadius.card,
+      borderWidth: shape.isSoft ? 0 : borderWidth.hairline,
       borderColor: colors.strokeLight,
-      borderStyle: 'dashed',
-      backgroundColor: colors.surface,
+      borderStyle: shape.isSoft ? 'solid' : 'dashed',
+      backgroundColor: shape.isSoft ? 'transparent' : colors.surface,
     },
     moreDaysText: {
       fontSize: 13,
-      fontWeight: '700',
-      color: colors.primary,
+      fontWeight: shape.isSoft ? '500' : '700',
+      color: shape.isSoft ? colors.textTertiary : colors.primary,
     },
     emptyState: {
       alignItems: 'center',
       padding: spacing.xxl,
       backgroundColor: colors.surface,
-      borderRadius: borderRadius.card,
-      borderWidth: borderWidth.hairline,
-      borderColor: colors.divider,
+      borderRadius: shape.isSoft ? shape.radius.card : borderRadius.card,
+      borderWidth: shape.isSoft ? shape.borderWidth.card : borderWidth.hairline,
+      borderColor: shape.isSoft ? colors.cardBorder : colors.divider,
+      ...(shape.isSoft ? shape.elevation.card : {}),
     },
     emptyIcon: {
       fontSize: 40,
@@ -1371,23 +1918,23 @@ const createStyles = (colors: ThemeColors) => ({
     },
     emptyText: {
       fontSize: 15,
-      fontWeight: '600',
+      fontWeight: shape.isSoft ? '500' : '600',
       color: colors.textTertiary,
       marginBottom: spacing.lg,
     },
     emptyButton: {
-      backgroundColor: colors.accent,
+      backgroundColor: shape.isSoft ? colors.primary : colors.accent,
       paddingHorizontal: spacing.xl,
       paddingVertical: spacing.md,
-      borderRadius: borderRadius.button,
-      borderWidth: borderWidth.thin,
+      borderRadius: shape.isSoft ? shape.radius.button : borderRadius.button,
+      borderWidth: shape.isSoft ? 0 : borderWidth.thin,
       borderColor: colors.stroke,
-      ...shadow.soft,
+      ...(shape.isSoft ? shape.elevation.none : shadow.soft),
     },
     emptyButtonText: {
       fontSize: 15,
-      fontWeight: '700',
-      color: colors.textPrimary,
+      fontWeight: shape.isSoft ? '600' : '700',
+      color: shape.isSoft ? colors.onPrimary : colors.textPrimary,
     },
   }),
 });

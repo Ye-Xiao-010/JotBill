@@ -27,6 +27,7 @@ import { CACHE_TIME, GC_TIME, QUERY_KEYS } from '../../lib/queryClient';
 import { formatPlatform } from '../../utils/platform';
 import { formatCurrency } from '../../utils/format';
 import { ThemeColors } from '../../theme/colors';
+import { ThemeShape } from '../../theme/shape';
 import { spacing, borderRadius, borderWidth, typography } from '../../theme';
 import {
   getCurrentMonthRange,
@@ -351,35 +352,36 @@ const AllBillsScreen: React.FC = () => {
   );
 };
 
-const createStyles = (colors: ThemeColors) => ({
+const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
   ...StyleSheet.create({
     container: { flex: 1, backgroundColor: colors.background },
     filterBar: {
-      backgroundColor: colors.surface,
+      backgroundColor: shape.isSoft ? colors.background : colors.surface,
       paddingHorizontal: spacing.lg,
       paddingVertical: spacing.md,
-      borderBottomWidth: borderWidth.thin,
+      borderBottomWidth: shape.isSoft ? 0 : borderWidth.thin,
       borderBottomColor: colors.stroke,
     },
     filterBtn: {
       paddingHorizontal: spacing.lg,
       paddingVertical: spacing.sm,
-      borderRadius: borderRadius.small,
+      borderRadius: shape.isSoft ? shape.radius.pill : borderRadius.small,
       marginRight: spacing.sm,
       backgroundColor: colors.surface,
-      borderWidth: borderWidth.thin,
-      borderColor: colors.stroke,
+      borderWidth: shape.isSoft ? shape.borderWidth.card : borderWidth.thin,
+      borderColor: shape.isSoft ? colors.cardBorder : colors.stroke,
+      ...(shape.isSoft ? shape.elevation.card : {}),
     },
     filterBtnActive: {
       backgroundColor: colors.primary,
-      borderColor: colors.stroke,
+      borderColor: shape.isSoft ? colors.primary : colors.stroke,
     },
     filterText: {
       fontSize: 13,
       color: colors.textSecondary,
-      fontWeight: '700',
+      fontWeight: shape.isSoft ? '600' : '700',
     },
-    filterTextActive: { color: colors.onPrimary, fontWeight: '800' },
+    filterTextActive: { color: colors.onPrimary, fontWeight: shape.isSoft ? '700' : '800' },
     scrollView: { flex: 1 },
     monthSection: { marginBottom: spacing.md },
     monthHeader: {
@@ -387,20 +389,21 @@ const createStyles = (colors: ThemeColors) => ({
       justifyContent: 'space-between',
       alignItems: 'center',
       paddingHorizontal: spacing.lg,
-      paddingVertical: spacing.md,
-      backgroundColor: colors.surface,
-      borderBottomWidth: borderWidth.thin,
+      paddingVertical: shape.isSoft ? spacing.sm : spacing.md,
+      backgroundColor: shape.isSoft ? colors.background : colors.surface,
+      borderBottomWidth: shape.isSoft ? 0 : borderWidth.thin,
       borderBottomColor: colors.stroke,
     },
     monthTitle: {
-      fontSize: 15,
-      fontWeight: '800',
-      color: colors.textPrimary,
+      fontSize: shape.isSoft ? 14 : 15,
+      fontWeight: shape.isSoft ? '700' : '800',
+      color: shape.isSoft ? colors.textSecondary : colors.textPrimary,
     },
     monthTotal: {
-      fontSize: 15,
-      fontWeight: '800',
-      fontFamily: typography.fontFamily.mono,
+      fontSize: shape.isSoft ? 14 : 15,
+      fontWeight: shape.isSoft ? '700' : '800',
+      fontFamily: shape.isSoft ? undefined : typography.fontFamily.mono,
+      fontVariant: ['tabular-nums'],
     },
     loadingContainer: {
       flex: 1,
