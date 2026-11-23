@@ -26,6 +26,9 @@ object BookkeepingChannels {
 
     private const val KEY_CHANNEL_PREFIX = "channel_"
 
+    /** 「已自动记一笔」通知开关；默认开，关闭不影响入账与待确认提醒。 */
+    private const val KEY_NOTIFY_AUTO_BOOKED = "notify_auto_booked"
+
     /**
      * 渠道包在识别层的采集档位（B2）：与 `RecognitionPackages` 的集合一一对应。
      * 新增渠道必须标注 kind，否则 `BookkeepingChannelsTest` 的一致性断言会红。
@@ -139,6 +142,14 @@ object BookkeepingChannels {
 
     fun isChannelEnabled(context: Context, channel: String): Boolean =
         prefs(context).getBoolean(KEY_CHANNEL_PREFIX + channel, DEFAULTS[channel] ?: false)
+
+    fun isAutoBookedNotificationEnabled(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_NOTIFY_AUTO_BOOKED, true)
+
+    fun setAutoBookedNotificationEnabled(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_NOTIFY_AUTO_BOOKED, enabled).apply()
+        JotBillLog.i(TAG, "自动记账通知开关切换: enabled=$enabled")
+    }
 
     fun setChannelEnabled(context: Context, channel: String, enabled: Boolean) {
         prefs(context).edit().putBoolean(KEY_CHANNEL_PREFIX + channel, enabled).apply()

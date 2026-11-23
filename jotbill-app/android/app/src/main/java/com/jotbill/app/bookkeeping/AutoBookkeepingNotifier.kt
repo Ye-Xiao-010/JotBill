@@ -22,6 +22,10 @@ class AutoBookkeepingNotifier(private val context: Context) {
         channelLabel: String,
         merchant: String?
     ) {
+        if (!BookkeepingChannels.isAutoBookedNotificationEnabled(context)) {
+            JotBillLog.i(TAG, "自动记账通知已关闭(设置), 跳过: billId=${billId.take(8)}")
+            return
+        }
         val manager =
             context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
         if (manager == null || !manager.areNotificationsEnabled()) {

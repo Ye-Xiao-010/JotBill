@@ -1289,6 +1289,7 @@ export interface AutoBookkeepingChannelMeta {
 export interface AutoBookkeepingSettings {
   masterEnabled: boolean;
   silentBookkeepingEnabled: boolean;
+  autoBookedNotificationEnabled: boolean;
   keepAliveEnabled: boolean;
   keepAlivePrompted: boolean;
   keepAliveRunning: boolean;
@@ -1306,6 +1307,7 @@ export interface AutoBookkeepingModule {
   getSettings(): Promise<AutoBookkeepingSettings>;
   setMasterEnabled(enabled: boolean): Promise<void>;
   setSilentBookkeepingEnabled(enabled: boolean): Promise<void>;
+  setAutoBookedNotificationEnabled(enabled: boolean): Promise<void>;
   setChannelEnabled(channel: string, enabled: boolean): Promise<void>;
   setKeepAliveEnabled(enabled: boolean): Promise<void>;
   markKeepAlivePrompted(): Promise<void>;

@@ -115,6 +115,11 @@ export default function AutoBookkeepingScreen() {
     },
     onError: () => Alert.alert('设置失败', '无法保存静默记账设置，请重试。'),
   });
+  const autoBookedNotificationMutation = useMutation({
+    mutationFn: nativeAutoBookkeeping.setAutoBookedNotificationEnabled,
+    onSuccess: invalidate,
+    onError: () => Alert.alert('设置失败', '无法保存通知设置，请重试。'),
+  });
   const channelMutation = useMutation({
     mutationFn: ({ channel, enabled }: { channel: string; enabled: boolean }) =>
       nativeAutoBookkeeping.setChannelEnabled(channel, enabled),
@@ -169,8 +174,8 @@ export default function AutoBookkeepingScreen() {
             <View style={styles.masterText}>
               <Text style={styles.sectionTitle}>付完钱自动记账</Text>
               <Text style={styles.sectionText}>
-                在支付应用里完成支付后，自动识别金额与商户并入账，
-                通知栏可一键撤销；未识别的场景仍走待确认兜底。
+                在支付应用里完成支付后，自动识别金额与商户并入账；
+                未识别的场景仍走待确认兜底。
               </Text>
             </View>
             <Switch
@@ -207,6 +212,25 @@ export default function AutoBookkeepingScreen() {
               value={settings?.silentBookkeepingEnabled ?? false}
               disabled={!masterEnabled || silentBookkeepingMutation.isPending}
               onValueChange={enabled => silentBookkeepingMutation.mutate(enabled)}
+              trackColor={{ false: styles._colors.divider, true: styles._colors.primary }}
+              thumbColor="#FFFFFF"
+            />
+          </View>
+        </View>
+
+        <View style={styles.sectionCard}>
+          <View style={styles.masterRow}>
+            <View style={styles.masterText}>
+              <Text style={styles.sectionTitle}>自动记账通知</Text>
+              <Text style={styles.sectionText}>
+                自动入账成功后，在通知栏提示金额、渠道和商户，并可一键撤销。关闭后照常入账，只是不再发这条通知，也就无法从通知栏撤销。
+              </Text>
+            </View>
+            <Switch
+              accessibilityLabel="自动记账通知"
+              value={settings?.autoBookedNotificationEnabled ?? true}
+              disabled={!masterEnabled || autoBookedNotificationMutation.isPending}
+              onValueChange={enabled => autoBookedNotificationMutation.mutate(enabled)}
               trackColor={{ false: styles._colors.divider, true: styles._colors.primary }}
               thumbColor="#FFFFFF"
             />
@@ -288,7 +312,7 @@ export default function AutoBookkeepingScreen() {
             <ShieldCheck size={16} color={styles._colors.textSecondary} />
             <Text style={styles.privacyText}>
               关闭总开关立即停止一切自动识别；已自动入账的记录可在账单列表删除，
-              或在弹出通知上直接撤销。
+              或在本页「自动记账通知」开启时，从通知栏直接撤销。
             </Text>
           </View>
           <View style={styles.privacyRow}>

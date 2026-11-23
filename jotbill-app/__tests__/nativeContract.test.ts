@@ -158,6 +158,7 @@ test('静默记账通过独立的原生设置读写', async () => {
   const settings = {
     masterEnabled: true,
     silentBookkeepingEnabled: false,
+    autoBookedNotificationEnabled: true,
     keepAliveEnabled: false,
     keepAlivePrompted: true,
     keepAliveRunning: false,
@@ -165,14 +166,18 @@ test('静默记账通过独立的原生设置读写', async () => {
     channelMeta: [],
   } satisfies AutoBookkeepingSettings;
   const setSilentBookkeepingEnabled = jest.fn().mockResolvedValue(null);
+  const setAutoBookedNotificationEnabled = jest.fn().mockResolvedValue(null);
   modules.AutoBookkeeping = {
     getSettings: jest.fn().mockResolvedValue(JSON.stringify(settings)),
     setSilentBookkeepingEnabled,
+    setAutoBookedNotificationEnabled,
   };
   expect(await nativeAutoBookkeeping.getSettings()).toEqual(settings);
   await nativeAutoBookkeeping.setSilentBookkeepingEnabled(true);
   await nativeAutoBookkeeping.setSilentBookkeepingEnabled(false);
   expect(setSilentBookkeepingEnabled.mock.calls).toEqual([[true], [false]]);
+  await nativeAutoBookkeeping.setAutoBookedNotificationEnabled(false);
+  expect(setAutoBookedNotificationEnabled.mock.calls).toEqual([[false]]);
 });
 
 test('Runtime 区分权限掉落、服务断开和无需权限，并能打开指定设置', async () => {

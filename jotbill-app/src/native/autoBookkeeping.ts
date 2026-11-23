@@ -11,6 +11,8 @@ export interface AutoBookkeepingChannelMeta {
 export interface AutoBookkeepingSettings {
   masterEnabled: boolean;
   silentBookkeepingEnabled: boolean;
+  /** 「已自动记一笔」通知开关；关闭只静音通知，不影响入账。 */
+  autoBookedNotificationEnabled: boolean;
   keepAliveEnabled: boolean;
   keepAlivePrompted: boolean;
   keepAliveRunning: boolean;
@@ -29,6 +31,7 @@ interface RawAutoBookkeepingModule {
   getSettings(): Promise<string>;
   setMasterEnabled(enabled: boolean): Promise<null>;
   setSilentBookkeepingEnabled(enabled: boolean): Promise<null>;
+  setAutoBookedNotificationEnabled(enabled: boolean): Promise<null>;
   setChannelEnabled(channel: string, enabled: boolean): Promise<null>;
   setKeepAliveEnabled(enabled: boolean): Promise<null>;
   markKeepAlivePrompted(): Promise<null>;
@@ -55,6 +58,10 @@ export const nativeAutoBookkeeping = {
 
   async setSilentBookkeepingEnabled(enabled: boolean): Promise<void> {
     await getRawModule().setSilentBookkeepingEnabled(enabled);
+  },
+
+  async setAutoBookedNotificationEnabled(enabled: boolean): Promise<void> {
+    await getRawModule().setAutoBookedNotificationEnabled(enabled);
   },
 
   async setChannelEnabled(channel: string, enabled: boolean): Promise<void> {
