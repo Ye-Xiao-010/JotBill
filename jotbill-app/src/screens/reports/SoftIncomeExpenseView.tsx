@@ -28,10 +28,11 @@ import {
   useDailyGridData,
   useMonthlyGridData,
 } from '../../hooks/useIncomeExpenseData';
-import { nativeData } from '../../native';
-import { CACHE_TIME, GC_TIME } from '../../lib/queryClient';
+import { nativeData, type Account } from '../../native';
+import { CACHE_TIME, GC_TIME, QUERY_KEYS } from '../../lib/queryClient';
 import { QueryErrorBanner, SegmentedControl } from '../../components/ui';
 import { CalendarSkeleton } from '../../components/skeleton/ReportSkeletons';
+import AccountBadge from '../../components/business/AccountBadge';
 import CategoryIcon from '../../components/business/CategoryIcon';
 import { getCategoryColor, getCategoryIcon } from '../../constants/app';
 import { formatCurrency, formatNumber } from '../../utils/format';
@@ -110,6 +111,16 @@ export default function SoftIncomeExpenseView() {
   const selectedDateKey =
     period === 'month' ? formatDateKey(year, month, clampedSelectedDay) : null;
   const dailyBillsQuery = useDailyBills(selectedDateKey);
+  const { data: accounts = [], refetch: refetchAccounts } = useQuery({
+    queryKey: QUERY_KEYS.accountsList,
+    queryFn: () => nativeData.getAccounts(),
+    staleTime: CACHE_TIME.CATEGORIES,
+    gcTime: GC_TIME.DEFAULT,
+  });
+  const accountById = useMemo(
+    () => new Map<string, Account>(accounts.map(account => [account.id, account])),
+    [accounts],
+  );
 
   const periodRange = useMemo(() => {
     if (period === 'month') {
@@ -333,7 +344,10 @@ export default function SoftIncomeExpenseView() {
         <RefreshControl
           {...refreshControlProps}
           refreshing={activeQuery.isFetching && !activeQuery.isLoading}
-          onRefresh={() => { void activeQuery.refetch(); }}
+          onRefresh={() => {
+            void activeQuery.refetch();
+            void refetchAccounts();
+          }}
         />
       }
       showsVerticalScrollIndicator={false}
@@ -631,6 +645,9 @@ export default function SoftIncomeExpenseView() {
                     const isInc = bill.type === 'income';
                     const catName = bill.category?.name || '未分类';
                     const catColor = getCategoryAccent(catName, idx);
+                    const account = bill.accountId
+                      ? accountById.get(bill.accountId)
+                      : undefined;
                     return (
                       <TouchableOpacity
                         key={bill.id}
@@ -650,21 +667,25 @@ export default function SoftIncomeExpenseView() {
                             emojiStyle={{ fontSize: 16 }}
                           />
                         </View>
-                        <View style={{ flex: 1 }}>
+                        <View style={styles.dayBillInfo}>
                           <Text style={styles.dayBillTitle} numberOfLines={1}>
                             {bill.description || catName}
                           </Text>
                           <Text style={styles.dayBillSub}>{catName}</Text>
                         </View>
-                        <Text
-                          style={[
-                            styles.dayBillAmt,
-                            isInc ? styles.incomeText : styles.expenseText,
-                          ]}
-                        >
-                          {isInc ? '+' : '-'}
-                          {formatNumber(bill.amount, 2)}
-                        </Text>
+                        <View style={styles.dayBillRight}>
+                          <Text
+                            style={[
+                              styles.dayBillAmt,
+                              isInc ? styles.incomeText : styles.expenseText,
+                            ]}
+                            numberOfLines={1}
+                          >
+                            {isInc ? '+' : '-'}
+                            {formatNumber(bill.amount, 2)}
+                          </Text>
+                          {account ? <AccountBadge account={account} /> : null}
+                        </View>
                       </TouchableOpacity>
                     );
                   })}
@@ -824,6 +845,9 @@ export default function SoftIncomeExpenseView() {
                                 {drillItems.map((bill, bIdx) => {
                                   const d = new Date(bill.occurredAt);
                                   const dateStr = `${d.getMonth() + 1}/${d.getDate()}`;
+                                  const account = bill.accountId
+                                    ? accountById.get(bill.accountId)
+                                    : undefined;
                                   return (
                                     <TouchableOpacity
                                       key={bill.id}
@@ -840,17 +864,23 @@ export default function SoftIncomeExpenseView() {
                                       <Text style={styles.drillTitle} numberOfLines={1}>
                                         {bill.description || bill.merchant || item.categoryName}
                                       </Text>
-                                      <Text
-                                        style={[
-                                          styles.drillAmt,
-                                          breakdownType === 'income'
-                                            ? styles.incomeText
-                                            : styles.expenseText,
-                                        ]}
-                                      >
-                                        {breakdownType === 'income' ? '+' : '-'}
-                                        {formatNumber(bill.amountMinor / 100, 2)}
-                                      </Text>
+                                      <View style={styles.drillRight}>
+                                        <Text
+                                          style={[
+                                            styles.drillAmt,
+                                            breakdownType === 'income'
+                                              ? styles.incomeText
+                                              : styles.expenseText,
+                                          ]}
+                                          numberOfLines={1}
+                                        >
+                                          {breakdownType === 'income' ? '+' : '-'}
+                                          {formatNumber(bill.amountMinor / 100, 2)}
+                                        </Text>
+                                        {account ? (
+                                          <AccountBadge account={account} compact />
+                                        ) : null}
+                                      </View>
                                     </TouchableOpacity>
                                   );
                                 })}
@@ -1133,6 +1163,16 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape, isDark: boolean) =
       alignItems: 'center',
       justifyContent: 'center',
     },
+    dayBillInfo: {
+      flex: 1,
+      minWidth: 0,
+    },
+    dayBillRight: {
+      alignItems: 'flex-end',
+      justifyContent: 'center',
+      gap: 3,
+      flexShrink: 0,
+    },
     dayBillTitle: {
       fontSize: 14,
       fontWeight: '500',
@@ -1306,8 +1346,15 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape, isDark: boolean) =
     },
     drillTitle: {
       flex: 1,
+      minWidth: 0,
       fontSize: 13,
       color: colors.textPrimary,
+    },
+    drillRight: {
+      alignItems: 'flex-end',
+      justifyContent: 'center',
+      gap: 3,
+      flexShrink: 0,
     },
     drillAmt: {
       fontSize: 13,

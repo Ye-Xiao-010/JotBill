@@ -14,7 +14,9 @@ import { ThemeShape } from '../../theme/shape';
 import { spacing, borderRadius, borderWidth, typography } from '../../theme';
 import { useStyles } from '../../hooks';
 import { HOGWARTS_FONTS } from '../../constants/hogwartsAssets';
+import type { AccountBadgeInput } from '../../constants/accountStyles';
 import { formatSignedCurrency } from '../../utils/format';
+import AccountBadge from './AccountBadge';
 import CategoryIcon from './CategoryIcon';
 
 
@@ -30,10 +32,12 @@ export interface BillData {
 
 interface BillItemProps {
   bill: BillData;
+  /** 扣款/入账账户：提供时在金额下方渲染主题适配的彩色账户微标 */
+  account?: AccountBadgeInput;
   onPress?: (bill: BillData) => void;
 }
 
-const BillItem: React.FC<BillItemProps> = ({ bill, onPress }) => {
+const BillItem: React.FC<BillItemProps> = ({ bill, account, onPress }) => {
   const styles = useStyles(createStyles);
 
   const handlePress = () => {
@@ -76,13 +80,16 @@ const BillItem: React.FC<BillItemProps> = ({ bill, onPress }) => {
         </View>
       </View>
 
-      <View style={[
-        styles.amountBadge,
-        isIncome ? styles.incomeBadge : styles.expenseBadge,
-      ]}>
-        <Text style={[styles.amount, isIncome ? styles.incomeAmount : styles.expenseAmount]}>
-          {formatSignedCurrency(bill.amount, isIncome)}
-        </Text>
+      <View style={styles.rightSection}>
+        <View style={[
+          styles.amountBadge,
+          isIncome ? styles.incomeBadge : styles.expenseBadge,
+        ]}>
+          <Text style={[styles.amount, isIncome ? styles.incomeAmount : styles.expenseAmount]} numberOfLines={1}>
+            {formatSignedCurrency(bill.amount, isIncome)}
+          </Text>
+        </View>
+        {account ? <AccountBadge account={account} /> : null}
       </View>
     </TouchableOpacity>
   );
@@ -108,6 +115,8 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
       flexDirection: 'row',
       alignItems: 'center',
       flex: 1,
+      minWidth: 0,
+      paddingRight: spacing.sm,
     },
     iconContainer: {
       width: 44,
@@ -124,6 +133,13 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
     },
     billInfo: {
       flex: 1,
+      minWidth: 0,
+    },
+    rightSection: {
+      alignItems: 'flex-end',
+      justifyContent: 'center',
+      gap: 4,
+      flexShrink: 0,
     },
     category: {
       fontSize: 15,

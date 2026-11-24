@@ -25,14 +25,14 @@ import { HogwartsStarDivider } from '../../components/ui';
 import QueryErrorBanner from '../../components/ui/QueryErrorBanner';
 import { useToast, useStyles, useRefreshControlProps } from '../../hooks';
 import { useTheme } from '../../providers';
-import { nativeData, type Category } from '../../native';
+import { nativeData, type Account, type Category } from '../../native';
 import { CACHE_TIME, GC_TIME, QUERY_KEYS } from '../../lib/queryClient';
 import { formatPlatform } from '../../utils/platform';
 import { formatCurrency } from '../../utils/format';
 import { ThemeColors } from '../../theme/colors';
 import { ThemeShape } from '../../theme/shape';
 import { HOGWARTS_FONTS, HOGWARTS_IMAGES } from '../../constants/hogwartsAssets';
-import { spacing, borderRadius, borderWidth, typography } from '../../theme';
+import { spacing, borderRadius, typography } from '../../theme';
 import {
   getCurrentMonthRange,
   getLastMonthRange,
@@ -79,6 +79,19 @@ const AllBillsScreen: React.FC = () => {
         categories.map(category => [category.id, category]),
       ),
     [categories],
+  );
+  const { data: accounts = [], refetch: refetchAccounts } = useQuery({
+    queryKey: QUERY_KEYS.accountsList,
+    queryFn: () => nativeData.getAccounts(),
+    staleTime: CACHE_TIME.CATEGORIES,
+    gcTime: GC_TIME.DEFAULT,
+  });
+  const accountById = useMemo(
+    () =>
+      new Map<string, Account>(
+        accounts.map(account => [account.id, account]),
+      ),
+    [accounts],
   );
 
   const fetchBills = useCallback(
@@ -169,6 +182,7 @@ const AllBillsScreen: React.FC = () => {
 
   const handleRefresh = () => {
     fetchBills(true);
+    refetchAccounts();
   };
 
   /** 按月分组为 SectionList sections；月合计口径与原生统计一致 */
@@ -309,6 +323,9 @@ const AllBillsScreen: React.FC = () => {
             const category = rawBill.categoryId
               ? categoryById.get(rawBill.categoryId)
               : undefined;
+            const account = rawBill.accountId
+              ? accountById.get(rawBill.accountId)
+              : undefined;
             const bill = {
               ...rawBill,
               merchant: rawBill.merchant || category?.name,
@@ -332,6 +349,7 @@ const AllBillsScreen: React.FC = () => {
                   description: bill.description,
                   icon: category?.icon || '📝',
                 }}
+                account={account}
                 onPress={() => handleBillPress(rawBill)}
               />
             );

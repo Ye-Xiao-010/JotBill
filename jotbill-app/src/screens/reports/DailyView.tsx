@@ -2,14 +2,17 @@
  * DailyView - 日收支视图
  * 月日历网格 + 点击某天展示账单明细
  */
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { View, Text, ScrollView, RefreshControl, StyleSheet, ActivityIndicator, TouchableOpacity } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
+import { useQuery } from '@tanstack/react-query';
 import { ThemeColors } from '../../theme/colors';
 import { ThemeShape } from '../../theme/shape';
 import { spacing } from '../../theme/spacing';
 import { useStyles } from '../../hooks';
 import { HOGWARTS_FONTS } from '../../constants/hogwartsAssets';
+import { nativeData, type Account } from '../../native';
+import { CACHE_TIME, GC_TIME, QUERY_KEYS } from '../../lib/queryClient';
 import {
   useDailyGridData,
   useDailyBills,
@@ -66,6 +69,16 @@ export default function DailyView({
     error: billsErrorDetail,
     refetch: refetchBills,
   } = useDailyBills(selectedDay);
+  const { data: accounts = [], refetch: refetchAccounts } = useQuery({
+    queryKey: QUERY_KEYS.accountsList,
+    queryFn: () => nativeData.getAccounts(),
+    staleTime: CACHE_TIME.CATEGORIES,
+    gcTime: GC_TIME.DEFAULT,
+  });
+  const accountById = useMemo(
+    () => new Map<string, Account>(accounts.map((account) => [account.id, account])),
+    [accounts],
+  );
 
   const handlePrev = () => {
     if (month === 0) {
@@ -124,7 +137,13 @@ export default function DailyView({
     <ScrollView
       style={styles.container}
       refreshControl={
-        <RefreshControl refreshing={isFetching && !isLoading} onRefresh={refetch} />
+        <RefreshControl
+          refreshing={isFetching && !isLoading}
+          onRefresh={() => {
+            void refetch();
+            void refetchAccounts();
+          }}
+        />
       }
       showsVerticalScrollIndicator={false}
     >
@@ -196,6 +215,7 @@ export default function DailyView({
                 <BillItem
                   key={bill.id}
                   bill={mapBill(bill)}
+                  account={bill.accountId ? accountById.get(bill.accountId) : undefined}
                   onPress={handleBillPress}
                 />
               ))}

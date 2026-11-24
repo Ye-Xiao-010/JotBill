@@ -49,7 +49,12 @@ import {
 } from '../../components/ui';
 import { DashboardSkeleton } from '../../components/skeleton';
 import CategoryIcon from '../../components/business/CategoryIcon';
+import AccountBadge from '../../components/business/AccountBadge';
 import HogwartsIcon from '../../components/icons/HogwartsIcon';
+import {
+  formatAccountBadgeParts,
+  shouldHideRedundantPlatform,
+} from '../../constants/accountStyles';
 import {
   HOGWARTS_FONTS,
   HOGWARTS_HOUSES,
@@ -65,6 +70,7 @@ import { getCategoryIcon, getCategoryColor, getBudgetStatusColor } from '../../c
 import { groupBillsByDay, limitBillDayGroups, type BillDayGroup } from '../../utils/billGroups';
 import { CACHE_TIME, GC_TIME, QUERY_KEYS } from '../../lib/queryClient';
 import type {
+  Account,
   Bill,
   BudgetProgress,
   Category,
@@ -157,6 +163,7 @@ function getDayLabel(date: Date | null): DayLabel {
 function DayTradeGroup({
   group,
   categoryById,
+  accountById,
   styles,
   isSoft,
   isDark,
@@ -166,6 +173,7 @@ function DayTradeGroup({
 }: {
   group: BillDayGroup;
   categoryById: Map<string, Category>;
+  accountById: Map<string, Account>;
   styles: any;
   isSoft: boolean;
   isDark: boolean;
@@ -241,6 +249,9 @@ function DayTradeGroup({
           const category = bill.categoryId
             ? categoryById.get(bill.categoryId)
             : undefined;
+          const account = bill.accountId
+            ? accountById.get(bill.accountId)
+            : undefined;
           const categoryName =
             category?.name ||
             bill.merchant ||
@@ -257,10 +268,14 @@ function DayTradeGroup({
             bill.productDescription ||
             categoryName;
           // 时间已在日组内，元信息只保留「时间 · 平台」；
+          // 若右侧账户徽标已明确表示微信/支付宝账户，则隐藏左侧重复平台文案；
           // 平台缺失且分类与标题不同时补分类，避免出现「正餐 / 03:23 · 正餐」这类重复。
           const time = formatTime(bill.occurredAt);
           const timeLabel = time && time !== '00:00' ? time : '';
-          const platformLabel = formatPlatform(bill.platform);
+          const rawPlatformLabel = formatPlatform(bill.platform);
+          const platformLabel = shouldHideRedundantPlatform(rawPlatformLabel, account)
+            ? ''
+            : rawPlatformLabel;
           const metaParts = [timeLabel, platformLabel];
           if (!platformLabel && categoryName !== description) {
             metaParts.push(categoryName);
@@ -273,6 +288,9 @@ function DayTradeGroup({
             /^#[0-9a-fA-F]{6}$/.test(rawCategoryColor)
               ? `${rawCategoryColor}${isDark ? '33' : '22'}`
               : colors.surfaceMuted;
+          const accountLabel = account
+            ? formatAccountBadgeParts(account).fullLabel
+            : '';
 
           return (
             <TouchableOpacity
@@ -283,10 +301,13 @@ function DayTradeGroup({
               ]}
               onPress={() => onPressBill(bill)}
               activeOpacity={0.72}
-              accessibilityLabel={`${description} ${formatSignedCurrency(
-                bill.amountMinor / 100,
-                isIncome,
-              )}`}
+              accessibilityLabel={[
+                description,
+                accountLabel,
+                formatSignedCurrency(bill.amountMinor / 100, isIncome),
+              ]
+                .filter(Boolean)
+                .join(' ')}
               accessibilityRole="button"
             >
               <View style={styles.transactionLeft}>
@@ -330,14 +351,18 @@ function DayTradeGroup({
                   ) : null}
                 </View>
               </View>
-              <Text
-                style={[
-                  styles.transactionAmount,
-                  isIncome ? styles.incomeAmount : styles.expenseAmount,
-                ]}
-              >
-                {formatSignedCurrency(bill.amountMinor / 100, isIncome)}
-              </Text>
+              <View style={styles.transactionRight}>
+                <Text
+                  style={[
+                    styles.transactionAmount,
+                    isIncome ? styles.incomeAmount : styles.expenseAmount,
+                  ]}
+                  numberOfLines={1}
+                >
+                  {formatSignedCurrency(bill.amountMinor / 100, isIncome)}
+                </Text>
+                {account ? <AccountBadge account={account} /> : null}
+              </View>
             </TouchableOpacity>
           );
         })}
@@ -597,6 +622,13 @@ export default function DashboardScreen({ onSelectTab }: DashboardScreenProps = 
     gcTime: GC_TIME.DEFAULT,
   });
 
+  const { data: accounts = [], refetch: refetchAccounts } = useQuery({
+    queryKey: QUERY_KEYS.accountsList,
+    queryFn: () => nativeData.getAccounts(),
+    staleTime: CACHE_TIME.CATEGORIES,
+    gcTime: GC_TIME.DEFAULT,
+  });
+
   /** 待确认笔数：与 ReviewScreen 共享同一 queryKey/缓存；桥接失败时
    *  data 为 undefined → count=0 不渲染横幅（失败静默，不打断首页主信息）。 */
   const { data: recognitionStatus } = useQuery({
@@ -612,6 +644,13 @@ export default function DashboardScreen({ onSelectTab }: DashboardScreenProps = 
         categories.map(category => [category.id, category]),
       ),
     [categories],
+  );
+  const accountById = useMemo(
+    () =>
+      new Map<string, Account>(
+        accounts.map(account => [account.id, account]),
+      ),
+    [accounts],
   );
 
   const {
@@ -712,13 +751,13 @@ export default function DashboardScreen({ onSelectTab }: DashboardScreenProps = 
     : `${currentDate.getFullYear()}`;
 
   const onRefresh = useCallback(async () => {
-    const tasks: Promise<unknown>[] = [refetch()];
+    const tasks: Promise<unknown>[] = [refetch(), refetchAccounts()];
     // 预算卡片关闭时不触发预算/目标请求，避免无谓的原生桥接开销
     if (budgetEnabled) {
       tasks.push(refetchBudgets(), refetchGoals());
     }
     await Promise.all(tasks);
-  }, [refetch, refetchBudgets, refetchGoals, budgetEnabled]);
+  }, [refetch, refetchAccounts, refetchBudgets, refetchGoals, budgetEnabled]);
 
   const handleAddBill = () => {
     playMagicSound('quill');
@@ -1235,6 +1274,7 @@ export default function DashboardScreen({ onSelectTab }: DashboardScreenProps = 
                 key={group.dateKey}
                 group={group}
                 categoryById={categoryById}
+                accountById={accountById}
                 styles={styles}
                 isSoft={isSoft}
                 isDark={isDark}
@@ -2069,6 +2109,7 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape, isDark: boolean) =
       flexDirection: 'row',
       alignItems: 'center',
       flex: 1,
+      minWidth: 0,
       paddingRight: spacing.sm,
     },
     transactionIcon: {
@@ -2086,6 +2127,13 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape, isDark: boolean) =
     },
     transactionInfo: {
       flex: 1,
+      minWidth: 0,
+    },
+    transactionRight: {
+      alignItems: 'flex-end',
+      justifyContent: 'center',
+      gap: 4,
+      flexShrink: 0,
     },
     transactionTitle: {
       fontSize: 15,

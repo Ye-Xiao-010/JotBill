@@ -19,6 +19,7 @@ export interface ReportBill {
   type: 'income' | 'expense';
   date: string;
   description?: string;
+  accountId?: string;
   category?: {
     name: string;
     icon?: string;
@@ -42,6 +43,7 @@ function toReportBill(bill: Bill, categories: Map<string, Category>): ReportBill
     type,
     date: bill.occurredAt,
     description: bill.description || bill.merchant || bill.productDescription,
+    accountId: bill.accountId,
     category: category
       ? { name: category.name, icon: category.icon }
       : undefined,
