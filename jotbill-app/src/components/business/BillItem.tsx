@@ -10,8 +10,10 @@ import {
   StyleSheet,
 } from 'react-native';
 import { ThemeColors } from '../../theme/colors';
+import { ThemeShape } from '../../theme/shape';
 import { spacing, borderRadius, borderWidth, typography } from '../../theme';
 import { useStyles } from '../../hooks';
+import { HOGWARTS_FONTS } from '../../constants/hogwartsAssets';
 import { formatSignedCurrency } from '../../utils/format';
 import CategoryIcon from './CategoryIcon';
 
@@ -49,12 +51,17 @@ const BillItem: React.FC<BillItemProps> = ({ bill, onPress }) => {
       <View style={styles.leftSection}>
         <View style={[
           styles.iconContainer,
-          { backgroundColor: isIncome ? styles._colors.income : styles._colors.expense },
+          {
+            backgroundColor: styles._isHogwarts
+              ? (isIncome ? styles._colors.incomeLight : styles._colors.expenseLight)
+              : (isIncome ? styles._colors.income : styles._colors.expense),
+          },
         ]}>
           <CategoryIcon
             icon={bill.icon}
             fallback={isIncome ? '💰' : '💸'}
             size={20}
+            color={styles._isHogwarts ? (isIncome ? styles._colors.incomeStrong : styles._colors.expenseStrong) : undefined}
             emojiStyle={styles.icon}
           />
         </View>
@@ -81,7 +88,7 @@ const BillItem: React.FC<BillItemProps> = ({ bill, onPress }) => {
   );
 };
 
-const createStyles = (colors: ThemeColors) => ({
+const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
   ...StyleSheet.create({
     container: {
       flexDirection: 'row',
@@ -90,11 +97,12 @@ const createStyles = (colors: ThemeColors) => ({
       backgroundColor: colors.surface,
       marginHorizontal: spacing.lg,
       marginVertical: spacing.xs,
-      borderRadius: borderRadius.card,
+      borderRadius: shape.radius.card,
       paddingHorizontal: spacing.lg,
       paddingVertical: spacing.md,
-      borderWidth: borderWidth.thin,
-      borderColor: colors.stroke,
+      borderWidth: shape.isHogwarts ? shape.borderWidth.card : borderWidth.thin,
+      borderColor: shape.isHogwarts ? colors.cardBorder : colors.stroke,
+      ...(shape.isHogwarts ? shape.elevation.card : {}),
     },
     leftSection: {
       flexDirection: 'row',
@@ -104,9 +112,9 @@ const createStyles = (colors: ThemeColors) => ({
     iconContainer: {
       width: 44,
       height: 44,
-      borderRadius: borderRadius.medium,
-      borderWidth: borderWidth.thin,
-      borderColor: colors.stroke,
+      borderRadius: shape.isHogwarts ? borderRadius.large : borderRadius.medium,
+      borderWidth: shape.borderWidth.subtle,
+      borderColor: shape.isHogwarts ? colors.cardBorder : colors.stroke,
       alignItems: 'center',
       justifyContent: 'center',
       marginRight: spacing.md,
@@ -119,26 +127,28 @@ const createStyles = (colors: ThemeColors) => ({
     },
     category: {
       fontSize: 15,
-      fontWeight: '700',
+      fontWeight: shape.isHogwarts ? undefined : '700',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
       color: colors.textPrimary,
       marginBottom: 2,
     },
     date: {
       fontSize: 12,
-      fontWeight: '500',
+      fontWeight: shape.isHogwarts ? undefined : '500',
       color: colors.textTertiary,
-      fontFamily: typography.fontFamily.mono,
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.numeric : typography.fontFamily.mono,
       marginBottom: 2,
     },
     description: {
       fontSize: 12,
-      fontWeight: '500',
+      fontWeight: shape.isHogwarts ? undefined : '500',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
       color: colors.textSecondary,
     },
     amountBadge: {
-      borderRadius: borderRadius.small,
-      borderWidth: borderWidth.thin,
-      borderColor: colors.stroke,
+      borderRadius: shape.radius.badge,
+      borderWidth: shape.borderWidth.subtle,
+      borderColor: shape.isHogwarts ? colors.cardBorder : colors.stroke,
       paddingHorizontal: spacing.md,
       paddingVertical: spacing.xs,
     },
@@ -150,8 +160,8 @@ const createStyles = (colors: ThemeColors) => ({
     },
     amount: {
       fontSize: 15,
-      fontWeight: '800',
-      fontFamily: typography.fontFamily.mono,
+      fontWeight: shape.isHogwarts ? undefined : '800',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.numeric : typography.fontFamily.mono,
     },
     incomeAmount: {
       color: colors.incomeStrong,
@@ -161,6 +171,7 @@ const createStyles = (colors: ThemeColors) => ({
     },
   }),
   _colors: colors,
+  _isHogwarts: shape.isHogwarts,
 });
 
 export default BillItem;

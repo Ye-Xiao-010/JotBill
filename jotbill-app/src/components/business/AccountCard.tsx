@@ -5,8 +5,10 @@
 import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import { ThemeColors } from '../../theme/colors';
-import { borderRadius, borderWidth, spacing, shadow } from '../../theme/spacing';
+import { ThemeShape } from '../../theme/shape';
+import { borderRadius, borderWidth, spacing } from '../../theme/spacing';
 import { useStyles } from '../../hooks';
+import { HOGWARTS_FONTS } from '../../constants/hogwartsAssets';
 import BrutalPressable from '../ui/BrutalPressable';
 import { typography } from '../../theme';
 
@@ -81,15 +83,16 @@ export default function AccountCard({
   );
 }
 
-const createStyles = (colors: ThemeColors) => ({
+const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
   ...StyleSheet.create({
     container: {
-      borderRadius: borderRadius.card,
-      borderWidth: borderWidth.thick,
-      borderColor: colors.stroke,
+      borderRadius: shape.radius.card,
+      borderWidth: shape.isHogwarts ? shape.borderWidth.card : borderWidth.thick,
+      borderColor: shape.isHogwarts ? colors.accent : colors.stroke,
       padding: spacing.lg,
       minWidth: 200,
       marginRight: spacing.md,
+      ...(shape.isHogwarts ? shape.elevation.card : {}),
     },
     header: {
       flexDirection: 'row',
@@ -99,9 +102,9 @@ const createStyles = (colors: ThemeColors) => ({
     iconContainer: {
       width: 44,
       height: 44,
-      borderRadius: borderRadius.medium,
+      borderRadius: shape.isHogwarts ? borderRadius.large : borderRadius.medium,
       backgroundColor: 'rgba(255, 255, 255, 0.25)',
-      borderWidth: borderWidth.thin,
+      borderWidth: shape.borderWidth.subtle,
       borderColor: 'rgba(255, 255, 255, 0.4)',
       alignItems: 'center',
       justifyContent: 'center',
@@ -115,29 +118,32 @@ const createStyles = (colors: ThemeColors) => ({
     },
     name: {
       fontSize: 16,
-      fontWeight: '700',
+      fontWeight: shape.isHogwarts ? undefined : '700',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.display : undefined,
       color: '#FFFFFF',
       marginBottom: 2,
     },
     type: {
       fontSize: 12,
-      fontWeight: '600',
-      color: 'rgba(255, 255, 255, 0.7)',
+      fontWeight: shape.isHogwarts ? undefined : '600',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
+      color: 'rgba(255, 255, 255, 0.78)',
     },
     balanceContainer: {
       marginTop: spacing.sm,
     },
     balanceLabel: {
       fontSize: 12,
-      fontWeight: '600',
-      color: 'rgba(255, 255, 255, 0.7)',
+      fontWeight: shape.isHogwarts ? undefined : '600',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
+      color: 'rgba(255, 255, 255, 0.78)',
       marginBottom: spacing.xs,
     },
     balance: {
       fontSize: 24,
-      fontWeight: '900',
+      fontWeight: shape.isHogwarts ? undefined : '900',
       color: '#FFFFFF',
-      fontFamily: typography.fontFamily.mono,
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.numeric : typography.fontFamily.mono,
     },
   }),
   _colors: colors,

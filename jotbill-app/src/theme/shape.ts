@@ -33,6 +33,7 @@ export interface ThemeShape {
   isHogwarts: boolean;
   radius: {
     tag: number;
+    badge: number;
     small: number;
     medium: number;
     button: number;
@@ -45,6 +46,7 @@ export interface ThemeShape {
   };
   borderWidth: {
     hairline: number;
+    subtle: number;
     card: number;
     control: number;
     strong: number;
@@ -70,6 +72,7 @@ export const brutalShape: ThemeShape = {
   isHogwarts: false,
   radius: {
     tag: brutalRadius.small,
+    badge: brutalRadius.small,
     small: brutalRadius.small,
     medium: brutalRadius.medium,
     button: brutalRadius.button,
@@ -82,6 +85,7 @@ export const brutalShape: ThemeShape = {
   },
   borderWidth: {
     hairline: brutalBorderWidth.hairline,
+    subtle: brutalBorderWidth.thin,
     card: brutalBorderWidth.thin,
     control: brutalBorderWidth.medium,
     strong: brutalBorderWidth.thick,
@@ -112,6 +116,7 @@ const hogwartsLightShape: ThemeShape = {
   isHogwarts: true,
   radius: {
     tag: 8,
+    badge: 10,
     small: 10,
     medium: 14,
     button: 14,
@@ -124,6 +129,7 @@ const hogwartsLightShape: ThemeShape = {
   },
   borderWidth: {
     hairline: StyleSheet.hairlineWidth,
+    subtle: 1,
     card: 1,
     control: 1,
     strong: 1.5,

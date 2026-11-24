@@ -24,10 +24,13 @@ export interface HogwartsHouseMeta {
   id: HogwartsHouse;
   label: string;
   shortLabel: string;
+  enBadge: string;
   motto: string;
   crest: ImageSourcePropType;
   swatchPrimary: string;
   swatchAccent: string;
+  heroWashLight: string;
+  heroWashDark: string;
 }
 
 export const HOGWARTS_IMAGES = {
@@ -48,46 +51,61 @@ export const HOGWARTS_HOUSES: Record<HogwartsHouse, HogwartsHouseMeta> = {
     id: 'classic',
     label: '霍格沃茨古金',
     shortLabel: '古金',
+    enBadge: 'GRINGOTTS',
     motto: '羊皮纸与星光鎏金',
     crest: HOGWARTS_IMAGES.aiMascot,
     swatchPrimary: '#735318',
     swatchAccent: '#C9A227',
+    heroWashLight: 'rgba(115, 83, 24, 0.05)',
+    heroWashDark: 'rgba(223, 185, 96, 0.08)',
   },
   gryffindor: {
     id: 'gryffindor',
     label: '格兰芬多',
     shortLabel: '格兰芬多',
+    enBadge: 'GRYFFINDOR',
     motto: '绯红鎏金 · 勇气与火',
     crest: HOGWARTS_IMAGES.crestCrimsonLion,
     swatchPrimary: '#821B1F',
     swatchAccent: '#C9A227',
+    heroWashLight: 'rgba(130, 27, 31, 0.09)',
+    heroWashDark: 'rgba(130, 27, 31, 0.24)',
   },
   slytherin: {
     id: 'slytherin',
     label: '斯莱特林',
     shortLabel: '斯莱特林',
+    enBadge: 'SLYTHERIN',
     motto: '祖母绿银 · 精明自制',
     crest: HOGWARTS_IMAGES.crestEmeraldSerpent,
     swatchPrimary: '#195434',
     swatchAccent: '#8D99AE',
+    heroWashLight: 'rgba(25, 84, 52, 0.09)',
+    heroWashDark: 'rgba(25, 84, 52, 0.24)',
   },
   ravenclaw: {
     id: 'ravenclaw',
     label: '拉文克劳',
     shortLabel: '拉文克劳',
+    enBadge: 'RAVENCLAW',
     motto: '星夜蓝铜 · 智慧洞见',
     crest: HOGWARTS_IMAGES.crestSapphireEagle,
     swatchPrimary: '#1D3975',
     swatchAccent: '#B0793A',
+    heroWashLight: 'rgba(29, 57, 117, 0.09)',
+    heroWashDark: 'rgba(29, 57, 117, 0.26)',
   },
   hufflepuff: {
     id: 'hufflepuff',
     label: '赫奇帕奇',
     shortLabel: '赫奇帕奇',
+    enBadge: 'HUFFLEPUFF',
     motto: '琥珀黑金 · 勤勉公正',
     crest: HOGWARTS_IMAGES.crestAmberBadger,
     swatchPrimary: '#7D510D',
     swatchAccent: '#D99B26',
+    heroWashLight: 'rgba(182, 118, 24, 0.11)',
+    heroWashDark: 'rgba(182, 118, 24, 0.22)',
   },
 };
 

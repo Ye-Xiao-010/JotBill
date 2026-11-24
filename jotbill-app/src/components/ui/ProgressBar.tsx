@@ -5,8 +5,10 @@
 import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import { ThemeColors } from '../../theme/colors';
+import { ThemeShape } from '../../theme/shape';
 import { borderRadius, spacing } from '../../theme/spacing';
 import { useStyles } from '../../hooks';
+import { HOGWARTS_FONTS } from '../../constants/hogwartsAssets';
 import { typography } from '../../theme';
 
 export interface ProgressBarProps {
@@ -68,7 +70,7 @@ export default function ProgressBar({
   );
 }
 
-const createStyles = (colors: ThemeColors) => ({
+const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
   ...StyleSheet.create({
     container: {
       flexDirection: 'row',
@@ -76,28 +78,29 @@ const createStyles = (colors: ThemeColors) => ({
     },
     track: {
       flex: 1,
-      borderRadius: borderRadius.small,
+      borderRadius: shape.isHogwarts ? borderRadius.round : borderRadius.small,
       overflow: 'hidden',
       position: 'relative',
     },
     fill: {
-      borderRadius: borderRadius.small,
+      borderRadius: shape.isHogwarts ? borderRadius.round : borderRadius.small,
     },
     insideLabel: {
       position: 'absolute',
       right: spacing.sm,
       color: '#FFFFFF',
       fontSize: 10,
-      fontWeight: '800',
+      fontWeight: shape.isHogwarts ? undefined : '800',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.numeric : undefined,
       top: '50%',
       transform: [{ translateY: -6 }],
     },
     outsideLabel: {
       marginLeft: spacing.sm,
       fontSize: 12,
-      fontWeight: '800',
+      fontWeight: shape.isHogwarts ? undefined : '800',
       minWidth: 36,
-      fontFamily: typography.fontFamily.mono,
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.numeric : typography.fontFamily.mono,
     },
   }),
   _colors: colors,

@@ -5,8 +5,10 @@
 import React, { useState } from 'react';
 import { View, TextInput, TouchableOpacity, Text, StyleSheet } from 'react-native';
 import { ThemeColors } from '../../theme/colors';
+import { ThemeShape } from '../../theme/shape';
 import { borderRadius, borderWidth, spacing } from '../../theme/spacing';
 import { useStyles } from '../../hooks';
+import { HOGWARTS_FONTS } from '../../constants/hogwartsAssets';
 
 export interface SearchBarProps {
   value: string;
@@ -56,17 +58,17 @@ export default function SearchBar({
   );
 }
 
-const createStyles = (colors: ThemeColors) => ({
+const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
   ...StyleSheet.create({
     container: {
       flexDirection: 'row',
       alignItems: 'center',
       backgroundColor: colors.surface,
-      borderRadius: borderRadius.input,
+      borderRadius: shape.radius.input,
       paddingHorizontal: spacing.md,
       height: 48,
-      borderWidth: borderWidth.medium,
-      borderColor: colors.stroke,
+      borderWidth: shape.isHogwarts ? shape.borderWidth.card : borderWidth.medium,
+      borderColor: shape.isHogwarts ? colors.cardBorder : colors.stroke,
     },
     containerFocused: {
       borderColor: colors.accent,
@@ -78,16 +80,17 @@ const createStyles = (colors: ThemeColors) => ({
     input: {
       flex: 1,
       fontSize: 15,
-      fontWeight: '600',
+      fontWeight: shape.isHogwarts ? undefined : '600',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
       color: colors.textPrimary,
       padding: 0,
     },
     clearButton: {
       width: 28,
       height: 28,
-      borderRadius: borderRadius.small,
-      borderWidth: borderWidth.thin,
-      borderColor: colors.stroke,
+      borderRadius: shape.isHogwarts ? borderRadius.round : borderRadius.small,
+      borderWidth: shape.borderWidth.subtle,
+      borderColor: shape.isHogwarts ? colors.cardBorder : colors.stroke,
       backgroundColor: colors.divider,
       alignItems: 'center',
       justifyContent: 'center',

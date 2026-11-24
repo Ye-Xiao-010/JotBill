@@ -5,8 +5,10 @@
 import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import { ThemeColors } from '../../theme/colors';
-import { borderRadius, borderWidth, spacing, shadow } from '../../theme/spacing';
+import { ThemeShape } from '../../theme/shape';
+import { borderRadius, borderWidth, spacing } from '../../theme/spacing';
 import { useStyles } from '../../hooks';
+import { HOGWARTS_FONTS } from '../../constants/hogwartsAssets';
 import { formatSignedCurrency } from '../../utils/format';
 import CategoryIcon from './CategoryIcon';
 import BrutalPressable from '../ui/BrutalPressable';
@@ -41,12 +43,17 @@ export default function TransactionItem({
     <View style={styles.inner}>
       <View style={[
         styles.iconContainer,
-        { backgroundColor: isIncome ? styles._colors.income : styles._colors.expense },
+        {
+          backgroundColor: styles._isHogwarts
+            ? (isIncome ? styles._colors.incomeLight : styles._colors.expenseLight)
+            : (isIncome ? styles._colors.income : styles._colors.expense),
+        },
       ]}>
         <CategoryIcon
           icon={categoryIcon}
           fallback={isIncome ? '💰' : '💸'}
           size={22}
+          color={styles._isHogwarts ? (isIncome ? styles._colors.incomeStrong : styles._colors.expenseStrong) : undefined}
           emojiStyle={styles.icon}
         />
       </View>
@@ -94,15 +101,16 @@ export default function TransactionItem({
   return <View style={styles.container}>{content}</View>;
 }
 
-const createStyles = (colors: ThemeColors) => ({
+const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
   ...StyleSheet.create({
     container: {
       backgroundColor: colors.surface,
-      borderRadius: borderRadius.card,
-      borderWidth: borderWidth.medium,
-      borderColor: colors.stroke,
+      borderRadius: shape.radius.card,
+      borderWidth: shape.isHogwarts ? shape.borderWidth.card : borderWidth.medium,
+      borderColor: shape.isHogwarts ? colors.cardBorder : colors.stroke,
       padding: spacing.md,
       marginBottom: spacing.sm,
+      ...(shape.isHogwarts ? shape.elevation.card : {}),
     },
     inner: {
       flexDirection: 'row',
@@ -111,9 +119,9 @@ const createStyles = (colors: ThemeColors) => ({
     iconContainer: {
       width: 44,
       height: 44,
-      borderRadius: borderRadius.medium,
-      borderWidth: borderWidth.thin,
-      borderColor: colors.stroke,
+      borderRadius: shape.isHogwarts ? borderRadius.large : borderRadius.medium,
+      borderWidth: shape.borderWidth.subtle,
+      borderColor: shape.isHogwarts ? colors.cardBorder : colors.stroke,
       alignItems: 'center',
       justifyContent: 'center',
       marginRight: spacing.md,
@@ -132,15 +140,16 @@ const createStyles = (colors: ThemeColors) => ({
     },
     category: {
       fontSize: 15,
-      fontWeight: '700',
+      fontWeight: shape.isHogwarts ? undefined : '700',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
       color: colors.textPrimary,
       flex: 1,
       marginRight: spacing.sm,
     },
     amountBadge: {
-      borderRadius: borderRadius.small,
-      borderWidth: borderWidth.thin,
-      borderColor: colors.stroke,
+      borderRadius: shape.radius.badge,
+      borderWidth: shape.borderWidth.subtle,
+      borderColor: shape.isHogwarts ? colors.cardBorder : colors.stroke,
       paddingHorizontal: spacing.sm,
       paddingVertical: 2,
     },
@@ -152,8 +161,8 @@ const createStyles = (colors: ThemeColors) => ({
     },
     amount: {
       fontSize: 15,
-      fontWeight: '800',
-      fontFamily: typography.fontFamily.mono,
+      fontWeight: shape.isHogwarts ? undefined : '800',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.numeric : typography.fontFamily.mono,
     },
     incomeAmount: {
       color: colors.incomeStrong,
@@ -168,17 +177,19 @@ const createStyles = (colors: ThemeColors) => ({
     },
     description: {
       fontSize: 13,
-      fontWeight: '500',
+      fontWeight: shape.isHogwarts ? undefined : '500',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
       color: colors.textTertiary,
       flex: 1,
       marginRight: spacing.sm,
     },
     time: {
       fontSize: 12,
-      fontWeight: '500',
+      fontWeight: shape.isHogwarts ? undefined : '500',
       color: colors.textTertiary,
-      fontFamily: typography.fontFamily.mono,
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.numeric : typography.fontFamily.mono,
     },
   }),
   _colors: colors,
+  _isHogwarts: shape.isHogwarts,
 });

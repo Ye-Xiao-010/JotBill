@@ -5,8 +5,10 @@
 import React, { useState } from 'react';
 import { View, Text, ScrollView, RefreshControl, StyleSheet } from 'react-native';
 import { ThemeColors } from '../../theme/colors';
+import { ThemeShape } from '../../theme/shape';
 import { spacing } from '../../theme/spacing';
 import { useStyles } from '../../hooks';
+import { HOGWARTS_FONTS } from '../../constants/hogwartsAssets';
 import { useYearlyGridData } from '../../hooks/useIncomeExpenseData';
 import { YearGrid, MonthlySummaryList } from '../../components/reports';
 import QueryErrorBanner from '../../components/ui/QueryErrorBanner';
@@ -118,7 +120,7 @@ export default function YearlyView({ onJumpToMonthly }: YearlyViewProps) {
   );
 }
 
-const createStyles = (colors: ThemeColors) => ({
+const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
   ...StyleSheet.create({
     container: {
       flex: 1,
@@ -129,7 +131,8 @@ const createStyles = (colors: ThemeColors) => ({
     },
     headerTitle: {
       fontSize: 18,
-      fontWeight: '800',
+      fontWeight: shape.isHogwarts ? undefined : '800',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.display : undefined,
       color: colors.textPrimary,
       textAlign: 'center',
     },
@@ -138,7 +141,8 @@ const createStyles = (colors: ThemeColors) => ({
     },
     detailTitle: {
       fontSize: 15,
-      fontWeight: '800',
+      fontWeight: shape.isHogwarts ? undefined : '800',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.display : undefined,
       color: colors.textPrimary,
       paddingHorizontal: spacing.lg,
       marginBottom: spacing.md,

@@ -4,6 +4,7 @@
  */
 import React, { useState, useCallback, useMemo } from 'react';
 import {
+  Image,
   View,
   Text,
   ScrollView,
@@ -20,13 +21,17 @@ import {
 } from '@react-navigation/native';
 import { useQuery } from '@tanstack/react-query';
 import { BillItem } from '../../components';
+import { HogwartsStarDivider } from '../../components/ui';
 import QueryErrorBanner from '../../components/ui/QueryErrorBanner';
 import { useToast, useStyles } from '../../hooks';
+import { useTheme } from '../../providers';
 import { nativeData, type Category } from '../../native';
 import { CACHE_TIME, GC_TIME, QUERY_KEYS } from '../../lib/queryClient';
 import { formatPlatform } from '../../utils/platform';
 import { formatCurrency } from '../../utils/format';
 import { ThemeColors } from '../../theme/colors';
+import { ThemeShape } from '../../theme/shape';
+import { HOGWARTS_FONTS, HOGWARTS_IMAGES } from '../../constants/hogwartsAssets';
 import { spacing, borderRadius, borderWidth, typography } from '../../theme';
 import {
   getCurrentMonthRange,
@@ -40,6 +45,7 @@ const AllBillsScreen: React.FC = () => {
   const navigation = useNavigation<any>();
   const route = useRoute();
   const { showError } = useToast();
+  const { isHogwarts, colors } = useTheme();
   const styles = useStyles(createStyles);
 
   const routeParams = route.params as
@@ -340,8 +346,25 @@ const AllBillsScreen: React.FC = () => {
               />
             ) : (
               <View style={styles.emptyContainer}>
-                <Text style={styles.emptyIcon}>📋</Text>
-                <Text style={styles.emptyText}>暂无账单记录</Text>
+                {isHogwarts ? (
+                  <>
+                    <Image
+                      source={HOGWARTS_IMAGES.emptyOwl}
+                      style={styles.emptyOwlArt}
+                      resizeMode="contain"
+                    />
+                    <HogwartsStarDivider
+                      color={colors.accent}
+                      width={150}
+                      style={styles.emptyStarDivider}
+                    />
+                  </>
+                ) : (
+                  <Text style={styles.emptyIcon}>📋</Text>
+                )}
+                <Text style={styles.emptyText}>
+                  {isHogwarts ? '账卷尚无落墨记录' : '暂无账单记录'}
+                </Text>
               </View>
             )
           }
@@ -351,35 +374,39 @@ const AllBillsScreen: React.FC = () => {
   );
 };
 
-const createStyles = (colors: ThemeColors) => ({
+const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
   ...StyleSheet.create({
     container: { flex: 1, backgroundColor: colors.background },
     filterBar: {
       backgroundColor: colors.surface,
       paddingHorizontal: spacing.lg,
       paddingVertical: spacing.md,
-      borderBottomWidth: borderWidth.thin,
-      borderBottomColor: colors.stroke,
+      borderBottomWidth: shape.borderWidth.subtle,
+      borderBottomColor: shape.isHogwarts ? colors.divider : colors.stroke,
     },
     filterBtn: {
       paddingHorizontal: spacing.lg,
       paddingVertical: spacing.sm,
-      borderRadius: borderRadius.small,
+      borderRadius: shape.isHogwarts ? shape.radius.pill : borderRadius.small,
       marginRight: spacing.sm,
       backgroundColor: colors.surface,
-      borderWidth: borderWidth.thin,
-      borderColor: colors.stroke,
+      borderWidth: shape.borderWidth.subtle,
+      borderColor: shape.isHogwarts ? colors.cardBorder : colors.stroke,
     },
     filterBtnActive: {
       backgroundColor: colors.primary,
-      borderColor: colors.stroke,
+      borderColor: shape.isHogwarts ? colors.accent : colors.stroke,
     },
     filterText: {
       fontSize: 13,
       color: colors.textSecondary,
-      fontWeight: '700',
+      fontWeight: shape.isHogwarts ? undefined : '700',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
     },
-    filterTextActive: { color: colors.onPrimary, fontWeight: '800' },
+    filterTextActive: {
+      color: colors.onPrimary,
+      fontWeight: shape.isHogwarts ? undefined : '800',
+    },
     scrollView: { flex: 1 },
     monthSection: { marginBottom: spacing.md },
     monthHeader: {
@@ -388,19 +415,20 @@ const createStyles = (colors: ThemeColors) => ({
       alignItems: 'center',
       paddingHorizontal: spacing.lg,
       paddingVertical: spacing.md,
-      backgroundColor: colors.surface,
-      borderBottomWidth: borderWidth.thin,
-      borderBottomColor: colors.stroke,
+      backgroundColor: shape.isHogwarts ? colors.surfaceMuted : colors.surface,
+      borderBottomWidth: shape.borderWidth.subtle,
+      borderBottomColor: shape.isHogwarts ? colors.divider : colors.stroke,
     },
     monthTitle: {
       fontSize: 15,
-      fontWeight: '800',
+      fontWeight: shape.isHogwarts ? undefined : '800',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.display : undefined,
       color: colors.textPrimary,
     },
     monthTotal: {
       fontSize: 15,
-      fontWeight: '800',
-      fontFamily: typography.fontFamily.mono,
+      fontWeight: shape.isHogwarts ? undefined : '800',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.numeric : typography.fontFamily.mono,
     },
     loadingContainer: {
       flex: 1,
@@ -411,17 +439,34 @@ const createStyles = (colors: ThemeColors) => ({
     loadingText: {
       marginTop: spacing.md,
       fontSize: 15,
-      fontWeight: '600',
+      fontWeight: shape.isHogwarts ? undefined : '600',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
       color: colors.textSecondary,
     },
     emptyContainer: {
       flex: 1,
       justifyContent: 'center',
       alignItems: 'center',
-      paddingTop: 100,
+      paddingTop: 80,
+    },
+    emptyOwlArt: {
+      width: 128,
+      height: 128,
+      borderRadius: 16,
+      borderWidth: 1,
+      borderColor: colors.cardBorder,
+      marginBottom: spacing.sm,
+    },
+    emptyStarDivider: {
+      marginBottom: spacing.sm,
     },
     emptyIcon: { fontSize: 48, marginBottom: spacing.md },
-    emptyText: { fontSize: 15, fontWeight: '700', color: colors.textTertiary },
+    emptyText: {
+      fontSize: 15,
+      fontWeight: shape.isHogwarts ? undefined : '700',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
+      color: colors.textTertiary,
+    },
   }),
   _colors: colors,
 });

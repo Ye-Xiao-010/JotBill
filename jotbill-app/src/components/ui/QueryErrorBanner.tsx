@@ -15,8 +15,10 @@
 import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import { ThemeColors } from '../../theme/colors';
-import { spacing, borderRadius, borderWidth } from '../../theme/spacing';
+import { ThemeShape } from '../../theme/shape';
+import { spacing, borderWidth } from '../../theme/spacing';
 import { useStyles } from '../../hooks';
+import { HOGWARTS_FONTS } from '../../constants/hogwartsAssets';
 import BrutalPressable from './BrutalPressable';
 
 export interface QueryErrorBannerProps {
@@ -98,16 +100,17 @@ const QueryErrorBanner: React.FC<QueryErrorBannerProps> = ({
   );
 };
 
-const createStyles = (colors: ThemeColors) => ({
+const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
   ...StyleSheet.create({
     container: {
       margin: spacing.lg,
       marginBottom: 0,
       padding: spacing.md,
       backgroundColor: colors.surface,
-      borderRadius: borderRadius.card,
-      borderWidth: borderWidth.medium,
+      borderRadius: shape.radius.card,
+      borderWidth: shape.isHogwarts ? shape.borderWidth.card : borderWidth.medium,
       borderColor: colors.error,
+      ...(shape.isHogwarts ? shape.elevation.card : {}),
     },
     header: {
       flexDirection: 'row',
@@ -119,7 +122,8 @@ const createStyles = (colors: ThemeColors) => ({
     },
     title: {
       fontSize: 14,
-      fontWeight: '800',
+      fontWeight: shape.isHogwarts ? undefined : '800',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.display : undefined,
       color: colors.error,
       flex: 1,
     },
@@ -127,28 +131,31 @@ const createStyles = (colors: ThemeColors) => ({
       marginTop: spacing.sm,
       fontSize: 12,
       lineHeight: 17,
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
       color: colors.textSecondary,
     },
     hint: {
       marginTop: spacing.xs,
       fontSize: 12,
       lineHeight: 17,
-      fontWeight: '700',
+      fontWeight: shape.isHogwarts ? undefined : '700',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
       color: colors.error,
     },
     button: {
       alignSelf: 'flex-start',
       marginTop: spacing.md,
       backgroundColor: colors.primary,
-      borderRadius: borderRadius.button,
-      borderWidth: borderWidth.thin,
-      borderColor: colors.stroke,
+      borderRadius: shape.radius.button,
+      borderWidth: shape.borderWidth.subtle,
+      borderColor: shape.isHogwarts ? colors.accent : colors.stroke,
       paddingHorizontal: spacing.lg,
       paddingVertical: spacing.sm,
     },
     buttonText: {
       fontSize: 13,
-      fontWeight: '800',
+      fontWeight: shape.isHogwarts ? undefined : '800',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
       color: colors.onPrimary,
     },
   }),

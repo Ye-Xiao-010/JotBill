@@ -36,12 +36,13 @@ import {
   type ThemeName,
 } from '../theme/colors';
 import { spacing, borderRadius, borderWidth, shadow, typography, type ThemeShape } from '../theme';
-import { useStyles } from '../hooks';
+import { useStyles, useToast } from '../hooks';
 import { useDisplayPreferences, useTheme } from '../providers';
 import {
   HOGWARTS_FONTS,
   HOGWARTS_HOUSES,
   HOGWARTS_HOUSE_ORDER,
+  HOGWARTS_IMAGES,
 } from '../constants/hogwartsAssets';
 import type { MagicSoundKey } from '../native/theme';
 
@@ -132,9 +133,32 @@ export default function SettingsScreen({ navigation }: SettingsScreenProps) {
     showDashboardBudget,
     setShowDashboardBudget,
   } = useDisplayPreferences();
+  const { showInfo } = useToast();
   const styles = useStyles(createStyles);
 
   const activeHouseMeta = HOGWARTS_HOUSES[hogwartsHouse] ?? HOGWARTS_HOUSES.classic;
+
+  const handleSelectTheme = (name: ThemeName) => {
+    const prevWasHogwarts = isHogwarts;
+    setThemeName(name);
+    if (name === 'hogwarts') {
+      playMagicSound('chime', { force: hogwartsSfxEnabled });
+      if (hogwartsDynamicIconEnabled) {
+        showInfo(`返回桌面后图标将切换为「${activeHouseMeta.label}」`);
+      }
+    } else if (prevWasHogwarts && hogwartsDynamicIconEnabled) {
+      showInfo('返回桌面后图标将恢复为默认「招财猫猫」');
+    }
+  };
+
+  const handleToggleDynamicIcon = (enabled: boolean) => {
+    setHogwartsDynamicIconEnabled(enabled);
+    if (enabled) {
+      showInfo(`返回桌面后图标将自动切换为「${activeHouseMeta.label}」`);
+    } else {
+      showInfo('已关闭同步切换，返回桌面后恢复默认图标');
+    }
+  };
 
   const handleAuditionSound = () => {
     const order: MagicSoundKey[] = ['coin_drop', 'quill', 'chime', 'coin_clink'];
@@ -226,6 +250,15 @@ export default function SettingsScreen({ navigation }: SettingsScreenProps) {
 
   return (
     <View style={styles.container}>
+      {isHogwarts && !isDark ? (
+        <View pointerEvents="none" style={styles.parchmentBackdrop}>
+          <Image
+            source={HOGWARTS_IMAGES.parchmentTexture}
+            style={StyleSheet.absoluteFill}
+            resizeMode="cover"
+          />
+        </View>
+      ) : null}
       <View style={styles.header}>
         <View style={styles.userInfo}>
           <View style={styles.avatarContainer}>
@@ -261,14 +294,17 @@ export default function SettingsScreen({ navigation }: SettingsScreenProps) {
             <View style={styles.groupItems}>
               {group.items.map((item) => {
                 const IconComponent = iconMap[item.icon];
-                const candyColor = ICON_CANDY_COLORS[item.icon] || colors.accent;
+                const iconBg = isHogwarts
+                  ? colors.primaryLight
+                  : ICON_CANDY_COLORS[item.icon] || colors.accent;
+                const iconColor = isHogwarts ? colors.primary : colors.stroke;
                 return (
                 <View key={item.id}>
                   {item.isSwitch ? (
                     <View style={styles.settingItem}>
                       <View style={styles.settingLeft}>
-                        <View style={[styles.iconContainer, { backgroundColor: candyColor }]}>
-                          {IconComponent && <IconComponent size={20} color={colors.stroke} />}
+                        <View style={[styles.iconContainer, { backgroundColor: iconBg }]}>
+                          {IconComponent && <IconComponent size={20} color={iconColor} />}
                         </View>
                         <View style={styles.settingTextBlock}>
                           <Text style={styles.settingLabel}>{item.label}</Text>
@@ -292,8 +328,8 @@ export default function SettingsScreen({ navigation }: SettingsScreenProps) {
                       activeOpacity={0.8}
                     >
                       <View style={styles.settingLeft}>
-                        <View style={[styles.iconContainer, { backgroundColor: candyColor }]}>
-                          {IconComponent && <IconComponent size={20} color={colors.stroke} />}
+                        <View style={[styles.iconContainer, { backgroundColor: iconBg }]}>
+                          {IconComponent && <IconComponent size={20} color={iconColor} />}
                         </View>
                         <View style={styles.settingTextBlock}>
                           <Text style={styles.settingLabel}>{item.label}</Text>
@@ -318,30 +354,56 @@ export default function SettingsScreen({ navigation }: SettingsScreenProps) {
             {(Object.keys(themes) as ThemeName[]).map(name => {
               const preview = themes[name].light;
               const active = name === themeName;
+              const isHogwartsCard = name === 'hogwarts';
               return (
                 <TouchableOpacity
                   key={name}
-                  style={[styles.themeCard, active && styles.themeCardActive]}
-                  onPress={() => setThemeName(name)}
+                  style={[
+                    styles.themeCard,
+                    isHogwartsCard && styles.themeCardFeatured,
+                    active && styles.themeCardActive,
+                  ]}
+                  onPress={() => handleSelectTheme(name)}
                   activeOpacity={0.8}
                   accessibilityLabel={`主题 ${THEME_LABELS[name]}${active ? '，当前使用中' : ''}`}
                   accessibilityRole="button"
                   accessibilityState={{ selected: active }}
                 >
-                  <View style={styles.themeSwatches}>
-                    <View style={[styles.themeSwatch, { backgroundColor: preview.primary }]} />
-                    <View style={[styles.themeSwatch, { backgroundColor: preview.accent }]} />
-                    <View
-                      style={[
-                        styles.themeSwatch,
-                        { backgroundColor: preview.background },
-                        styles.themeSwatchBordered,
-                      ]}
-                    />
-                  </View>
-                  <Text style={styles.themeName}>
-                    {THEME_LABELS[name]}{active ? ' ✓' : ''}
-                  </Text>
+                  {isHogwartsCard ? (
+                    <View style={styles.themeFeaturedRow}>
+                      <Image
+                        source={HOGWARTS_IMAGES.themeCover}
+                        style={styles.themeCoverThumb}
+                        resizeMode="cover"
+                      />
+                      <View style={styles.themeFeaturedMeta}>
+                        <Text style={styles.themeFeaturedEn}>HOGWARTS EDITION</Text>
+                        <Text style={styles.themeName}>
+                          {THEME_LABELS[name]}{active ? ' ✓' : ''}
+                        </Text>
+                        <Text style={styles.themeFeaturedDesc}>
+                          羊皮纸双语字库 · 四学院纹章 · 魔法音效
+                        </Text>
+                      </View>
+                    </View>
+                  ) : (
+                    <>
+                      <View style={styles.themeSwatches}>
+                        <View style={[styles.themeSwatch, { backgroundColor: preview.primary }]} />
+                        <View style={[styles.themeSwatch, { backgroundColor: preview.accent }]} />
+                        <View
+                          style={[
+                            styles.themeSwatch,
+                            { backgroundColor: preview.background },
+                            styles.themeSwatchBordered,
+                          ]}
+                        />
+                      </View>
+                      <Text style={styles.themeName}>
+                        {THEME_LABELS[name]}{active ? ' ✓' : ''}
+                      </Text>
+                    </>
+                  )}
                 </TouchableOpacity>
               );
             })}
@@ -363,6 +425,9 @@ export default function SettingsScreen({ navigation }: SettingsScreenProps) {
                     onPress={() => {
                       setHogwartsHouse(houseId);
                       playMagicSound('chime');
+                      if (hogwartsDynamicIconEnabled) {
+                        showInfo(`已切换「${house.label}」，返回桌面后图标同步更新`);
+                      }
                     }}
                     activeOpacity={0.8}
                     accessibilityLabel={`学院风格 ${house.label}${active ? '，当前使用中' : ''}`}
@@ -435,7 +500,7 @@ export default function SettingsScreen({ navigation }: SettingsScreenProps) {
               </View>
               <Switch
                 value={hogwartsDynamicIconEnabled}
-                onValueChange={setHogwartsDynamicIconEnabled}
+                onValueChange={handleToggleDynamicIcon}
                 trackColor={{ false: colors.divider, true: colors.primary }}
                 thumbColor="#FFFFFF"
                 accessibilityLabel="同步切换桌面图标"
@@ -458,6 +523,10 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
     container: {
       flex: 1,
       backgroundColor: colors.background,
+    },
+    parchmentBackdrop: {
+      ...StyleSheet.absoluteFillObject,
+      opacity: 0.07,
     },
     header: {
       backgroundColor: colors.surface,
@@ -540,6 +609,36 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
       borderColor: colors.cardBorder,
       padding: spacing.md,
       minHeight: 44,
+    },
+    themeCardFeatured: {
+      flexBasis: '100%',
+    },
+    themeFeaturedRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: spacing.md,
+    },
+    themeCoverThumb: {
+      width: 52,
+      height: 68,
+      borderRadius: 10,
+      borderWidth: 1.5,
+      borderColor: '#C9A227',
+    },
+    themeFeaturedMeta: {
+      flex: 1,
+      gap: 2,
+    },
+    themeFeaturedEn: {
+      fontSize: 10,
+      fontFamily: HOGWARTS_FONTS.ornate,
+      color: colors.primary,
+      letterSpacing: 1.2,
+    },
+    themeFeaturedDesc: {
+      fontSize: 12,
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
+      color: colors.textSecondary,
     },
     themeCardActive: {
       borderWidth: shape.isHogwarts ? 2 : borderWidth.medium,

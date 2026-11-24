@@ -6,8 +6,10 @@ import React, { useState, useEffect } from 'react';
 import { View, Text, ScrollView, RefreshControl, StyleSheet, ActivityIndicator, TouchableOpacity } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { ThemeColors } from '../../theme/colors';
-import { spacing, borderRadius, borderWidth } from '../../theme/spacing';
+import { ThemeShape } from '../../theme/shape';
+import { spacing } from '../../theme/spacing';
 import { useStyles } from '../../hooks';
+import { HOGWARTS_FONTS } from '../../constants/hogwartsAssets';
 import {
   useDailyGridData,
   useDailyBills,
@@ -229,7 +231,7 @@ export default function DailyView({
   );
 }
 
-const createStyles = (colors: ThemeColors) => ({
+const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
   ...StyleSheet.create({
     container: {
       flex: 1,
@@ -246,7 +248,8 @@ const createStyles = (colors: ThemeColors) => ({
     },
     detailTitle: {
       fontSize: 15,
-      fontWeight: '800',
+      fontWeight: shape.isHogwarts ? undefined : '800',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.display : undefined,
       color: colors.textPrimary,
     },
     daySummary: {
@@ -255,14 +258,14 @@ const createStyles = (colors: ThemeColors) => ({
     },
     incomeText: {
       fontSize: 12,
-      fontWeight: '700',
-      fontFamily: typography.fontFamily.mono,
+      fontWeight: shape.isHogwarts ? undefined : '700',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.numeric : typography.fontFamily.mono,
       color: colors.income,
     },
     expenseText: {
       fontSize: 12,
-      fontWeight: '700',
-      fontFamily: typography.fontFamily.mono,
+      fontWeight: shape.isHogwarts ? undefined : '700',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.numeric : typography.fontFamily.mono,
       color: colors.expense,
     },
     loading: {
@@ -270,6 +273,7 @@ const createStyles = (colors: ThemeColors) => ({
     },
     emptyText: {
       fontSize: 14,
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
       color: colors.textTertiary,
       textAlign: 'center',
       padding: spacing.xxxl,
@@ -280,14 +284,15 @@ const createStyles = (colors: ThemeColors) => ({
     truncatedNotice: {
       marginTop: spacing.md,
       padding: spacing.md,
-      borderRadius: borderRadius.small,
-      borderWidth: borderWidth.thin,
+      borderRadius: shape.radius.card,
+      borderWidth: shape.borderWidth.card,
       borderColor: colors.warning,
       backgroundColor: colors.surface,
     },
     truncatedText: {
       fontSize: 12,
       lineHeight: 18,
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
       color: colors.textSecondary,
     },
     truncatedButton: {
@@ -295,14 +300,15 @@ const createStyles = (colors: ThemeColors) => ({
       marginTop: spacing.sm,
       paddingHorizontal: spacing.md,
       paddingVertical: spacing.xs,
-      borderRadius: borderRadius.small,
-      borderWidth: borderWidth.thin,
-      borderColor: colors.stroke,
+      borderRadius: shape.radius.button,
+      borderWidth: shape.borderWidth.subtle,
+      borderColor: shape.isHogwarts ? colors.accent : colors.stroke,
       backgroundColor: colors.primary,
     },
     truncatedButtonText: {
       fontSize: 12,
-      fontWeight: '800',
+      fontWeight: shape.isHogwarts ? undefined : '800',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
       color: '#FFFFFF',
     },
   }),

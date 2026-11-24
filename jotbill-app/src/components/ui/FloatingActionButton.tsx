@@ -13,6 +13,7 @@ import {
   GestureResponderEvent,
 } from 'react-native';
 import { ThemeColors } from '../../theme/colors';
+import { ThemeShape } from '../../theme/shape';
 import { spacing, borderRadius, borderWidth } from '../../theme/spacing';
 import { useStyles } from '../../hooks';
 
@@ -45,9 +46,11 @@ export const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({
   };
 
   const currentSize = sizeStyles[size];
-  const shadowOffset = size === 'small' ? 3 : 4;
-  const bgColor = backgroundColor || styles._colors.accent;
-  const txtColor = iconColor || styles._colors.textPrimary;
+  const isHogwarts = styles._isHogwarts;
+  const shadowOffset = isHogwarts ? 0 : (size === 'small' ? 3 : 4);
+  const bgColor = backgroundColor || (isHogwarts ? styles._colors.primary : styles._colors.accent);
+  const txtColor = iconColor || (isHogwarts ? styles._colors.onPrimary : styles._colors.textPrimary);
+  const fabRadius = isHogwarts ? borderRadius.round : borderRadius.medium;
 
   const handlePressIn = () => {
     Animated.timing(anim, {
@@ -85,19 +88,21 @@ export const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({
         style,
       ]}
     >
-      {/* 实心阴影层 */}
-      <View
-        style={[
-          styles.shadowLayer,
-          {
-            width: currentSize.width,
-            height: currentSize.height,
-            borderRadius: borderRadius.medium,
-            top: shadowOffset,
-            left: shadowOffset,
-          },
-        ]}
-      />
+      {/* 实心阴影层（仅粗野主义主题） */}
+      {!isHogwarts ? (
+        <View
+          style={[
+            styles.shadowLayer,
+            {
+              width: currentSize.width,
+              height: currentSize.height,
+              borderRadius: fabRadius,
+              top: shadowOffset,
+              left: shadowOffset,
+            },
+          ]}
+        />
+      ) : null}
       {/* 按钮主体 */}
       <Pressable
         onPress={onPress}
@@ -111,7 +116,7 @@ export const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({
             {
               width: currentSize.width,
               height: currentSize.height,
-              borderRadius: borderRadius.medium,
+              borderRadius: fabRadius,
               backgroundColor: disabled ? styles._colors.divider : bgColor,
               transform: [{ translateX }, { translateY }],
             },
@@ -134,7 +139,7 @@ export const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({
   );
 };
 
-const createStyles = (colors: ThemeColors) => ({
+const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
   ...StyleSheet.create({
     container: {
       position: 'absolute',
@@ -149,14 +154,16 @@ const createStyles = (colors: ThemeColors) => ({
     button: {
       justifyContent: 'center',
       alignItems: 'center',
-      borderWidth: borderWidth.thick,
-      borderColor: colors.stroke,
+      borderWidth: shape.isHogwarts ? 1.5 : borderWidth.thick,
+      borderColor: shape.isHogwarts ? colors.accent : colors.stroke,
+      ...(shape.isHogwarts ? shape.elevation.floating : {}),
     },
     icon: {
       fontWeight: '800',
     },
   }),
   _colors: colors,
+  _isHogwarts: shape.isHogwarts,
 });
 
 export default FloatingActionButton;

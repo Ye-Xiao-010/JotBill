@@ -11,8 +11,10 @@ import {
   Dimensions,
 } from 'react-native';
 import { ThemeColors } from '../../theme/colors';
-import { spacing, borderRadius, borderWidth, shadow } from '../../theme/spacing';
+import { ThemeShape } from '../../theme/shape';
+import { spacing, borderWidth, shadow } from '../../theme/spacing';
 import { useStyles } from '../../hooks';
+import { HOGWARTS_FONTS } from '../../constants/hogwartsAssets';
 
 export type ToastType = 'success' | 'error' | 'warning' | 'info';
 
@@ -134,7 +136,7 @@ const Toast: React.FC<ToastProps> = ({
   );
 };
 
-const createStyles = (colors: ThemeColors) => ({
+const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
   ...StyleSheet.create({
     container: {
       position: 'absolute',
@@ -149,18 +151,18 @@ const createStyles = (colors: ThemeColors) => ({
       alignItems: 'center',
       paddingHorizontal: spacing.lg,
       paddingVertical: spacing.md,
-      borderRadius: borderRadius.button,
-      borderWidth: borderWidth.medium,
-      borderColor: colors.stroke,
+      borderRadius: shape.radius.modal,
+      borderWidth: shape.isHogwarts ? 1.5 : borderWidth.medium,
+      borderColor: shape.isHogwarts ? colors.accent : colors.stroke,
       maxWidth: screenWidth - spacing.lg * 2,
       minWidth: 200,
-      ...shadow.medium,
+      ...(shape.isHogwarts ? shape.elevation.floating : shadow.medium),
     },
     iconContainer: {
       width: 28,
       height: 28,
-      borderRadius: borderRadius.small,
-      borderWidth: borderWidth.thin,
+      borderRadius: shape.radius.badge,
+      borderWidth: shape.borderWidth.subtle,
       borderColor: 'rgba(255, 255, 255, 0.4)',
       backgroundColor: 'rgba(255, 255, 255, 0.2)',
       alignItems: 'center',
@@ -176,7 +178,8 @@ const createStyles = (colors: ThemeColors) => ({
       flex: 1,
       fontSize: 15,
       color: '#FFFFFF',
-      fontWeight: '700',
+      fontWeight: shape.isHogwarts ? undefined : '700',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
       lineHeight: 21,
     },
   }),

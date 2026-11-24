@@ -19,6 +19,7 @@ import android.widget.ImageButton
 import android.widget.LinearLayout
 import android.widget.TextView
 import com.jotbill.app.R
+import com.jotbill.app.theme.HogwartsOverlayTheme
 import com.jotbill.app.theme.MagicSoundPlayer
 import com.jotbill.app.theme.ThemePreferences
 import com.jotbill.app.bridge.BridgeDtoMapper
@@ -324,6 +325,9 @@ internal object PendingConfirmOverlayManager {
     private val categoryViews = mutableListOf<Pair<TextView, CategoryEntity>>()
     private val accountViews = mutableListOf<Pair<TextView, AccountEntity>>()
     private var currentConfirmButton: Button? = null
+
+    /** 当前弹窗的「魔法羊皮纸」色板；非 hogwarts 主题为 null，保持原粗野主义 XML 外观。 */
+    private var activeHogwartsPalette: HogwartsOverlayTheme.Palette? = null
 
     /** 当前弹窗的金额输入框。金额参与就绪判据（D-21），输入变化时重算按钮状态。 */
     private var currentAmountInput: EditText? = null
@@ -1172,6 +1176,13 @@ internal object PendingConfirmOverlayManager {
         try {
             val inflater = LayoutInflater.from(context)
             val view = inflater.inflate(R.layout.pending_confirm_overlay, null)
+            activeHogwartsPalette = if (ThemePreferences.isHogwarts(context)) {
+                HogwartsOverlayTheme.resolvePalette(ThemePreferences.getHogwartsHouse(context)).also {
+                    HogwartsOverlayTheme.applyOverlayTheme(view, it)
+                }
+            } else {
+                null
+            }
             // 黄色来源条幅已按用户裁定（2026-10-24）删除常显来源文案 —— 对用户无信息量。
             // 仅保留 D-21 的 0 金额占位说明：用户必须看懂"为什么是 0、下一步做什么"。
             val sourceText = view.findViewById<TextView>(R.id.tv_source)
@@ -1725,8 +1736,13 @@ internal object PendingConfirmOverlayManager {
                             text = "${account.icon ?: "💳"} ${account.name}"
                         }
                         textSize = 14f
-                        setTextColor(0xFF1A1A1A.toInt())
-                        setBackgroundResource(R.drawable.btn_category_unselected)
+                        val hpPalette = activeHogwartsPalette
+                        if (hpPalette != null) {
+                            HogwartsOverlayTheme.styleChip(this, selected = false, palette = hpPalette)
+                        } else {
+                            setTextColor(0xFF1A1A1A.toInt())
+                            setBackgroundResource(R.drawable.btn_category_unselected)
+                        }
                         setTypeface(typeface, Typeface.BOLD)
                         val horizontalPadding = (12 * density).toInt()
                         val verticalPadding = (8 * density).toInt()
@@ -1777,8 +1793,13 @@ internal object PendingConfirmOverlayManager {
                 text = "${category.icon ?: "📦"} ${category.name}"
             }
             textSize = 14f
-            setTextColor(0xFF1A1A1A.toInt())
-            setBackgroundResource(R.drawable.btn_category_unselected)
+            val hpPalette = activeHogwartsPalette
+            if (hpPalette != null) {
+                HogwartsOverlayTheme.styleChip(this, selected = false, palette = hpPalette)
+            } else {
+                setTextColor(0xFF1A1A1A.toInt())
+                setBackgroundResource(R.drawable.btn_category_unselected)
+            }
             setTypeface(typeface, Typeface.BOLD)
             val density = context.resources.displayMetrics.density
             val horizontalPadding = (12 * density).toInt()
@@ -1806,8 +1827,12 @@ internal object PendingConfirmOverlayManager {
 
     private fun selectCategory(selectedView: TextView, category: CategoryEntity) {
         selectedCategory = category
+        val hpPalette = activeHogwartsPalette
         categoryViews.forEach { (view, cat) ->
-            if (cat.id == category.id) {
+            val isSelected = cat.id == category.id
+            if (hpPalette != null) {
+                HogwartsOverlayTheme.styleChip(view, selected = isSelected, palette = hpPalette)
+            } else if (isSelected) {
                 view.setBackgroundResource(R.drawable.btn_category_selected)
                 view.setTextColor(0xFF1D4ED8.toInt())
             } else {
@@ -1822,8 +1847,12 @@ internal object PendingConfirmOverlayManager {
 
     private fun selectAccount(selectedView: TextView, account: AccountEntity) {
         selectedAccount = account
+        val hpPalette = activeHogwartsPalette
         accountViews.forEach { (view, acc) ->
-            if (acc.id == account.id) {
+            val isSelected = acc.id == account.id
+            if (hpPalette != null) {
+                HogwartsOverlayTheme.styleChip(view, selected = isSelected, palette = hpPalette)
+            } else if (isSelected) {
                 view.setBackgroundResource(R.drawable.btn_category_selected)
                 view.setTextColor(0xFF1D4ED8.toInt())
             } else {
@@ -2007,6 +2036,7 @@ internal object PendingConfirmOverlayManager {
             categoryViews.clear()
             accountViews.clear()
             currentConfirmButton = null
+            activeHogwartsPalette = null
             currentAmountInput = null
             displayedPendingId = null
             displayedAutoDismissInfo = null
