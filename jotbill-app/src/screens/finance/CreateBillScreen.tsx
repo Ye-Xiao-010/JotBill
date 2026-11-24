@@ -7,8 +7,11 @@ import {
   Animated,
   Dimensions,
   Easing,
+  Keyboard,
+  KeyboardAvoidingView,
   Modal,
   PanResponder,
+  Platform,
   View,
   ScrollView,
   StyleSheet,
@@ -23,6 +26,8 @@ import {
   Calendar,
   Check,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   CreditCard,
   Pencil,
   Plus,
@@ -47,6 +52,7 @@ import {
   hasExpressionOperator,
   type KeypadKey,
 } from '../../utils/amountExpression';
+import { triggerSoftHaptic } from '../../utils/haptics';
 import { formatTime } from '../../utils/format';
 import { ThemeColors } from '../../theme/colors';
 import { ThemeShape } from '../../theme/shape';
@@ -129,7 +135,58 @@ const CreateBillScreen: React.FC<CreateBillScreenProps> = ({ navigation, route }
     editingBill?.targetAccountId
   );
   const [description, setDescription] = useState(editingBill?.description || '');
+  const [selectedDate, setSelectedDate] = useState<Date>(() =>
+    editingBill?.occurredAt ? new Date(editingBill.occurredAt) : new Date(),
+  );
+  const [showDatePicker, setShowDatePicker] = useState(false);
   const [loading, setLoading] = useState(false);
+  const sheetDragY = useRef(new Animated.Value(0)).current;
+
+  const sheetDismissResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => false,
+      onMoveShouldSetPanResponder: (_evt, gesture) =>
+        gesture.dy > 8 && Math.abs(gesture.dy) > Math.abs(gesture.dx) * 1.3,
+      onPanResponderMove: (_evt, gesture) => {
+        if (gesture.dy > 0) {
+          sheetDragY.setValue(gesture.dy);
+        }
+      },
+      onPanResponderRelease: (_evt, gesture) => {
+        if (gesture.dy > 90 || gesture.vy > 0.85) {
+          Keyboard.dismiss();
+          Animated.timing(sheetDragY, {
+            toValue: 520,
+            duration: 180,
+            easing: Easing.out(Easing.cubic),
+            useNativeDriver: true,
+          }).start(() => navigation.goBack());
+        } else {
+          Animated.spring(sheetDragY, {
+            toValue: 0,
+            useNativeDriver: true,
+            speed: 24,
+            bounciness: 4,
+          }).start();
+        }
+      },
+      onPanResponderTerminate: () => {
+        Animated.spring(sheetDragY, {
+          toValue: 0,
+          useNativeDriver: true,
+        }).start();
+      },
+    }),
+  ).current;
+
+  // 系统键盘被返回键收起时，自动关闭备注编辑态以恢复内置计算键盘
+  useEffect(() => {
+    if (!isSoft || !showNoteEditor) return;
+    const hideSub = Keyboard.addListener('keyboardDidHide', () => {
+      setShowNoteEditor(false);
+    });
+    return () => hideSub.remove();
+  }, [isSoft, showNoteEditor]);
   // P15：表单会话级幂等键 —— 本组件实例生命周期内稳定，创建保存的重试/
   // 双击复用同一键；成功保存后页面返回、实例销毁，下次进入重新生成。
   const clientRequestIdRef = useRef(generateClientRequestId());
@@ -530,7 +587,7 @@ const CreateBillScreen: React.FC<CreateBillScreenProps> = ({ navigation, route }
         // 类型锁定的编辑（退款/手续费等）保留原类型，仅允许修改金额/备注/分类/账户
         type: editingTypeLocked ? editingBill!.type : type,
         description: description.trim() || null,
-        occurredAt: editingBill?.occurredAt || new Date().toISOString(),
+        occurredAt: selectedDate.toISOString(),
         // 转账/还款不计收支，不写分类
         ...(isTransferLike ? {} : { categoryId: selectedCategory!.id }),
         sourceType: editingBill?.sourceType || 'manual' as const,
@@ -547,6 +604,7 @@ const CreateBillScreen: React.FC<CreateBillScreenProps> = ({ navigation, route }
           version: editingBill!.version,
         });
         invalidateCache.bills();
+        if (isSoft) triggerSoftHaptic('success');
         showSuccess('账单更新成功');
         navigation.goBack();
         return;
@@ -560,6 +618,7 @@ const CreateBillScreen: React.FC<CreateBillScreenProps> = ({ navigation, route }
           clientRequestId: clientRequestIdRef.current,
         });
         invalidateCache.bills();
+        if (isSoft) triggerSoftHaptic('success');
         showSuccess('账单创建成功');
         if (continueAfterSave) {
           // 再记一笔：清空金额与备注，并刷新 P15 幂等键，避免下一笔误撞同键
@@ -578,10 +637,10 @@ const CreateBillScreen: React.FC<CreateBillScreenProps> = ({ navigation, route }
       if (!isTransferLike) {
         let duplicates: string[] = [];
         try {
-          const today = new Date();
-          const dateText = `${today.getFullYear()}-${
-            String(today.getMonth() + 1).padStart(2, '0')
-          }-${String(today.getDate()).padStart(2, '0')}`;
+          const checkDate = selectedDate;
+          const dateText = `${checkDate.getFullYear()}-${
+            String(checkDate.getMonth() + 1).padStart(2, '0')
+          }-${String(checkDate.getDate()).padStart(2, '0')}`;
           duplicates = await findDuplicateBills([{
             amount: numericAmount,
             type: type as 'income' | 'expense',
@@ -626,7 +685,43 @@ const CreateBillScreen: React.FC<CreateBillScreenProps> = ({ navigation, route }
 
   const handleSoftKeyPress = (key: KeypadKey) => {
     setShowNoteEditor(false);
+    setShowDatePicker(false);
     setAmount(prev => applyKeypadInput(prev, key));
+  };
+
+  const dayDiffFromToday = (date: Date): number => {
+    const now = new Date();
+    const a = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    const b = new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+    return Math.round((a - b) / 86_400_000);
+  };
+
+  const applyDateOffsetDays = (daysAgo: number) => {
+    const base = new Date();
+    base.setDate(base.getDate() - daysAgo);
+    base.setHours(selectedDate.getHours(), selectedDate.getMinutes(), selectedDate.getSeconds(), 0);
+    setSelectedDate(base);
+    triggerSoftHaptic('light');
+  };
+
+  const shiftSelectedDateBy = (deltaDays: number) => {
+    const next = new Date(selectedDate);
+    next.setDate(next.getDate() + deltaDays);
+    // 不允许超过今天
+    if (dayDiffFromToday(next) < 0) return;
+    setSelectedDate(next);
+    triggerSoftHaptic('light');
+  };
+
+  const formatSoftDateChipLabel = (date: Date): string => {
+    const diff = dayDiffFromToday(date);
+    const hhmm = formatTime(date.toISOString());
+    if (diff === 0) return `今天 ${hhmm}`;
+    if (diff === 1) return `昨天 ${hhmm}`;
+    if (diff === 2) return `前天 ${hhmm}`;
+    const nowYear = new Date().getFullYear();
+    const md = `${date.getMonth() + 1}月${date.getDate()}日`;
+    return date.getFullYear() === nowYear ? `${md} ${hhmm}` : `${date.getFullYear()}/${date.getMonth() + 1}/${date.getDate()}`;
   };
 
   const handleSwapTransferAccounts = () => {
@@ -769,46 +864,62 @@ const CreateBillScreen: React.FC<CreateBillScreenProps> = ({ navigation, route }
     const exprPreview = formatExpressionPreview(amount);
     const selectedSourceAccount = selectableAccounts.find(a => a.id === selectedAccountId);
     const selectedTargetAccount = selectableAccounts.find(a => a.id === selectedTargetAccountId);
-    const timeLabel = editingBill
-      ? formatTime(editingBill.occurredAt) || '已记录'
-      : `今天 ${formatTime(new Date().toISOString())}`;
+    const currentDayDiff = dayDiffFromToday(selectedDate);
+    const timeLabel = formatSoftDateChipLabel(selectedDate);
 
     return (
-      <View style={styles.softModalRoot}>
+      <KeyboardAvoidingView
+        style={styles.softModalRoot}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      >
         <TouchableOpacity
           style={styles.softBackdrop}
           activeOpacity={1}
-          onPress={() => navigation.goBack()}
+          onPress={() => {
+            Keyboard.dismiss();
+            navigation.goBack();
+          }}
           accessibilityLabel="关闭记账弹层"
         />
-        <View
+        <Animated.View
           style={[
             styles.softSheet,
-            { paddingBottom: Math.max(insets.bottom, 14) },
+            {
+              paddingBottom: Math.max(insets.bottom, 14),
+              transform: [{ translateY: sheetDragY }],
+            },
           ]}
           {...typeSwipeResponder.panHandlers}
         >
-          <View style={styles.softGrabber} />
-          <View style={styles.softSheetHeader}>
-            <TouchableOpacity
-              style={styles.softCloseBtn}
-              onPress={() => navigation.goBack()}
-              activeOpacity={0.75}
-              accessibilityLabel="关闭"
-              accessibilityRole="button"
-            >
-              <X size={18} color={colors.textSecondary} strokeWidth={2} />
-            </TouchableOpacity>
-            <View style={styles.softSegmentWrap}>
-              <SegmentedControl
-                options={FORM_TYPE_OPTIONS.map(o => ({ key: o.value, label: o.label }))}
-                selectedKey={type}
-                onSelect={(key) => {
-                  if (!editingTypeLocked) handleTypeChange(key as BillFormType);
-                }}
-              />
+          {/* 顶部抓手与标题区支持下滑手势关闭抽屉 */}
+          <View {...sheetDismissResponder.panHandlers}>
+            <View style={styles.softGrabberHitArea}>
+              <View style={styles.softGrabber} />
             </View>
-            <View style={styles.softHeaderSpacer} />
+            <View style={styles.softSheetHeader}>
+              <TouchableOpacity
+                style={styles.softCloseBtn}
+                onPress={() => {
+                  Keyboard.dismiss();
+                  navigation.goBack();
+                }}
+                activeOpacity={0.75}
+                accessibilityLabel="关闭"
+                accessibilityRole="button"
+              >
+                <X size={18} color={colors.textSecondary} strokeWidth={2} />
+              </TouchableOpacity>
+              <View style={styles.softSegmentWrap}>
+                <SegmentedControl
+                  options={FORM_TYPE_OPTIONS.map(o => ({ key: o.value, label: o.label }))}
+                  selectedKey={type}
+                  onSelect={(key) => {
+                    if (!editingTypeLocked) handleTypeChange(key as BillFormType);
+                  }}
+                />
+              </View>
+              <View style={styles.softHeaderSpacer} />
+            </View>
           </View>
 
           {editingTypeLocked ? (
@@ -847,10 +958,35 @@ const CreateBillScreen: React.FC<CreateBillScreenProps> = ({ navigation, route }
             style={styles.softChipScroll}
             contentContainerStyle={styles.softChipRow}
           >
-            <View style={styles.softMetaChip}>
-              <Calendar size={14} color={colors.textTertiary} strokeWidth={2} />
-              <Text style={styles.softMetaChipText}>{timeLabel}</Text>
-            </View>
+            <TouchableOpacity
+              style={[
+                styles.softMetaChip,
+                (showDatePicker || currentDayDiff !== 0) && styles.softMetaChipActive,
+              ]}
+              onPress={() => {
+                Keyboard.dismiss();
+                setShowNoteEditor(false);
+                setShowDatePicker(v => !v);
+                triggerSoftHaptic('light');
+              }}
+              activeOpacity={0.75}
+              accessibilityLabel="选择记账日期"
+              accessibilityRole="button"
+            >
+              <Calendar
+                size={14}
+                color={showDatePicker || currentDayDiff !== 0 ? colors.primary : colors.textTertiary}
+                strokeWidth={2}
+              />
+              <Text
+                style={[
+                  styles.softMetaChipText,
+                  (showDatePicker || currentDayDiff !== 0) && { color: colors.primaryDark },
+                ]}
+              >
+                {timeLabel}
+              </Text>
+            </TouchableOpacity>
             {!isTransferLike ? (
               <TouchableOpacity
                 style={[
@@ -888,7 +1024,15 @@ const CreateBillScreen: React.FC<CreateBillScreenProps> = ({ navigation, route }
             ) : null}
             <TouchableOpacity
               style={[styles.softMetaChip, (showNoteEditor || !!description) && styles.softMetaChipActive]}
-              onPress={() => setShowNoteEditor(v => !v)}
+              onPress={() => {
+                setShowDatePicker(false);
+                if (showNoteEditor) {
+                  Keyboard.dismiss();
+                  setShowNoteEditor(false);
+                } else {
+                  setShowNoteEditor(true);
+                }
+              }}
               activeOpacity={0.75}
             >
               <Pencil size={14} color={description ? colors.primary : colors.textTertiary} strokeWidth={2} />
@@ -904,6 +1048,58 @@ const CreateBillScreen: React.FC<CreateBillScreenProps> = ({ navigation, route }
             </TouchableOpacity>
           </ScrollView>
 
+          {/* 补记日期快捷选择栏 */}
+          {showDatePicker ? (
+            <View style={styles.softDatePickerRow}>
+              <View style={styles.softDatePresets}>
+                {[
+                  { label: '今天', offset: 0 },
+                  { label: '昨天', offset: 1 },
+                  { label: '前天', offset: 2 },
+                ].map(item => {
+                  const active = currentDayDiff === item.offset;
+                  return (
+                    <TouchableOpacity
+                      key={item.label}
+                      style={[styles.softDatePresetBtn, active && styles.softDatePresetBtnActive]}
+                      onPress={() => applyDateOffsetDays(item.offset)}
+                      activeOpacity={0.75}
+                    >
+                      <Text
+                        style={[
+                          styles.softDatePresetText,
+                          active && styles.softDatePresetTextActive,
+                        ]}
+                      >
+                        {item.label}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+              <View style={styles.softDateStepper}>
+                <TouchableOpacity
+                  style={styles.softDateStepBtn}
+                  onPress={() => shiftSelectedDateBy(-1)}
+                  accessibilityLabel="前一天"
+                >
+                  <ChevronLeft size={16} color={colors.textSecondary} strokeWidth={2} />
+                </TouchableOpacity>
+                <Text style={styles.softDateStepperLabel}>
+                  {`${selectedDate.getMonth() + 1}/${selectedDate.getDate()}`}
+                </Text>
+                <TouchableOpacity
+                  style={[styles.softDateStepBtn, currentDayDiff <= 0 && styles.softDateStepDisabled]}
+                  onPress={() => shiftSelectedDateBy(1)}
+                  disabled={currentDayDiff <= 0}
+                  accessibilityLabel="后一天"
+                >
+                  <ChevronRight size={16} color={colors.textSecondary} strokeWidth={2} />
+                </TouchableOpacity>
+              </View>
+            </View>
+          ) : null}
+
           {showNoteEditor ? (
             <View style={styles.softNoteInputRow}>
               <TextInput
@@ -914,11 +1110,17 @@ const CreateBillScreen: React.FC<CreateBillScreenProps> = ({ navigation, route }
                 placeholderTextColor={colors.textQuaternary}
                 autoFocus
                 returnKeyType="done"
-                onSubmitEditing={() => setShowNoteEditor(false)}
+                onSubmitEditing={() => {
+                  Keyboard.dismiss();
+                  setShowNoteEditor(false);
+                }}
               />
               <TouchableOpacity
                 style={styles.softNoteDoneBtn}
-                onPress={() => setShowNoteEditor(false)}
+                onPress={() => {
+                  Keyboard.dismiss();
+                  setShowNoteEditor(false);
+                }}
               >
                 <Text style={styles.softNoteDoneText}>完成</Text>
               </TouchableOpacity>
@@ -1148,10 +1350,10 @@ const CreateBillScreen: React.FC<CreateBillScreenProps> = ({ navigation, route }
               disabled={loading}
             />
           ) : null}
-        </View>
+        </Animated.View>
 
         {renderSharedModals()}
-      </View>
+      </KeyboardAvoidingView>
     );
   }
 
@@ -1430,13 +1632,16 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape, isDark: boolean) =
       paddingTop: 8,
       ...shape.elevation.floating,
     },
+    softGrabberHitArea: {
+      paddingVertical: 6,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
     softGrabber: {
       width: 40,
       height: 5,
       borderRadius: 999,
       backgroundColor: colors.stroke,
-      alignSelf: 'center',
-      marginBottom: 10,
     },
     softSheetHeader: {
       flexDirection: 'row',
@@ -1563,6 +1768,64 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape, isDark: boolean) =
       fontSize: 14,
       fontWeight: '600',
       color: colors.onPrimary,
+    },
+    softDatePickerRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      gap: 8,
+      paddingVertical: 10,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: colors.divider,
+    },
+    softDatePresets: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 6,
+    },
+    softDatePresetBtn: {
+      paddingHorizontal: 11,
+      paddingVertical: 6,
+      borderRadius: 999,
+      backgroundColor: colors.surfaceMuted,
+    },
+    softDatePresetBtnActive: {
+      backgroundColor: colors.primaryLight,
+    },
+    softDatePresetText: {
+      fontSize: 12.5,
+      fontWeight: '600',
+      color: colors.textSecondary,
+    },
+    softDatePresetTextActive: {
+      color: colors.primaryDark,
+    },
+    softDateStepper: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 4,
+      backgroundColor: colors.surfaceMuted,
+      borderRadius: 999,
+      paddingHorizontal: 4,
+      paddingVertical: 2,
+    },
+    softDateStepBtn: {
+      width: 26,
+      height: 26,
+      borderRadius: 13,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    softDateStepDisabled: {
+      opacity: 0.35,
+    },
+    softDateStepperLabel: {
+      fontSize: 12.5,
+      fontWeight: '600',
+      color: colors.textPrimary,
+      fontVariant: ['tabular-nums'],
+      minWidth: 42,
+      textAlign: 'center',
     },
     softBodyScroll: {
       flex: 1,

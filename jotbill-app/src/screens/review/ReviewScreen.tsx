@@ -52,7 +52,7 @@ import { useAlert, useTheme } from '../../providers';
 import { borderRadius, borderWidth, spacing } from '../../theme/spacing';
 import { ThemeColors } from '../../theme/colors';
 import { ThemeShape } from '../../theme/shape';
-import { useStyles } from '../../hooks';
+import { useStyles, useRefreshControlProps } from '../../hooks';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { typography } from '../../theme';
 
@@ -86,6 +86,7 @@ export default function ReviewScreen() {
   const navigation = useNavigation();
   const queryClient = useQueryClient();
   const styles = useStyles(createStyles);
+  const refreshControlProps = useRefreshControlProps();
   const { alert, confirm } = useAlert();
   const [selecting, setSelecting] = useState(false);
   const closeSelection = useCallback(() => setSelecting(false), []);
@@ -295,6 +296,7 @@ export default function ReviewScreen() {
         contentContainerStyle={styles.content}
         refreshControl={
           <RefreshControl
+            {...refreshControlProps}
             refreshing={pendingQuery.isFetching || statusQuery.isFetching}
             onRefresh={refresh}
           />

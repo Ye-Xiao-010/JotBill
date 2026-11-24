@@ -43,7 +43,7 @@ import { nativePendingReminder } from '../native/pendingReminder';
 import { nativeRecognition, nativeRuntime } from '../native';
 import { paymentNotificationService } from '../services/paymentNotification';
 import { useAlert } from '../providers';
-import { useStyles } from '../hooks';
+import { useStyles, useRefreshControlProps } from '../hooks';
 import { borderRadius, borderWidth, shadow, spacing } from '../theme';
 import { ThemeColors } from '../theme/colors';
 import { ThemeShape } from '../theme/shape';
@@ -139,6 +139,7 @@ export default function GeneralSettingsScreen() {
   const navigation = useNavigation();
   const queryClient = useQueryClient();
   const styles = useStyles(createStyles);
+  const refreshControlProps = useRefreshControlProps();
   const { alert } = useAlert();
 
   const [openingId, setOpeningId] = useState<string | null>(null);
@@ -309,7 +310,7 @@ export default function GeneralSettingsScreen() {
         style={styles.scrollView}
         contentContainerStyle={styles.content}
         refreshControl={
-          <RefreshControl refreshing={healthQuery.isFetching} onRefresh={refresh} />
+          <RefreshControl {...refreshControlProps} refreshing={healthQuery.isFetching} onRefresh={refresh} />
         }
       >
         <View style={styles.sectionCard}>

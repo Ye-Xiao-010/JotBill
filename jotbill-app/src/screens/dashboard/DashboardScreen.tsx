@@ -42,7 +42,7 @@ import {
 import { ProgressBar, QueryErrorBanner, SoftGradient } from '../../components/ui';
 import { DashboardSkeleton } from '../../components/skeleton';
 import CategoryIcon from '../../components/business/CategoryIcon';
-import { useDashboard, useStyles } from '../../hooks';
+import { useDashboard, useStyles, useRefreshControlProps } from '../../hooks';
 import { useAlert, useDisplayPreferences, useTheme } from '../../providers';
 import { nativeData, nativeRecognition, nativeRuntime } from '../../native';
 import type { RecognitionPermission } from '../../native/runtime';
@@ -548,6 +548,7 @@ export interface DashboardScreenProps {
 export default function DashboardScreen({ onSelectTab }: DashboardScreenProps = {}) {
   const navigation = useNavigation();
   const styles = useStyles(createStyles);
+  const refreshControlProps = useRefreshControlProps();
   const { colors, isSoft, isDark } = useTheme();
   const [hideAmounts, setHideAmounts] = useState(false);
   // 预算与目标卡片默认关闭；偏好读取完成后才允许发起预算/目标请求
@@ -743,7 +744,7 @@ export default function DashboardScreen({ onSelectTab }: DashboardScreenProps = 
       style={styles.container}
       contentContainerStyle={styles.content}
       refreshControl={
-        <RefreshControl refreshing={isFetching} onRefresh={onRefresh} />
+        <RefreshControl {...refreshControlProps} refreshing={isFetching} onRefresh={onRefresh} />
       }
       showsVerticalScrollIndicator={false}
     >

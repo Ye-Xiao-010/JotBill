@@ -8,6 +8,7 @@
     android:background="#99000000">
 
     <LinearLayout
+        android:id="@+id/overlay_card"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginHorizontal="24dp"
@@ -36,6 +37,7 @@
                 android:gravity="center_vertical">
 
                 <TextView
+                    android:id="@+id/tv_overlay_title"
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
                     android:layout_weight="1"
@@ -250,6 +252,7 @@
             android:visibility="gone">
 
             <TextView
+                android:id="@+id/tv_success_icon"
                 android:layout_width="64dp"
                 android:layout_height="64dp"
                 android:text="✓"
@@ -260,6 +263,7 @@
                 android:background="@drawable/bg_success_neo" />
 
             <TextView
+                android:id="@+id/tv_success_title"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="16dp"
@@ -293,6 +297,7 @@
             android:visibility="gone">
 
             <TextView
+                android:id="@+id/tv_error_icon"
                 android:layout_width="64dp"
                 android:layout_height="64dp"
                 android:text="✗"
@@ -303,6 +308,7 @@
                 android:background="@drawable/bg_error_neo" />
 
             <TextView
+                android:id="@+id/tv_error_title"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="16dp"

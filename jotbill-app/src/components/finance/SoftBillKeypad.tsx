@@ -8,6 +8,7 @@ import { Delete } from 'lucide-react-native';
 import { ThemeColors } from '../../theme/colors';
 import { ThemeShape } from '../../theme/shape';
 import { useStyles } from '../../hooks';
+import { triggerSoftHaptic } from '../../utils/haptics';
 import type { KeypadKey } from '../../utils/amountExpression';
 
 interface SoftBillKeypadProps {
@@ -72,7 +73,10 @@ export default function SoftBillKeypad({
                   <TouchableOpacity
                     key="zero-wide-placeholder"
                     style={styles.key}
-                    onPress={() => onKey('0')}
+                    onPress={() => {
+                      triggerSoftHaptic('light');
+                      onKey('0');
+                    }}
                     disabled={disabled}
                     activeOpacity={0.72}
                     accessibilityLabel="00"
@@ -86,7 +90,10 @@ export default function SoftBillKeypad({
                 <TouchableOpacity
                   key="again"
                   style={[styles.key, styles.fnKey, disabled && styles.disabled]}
-                  onPress={onSaveAndContinue}
+                  onPress={() => {
+                    triggerSoftHaptic('medium');
+                    onSaveAndContinue?.();
+                  }}
                   disabled={disabled}
                   activeOpacity={0.78}
                   accessibilityLabel="保存并再记一笔"
@@ -102,7 +109,10 @@ export default function SoftBillKeypad({
                 <TouchableOpacity
                   key="save"
                   style={[styles.key, styles.saveKey, disabled && styles.disabled]}
-                  onPress={onSave}
+                  onPress={() => {
+                    triggerSoftHaptic('medium');
+                    onSave();
+                  }}
                   disabled={disabled}
                   activeOpacity={0.82}
                   accessibilityLabel={saveLabel}
@@ -120,7 +130,10 @@ export default function SoftBillKeypad({
               <TouchableOpacity
                 key={`${rowIdx}-${colIdx}`}
                 style={styles.key}
-                onPress={() => onKey(cell.value)}
+                onPress={() => {
+                  triggerSoftHaptic('light');
+                  onKey(cell.value);
+                }}
                 disabled={disabled}
                 activeOpacity={0.72}
                 accessibilityLabel={isDel ? '删除' : cell.label ?? cell.value}

@@ -15,6 +15,7 @@ import {
   type ThemeStyleVariant,
 } from '../theme/colors';
 import { getThemeShape, type ThemeShape } from '../theme/shape';
+import { nativeTheme } from '../native/theme';
 
 type ThemeMode = 'light' | 'dark' | 'system';
 
@@ -111,6 +112,12 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     const newMode = isDark ? 'light' : 'dark';
     setThemeMode(newMode);
   }, [isDark, setThemeMode]);
+
+  // 同步当前主题与系统导航栏颜色到原生 Android（供付款确认悬浮窗皮肤与底栏配色联动）
+  useEffect(() => {
+    if (!isLoaded) return;
+    nativeTheme.syncTheme(themeName, isDark, colors.background);
+  }, [isLoaded, themeName, isDark, colors.background]);
 
   // 等待主题加载完成
   if (!isLoaded) {

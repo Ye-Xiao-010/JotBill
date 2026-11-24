@@ -2,8 +2,8 @@
  * 应用导航器 - Neo-Brutalism 风格
  * 粗描边 Tab Bar + 糖果色活跃态 + 方圆角"+"按钮 + 实心阴影
  */
-import React, { useState, useMemo, useEffect } from 'react';
-import { Keyboard, View, Text, TouchableOpacity, StyleSheet } from 'react-native';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
+import { Animated, Keyboard, View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { NavigationContainer, DefaultTheme, DarkTheme } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
@@ -40,6 +40,7 @@ import { SoftGradient } from '../components/ui';
 import { spacing, borderRadius, borderWidth } from '../theme/spacing';
 import { ThemeColors } from '../theme/colors';
 import { ThemeShape } from '../theme/shape';
+import { triggerSoftHaptic } from '../utils/haptics';
 import '../types/navigation';
 
 const Stack = createNativeStackNavigator();
@@ -219,7 +220,77 @@ const tabStyles = StyleSheet.create({
   },
 });
 
-// 柔光主题悬浮胶囊底栏：大圆角半透明胶囊 + 浅底药丸活跃态 + 圆形渐变 FAB
+// 柔光单 Tab 项：切换选中态时轻缓弹入，提升柔和细腻感
+function SoftTabButton({
+  label,
+  Icon,
+  isActive,
+  onPress,
+  colors,
+  shape,
+  softStyles,
+}: {
+  label: string;
+  Icon: React.ComponentType<{ size?: number; color?: string; strokeWidth?: number }>;
+  isActive: boolean;
+  onPress: () => void;
+  colors: ThemeColors;
+  shape: ThemeShape;
+  softStyles: {
+    tab: object;
+    tabPill: object;
+    tabPillActive: object;
+    tabLabel: object;
+    tabLabelActive: object;
+  };
+}) {
+  const pillScale = useRef(new Animated.Value(isActive ? 1 : 0.92)).current;
+
+  useEffect(() => {
+    Animated.spring(pillScale, {
+      toValue: isActive ? 1 : 0.94,
+      useNativeDriver: true,
+      speed: 22,
+      bounciness: isActive ? 8 : 0,
+    }).start();
+  }, [isActive, pillScale]);
+
+  const iconColor = isActive ? colors.primary : colors.textTertiary;
+
+  return (
+    <TouchableOpacity
+      onPress={() => {
+        if (!isActive) {
+          triggerSoftHaptic('light');
+        }
+        onPress();
+      }}
+      style={softStyles.tab}
+      activeOpacity={0.75}
+      accessibilityRole="tab"
+      accessibilityState={{ selected: isActive }}
+    >
+      <Animated.View
+        style={[
+          softStyles.tabPill,
+          isActive && softStyles.tabPillActive,
+          { transform: [{ scale: pillScale }] },
+        ]}
+      >
+        <Icon
+          size={21}
+          color={iconColor}
+          strokeWidth={isActive ? shape.iconStrokeWidth.active : shape.iconStrokeWidth.regular}
+        />
+      </Animated.View>
+      <Text style={[softStyles.tabLabel, isActive && softStyles.tabLabelActive]}>
+        {label}
+      </Text>
+    </TouchableOpacity>
+  );
+}
+
+// 柔光主题悬浮胶囊底栏：纯色不透明底避免 Android elevation 透灰 + 浅底药丸活跃态 + 圆形渐变 FAB
 function SoftBottomTabBar({
   activeTab,
   onTabPress,
@@ -253,9 +324,10 @@ function SoftBottomTabBar({
       bottom: Math.max(insets.bottom, 12),
       height: 68,
       borderRadius: 26,
-      backgroundColor: isDark ? 'rgba(23, 26, 33, 0.94)' : 'rgba(255, 255, 255, 0.94)',
+      // Android 上对带 alpha 的 View 加 elevation 会导致阴影轮廓透出并整体发灰，故使用纯不透明 surface
+      backgroundColor: colors.surface,
       borderWidth: isDark ? 1 : StyleSheet.hairlineWidth,
-      borderColor: isDark ? colors.cardBorder : 'rgba(18, 20, 26, 0.06)',
+      borderColor: isDark ? colors.cardBorder : 'rgba(18, 20, 26, 0.08)',
       flexDirection: 'row',
       alignItems: 'center',
       ...shape.elevation.floating,
@@ -329,7 +401,10 @@ function SoftBottomTabBar({
           return (
             <TouchableOpacity
               key={tab.key}
-              onPress={() => onTabPress('add')}
+              onPress={() => {
+                triggerSoftHaptic('medium');
+                onTabPress('add');
+              }}
               style={softStyles.fabSlot}
               activeOpacity={0.85}
               accessibilityLabel="记一笔"
@@ -347,30 +422,17 @@ function SoftBottomTabBar({
           );
         }
 
-        const isActive = activeTab === tab.key;
-        const Icon = tab.Icon;
-        const iconColor = isActive ? colors.primary : colors.textTertiary;
-
         return (
-          <TouchableOpacity
+          <SoftTabButton
             key={tab.key}
+            label={tab.label}
+            Icon={tab.Icon}
+            isActive={activeTab === tab.key}
             onPress={() => onTabPress(tab.key)}
-            style={softStyles.tab}
-            activeOpacity={0.75}
-            accessibilityRole="tab"
-            accessibilityState={{ selected: isActive }}
-          >
-            <View style={[softStyles.tabPill, isActive && softStyles.tabPillActive]}>
-              <Icon
-                size={21}
-                color={iconColor}
-                strokeWidth={isActive ? shape.iconStrokeWidth.active : shape.iconStrokeWidth.regular}
-              />
-            </View>
-            <Text style={[softStyles.tabLabel, isActive && softStyles.tabLabelActive]}>
-              {tab.label}
-            </Text>
-          </TouchableOpacity>
+            colors={colors}
+            shape={shape}
+            softStyles={softStyles}
+          />
         );
       })}
     </View>

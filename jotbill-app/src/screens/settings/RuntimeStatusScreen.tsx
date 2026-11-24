@@ -7,7 +7,7 @@ import { nativeRuntime } from '../../native';
 import { borderRadius, borderWidth, spacing } from '../../theme/spacing';
 import { ThemeColors } from '../../theme/colors';
 import { ThemeShape } from '../../theme/shape';
-import { useStyles } from '../../hooks';
+import { useStyles, useRefreshControlProps } from '../../hooks';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { typography } from '../../theme';
 
@@ -27,6 +27,7 @@ function formatTime(value?: string): string {
 export default function RuntimeStatusScreen() {
   const navigation = useNavigation();
   const styles = useStyles(createStyles);
+  const refreshControlProps = useRefreshControlProps();
   const [exporting, setExporting] = useState(false);
   const query = useQuery({
     queryKey: STATUS_QUERY_KEY,
@@ -96,7 +97,7 @@ export default function RuntimeStatusScreen() {
       <ScrollView
         style={styles.scrollView}
         contentContainerStyle={styles.content}
-        refreshControl={<RefreshControl refreshing={query.isFetching} onRefresh={onRefresh} />}
+        refreshControl={<RefreshControl {...refreshControlProps} refreshing={query.isFetching} onRefresh={onRefresh} />}
       >
         <View style={styles.healthCard}>
           <View style={styles.healthIcon}><CheckCircle2 size={24} color={styles._colors.success} /></View>

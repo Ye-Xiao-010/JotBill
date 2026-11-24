@@ -17,7 +17,7 @@ import { useAlert } from '../../providers';
 import { ThemeColors } from '../../theme/colors';
 import { ThemeShape } from '../../theme/shape';
 import { borderRadius, borderWidth, spacing } from '../../theme/spacing';
-import { useStyles } from '../../hooks';
+import { useStyles, useRefreshControlProps } from '../../hooks';
 import { useChatSessions } from '../../hooks/useChatSessions';
 import { aiService } from '../../services/ai';
 import type { ChatSession } from '../../types/ai';
@@ -26,6 +26,7 @@ import { typography } from '../../theme';
 
 export default function AIChatSessionsScreen() {
   const styles = useStyles(createStyles);
+  const refreshControlProps = useRefreshControlProps();
   const navigation = useNavigation();
   const { alert, confirm } = useAlert();
   const [refreshing, setRefreshing] = useState(false);
@@ -178,7 +179,7 @@ export default function AIChatSessionsScreen() {
           onPress={handleNewChat}
           activeOpacity={0.7}
         >
-          <Plus size={20} color="#FFFFFF" />
+          <Plus size={20} color={styles._primaryIconColor} />
           <Text style={styles.newChatButtonText}>新对话</Text>
         </TouchableOpacity>
       </View>
@@ -201,9 +202,9 @@ export default function AIChatSessionsScreen() {
         }
         refreshControl={
           <RefreshControl
+            {...refreshControlProps}
             refreshing={refreshing}
             onRefresh={handleRefresh}
-            colors={[styles._colors.primary]}
           />
         }
       />
@@ -350,4 +351,5 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
     },
   }),
   _colors: colors,
+  _primaryIconColor: shape.isSoft ? colors.onPrimary : '#FFFFFF',
 });

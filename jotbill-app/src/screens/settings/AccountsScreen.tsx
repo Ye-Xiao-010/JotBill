@@ -26,7 +26,7 @@ import { QUERY_KEYS } from '../../lib/queryClient';
 import { borderRadius, borderWidth, shadow, spacing } from '../../theme/spacing';
 import { ThemeColors } from '../../theme/colors';
 import { ThemeShape } from '../../theme/shape';
-import { useStyles } from '../../hooks';
+import { useStyles, useRefreshControlProps } from '../../hooks';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { typography } from '../../theme';
 
@@ -67,6 +67,7 @@ export default function AccountsScreen() {
   const navigation = useNavigation();
   const queryClient = useQueryClient();
   const styles = useStyles(createStyles);
+  const refreshControlProps = useRefreshControlProps();
   const [showForm, setShowForm] = useState(false);
   const [showCalibration, setShowCalibration] = useState(false);
   const [editingAccount, setEditingAccount] = useState<Account | null>(null);
@@ -311,6 +312,7 @@ export default function AccountsScreen() {
         contentContainerStyle={styles.content}
         refreshControl={
           <RefreshControl
+            {...refreshControlProps}
             refreshing={accountsQuery.isFetching || netWorthQuery.isFetching}
             onRefresh={onRefresh}
           />
@@ -348,7 +350,7 @@ export default function AccountsScreen() {
             <Text style={styles.emptyTitle}>暂无账户</Text>
             <Text style={styles.emptySubtitle}>添加账户后，净资产会按余额计算</Text>
             <TouchableOpacity style={styles.primaryButton} onPress={openCreate}>
-              <Plus size={18} color="#FFFFFF" />
+              <Plus size={18} color={styles._primaryIconColor} />
               <Text style={styles.primaryButtonText}>添加账户</Text>
             </TouchableOpacity>
           </View>
@@ -897,4 +899,5 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
     bankListShort: { marginTop: 2, fontSize: 12, fontWeight: '600', color: colors.textSecondary },
   }),
   _colors: colors,
+  _primaryIconColor: shape.isSoft ? colors.onPrimary : '#FFFFFF',
 });

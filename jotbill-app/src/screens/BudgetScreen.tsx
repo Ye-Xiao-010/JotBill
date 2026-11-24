@@ -22,7 +22,7 @@ import { spacing, borderRadius, borderWidth, shadow } from '../theme/spacing';
 import { ProgressBar, BrutalPressable } from '../components/ui';
 import CategoryIcon from '../components/business/CategoryIcon';
 import { getBudgetStatusColor } from '../constants/app';
-import { useStyles, useToast } from '../hooks';
+import { useStyles, useToast, useRefreshControlProps } from '../hooks';
 import { useAlert, useTheme } from '../providers';
 import { nativeData, type BudgetInput, type BudgetPeriod, type BudgetProgress, type Category } from '../native';
 import { QUERY_KEYS, invalidateCache } from '../lib/queryClient';
@@ -120,6 +120,7 @@ function describePeriod(
 export default function BudgetScreen() {
   const navigation = useNavigation();
   const styles = useStyles(createStyles);
+  const refreshControlProps = useRefreshControlProps();
   const { colors, isSoft } = useTheme();
   const { confirm } = useAlert();
   const { showError } = useToast();
@@ -350,6 +351,7 @@ export default function BudgetScreen() {
         contentContainerStyle={styles.scrollContent}
         refreshControl={
           <RefreshControl
+            {...refreshControlProps}
             refreshing={isBudgetsFetching || isCategoriesFetching}
             onRefresh={onRefresh}
           />

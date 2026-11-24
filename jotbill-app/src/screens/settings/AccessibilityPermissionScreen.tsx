@@ -30,7 +30,7 @@ import { useAlert } from '../../providers';
 import { borderRadius, borderWidth, spacing } from '../../theme/spacing';
 import { ThemeColors } from '../../theme/colors';
 import { ThemeShape } from '../../theme/shape';
-import { useStyles } from '../../hooks';
+import { useStyles, useRefreshControlProps } from '../../hooks';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 const ACCESSIBILITY_QUERY_KEY = QUERY_KEYS.recognition.accessibility;
@@ -40,6 +40,7 @@ export default function AccessibilityPermissionScreen() {
   const navigation = useNavigation();
   const queryClient = useQueryClient();
   const styles = useStyles(createStyles);
+  const refreshControlProps = useRefreshControlProps();
   const { alert } = useAlert();
   const [opening, setOpening] = useState(false);
 
@@ -100,7 +101,7 @@ export default function AccessibilityPermissionScreen() {
         style={styles.scrollView}
         contentContainerStyle={styles.content}
         refreshControl={
-          <RefreshControl refreshing={query.isFetching} onRefresh={refresh} />
+          <RefreshControl {...refreshControlProps} refreshing={query.isFetching} onRefresh={refresh} />
         }
       >
         <View style={styles.statusCard}>
@@ -181,7 +182,7 @@ export default function AccessibilityPermissionScreen() {
             disabled={opening || isLoading}
             activeOpacity={0.85}
           >
-            <ExternalLink size={18} color="#FFFFFF" />
+            <ExternalLink size={18} color={styles._primaryIconColor} />
             <Text style={styles.primaryButtonText}>
               {opening ? '正在打开…' : enabled ? '重新打开设置' : '去系统设置开启'}
             </Text>
@@ -359,4 +360,5 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
     },
   }),
   _colors: colors,
+  _primaryIconColor: shape.isSoft ? colors.onPrimary : '#FFFFFF',
 });

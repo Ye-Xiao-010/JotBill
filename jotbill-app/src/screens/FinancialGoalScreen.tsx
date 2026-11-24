@@ -20,7 +20,7 @@ import { ThemeColors } from '../theme/colors';
 import { ThemeShape } from '../theme/shape';
 import { spacing, borderRadius, borderWidth, shadow } from '../theme/spacing';
 import { ProgressBar, BrutalPressable } from '../components/ui';
-import { useStyles, useToast } from '../hooks';
+import { useStyles, useToast, useRefreshControlProps } from '../hooks';
 import { useAlert } from '../providers';
 import {
   nativeData,
@@ -58,6 +58,7 @@ function formatAmount(amountMinor: number): string {
 export default function FinancialGoalScreen() {
   const navigation = useNavigation();
   const styles = useStyles(createStyles);
+  const refreshControlProps = useRefreshControlProps();
   const { confirm } = useAlert();
   const { showError } = useToast();
 
@@ -238,7 +239,7 @@ export default function FinancialGoalScreen() {
       <ScrollView
         style={styles.scrollView}
         contentContainerStyle={styles.scrollContent}
-        refreshControl={<RefreshControl refreshing={isFetching} onRefresh={onRefresh} />}
+        refreshControl={<RefreshControl {...refreshControlProps} refreshing={isFetching} onRefresh={onRefresh} />}
         showsVerticalScrollIndicator={false}
       >
         {goals.length === 0 ? (

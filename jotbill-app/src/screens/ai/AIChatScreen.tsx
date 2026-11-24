@@ -2449,10 +2449,10 @@ export default function AIChatScreen() {
             disabled={savingBills}
           >
             {savingBills ? (
-              <ActivityIndicator size="small" color="#FFFFFF" />
+              <ActivityIndicator size="small" color={isSoft ? styles._colors.onPrimary : '#FFFFFF'} />
             ) : (
               <>
-                <Check size={16} color="#FFFFFF" />
+                <Check size={16} color={isSoft ? styles._colors.onPrimary : '#FFFFFF'} />
                 <Text style={styles.saveAllButtonText}>全部保存</Text>
               </>
             )}

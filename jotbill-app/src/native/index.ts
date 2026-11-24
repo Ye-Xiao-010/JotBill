@@ -8,3 +8,4 @@ export * from './overlay';
 export * from './recognition';
 export * from './budgetReminder';
 export * from './autoBookkeeping';
+export * from './theme';

@@ -21,7 +21,7 @@ import {
 import { useQuery } from '@tanstack/react-query';
 import { BillItem } from '../../components';
 import QueryErrorBanner from '../../components/ui/QueryErrorBanner';
-import { useToast, useStyles } from '../../hooks';
+import { useToast, useStyles, useRefreshControlProps } from '../../hooks';
 import { nativeData, type Category } from '../../native';
 import { CACHE_TIME, GC_TIME, QUERY_KEYS } from '../../lib/queryClient';
 import { formatPlatform } from '../../utils/platform';
@@ -42,6 +42,7 @@ const AllBillsScreen: React.FC = () => {
   const route = useRoute();
   const { showError } = useToast();
   const styles = useStyles(createStyles);
+  const refreshControlProps = useRefreshControlProps();
 
   const routeParams = route.params as
     | { initialFilter?: 'all' | 'income' | 'expense' }
@@ -278,7 +279,7 @@ const AllBillsScreen: React.FC = () => {
           showsVerticalScrollIndicator={false}
           stickySectionHeadersEnabled={false}
           refreshControl={
-            <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} />
+            <RefreshControl {...refreshControlProps} refreshing={refreshing} onRefresh={handleRefresh} />
           }
           renderSectionHeader={({ section }) => (
             <View style={styles.monthHeader}>

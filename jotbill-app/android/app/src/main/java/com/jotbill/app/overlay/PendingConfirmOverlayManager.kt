@@ -33,6 +33,8 @@ import com.jotbill.app.pending.PendingConfirmReadiness
 import com.jotbill.app.pending.PendingConfirmService
 import com.jotbill.app.pending.PendingPromptPolicy
 import com.jotbill.app.pending.PendingReminderNotifier
+import com.jotbill.app.theme.SoftOverlayTheme
+import com.jotbill.app.theme.ThemePreferences
 import com.jotbill.app.utils.JotBillLog
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
@@ -353,6 +355,10 @@ internal object PendingConfirmOverlayManager {
     /** 用户在弹窗里是否实际点选过账户/分类（编辑卡只锁真正改过的字段）。 */
     private var displayedAccountTouched = false
     private var displayedCategoryTouched = false
+
+    /** 当前在屏弹窗的主题快照（防止换肤瞬间与异步加载的 chip 风格不一致）。 */
+    private var displayedSoftTheme = false
+    private var displayedDarkTheme = false
 
     private data class AutoDismissInfo(
         val amountMinor: Long,
@@ -1170,6 +1176,11 @@ internal object PendingConfirmOverlayManager {
         try {
             val inflater = LayoutInflater.from(context)
             val view = inflater.inflate(R.layout.pending_confirm_overlay, null)
+            displayedSoftTheme = ThemePreferences.isSoft(context)
+            displayedDarkTheme = ThemePreferences.isDark(context)
+            if (displayedSoftTheme) {
+                SoftOverlayTheme.apply(view, displayedDarkTheme)
+            }
             // 黄色来源条幅已按用户裁定（2026-10-24）删除常显来源文案 —— 对用户无信息量。
             // 仅保留 D-21 的 0 金额占位说明：用户必须看懂"为什么是 0、下一步做什么"。
             val sourceText = view.findViewById<TextView>(R.id.tv_source)
@@ -1721,8 +1732,12 @@ internal object PendingConfirmOverlayManager {
                             text = "${account.icon ?: "💳"} ${account.name}"
                         }
                         textSize = 14f
-                        setTextColor(0xFF1A1A1A.toInt())
-                        setBackgroundResource(R.drawable.btn_category_unselected)
+                        if (displayedSoftTheme) {
+                            SoftOverlayTheme.styleChip(this, selected = false, isDark = displayedDarkTheme)
+                        } else {
+                            setTextColor(0xFF1A1A1A.toInt())
+                            setBackgroundResource(R.drawable.btn_category_unselected)
+                        }
                         setTypeface(typeface, Typeface.BOLD)
                         val horizontalPadding = (12 * density).toInt()
                         val verticalPadding = (8 * density).toInt()
@@ -1770,8 +1785,12 @@ internal object PendingConfirmOverlayManager {
                 text = "${category.icon ?: "📦"} ${category.name}"
             }
             textSize = 14f
-            setTextColor(0xFF1A1A1A.toInt())
-            setBackgroundResource(R.drawable.btn_category_unselected)
+            if (displayedSoftTheme) {
+                SoftOverlayTheme.styleChip(this, selected = false, isDark = displayedDarkTheme)
+            } else {
+                setTextColor(0xFF1A1A1A.toInt())
+                setBackgroundResource(R.drawable.btn_category_unselected)
+            }
             setTypeface(typeface, Typeface.BOLD)
             val density = context.resources.displayMetrics.density
             val horizontalPadding = (12 * density).toInt()
@@ -1800,7 +1819,10 @@ internal object PendingConfirmOverlayManager {
     private fun selectCategory(selectedView: TextView, category: CategoryEntity) {
         selectedCategory = category
         categoryViews.forEach { (view, cat) ->
-            if (cat.id == category.id) {
+            val isSelected = cat.id == category.id
+            if (displayedSoftTheme) {
+                SoftOverlayTheme.styleChip(view, selected = isSelected, isDark = displayedDarkTheme)
+            } else if (isSelected) {
                 view.setBackgroundResource(R.drawable.btn_category_selected)
                 view.setTextColor(0xFF1D4ED8.toInt())
             } else {
@@ -1816,7 +1838,10 @@ internal object PendingConfirmOverlayManager {
     private fun selectAccount(selectedView: TextView, account: AccountEntity) {
         selectedAccount = account
         accountViews.forEach { (view, acc) ->
-            if (acc.id == account.id) {
+            val isSelected = acc.id == account.id
+            if (displayedSoftTheme) {
+                SoftOverlayTheme.styleChip(view, selected = isSelected, isDark = displayedDarkTheme)
+            } else if (isSelected) {
                 view.setBackgroundResource(R.drawable.btn_category_selected)
                 view.setTextColor(0xFF1D4ED8.toInt())
             } else {

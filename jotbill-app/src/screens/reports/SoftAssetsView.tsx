@@ -2,7 +2,7 @@
  * SoftAssetsView - 柔光主题资产净值视图
  * 深碳色渐变净资产主卡 + 近 12 月收支净额走势折线 + 资产/负债账户分组卡。
  */
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   RefreshControl,
   ScrollView,
@@ -17,12 +17,12 @@ import Svg, { Circle, Defs, LinearGradient, Path, Stop } from 'react-native-svg'
 import { ThemeColors } from '../../theme/colors';
 import { ThemeShape } from '../../theme/shape';
 import { spacing } from '../../theme/spacing';
-import { useStyles } from '../../hooks';
+import { useStyles, useRefreshControlProps } from '../../hooks';
 import { useTheme } from '../../providers';
 import { useAssetsData } from '../../hooks/useAssetsData';
 import { nativeData, type Account } from '../../native';
 import { CACHE_TIME, GC_TIME, QUERY_KEYS } from '../../lib/queryClient';
-import { QueryErrorBanner, SoftGradient } from '../../components/ui';
+import { QueryErrorBanner, SegmentedControl, SoftGradient } from '../../components/ui';
 import { AssetsTabSkeleton } from '../../components/skeleton/ReportSkeletons';
 import AccountIcon from '../../components/business/AccountIcon';
 import { formatCurrency } from '../../utils/format';
@@ -36,16 +36,38 @@ const SUBTYPE_LABELS: Record<Account['subtype'], string> = {
   other: '其他账户',
 };
 
+const COMP_PALETTE = ['#4F46E5', '#14B8A6', '#F59E0B', '#EC4899', '#3B82F6', '#64748B'];
+
+const COMP_OPTIONS = [
+  { key: 'expense', label: '支出' },
+  { key: 'income', label: '收入' },
+];
+
+function formatCompactYuan(amount: number): string {
+  const abs = Math.abs(amount);
+  const sign = amount < 0 ? '-' : '';
+  if (abs >= 10000) {
+    return `${sign}¥${(abs / 10000).toFixed(2)}万`;
+  }
+  return formatCurrency(amount);
+}
+
 export default function SoftAssetsView() {
   const styles = useStyles(createStyles);
+  const refreshControlProps = useRefreshControlProps();
   const { isDark } = useTheme();
   const navigation = useNavigation<any>();
+  const [compType, setCompType] = useState<'expense' | 'income'>('expense');
 
   const {
     netWorth,
     totalAssets,
     totalLiabilities,
+    totalIncome,
+    totalExpense,
     assetTrendData,
+    incomeCategoryStats,
+    expenseCategoryStats,
     isLoading,
     isFetching,
     isError,
@@ -72,6 +94,34 @@ export default function SoftAssetsView() {
     () => activeAccounts.filter(a => a.kind === 'liability'),
     [activeAccounts],
   );
+
+  // 近 12 月收支分类构成（与 V2 05ca6a2 对齐：仅展示中文分类名、大额用「万」、缺省兜底「未分类」）
+  const compositionRows = useMemo(() => {
+    const raw = [...(compType === 'income' ? incomeCategoryStats : expenseCategoryStats)]
+      .filter(item => item.amount > 0)
+      .sort((a, b) => b.amount - a.amount);
+    const total = raw.reduce((s, r) => s + r.amount, 0);
+    if (total <= 0) return [];
+    const top = raw.slice(0, 5);
+    const rest = raw.slice(5);
+    const merged = rest.length > 0
+      ? [
+          ...top,
+          {
+            categoryId: '__rest__',
+            categoryName: '其他',
+            amount: rest.reduce((s, r) => s + r.amount, 0),
+          },
+        ]
+      : top;
+    return merged.map((item, idx) => ({
+      id: item.categoryId,
+      name: item.categoryName?.trim() || '未分类',
+      amount: item.amount,
+      pct: Math.round((item.amount / total) * 1000) / 10,
+      color: COMP_PALETTE[idx % COMP_PALETTE.length],
+    }));
+  }, [compType, expenseCategoryStats, incomeCategoryStats]);
 
   // 右上角迷你趋势折线（遵循 useAssetsData.assetTrendData 既有口径）
   const sparkPath = useMemo(() => {
@@ -155,6 +205,7 @@ export default function SoftAssetsView() {
       contentContainerStyle={styles.content}
       refreshControl={
         <RefreshControl
+          {...refreshControlProps}
           refreshing={(isFetching && !isLoading) || accountsQuery.isFetching}
           onRefresh={() => { void handleRefresh(); }}
         />
@@ -224,6 +275,53 @@ export default function SoftAssetsView() {
           </View>
         </View>
       </SoftGradient>
+
+      {/* 历史累计收支（与原资产页口径对齐） */}
+      <View style={styles.cumCard}>
+        <View style={styles.cumCell}>
+          <Text style={styles.cumLabel}>累计收入</Text>
+          <Text style={[styles.cumValue, styles.cumIncome]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>
+            {formatCompactYuan(totalIncome)}
+          </Text>
+        </View>
+        <View style={[styles.cumCell, styles.cumCellBorder]}>
+          <Text style={styles.cumLabel}>累计支出</Text>
+          <Text style={[styles.cumValue, styles.cumExpense]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>
+            {formatCompactYuan(totalExpense)}
+          </Text>
+        </View>
+      </View>
+
+      {/* 近 12 月类型构成（仅显示色点、中文分类名、金额与占比） */}
+      <View style={styles.groupHead}>
+        <Text style={styles.groupTitle}>近 12 月类型构成</Text>
+        <View style={styles.compSegWrap}>
+          <SegmentedControl
+            size="small"
+            options={COMP_OPTIONS}
+            selectedKey={compType}
+            onSelect={k => setCompType(k as 'expense' | 'income')}
+          />
+        </View>
+      </View>
+      {compositionRows.length > 0 ? (
+        <View style={styles.compCard}>
+          {compositionRows.map((row, idx) => (
+            <View key={row.id} style={[styles.compRow, idx > 0 && styles.accRowBorder]}>
+              <View style={[styles.compDot, { backgroundColor: row.color }]} />
+              <Text style={styles.compName} numberOfLines={1}>{row.name}</Text>
+              <Text style={styles.compAmount}>{formatCompactYuan(row.amount)}</Text>
+              <Text style={styles.compPct}>{row.pct}%</Text>
+            </View>
+          ))}
+        </View>
+      ) : (
+        <View style={styles.emptyCard}>
+          <Text style={styles.emptyText}>
+            {compType === 'income' ? '近 12 月暂无收入记录' : '近 12 月暂无支出记录'}
+          </Text>
+        </View>
+      )}
 
       {/* 资产账户 */}
       <View style={styles.groupHead}>
@@ -402,6 +500,78 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
     emptyText: {
       fontSize: 13,
       color: colors.textTertiary,
+    },
+    cumCard: {
+      flexDirection: 'row',
+      marginTop: 12,
+      backgroundColor: colors.surface,
+      borderRadius: shape.radius.card,
+      borderWidth: shape.borderWidth.card,
+      borderColor: colors.cardBorder,
+      paddingVertical: 14,
+      ...shape.elevation.card,
+    },
+    cumCell: {
+      flex: 1,
+      paddingHorizontal: 16,
+      gap: 3,
+    },
+    cumCellBorder: {
+      borderLeftWidth: StyleSheet.hairlineWidth,
+      borderLeftColor: colors.divider,
+    },
+    cumLabel: {
+      fontSize: 12,
+      color: colors.textTertiary,
+    },
+    cumValue: {
+      fontSize: 16,
+      fontWeight: '700',
+      fontVariant: ['tabular-nums'],
+    },
+    cumIncome: { color: colors.income },
+    cumExpense: { color: colors.expense },
+    compSegWrap: {
+      width: 96,
+    },
+    compCard: {
+      backgroundColor: colors.surface,
+      borderRadius: shape.radius.card,
+      borderWidth: shape.borderWidth.card,
+      borderColor: colors.cardBorder,
+      overflow: 'hidden',
+      ...shape.elevation.card,
+    },
+    compRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 10,
+      paddingHorizontal: 14,
+      paddingVertical: 11,
+    },
+    compDot: {
+      width: 9,
+      height: 9,
+      borderRadius: 3,
+    },
+    compName: {
+      flex: 1,
+      fontSize: 14,
+      fontWeight: '500',
+      color: colors.textPrimary,
+    },
+    compAmount: {
+      fontSize: 14,
+      fontWeight: '600',
+      color: colors.textPrimary,
+      fontVariant: ['tabular-nums'],
+    },
+    compPct: {
+      width: 44,
+      textAlign: 'right',
+      fontSize: 12,
+      color: colors.textTertiary,
+      fontVariant: ['tabular-nums'],
     },
   }),
 });

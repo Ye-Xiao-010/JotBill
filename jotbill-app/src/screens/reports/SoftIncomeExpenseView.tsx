@@ -3,9 +3,10 @@
  * 月 / 年切换；月视图内「趋势柱图 / 热力日历」二合一 + 选中日明细 + SVG 支出构成圆环与排行。
  * 严格遵循诚实状态约定：加载中显示骨架屏、失败时显式展示 QueryErrorBanner。
  */
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Animated,
   RefreshControl,
   ScrollView,
   StyleSheet,
@@ -14,26 +15,31 @@ import {
   View,
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
-import { ChevronLeft, ChevronRight } from 'lucide-react-native';
+import { useQuery } from '@tanstack/react-query';
+import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp } from 'lucide-react-native';
 import Svg, { Circle } from 'react-native-svg';
 import { ThemeColors } from '../../theme/colors';
 import { ThemeShape } from '../../theme/shape';
 import { spacing } from '../../theme/spacing';
-import { useStyles } from '../../hooks';
+import { useStyles, useRefreshControlProps } from '../../hooks';
 import { useTheme } from '../../providers';
 import {
   useDailyBills,
   useDailyGridData,
   useMonthlyGridData,
 } from '../../hooks/useIncomeExpenseData';
+import { nativeData } from '../../native';
+import { CACHE_TIME, GC_TIME } from '../../lib/queryClient';
 import { QueryErrorBanner, SegmentedControl } from '../../components/ui';
 import { CalendarSkeleton } from '../../components/skeleton/ReportSkeletons';
 import CategoryIcon from '../../components/business/CategoryIcon';
 import { getCategoryColor, getCategoryIcon } from '../../constants/app';
 import { formatCurrency, formatNumber } from '../../utils/format';
+import { triggerSoftHaptic } from '../../utils/haptics';
 
 type PeriodMode = 'month' | 'year';
 type TrendMode = 'bars' | 'cal';
+type BreakdownType = 'expense' | 'income';
 
 const PERIOD_OPTIONS = [
   { key: 'month', label: '月' },
@@ -43,6 +49,11 @@ const PERIOD_OPTIONS = [
 const TREND_OPTIONS = [
   { key: 'bars', label: '趋势' },
   { key: 'cal', label: '日历' },
+];
+
+const BREAKDOWN_OPTIONS = [
+  { key: 'expense', label: '支出' },
+  { key: 'income', label: '收入' },
 ];
 
 const WEEKDAYS = ['一', '二', '三', '四', '五', '六', '日'];
@@ -60,16 +71,33 @@ function getCategoryAccent(name: string, index: number): string {
 
 export default function SoftIncomeExpenseView() {
   const styles = useStyles(createStyles);
+  const refreshControlProps = useRefreshControlProps();
   const { colors, isDark } = useTheme();
   const navigation = useNavigation<any>();
   const now = new Date();
 
   const [period, setPeriod] = useState<PeriodMode>('month');
   const [trendView, setTrendView] = useState<TrendMode>('bars');
+  const [breakdownType, setBreakdownType] = useState<BreakdownType>('expense');
+  const [expandedCategoryId, setExpandedCategoryId] = useState<string | null>(null);
   const [year, setYear] = useState(now.getFullYear());
   const [month, setMonth] = useState(now.getMonth()); // 0..11
   const [selectedDay, setSelectedDay] = useState(now.getDate());
   const [selectedMonth, setSelectedMonth] = useState(now.getMonth() + 1); // 1..12
+  const donutFade = useRef(new Animated.Value(1)).current;
+
+  useEffect(() => {
+    setExpandedCategoryId(null);
+  }, [period, year, month, breakdownType]);
+
+  useEffect(() => {
+    donutFade.setValue(0.35);
+    Animated.timing(donutFade, {
+      toValue: 1,
+      duration: 240,
+      useNativeDriver: true,
+    }).start();
+  }, [breakdownType, period, year, month, donutFade]);
 
   const isCurrentMonth = year === now.getFullYear() && month === now.getMonth();
   const isCurrentYear = year === now.getFullYear();
@@ -82,6 +110,41 @@ export default function SoftIncomeExpenseView() {
   const selectedDateKey =
     period === 'month' ? formatDateKey(year, month, clampedSelectedDay) : null;
   const dailyBillsQuery = useDailyBills(selectedDateKey);
+
+  const periodRange = useMemo(() => {
+    if (period === 'month') {
+      return {
+        startDate: formatDateKey(year, month, 1),
+        endDate: formatDateKey(year, month, daysInMonth),
+      };
+    }
+    return {
+      startDate: `${year}-01-01`,
+      endDate: `${year}-12-31`,
+    };
+  }, [period, year, month, daysInMonth]);
+
+  // 分类下钻明细查询：点击某分类行时按需加载该期间的明细账单
+  const categoryDrillQuery = useQuery({
+    queryKey: [
+      'soft-report-category-drill',
+      breakdownType,
+      expandedCategoryId,
+      periodRange.startDate,
+      periodRange.endDate,
+    ],
+    queryFn: () =>
+      nativeData.getBills({
+        type: breakdownType,
+        categoryId: expandedCategoryId ?? undefined,
+        startDate: periodRange.startDate,
+        endDate: periodRange.endDate,
+        limit: 10,
+      }),
+    enabled: Boolean(expandedCategoryId && expandedCategoryId !== '__rest__'),
+    staleTime: CACHE_TIME.STATISTICS,
+    gcTime: GC_TIME.DEFAULT,
+  });
 
   const activeQuery = period === 'month' ? monthQuery : yearQuery;
   const stats = activeQuery.statistics;
@@ -168,18 +231,24 @@ export default function SoftIncomeExpenseView() {
   const elapsedMonths = isCurrentYear ? now.getMonth() + 1 : 12;
   const monthlyAvg = elapsedMonths > 0 ? (stats?.totalExpense ?? 0) / elapsedMonths : 0;
 
-  // 支出构成（前 5 + 其他汇总）
+  // 构成（支出 / 收入可切换；前 5 + 其他汇总）
   const breakdown = useMemo(() => {
-    const raw = [...(stats?.expenseCategoryStats ?? [])].sort((a, b) => b.amount - a.amount);
+    const source =
+      breakdownType === 'income'
+        ? (stats?.incomeCategoryStats ?? [])
+        : (stats?.expenseCategoryStats ?? []);
+    const raw = [...source].sort((a, b) => b.amount - a.amount);
     if (raw.length <= 6) {
       return raw.map((item, idx) => ({
         ...item,
-        color: getCategoryAccent(item.categoryName, idx),
+        categoryName: item.categoryName?.trim() || '未分类',
+        color: getCategoryAccent(item.categoryName?.trim() || '未分类', idx),
       }));
     }
     const top = raw.slice(0, 5).map((item, idx) => ({
       ...item,
-      color: getCategoryAccent(item.categoryName, idx),
+      categoryName: item.categoryName?.trim() || '未分类',
+      color: getCategoryAccent(item.categoryName?.trim() || '未分类', idx),
     }));
     const rest = raw.slice(5);
     const restAmount = rest.reduce((s, r) => s + r.amount, 0);
@@ -197,7 +266,7 @@ export default function SoftIncomeExpenseView() {
         color: '#64748B',
       },
     ];
-  }, [stats?.expenseCategoryStats]);
+  }, [breakdownType, stats?.expenseCategoryStats, stats?.incomeCategoryStats]);
 
   // 日历前导空格（周一为首列）
   const firstDayOffset = useMemo(() => {
@@ -208,6 +277,7 @@ export default function SoftIncomeExpenseView() {
   const totalExpense = stats?.totalExpense ?? 0;
   const totalIncome = stats?.totalIncome ?? 0;
   const totalBalance = totalIncome - totalExpense;
+  const activeBreakdownTotal = breakdownType === 'income' ? totalIncome : totalExpense;
   const maxPct = breakdown[0]?.percentage || 1;
 
   // SVG 圆环参数
@@ -216,6 +286,7 @@ export default function SoftIncomeExpenseView() {
 
   const renderDonut = () => {
     let offset = 0;
+    const isSingleFull = breakdown.length === 1 && breakdown[0].percentage >= 99.5;
     return (
       <Svg width={128} height={128} viewBox="0 0 128 128">
         <Circle
@@ -228,7 +299,9 @@ export default function SoftIncomeExpenseView() {
         />
         {breakdown.map(seg => {
           const arcLen = (seg.percentage / 100) * donutCircumference;
-          const visibleLen = Math.max(arcLen - 2.5, 0.2);
+          const visibleLen = isSingleFull
+            ? donutCircumference
+            : Math.max(arcLen - 2.5, 0.2);
           const currentOffset = offset;
           offset += arcLen;
           return (
@@ -244,7 +317,7 @@ export default function SoftIncomeExpenseView() {
               strokeDashoffset={-currentOffset}
               rotation={-90}
               origin="64, 64"
-              strokeLinecap="round"
+              strokeLinecap={isSingleFull ? 'butt' : 'round'}
             />
           );
         })}
@@ -258,6 +331,7 @@ export default function SoftIncomeExpenseView() {
       contentContainerStyle={styles.content}
       refreshControl={
         <RefreshControl
+          {...refreshControlProps}
           refreshing={activeQuery.isFetching && !activeQuery.isLoading}
           onRefresh={() => { void activeQuery.refetch(); }}
         />
@@ -604,31 +678,52 @@ export default function SoftIncomeExpenseView() {
             </View>
           ) : null}
 
-          {/* 支出构成圆环 + 排行 */}
+          {/* 支出 / 收入构成圆环 + 排行（点击分类行可下钻明细） */}
           <View style={styles.panelCard}>
             <View style={styles.panelHead}>
-              <Text style={styles.panelTitle}>支出构成</Text>
+              <View style={styles.panelTitleGroup}>
+                <Text style={styles.panelTitle}>
+                  {breakdownType === 'income' ? '收入构成' : '支出构成'}
+                </Text>
+                <View style={styles.breakdownSegWrap}>
+                  <SegmentedControl
+                    size="small"
+                    options={BREAKDOWN_OPTIONS}
+                    selectedKey={breakdownType}
+                    onSelect={k => {
+                      triggerSoftHaptic('light');
+                      setBreakdownType(k as BreakdownType);
+                    }}
+                  />
+                </View>
+              </View>
               <TouchableOpacity
-                onPress={() => navigation.navigate('AllBills', { initialFilter: 'expense' })}
+                onPress={() => navigation.navigate('AllBills', { initialFilter: breakdownType })}
                 activeOpacity={0.7}
               >
-                <Text style={styles.panelLink}>全部支出 ›</Text>
+                <Text style={styles.panelLink}>
+                  {breakdownType === 'income' ? '全部收入 ›' : '全部支出 ›'}
+                </Text>
               </TouchableOpacity>
             </View>
 
             {breakdown.length === 0 ? (
-              <Text style={styles.emptyChartText}>该期间暂无支出记录</Text>
+              <Text style={styles.emptyChartText}>
+                {breakdownType === 'income' ? '该期间暂无收入记录' : '该期间暂无支出记录'}
+              </Text>
             ) : (
-              <>
+              <Animated.View style={{ opacity: donutFade }}>
                 <View style={styles.donutWrap}>
                   <View style={styles.donutBox}>
                     {renderDonut()}
                     <View style={styles.donutCenter}>
                       <Text style={styles.donutCenterLabel}>
-                        {period === 'month' ? '月支出' : '年支出'}
+                        {period === 'month'
+                          ? (breakdownType === 'income' ? '月收入' : '月支出')
+                          : (breakdownType === 'income' ? '年收入' : '年支出')}
                       </Text>
                       <Text style={styles.donutCenterValue} numberOfLines={1}>
-                        {Math.round(totalExpense).toLocaleString('zh-CN')}
+                        {Math.round(activeBreakdownTotal).toLocaleString('zh-CN')}
                       </Text>
                     </View>
                   </View>
@@ -646,49 +741,133 @@ export default function SoftIncomeExpenseView() {
                 </View>
 
                 <View style={styles.rankList}>
-                  {breakdown.slice(0, 5).map((item, idx) => (
-                    <View
-                      key={item.categoryId}
-                      style={[styles.rankRow, idx > 0 && styles.rankRowBorder]}
-                    >
-                      <View
-                        style={[
-                          styles.rankIcon,
-                          { backgroundColor: `${item.color}${isDark ? '33' : '22'}` },
-                        ]}
-                      >
-                        <CategoryIcon
-                          icon={item.categoryIcon || getCategoryIcon(item.categoryName)}
-                          size={16}
-                          emojiStyle={{ fontSize: 16 }}
-                        />
-                      </View>
-                      <View style={styles.rankMain}>
-                        <View style={styles.rankTop}>
-                          <Text style={styles.rankName} numberOfLines={1}>
-                            {item.categoryName}
-                          </Text>
-                          <Text style={styles.rankAmt}>{formatCurrency(item.amount)}</Text>
-                        </View>
-                        <View style={styles.rankTrack}>
+                  {breakdown.slice(0, 5).map((item, idx) => {
+                    const canDrill = item.categoryId !== '__rest__';
+                    const isExpanded = canDrill && expandedCategoryId === item.categoryId;
+                    const drillItems = categoryDrillQuery.data?.items ?? [];
+
+                    return (
+                      <View key={item.categoryId} style={[idx > 0 && styles.rankRowBorder]}>
+                        <TouchableOpacity
+                          style={styles.rankRow}
+                          disabled={!canDrill}
+                          onPress={() => {
+                            if (!canDrill) return;
+                            triggerSoftHaptic('light');
+                            setExpandedCategoryId(prev =>
+                              prev === item.categoryId ? null : item.categoryId,
+                            );
+                          }}
+                          activeOpacity={0.72}
+                          accessibilityRole="button"
+                          accessibilityLabel={`${item.categoryName} ${formatCurrency(item.amount)}`}
+                        >
                           <View
                             style={[
-                              styles.rankFill,
-                              {
-                                width: `${Math.min(100, (item.percentage / maxPct) * 100)}%`,
-                                backgroundColor: item.color,
-                              },
+                              styles.rankIcon,
+                              { backgroundColor: `${item.color}${isDark ? '33' : '22'}` },
                             ]}
-                          />
-                        </View>
-                        <Text style={styles.rankSub}>
-                          {item.count} 笔 · {item.percentage}%
-                        </Text>
+                          >
+                            <CategoryIcon
+                              icon={item.categoryIcon || getCategoryIcon(item.categoryName)}
+                              size={16}
+                              emojiStyle={{ fontSize: 16 }}
+                            />
+                          </View>
+                          <View style={styles.rankMain}>
+                            <View style={styles.rankTop}>
+                              <Text style={styles.rankName} numberOfLines={1}>
+                                {item.categoryName}
+                              </Text>
+                              <View style={styles.rankRight}>
+                                <Text style={styles.rankAmt}>{formatCurrency(item.amount)}</Text>
+                                {canDrill ? (
+                                  isExpanded ? (
+                                    <ChevronUp size={15} color={colors.textTertiary} strokeWidth={2} />
+                                  ) : (
+                                    <ChevronDown size={15} color={colors.textTertiary} strokeWidth={2} />
+                                  )
+                                ) : null}
+                              </View>
+                            </View>
+                            <View style={styles.rankTrack}>
+                              <View
+                                style={[
+                                  styles.rankFill,
+                                  {
+                                    width: `${Math.min(100, (item.percentage / maxPct) * 100)}%`,
+                                    backgroundColor: item.color,
+                                  },
+                                ]}
+                              />
+                            </View>
+                            <Text style={styles.rankSub}>
+                              {item.count} 笔 · {item.percentage}%
+                            </Text>
+                          </View>
+                        </TouchableOpacity>
+
+                        {isExpanded ? (
+                          <View style={styles.drillDrawer}>
+                            {categoryDrillQuery.isLoading ? (
+                              <ActivityIndicator
+                                size="small"
+                                color={colors.primary}
+                                style={{ paddingVertical: 10 }}
+                              />
+                            ) : categoryDrillQuery.isError ? (
+                              <Text style={styles.drillHint}>明细加载失败，请下拉刷新重试</Text>
+                            ) : drillItems.length === 0 ? (
+                              <Text style={styles.drillHint}>暂无可展开明细</Text>
+                            ) : (
+                              <>
+                                {drillItems.map((bill, bIdx) => {
+                                  const d = new Date(bill.occurredAt);
+                                  const dateStr = `${d.getMonth() + 1}/${d.getDate()}`;
+                                  return (
+                                    <TouchableOpacity
+                                      key={bill.id}
+                                      style={[
+                                        styles.drillRow,
+                                        bIdx > 0 && styles.drillRowBorder,
+                                      ]}
+                                      onPress={() =>
+                                        navigation.navigate('BillDetail', { billId: bill.id })
+                                      }
+                                      activeOpacity={0.72}
+                                    >
+                                      <Text style={styles.drillDate}>{dateStr}</Text>
+                                      <Text style={styles.drillTitle} numberOfLines={1}>
+                                        {bill.description || bill.merchant || item.categoryName}
+                                      </Text>
+                                      <Text
+                                        style={[
+                                          styles.drillAmt,
+                                          breakdownType === 'income'
+                                            ? styles.incomeText
+                                            : styles.expenseText,
+                                        ]}
+                                      >
+                                        {breakdownType === 'income' ? '+' : '-'}
+                                        {formatNumber(bill.amountMinor / 100, 2)}
+                                      </Text>
+                                    </TouchableOpacity>
+                                  );
+                                })}
+                                {categoryDrillQuery.data?.hasMore ? (
+                                  <Text style={styles.drillMoreHint}>
+                                    仅展示最近 10 笔，可点右上角查看全部
+                                  </Text>
+                                ) : null}
+                              </>
+                            )}
+                          </View>
+                        ) : null}
                       </View>
-                    </View>
-                  ))}
+                    );
+                  })}
                 </View>
-              </>
+              </Animated.View>
             )}
           </View>
         </>
@@ -1087,6 +1266,66 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape, isDark: boolean) =
       fontSize: 11,
       color: colors.textTertiary,
       marginTop: 4,
+    },
+    panelTitleGroup: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 10,
+    },
+    breakdownSegWrap: {
+      width: 96,
+    },
+    rankRight: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 4,
+    },
+    drillDrawer: {
+      marginBottom: 10,
+      marginLeft: 46,
+      paddingHorizontal: 12,
+      paddingVertical: 6,
+      borderRadius: 12,
+      backgroundColor: colors.surfaceMuted,
+    },
+    drillRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 8,
+      paddingVertical: 7,
+    },
+    drillRowBorder: {
+      borderTopWidth: StyleSheet.hairlineWidth,
+      borderTopColor: colors.divider,
+    },
+    drillDate: {
+      fontSize: 11.5,
+      color: colors.textTertiary,
+      fontVariant: ['tabular-nums'],
+      width: 34,
+    },
+    drillTitle: {
+      flex: 1,
+      fontSize: 13,
+      color: colors.textPrimary,
+    },
+    drillAmt: {
+      fontSize: 13,
+      fontWeight: '600',
+      fontVariant: ['tabular-nums'],
+    },
+    drillHint: {
+      fontSize: 12,
+      color: colors.textTertiary,
+      paddingVertical: 8,
+      textAlign: 'center',
+    },
+    drillMoreHint: {
+      fontSize: 11,
+      color: colors.textTertiary,
+      paddingTop: 4,
+      paddingBottom: 2,
+      textAlign: 'center',
     },
   }),
   _colors: colors,

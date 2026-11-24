@@ -32,7 +32,7 @@ import { nativeData, type Account, type Rule } from '../../native';
 import { borderRadius, borderWidth, spacing } from '../../theme/spacing';
 import { ThemeColors } from '../../theme/colors';
 import { ThemeShape } from '../../theme/shape';
-import { useStyles } from '../../hooks';
+import { useStyles, useRefreshControlProps } from '../../hooks';
 import { useAlert } from '../../providers';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { typography } from '../../theme';
@@ -75,6 +75,7 @@ export default function RulesScreen() {
   const navigation = useNavigation();
   const queryClient = useQueryClient();
   const styles = useStyles(createStyles);
+  const refreshControlProps = useRefreshControlProps();
   const { alert, confirm } = useAlert();
 
   const [editingRule, setEditingRule] = useState<Rule | null>(null);
@@ -176,7 +177,7 @@ export default function RulesScreen() {
       <ScrollView
         style={styles.scrollView}
         contentContainerStyle={styles.content}
-        refreshControl={<RefreshControl refreshing={query.isFetching} onRefresh={() => query.refetch()} />}
+        refreshControl={<RefreshControl {...refreshControlProps} refreshing={query.isFetching} onRefresh={() => query.refetch()} />}
       >
         <View style={styles.notice}>
           <Text style={styles.noticeText}>
@@ -206,7 +207,7 @@ export default function RulesScreen() {
           ))
         )}
         <TouchableOpacity style={styles.createButton} onPress={handleCreate} activeOpacity={0.85}>
-          <Plus size={18} color="#FFFFFF" />
+          <Plus size={18} color={styles._primaryIconColor} />
           <Text style={styles.createButtonText}>新建规则</Text>
         </TouchableOpacity>
       </ScrollView>
@@ -668,4 +669,5 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
     actionDisabled: { opacity: 0.5 },
   }),
   _colors: colors,
+  _primaryIconColor: shape.isSoft ? colors.onPrimary : '#FFFFFF',
 });

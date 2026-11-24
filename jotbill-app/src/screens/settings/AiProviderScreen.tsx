@@ -222,7 +222,7 @@ export default function AiProviderScreen() {
             <Bot size={42} color={styles._colors.textTertiary} />
             <Text style={styles.emptyTitle}>还没有 AI 服务商</Text>
             <TouchableOpacity style={styles.primaryButton} onPress={openCreate}>
-              <Plus size={18} color="#FFFFFF" />
+              <Plus size={18} color={styles._primaryIconColor} />
               <Text style={styles.primaryButtonText}>添加服务商</Text>
             </TouchableOpacity>
           </View>
@@ -526,4 +526,5 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
     modalActions: { flexDirection: 'row', gap: spacing.md, marginTop: spacing.lg },
   }),
   _colors: colors,
+  _primaryIconColor: shape.isSoft ? colors.onPrimary : '#FFFFFF',
 });
