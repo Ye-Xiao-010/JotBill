@@ -15,6 +15,7 @@ import { ThemeColors } from '../../theme/colors';
 import { ThemeShape } from '../../theme/shape';
 import { spacing, borderRadius, borderWidth, shadow } from '../../theme/spacing';
 import { useStyles } from '../../hooks';
+import { HOGWARTS_FONTS } from '../../constants/hogwartsAssets';
 
 type ButtonVariant = 'primary' | 'secondary' | 'outline' | 'text';
 type ButtonSize = 'small' | 'medium' | 'large';
@@ -88,15 +89,16 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
       flexDirection: 'row',
       alignItems: 'center',
       justifyContent: 'center',
-      borderRadius: shape.isSoft ? shape.radius.button : borderRadius.button,
-      borderWidth: shape.isSoft ? 0 : borderWidth.medium,
-      borderColor: shape.isSoft ? colors.cardBorder : colors.stroke,
-      ...(shape.isSoft ? shape.elevation.none : shadow.small),
+      borderRadius: shape.isSoft || shape.isHogwarts ? shape.radius.button : borderRadius.button,
+      borderWidth: shape.isSoft ? 0 : shape.isHogwarts ? shape.borderWidth.control : borderWidth.medium,
+      borderColor: shape.isSoft || shape.isHogwarts ? colors.cardBorder : colors.stroke,
+      ...(shape.isSoft ? shape.elevation.none : shape.isHogwarts ? shape.elevation.card : shadow.small),
     },
 
     // 变体样式
     primary: {
       backgroundColor: colors.primary,
+      borderColor: shape.isHogwarts ? colors.accent : colors.stroke,
     },
     secondary: {
       backgroundColor: shape.isSoft ? colors.primaryLight : colors.accent,
@@ -132,7 +134,8 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
 
     // 文本样式
     buttonText: {
-      fontWeight: shape.isSoft ? shape.fontWeight.semibold : '800',
+      fontWeight: shape.isHogwarts ? undefined : shape.isSoft ? shape.fontWeight.semibold : '800',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
       textAlign: 'center',
     },
     primaryText: {

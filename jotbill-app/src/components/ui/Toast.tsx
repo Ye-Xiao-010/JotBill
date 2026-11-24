@@ -14,6 +14,7 @@ import { ThemeColors } from '../../theme/colors';
 import { ThemeShape } from '../../theme/shape';
 import { spacing, borderRadius, borderWidth, shadow } from '../../theme/spacing';
 import { useStyles } from '../../hooks';
+import { HOGWARTS_FONTS } from '../../constants/hogwartsAssets';
 
 export type ToastType = 'success' | 'error' | 'warning' | 'info';
 
@@ -155,19 +156,19 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape, isDark: boolean) =
       alignItems: 'center',
       paddingHorizontal: shape.isSoft ? 16 : spacing.lg,
       paddingVertical: shape.isSoft ? 10 : spacing.md,
-      borderRadius: shape.isSoft ? shape.radius.pill : borderRadius.button,
-      borderWidth: shape.isSoft ? 0 : borderWidth.medium,
-      borderColor: colors.stroke,
+      borderRadius: shape.isSoft ? shape.radius.pill : shape.isHogwarts ? shape.radius.modal : borderRadius.button,
+      borderWidth: shape.isSoft ? 0 : shape.isHogwarts ? 1.5 : borderWidth.medium,
+      borderColor: shape.isHogwarts ? colors.accent : colors.stroke,
       backgroundColor: shape.isSoft ? (isDark ? '#F3F4F7' : '#1C1F27') : colors.primary,
       maxWidth: screenWidth - spacing.lg * 2,
       minWidth: shape.isSoft ? undefined : 200,
-      ...(shape.isSoft ? shape.elevation.floating : shadow.medium),
+      ...(shape.isSoft || shape.isHogwarts ? shape.elevation.floating : shadow.medium),
     },
     iconContainer: {
       width: shape.isSoft ? 22 : 28,
       height: shape.isSoft ? 22 : 28,
-      borderRadius: shape.isSoft ? 11 : borderRadius.small,
-      borderWidth: shape.isSoft ? 0 : borderWidth.thin,
+      borderRadius: shape.isSoft ? 11 : shape.isHogwarts ? shape.radius.badge : borderRadius.small,
+      borderWidth: shape.isSoft ? 0 : shape.borderWidth.subtle,
       borderColor: 'rgba(255, 255, 255, 0.4)',
       backgroundColor: 'rgba(255, 255, 255, 0.2)',
       alignItems: 'center',
@@ -180,10 +181,11 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape, isDark: boolean) =
       fontWeight: shape.isSoft ? '700' : '800',
     },
     message: {
-      flexShrink: 1,
+      ...(shape.isSoft ? { flexShrink: 1 } : { flex: 1 }),
       fontSize: shape.isSoft ? 13 : 15,
       color: shape.isSoft ? (isDark ? '#12141A' : '#FFFFFF') : '#FFFFFF',
-      fontWeight: shape.isSoft ? '500' : '700',
+      fontWeight: shape.isHogwarts ? undefined : shape.isSoft ? '500' : '700',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
       lineHeight: shape.isSoft ? 19 : 21,
     },
   }),

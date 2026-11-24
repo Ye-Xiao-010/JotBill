@@ -37,7 +37,7 @@ export default function BrutalPressable({
   shadowOffset = 4,
   duration = 120,
 }: BrutalPressableProps) {
-  const { isSoft, shape } = useTheme();
+  const { isSoft, isHogwarts, shape } = useTheme();
   const pressAnim = useRef(new Animated.Value(0)).current;
 
   const handlePressIn = useCallback(() => {
@@ -55,6 +55,25 @@ export default function BrutalPressable({
       useNativeDriver: true,
     }).start();
   }, [pressAnim, duration]);
+
+  // 魔法羊皮纸主题：去掉硬偏移阴影块，改用柔和轻缩放反馈
+  if (isHogwarts) {
+    const scale = pressAnim.interpolate({
+      inputRange: [0, 1],
+      outputRange: [1, shape.pressScale],
+    });
+    return (
+      <Pressable
+        onPress={onPress}
+        onPressIn={handlePressIn}
+        onPressOut={handlePressOut}
+      >
+        <Animated.View style={[style, shape.elevation.card, { transform: [{ scale }] }]}>
+          {children}
+        </Animated.View>
+      </Pressable>
+    );
+  }
 
   const translateX = pressAnim.interpolate({
     inputRange: [0, 1],

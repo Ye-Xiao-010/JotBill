@@ -1,13 +1,20 @@
 /**
- * 主题形状与层级系统（ThemeShape）
+ * 主题形状、层级与字体系统（ThemeShape / ThemeFonts）
  *
- * 将圆角、描边、阴影高度、字重和按压反馈从静态常量提升为主题态 token：
+ * 将圆角、描边、阴影高度、字重、字体和按压反馈从静态常量提升为主题态 token：
  * - brutal：与既有 spacing.ts 数值保持 100% 一致，确保旧四套积木风零回归；
- * - soft：大圆角、浅色去粗描边 + 轻投影、深色 1px 低对比发丝线、缩放按压反馈。
+ * - soft：大圆角、浅色去粗描边 + 轻投影、深色 1px 低对比发丝线、缩放按压反馈；
+ * - hogwarts：古典羊皮纸精装书风格——柔和圆角（14–24dp）、1px 鎏金细描边、
+ *   暖褐轻阴影与双语古籍字体（霞鹜文楷 + 站酷小薇 + Cinzel）。
  */
 import { StyleSheet, type TextStyle, type ViewStyle } from 'react-native';
 import type { ThemeStyleVariant } from './colors';
-import { borderRadius as brutalRadius, borderWidth as brutalBorderWidth, shadow as brutalShadow } from './spacing';
+import {
+  borderRadius as brutalRadius,
+  borderWidth as brutalBorderWidth,
+  shadow as brutalShadow,
+} from './spacing';
+import { HOGWARTS_FONTS } from '../constants/hogwartsAssets';
 
 export interface ThemeElevation {
   none: ViewStyle;
@@ -16,11 +23,20 @@ export interface ThemeElevation {
   hero: ViewStyle;
 }
 
+export interface ThemeFonts {
+  display?: string;
+  body?: string;
+  numeric?: string;
+  ornate?: string;
+}
+
 export interface ThemeShape {
   variant: ThemeStyleVariant;
   isSoft: boolean;
+  isHogwarts: boolean;
   radius: {
     tag: number;
+    badge: number;
     small: number;
     medium: number;
     button: number;
@@ -33,6 +49,7 @@ export interface ThemeShape {
   };
   borderWidth: {
     hairline: number;
+    subtle: number;
     card: number;
     control: number;
     strong: number;
@@ -56,8 +73,10 @@ export interface ThemeShape {
 export const brutalShape: ThemeShape = {
   variant: 'brutal',
   isSoft: false,
+  isHogwarts: false,
   radius: {
     tag: brutalRadius.small,
+    badge: brutalRadius.small,
     small: brutalRadius.small,
     medium: brutalRadius.medium,
     button: brutalRadius.button,
@@ -70,6 +89,7 @@ export const brutalShape: ThemeShape = {
   },
   borderWidth: {
     hairline: brutalBorderWidth.hairline,
+    subtle: brutalBorderWidth.thin,
     card: brutalBorderWidth.thin,
     control: brutalBorderWidth.medium,
     strong: brutalBorderWidth.thick,
@@ -98,8 +118,10 @@ export const brutalShape: ThemeShape = {
 const softLightShape: ThemeShape = {
   variant: 'soft',
   isSoft: true,
+  isHogwarts: false,
   radius: {
     tag: 8,
+    badge: 10,
     small: 12,
     medium: 14,
     button: 14,
@@ -112,6 +134,7 @@ const softLightShape: ThemeShape = {
   },
   borderWidth: {
     hairline: StyleSheet.hairlineWidth,
+    subtle: 0,
     card: 0,
     control: 0,
     strong: 0,
@@ -159,6 +182,7 @@ const softDarkShape: ThemeShape = {
   ...softLightShape,
   borderWidth: {
     hairline: StyleSheet.hairlineWidth,
+    subtle: 1,
     card: 1,
     control: 1,
     strong: 1,
@@ -184,9 +208,115 @@ const softDarkShape: ThemeShape = {
   },
 };
 
+const hogwartsLightShape: ThemeShape = {
+  variant: 'hogwarts',
+  isSoft: false,
+  isHogwarts: true,
+  radius: {
+    tag: 8,
+    badge: 10,
+    small: 10,
+    medium: 14,
+    button: 14,
+    input: 12,
+    card: 18,
+    modal: 22,
+    hero: 24,
+    sheet: 26,
+    pill: 999,
+  },
+  borderWidth: {
+    hairline: StyleSheet.hairlineWidth,
+    subtle: 1,
+    card: 1,
+    control: 1,
+    strong: 1.5,
+    navTop: 1,
+  },
+  elevation: {
+    none: { shadowOpacity: 0, elevation: 0 },
+    card: {
+      shadowColor: '#3A2812',
+      shadowOffset: { width: 0, height: 3 },
+      shadowOpacity: 0.1,
+      shadowRadius: 10,
+      elevation: 2,
+    },
+    floating: {
+      shadowColor: '#3A2812',
+      shadowOffset: { width: 0, height: 6 },
+      shadowOpacity: 0.16,
+      shadowRadius: 16,
+      elevation: 5,
+    },
+    hero: {
+      shadowColor: '#3A2812',
+      shadowOffset: { width: 0, height: 8 },
+      shadowOpacity: 0.18,
+      shadowRadius: 18,
+      elevation: 6,
+    },
+  },
+  fontWeight: {
+    regular: '400',
+    medium: '500',
+    semibold: '600',
+    bold: '700',
+    heavy: '700',
+  },
+  iconStrokeWidth: {
+    regular: 2.0,
+    active: 2.2,
+  },
+  pressScale: 0.97,
+};
+
+const hogwartsDarkShape: ThemeShape = {
+  ...hogwartsLightShape,
+  elevation: {
+    none: { shadowOpacity: 0, elevation: 0 },
+    card: {
+      shadowColor: '#000000',
+      shadowOffset: { width: 0, height: 2 },
+      shadowOpacity: 0.28,
+      shadowRadius: 8,
+      elevation: 2,
+    },
+    floating: {
+      shadowColor: '#000000',
+      shadowOffset: { width: 0, height: 8 },
+      shadowOpacity: 0.42,
+      shadowRadius: 18,
+      elevation: 6,
+    },
+    hero: {
+      shadowColor: '#000000',
+      shadowOffset: { width: 0, height: 10 },
+      shadowOpacity: 0.48,
+      shadowRadius: 20,
+      elevation: 8,
+    },
+  },
+};
+
 export function getThemeShape(variant: ThemeStyleVariant, isDark: boolean): ThemeShape {
   if (variant === 'soft') {
     return isDark ? softDarkShape : softLightShape;
   }
+  if (variant === 'hogwarts') {
+    return isDark ? hogwartsDarkShape : hogwartsLightShape;
+  }
   return brutalShape;
+}
+
+const emptyFonts: ThemeFonts = {};
+const hogwartsFontsObj: ThemeFonts = {
+  display: HOGWARTS_FONTS.display,
+  body: HOGWARTS_FONTS.body,
+  numeric: HOGWARTS_FONTS.numeric,
+  ornate: HOGWARTS_FONTS.ornate,
+};
+
+export function getThemeFonts(isHogwarts: boolean): ThemeFonts {
+  return isHogwarts ? hogwartsFontsObj : emptyFonts;
 }

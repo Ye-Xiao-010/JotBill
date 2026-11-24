@@ -16,8 +16,9 @@ import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import { ThemeColors } from '../../theme/colors';
 import { ThemeShape } from '../../theme/shape';
-import { spacing, borderRadius, borderWidth } from '../../theme/spacing';
+import { spacing, borderWidth } from '../../theme/spacing';
 import { useStyles } from '../../hooks';
+import { HOGWARTS_FONTS } from '../../constants/hogwartsAssets';
 import BrutalPressable from './BrutalPressable';
 
 export interface QueryErrorBannerProps {
@@ -106,9 +107,10 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
       marginBottom: 0,
       padding: spacing.md,
       backgroundColor: shape.isSoft ? colors.expenseLight : colors.surface,
-      borderRadius: shape.isSoft ? shape.radius.card : borderRadius.card,
-      borderWidth: shape.isSoft ? 0 : borderWidth.medium,
+      borderRadius: shape.radius.card,
+      borderWidth: shape.isSoft ? 0 : shape.isHogwarts ? shape.borderWidth.card : borderWidth.medium,
       borderColor: colors.error,
+      ...(shape.isHogwarts ? shape.elevation.card : {}),
     },
     header: {
       flexDirection: 'row',
@@ -120,7 +122,8 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
     },
     title: {
       fontSize: 14,
-      fontWeight: shape.isSoft ? '600' : '800',
+      fontWeight: shape.isHogwarts ? undefined : shape.isSoft ? '600' : '800',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.display : undefined,
       color: shape.isSoft ? colors.expenseStrong : colors.error,
       flex: 1,
     },
@@ -128,28 +131,31 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
       marginTop: spacing.sm,
       fontSize: 12,
       lineHeight: 17,
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
       color: colors.textSecondary,
     },
     hint: {
       marginTop: spacing.xs,
       fontSize: 12,
       lineHeight: 17,
-      fontWeight: shape.isSoft ? '600' : '700',
+      fontWeight: shape.isHogwarts ? undefined : shape.isSoft ? '600' : '700',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
       color: shape.isSoft ? colors.expenseStrong : colors.error,
     },
     button: {
       alignSelf: 'flex-start',
       marginTop: spacing.md,
       backgroundColor: colors.primary,
-      borderRadius: shape.isSoft ? shape.radius.button : borderRadius.button,
-      borderWidth: shape.isSoft ? 0 : borderWidth.thin,
-      borderColor: colors.stroke,
+      borderRadius: shape.radius.button,
+      borderWidth: shape.isSoft ? 0 : shape.borderWidth.subtle,
+      borderColor: shape.isHogwarts ? colors.accent : colors.stroke,
       paddingHorizontal: spacing.lg,
       paddingVertical: spacing.sm,
     },
     buttonText: {
       fontSize: 13,
-      fontWeight: shape.isSoft ? '600' : '800',
+      fontWeight: shape.isHogwarts ? undefined : shape.isSoft ? '600' : '800',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
       color: colors.onPrimary,
     },
   }),

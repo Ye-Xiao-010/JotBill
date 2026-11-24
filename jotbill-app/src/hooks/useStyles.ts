@@ -1,12 +1,12 @@
 /**
  * useStyles Hook
- * 简化动态主题样式的创建
+ * 简化动态主题样式的创建，向后兼容只接收 (colors) 的旧调用点，
+ * 同时为新页面按需提供 (colors, shape, isDark)。
  */
 import { useMemo } from 'react';
-import { StyleSheet } from 'react-native';
 import { useTheme } from '../providers';
-import { ThemeColors } from '../theme/colors';
-import { ThemeShape } from '../theme/shape';
+import type { ThemeColors } from '../theme/colors';
+import type { ThemeShape } from '../theme/shape';
 
 type StyleCreator<T> = (colors: ThemeColors, shape: ThemeShape, isDark: boolean) => T;
 
@@ -21,14 +21,14 @@ export function useStyles<T>(styleCreator: StyleCreator<T>): T {
 }
 
 /**
- * 创建带有静态样式和动态样式的组合
+ * 创建带有静态样式和动态样式的组合（保留原 V2 导出名 useThemedStyles）
  * @param staticStyles 静态样式（不依赖主题）
  * @param dynamicStyleCreator 动态样式创建函数
  * @returns { static, dynamic } 样式对象
  */
 export function useThemedStyles<S, D>(
   staticStyles: S,
-  dynamicStyleCreator: StyleCreator<D>
+  dynamicStyleCreator: StyleCreator<D>,
 ): { static: S; dynamic: D } {
   const { colors, shape, isDark } = useTheme();
   const dynamic = useMemo(

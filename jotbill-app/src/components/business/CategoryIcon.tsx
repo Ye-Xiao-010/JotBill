@@ -34,6 +34,8 @@ import {
   type LucideIcon,
 } from 'lucide-react-native';
 import { useTheme } from '../../providers';
+import HogwartsIcon from '../icons/HogwartsIcon';
+import { hasHogwartsIcon } from '../../constants/hogwartsIcons';
 
 /** 默认分类的 lucide 图标名 → 组件映射（key 与数据库 icon 字段一致）。
  * 2026-10-27 起本地种子（DefaultDataInitializer）与后端种子共用本表：
@@ -98,9 +100,19 @@ export default function CategoryIcon({
   fallback = '📝',
   emojiStyle,
 }: CategoryIconProps) {
-  const { colors, isSoft } = useTheme();
+  const { colors, isSoft, isHogwarts } = useTheme();
   const resolvedStroke = strokeWidth ?? (isSoft ? 2.1 : 2.5);
   const resolvedColor = color ?? (isSoft ? colors.textPrimary : colors.stroke);
+
+  if (isHogwarts && hasHogwartsIcon(icon)) {
+    return (
+      <HogwartsIcon
+        name={icon}
+        size={size}
+        color={color ?? colors.textPrimary}
+      />
+    );
+  }
   const Icon = isLucideIconName(icon)
     ? CATEGORY_LUCIDE_ICONS[icon as string]
     : null;

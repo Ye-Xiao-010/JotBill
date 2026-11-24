@@ -12,8 +12,9 @@ import {
 } from 'react-native';
 import { ThemeColors } from '../../theme/colors';
 import { ThemeShape } from '../../theme/shape';
-import { spacing, borderRadius, borderWidth, shadow } from '../../theme';
+import { spacing, borderWidth, shadow } from '../../theme';
 import { useStyles } from '../../hooks';
+import { HOGWARTS_FONTS } from '../../constants/hogwartsAssets';
 
 interface ConfirmModalProps {
   visible: boolean;
@@ -85,22 +86,24 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
     modalContainer: {
       backgroundColor: colors.surface,
       borderRadius: shape.radius.modal,
-      borderWidth: shape.isSoft ? shape.borderWidth.card : borderWidth.thick,
-      borderColor: shape.isSoft ? colors.cardBorder : colors.stroke,
+      borderWidth: shape.isSoft ? shape.borderWidth.card : shape.isHogwarts ? shape.borderWidth.strong : borderWidth.thick,
+      borderColor: shape.isSoft || shape.isHogwarts ? colors.cardBorder : colors.stroke,
       width: '85%',
       padding: spacing.xl,
-      ...(shape.isSoft ? shape.elevation.floating : shadow.medium),
+      ...(shape.isSoft || shape.isHogwarts ? shape.elevation.floating : shadow.medium),
     },
     title: {
       fontSize: shape.isSoft ? 18 : 20,
-      fontWeight: shape.isSoft ? '700' : '800',
+      fontWeight: shape.isHogwarts ? undefined : shape.isSoft ? '700' : '800',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.display : undefined,
       color: colors.textPrimary,
       marginBottom: spacing.md,
       textAlign: 'center',
     },
     message: {
       fontSize: 15,
-      fontWeight: '500',
+      fontWeight: shape.isHogwarts ? undefined : '500',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
       color: colors.textSecondary,
       marginBottom: spacing.xl,
       textAlign: 'center',
@@ -114,19 +117,20 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
       flex: 1,
       paddingVertical: spacing.md,
       borderRadius: shape.radius.button,
-      borderWidth: shape.isSoft ? 0 : borderWidth.medium,
-      borderColor: colors.stroke,
+      borderWidth: shape.isSoft ? 0 : shape.isHogwarts ? shape.borderWidth.card : borderWidth.medium,
+      borderColor: shape.isHogwarts ? colors.cardBorder : colors.stroke,
       alignItems: 'center',
       minHeight: 48,
       justifyContent: 'center',
-      ...(shape.isSoft ? shape.elevation.none : shadow.small),
+      ...(shape.isSoft ? shape.elevation.none : shape.isHogwarts ? shape.elevation.card : shadow.small),
     },
     cancelButton: {
       backgroundColor: shape.isSoft ? colors.surfaceMuted : colors.surface,
     },
     cancelButtonText: {
       fontSize: 16,
-      fontWeight: '700',
+      fontWeight: shape.isHogwarts ? undefined : '700',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
       color: shape.isSoft ? colors.textSecondary : colors.textPrimary,
     },
     confirmButton: {
@@ -134,7 +138,8 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
     },
     confirmButtonText: {
       fontSize: 16,
-      fontWeight: shape.isSoft ? '700' : '800',
+      fontWeight: shape.isHogwarts ? undefined : shape.isSoft ? '700' : '800',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
       color: '#FFFFFF',
     },
   }),

@@ -34,3 +34,6 @@ export { default as BrutalPressable } from './BrutalPressable';
 // 柔光主题组件
 export { default as SoftGradient } from './SoftGradient';
 export type { SoftGradientProps } from './SoftGradient';
+
+// 魔法羊皮纸装饰组件
+export { HogwartsStarDivider, HogwartsWaxSeal } from './HogwartsOrnaments';

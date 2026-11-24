@@ -17,6 +17,16 @@ import {
 } from 'lucide-react-native';
 import { useTheme } from '../../providers';
 import { resolveAccountIcon, type AccountIconMatch } from '../../constants/accountIcons';
+import HogwartsIcon from '../icons/HogwartsIcon';
+
+const HOGWARTS_SUBTYPE_ICONS: Record<string, string> = {
+  cash: 'acc-cash',
+  e_wallet: 'acc-ewallet',
+  bank_debit: 'acc-vault',
+  credit_card: 'acc-credit-card',
+  consumer_loan: 'acc-credit-card',
+  other: 'acc-ewallet',
+};
 
 type AccountSubtypeLike =
   | 'cash'
@@ -64,7 +74,7 @@ export default function AccountIcon({
   size = 22,
   color,
 }: AccountIconProps) {
-  const { colors, isSoft } = useTheme();
+  const { colors, isSoft, isHogwarts } = useTheme();
   const match: AccountIconMatch | null = resolveAccountIcon(icon, name);
 
   if (match) {
@@ -82,6 +92,11 @@ export default function AccountIcon({
     return (
       <Text style={{ fontSize: size * 0.9, lineHeight: size * 1.1 }}>{icon}</Text>
     );
+  }
+
+  if (isHogwarts) {
+    const hpKey = HOGWARTS_SUBTYPE_ICONS[subtype ?? 'other'] ?? 'acc-ewallet';
+    return <HogwartsIcon name={hpKey} size={size} color={color ?? colors.primary} />;
   }
 
   const Icon = SUBTYPE_ICONS[subtype ?? 'other'] ?? CircleEllipsis;

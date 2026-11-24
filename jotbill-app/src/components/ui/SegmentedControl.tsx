@@ -9,6 +9,7 @@ import { ThemeColors } from '../../theme/colors';
 import { ThemeShape } from '../../theme/shape';
 import { borderRadius, borderWidth, spacing } from '../../theme/spacing';
 import { useStyles } from '../../hooks';
+import { HOGWARTS_FONTS } from '../../constants/hogwartsAssets';
 
 export interface SegmentedControlOption {
   key: string;
@@ -115,10 +116,14 @@ export default function SegmentedControl({
 const createStyles = (colors: ThemeColors, shape: ThemeShape, isDark: boolean) => ({
   ...StyleSheet.create({
     container: {
-      backgroundColor: shape.isSoft ? colors.surfaceMuted : colors.surface,
-      borderRadius: shape.isSoft ? shape.radius.medium : borderRadius.button,
-      borderWidth: shape.isSoft ? 0 : borderWidth.medium,
-      borderColor: colors.stroke,
+      backgroundColor: shape.isSoft || shape.isHogwarts ? colors.surfaceMuted : colors.surface,
+      borderRadius: shape.isSoft
+        ? shape.radius.medium
+        : shape.isHogwarts
+          ? shape.radius.button
+          : borderRadius.button,
+      borderWidth: shape.isSoft ? 0 : shape.isHogwarts ? shape.borderWidth.control : borderWidth.medium,
+      borderColor: shape.isHogwarts ? colors.cardBorder : colors.stroke,
       padding: 3,
     },
     containerSmall: {
@@ -154,28 +159,30 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape, isDark: boolean) =
       paddingHorizontal: shape.isSoft ? spacing.sm : spacing.md,
       alignItems: 'center',
       justifyContent: 'center',
-      borderRadius: shape.isSoft ? 11 : borderRadius.small,
+      borderRadius: shape.isSoft ? 11 : shape.isHogwarts ? shape.radius.small : borderRadius.small,
     },
     optionSmall: {
       paddingVertical: 5,
       paddingHorizontal: spacing.xs + 2,
     },
     optionSelected: {
-      backgroundColor: colors.accent,
-      borderWidth: borderWidth.thin,
-      borderColor: colors.stroke,
+      backgroundColor: shape.isHogwarts ? colors.primary : colors.accent,
+      borderWidth: shape.isHogwarts ? 1 : shape.borderWidth.card,
+      borderColor: shape.isHogwarts ? colors.accent : colors.stroke,
     },
     label: {
       fontSize: shape.isSoft ? 13 : 14,
-      fontWeight: shape.isSoft ? '500' : '600',
+      fontWeight: shape.isHogwarts ? undefined : shape.isSoft ? '500' : '600',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
       color: colors.textTertiary,
     },
     labelSmall: {
       fontSize: 12,
     },
     labelSelected: {
-      color: colors.textPrimary,
-      fontWeight: shape.isSoft ? '600' : '800',
+      color: shape.isHogwarts ? colors.onPrimary : colors.textPrimary,
+      fontWeight: shape.isHogwarts ? undefined : shape.isSoft ? '600' : '800',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
     },
   }),
   _colors: colors,

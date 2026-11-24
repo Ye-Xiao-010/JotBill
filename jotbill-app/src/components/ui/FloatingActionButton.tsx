@@ -47,9 +47,11 @@ export const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({
 
   const currentSize = sizeStyles[size];
   const isSoft = styles._isSoft;
-  const shadowOffset = isSoft ? 0 : size === 'small' ? 3 : 4;
-  const bgColor = backgroundColor || (isSoft ? styles._colors.primary : styles._colors.accent);
-  const txtColor = iconColor || (isSoft ? styles._colors.onPrimary : styles._colors.textPrimary);
+  const isHogwarts = styles._isHogwarts;
+  const isFlat = isSoft || isHogwarts;
+  const shadowOffset = isFlat ? 0 : (size === 'small' ? 3 : 4);
+  const bgColor = backgroundColor || (isFlat ? styles._colors.primary : styles._colors.accent);
+  const txtColor = iconColor || (isFlat ? styles._colors.onPrimary : styles._colors.textPrimary);
 
   const handlePressIn = () => {
     Animated.timing(anim, {
@@ -80,7 +82,11 @@ export const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({
     outputRange: [1, 0.94],
   });
 
-  const btnRadius = isSoft ? currentSize.width / 2 : borderRadius.medium;
+  const btnRadius = isSoft
+    ? currentSize.width / 2
+    : isHogwarts
+      ? borderRadius.round
+      : borderRadius.medium;
 
   return (
     <View
@@ -93,21 +99,21 @@ export const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({
         style,
       ]}
     >
-      {/* 实心阴影层（仅粗野模式） */}
-      {!isSoft && (
+      {/* 实心阴影层（仅粗野主义主题） */}
+      {!isFlat ? (
         <View
           style={[
             styles.shadowLayer,
             {
               width: currentSize.width,
               height: currentSize.height,
-              borderRadius: borderRadius.medium,
+              borderRadius: btnRadius,
               top: shadowOffset,
               left: shadowOffset,
             },
           ]}
         />
-      )}
+      ) : null}
       {/* 按钮主体 */}
       <Pressable
         onPress={onPress}
@@ -159,9 +165,9 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
     button: {
       justifyContent: 'center',
       alignItems: 'center',
-      borderWidth: shape.isSoft ? 0 : borderWidth.thick,
-      borderColor: colors.stroke,
-      ...(shape.isSoft ? shape.elevation.floating : {}),
+      borderWidth: shape.isSoft ? 0 : shape.isHogwarts ? 1.5 : borderWidth.thick,
+      borderColor: shape.isHogwarts ? colors.accent : colors.stroke,
+      ...(shape.isSoft || shape.isHogwarts ? shape.elevation.floating : {}),
     },
     icon: {
       fontWeight: shape.isSoft ? '700' : '800',
@@ -169,6 +175,7 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
   }),
   _colors: colors,
   _isSoft: shape.isSoft,
+  _isHogwarts: shape.isHogwarts,
 });
 
 export default FloatingActionButton;

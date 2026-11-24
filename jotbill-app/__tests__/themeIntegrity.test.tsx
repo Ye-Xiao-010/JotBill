@@ -1,17 +1,26 @@
 /**
- * 主题注册表完整性 + ThemeProvider 持久化测试
+ * 主题注册表完整性 + ThemeProvider 持久化 + 魔法羊皮纸（含四学院）测试
  *
  * 覆盖：
- * 1. 4 套主题 × 2 模式色板 token 齐全、键集合严格一致、无空值；
- * 2. 金额语义不变：income 为绿系、expense 为红系（按色相判定）；
+ * 1. 5 套主题 × 2 模式 + 魔法羊皮纸 5 组学院子色板 × 2 模式 token 齐全、键集合严格一致、无空值；
+ * 2. 金额语义不变：income 为绿系（100~170°）、expense 为红系（≤15° 或 ≥340°）；
  * 3. 关键组合 WCAG AA 对比度（正文/三级文/金额/主色上文字 ≥ 4.5:1）；
- * 4. ThemeProvider 持久化：默认值、写入键、读回生效、非法值兜底。
+ * 4. 全部 25 个默认分类图标键均有对应魔法羊皮纸 SVG 路径；
+ * 5. ThemeProvider 持久化：默认值、切换 hogwarts + 学院 + 音效、读回生效、非法值兜底。
  */
 import React from 'react';
 import ReactTestRenderer from 'react-test-renderer';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { ThemeProvider, useTheme } from '../src/providers/ThemeProvider';
-import { themes, THEME_LABELS, type ThemePalette } from '../src/theme/colors';
+import {
+  themes,
+  hogwartsHousePalettes,
+  THEME_LABELS,
+  type ThemePalette,
+} from '../src/theme/colors';
+import { CATEGORY_LUCIDE_ICONS } from '../src/components/business/CategoryIcon';
+import { HOGWARTS_ICON_PATHS } from '../src/constants/hogwartsIcons';
+import { HOGWARTS_FONTS } from '../src/constants/hogwartsAssets';
 
 /* ---------------- 工具函数（WCAG 相对亮度 / 对比度 / 色相） ---------------- */
 
@@ -48,22 +57,35 @@ function hue(hex: string): number {
   return (deg + 360) % 360;
 }
 
-/* ---------------- 1. 色板完整性 ---------------- */
+// 汇总全部待检色板（5 主题 + 4 学院衍生）
+const ALL_PALETTE_ENTRIES: Array<[string, ThemePalette]> = [
+  ...Object.entries(themes).flatMap(([name, set]) => [
+    [`${name}/light`, set.light] as [string, ThemePalette],
+    [`${name}/dark`, set.dark] as [string, ThemePalette],
+  ]),
+  ...Object.entries(hogwartsHousePalettes)
+    .filter(([house]) => house !== 'classic')
+    .flatMap(([house, set]) => [
+      [`hogwarts:${house}/light`, set.light] as [string, ThemePalette],
+      [`hogwarts:${house}/dark`, set.dark] as [string, ThemePalette],
+    ]),
+];
+
+/* ---------------- 1. 色板与图标完整性 ---------------- */
 
 describe('主题注册表完整性', () => {
-  const allPalettes = Object.values(themes).flatMap(set => [set.light, set.dark]);
-
-  it('5 套主题 × 2 模式 = 10 块色板', () => {
-    expect(Object.keys(themes)).toHaveLength(5);
+  it('6 套主题 × 2 模式 = 12 块主色板，且含 5 组魔法学院色板', () => {
+    expect(Object.keys(themes)).toHaveLength(6);
+    expect(Object.keys(hogwartsHousePalettes)).toHaveLength(5);
     for (const set of Object.values(themes)) {
       expect(set.light).toBeDefined();
       expect(set.dark).toBeDefined();
     }
   });
 
-  it('10 块色板键集合严格一致且无空值', () => {
+  it('全部 20 块色板键集合严格一致且无空值', () => {
     const referenceKeys = Object.keys(themes.blocks.light).sort();
-    for (const palette of allPalettes) {
+    for (const [, palette] of ALL_PALETTE_ENTRIES) {
       expect(Object.keys(palette).sort()).toEqual(referenceKeys);
       for (const value of Object.values(palette)) {
         expect(typeof value).toBe('string');
@@ -76,55 +98,56 @@ describe('主题注册表完整性', () => {
   it('THEME_LABELS 与注册表键集合一致', () => {
     expect(Object.keys(THEME_LABELS).sort()).toEqual(Object.keys(themes).sort());
   });
+
+  it('全部 25 个默认分类键均有对应魔法羊皮纸矢量图标路径', () => {
+    for (const lucideKey of Object.keys(CATEGORY_LUCIDE_ICONS)) {
+      expect(HOGWARTS_ICON_PATHS[lucideKey]).toBeDefined();
+      expect(HOGWARTS_ICON_PATHS[lucideKey].length).toBeGreaterThan(0);
+    }
+  });
 });
 
 /* ---------------- 2. 金额语义不变（色相判定，不看变量名） ---------------- */
 
 describe('金额语义色', () => {
-  for (const [name, set] of Object.entries(themes)) {
-    for (const mode of ['light', 'dark'] as const) {
-      const palette: ThemePalette = set[mode];
-      it(`${name}/${mode}: income 为绿系（色相 100~170°）`, () => {
-        const h = hue(palette.income);
-        expect(h).toBeGreaterThanOrEqual(100);
-        expect(h).toBeLessThanOrEqual(170);
-      });
-      it(`${name}/${mode}: expense 为红系（≤15° 或 ≥340°）`, () => {
-        const h = hue(palette.expense);
-        expect(h <= 15 || h >= 340).toBe(true);
-      });
-    }
+  for (const [label, palette] of ALL_PALETTE_ENTRIES) {
+    it(`${label}: income 为绿系（色相 100~170°）`, () => {
+      const h = hue(palette.income);
+      expect(h).toBeGreaterThanOrEqual(100);
+      expect(h).toBeLessThanOrEqual(170);
+    });
+    it(`${label}: expense 为红系（≤15° 或 ≥340°）`, () => {
+      const h = hue(palette.expense);
+      expect(h <= 15 || h >= 340).toBe(true);
+    });
   }
 });
 
 /* ---------------- 3. WCAG AA 对比度 ---------------- */
 
 describe('关键组合对比度 ≥ 4.5:1', () => {
-  for (const [name, set] of Object.entries(themes)) {
-    for (const mode of ['light', 'dark'] as const) {
-      const palette: ThemePalette = set[mode];
-      it(`${name}/${mode}: 正文/背景`, () => {
-        expect(contrast(palette.textPrimary, palette.background)).toBeGreaterThanOrEqual(4.5);
-      });
-      it(`${name}/${mode}: 三级文/背景`, () => {
-        expect(contrast(palette.textTertiary, palette.background)).toBeGreaterThanOrEqual(4.5);
-      });
-      it(`${name}/${mode}: 收入金额/表面`, () => {
-        expect(contrast(palette.income, palette.surface)).toBeGreaterThanOrEqual(4.5);
-      });
-      it(`${name}/${mode}: 支出金额/表面`, () => {
-        expect(contrast(palette.expense, palette.surface)).toBeGreaterThanOrEqual(4.5);
-      });
-      it(`${name}/${mode}: 主色块上文字 onPrimary/primary`, () => {
-        expect(contrast(palette.onPrimary, palette.primary)).toBeGreaterThanOrEqual(4.5);
-      });
-      it(`${name}/${mode}: 徽章深字/浅底 incomeStrong/incomeLight`, () => {
-        expect(contrast(palette.incomeStrong, palette.incomeLight)).toBeGreaterThanOrEqual(4.5);
-      });
-      it(`${name}/${mode}: 徽章深字/浅底 expenseStrong/expenseLight`, () => {
-        expect(contrast(palette.expenseStrong, palette.expenseLight)).toBeGreaterThanOrEqual(4.5);
-      });
-    }
+  for (const [label, palette] of ALL_PALETTE_ENTRIES) {
+    it(`${label}: 正文/背景`, () => {
+      expect(contrast(palette.textPrimary, palette.background)).toBeGreaterThanOrEqual(4.5);
+    });
+    it(`${label}: 三级文/背景`, () => {
+      expect(contrast(palette.textTertiary, palette.background)).toBeGreaterThanOrEqual(4.5);
+    });
+    it(`${label}: 收入金额/表面`, () => {
+      expect(contrast(palette.income, palette.surface)).toBeGreaterThanOrEqual(4.5);
+    });
+    it(`${label}: 支出金额/表面`, () => {
+      expect(contrast(palette.expense, palette.surface)).toBeGreaterThanOrEqual(4.5);
+    });
+    it(`${label}: 主色块上文字 onPrimary/primary`, () => {
+      expect(contrast(palette.onPrimary, palette.primary)).toBeGreaterThanOrEqual(4.5);
+    });
+    it(`${label}: 徽章深字/浅底 incomeStrong/incomeLight`, () => {
+      expect(contrast(palette.incomeStrong, palette.incomeLight)).toBeGreaterThanOrEqual(4.5);
+    });
+    it(`${label}: 徽章深字/浅底 expenseStrong/expenseLight`, () => {
+      expect(contrast(palette.expenseStrong, palette.expenseLight)).toBeGreaterThanOrEqual(4.5);
+    });
   }
 });
 
@@ -155,11 +178,14 @@ describe('ThemeProvider 持久化与默认值', () => {
     jest.restoreAllMocks();
   });
 
-  it('首次启动无键：默认 blocks + 浅色', async () => {
+  it('首次启动无键：默认 blocks + 浅色 + brutal 形状', async () => {
     await mountProvider();
     expect(captured!.themeName).toBe('blocks');
     expect(captured!.themeMode).toBe('light');
     expect(captured!.isDark).toBe(false);
+    expect(captured!.isHogwarts).toBe(false);
+    expect(captured!.styleVariant).toBe('brutal');
+    expect(captured!.shape.borderWidth.card).toBe(2);
     expect(captured!.colors.primary).toBe(themes.blocks.light.primary);
   });
 
@@ -183,12 +209,15 @@ describe('ThemeProvider 持久化与默认值', () => {
     expect(captured!.colors.primary).toBe(themes.ink.dark.primary);
   });
 
-  it('非法存储值兜底：neon 不存在时回落 blocks，不崩溃', async () => {
+  it('非法存储值兜底：neon / 非法学院不存在时回落默认值，不崩溃', async () => {
     await AsyncStorage.setItem('@app_theme_name', 'neon');
+    await AsyncStorage.setItem('@app_hogwarts_house', 'durmstrang');
     await mountProvider();
     expect(captured!.themeName).toBe('blocks');
     expect(captured!.styleVariant).toBe('brutal');
     expect(captured!.isSoft).toBe(false);
+    expect(captured!.hogwartsHouse).toBe('classic');
+    expect(captured!.isHogwarts).toBe(false);
     expect(captured!.colors.primary).toBe(themes.blocks.light.primary);
   });
 
@@ -203,6 +232,7 @@ describe('ThemeProvider 持久化与默认值', () => {
     expect(captured!.themeName).toBe('soft');
     expect(captured!.styleVariant).toBe('soft');
     expect(captured!.isSoft).toBe(true);
+    expect(captured!.isHogwarts).toBe(false);
     expect(captured!.shape.radius.card).toBe(20);
     expect(captured!.shape.borderWidth.card).toBe(0);
     expect(captured!.colors.primary).toBe(themes.soft.light.primary);
@@ -213,5 +243,59 @@ describe('ThemeProvider 持久化与默认值', () => {
     expect(captured!.isDark).toBe(true);
     expect(captured!.shape.borderWidth.card).toBe(1);
     expect(captured!.colors.primary).toBe(themes.soft.dark.primary);
+  });
+
+  it('切换至 hogwarts 主题与四学院：shape / fonts / 学院色板与持久化正确生效', async () => {
+    await mountProvider();
+    const spy = jest.spyOn(AsyncStorage, 'setItem');
+
+    await ReactTestRenderer.act(async () => {
+      captured!.setThemeName('hogwarts');
+    });
+    expect(captured!.themeName).toBe('hogwarts');
+    expect(captured!.isHogwarts).toBe(true);
+    expect(captured!.isSoft).toBe(false);
+    expect(captured!.styleVariant).toBe('hogwarts');
+    expect(captured!.shape.borderWidth.card).toBe(1);
+    expect(captured!.shape.radius.card).toBe(18);
+    expect(captured!.fonts.display).toBe(HOGWARTS_FONTS.display);
+    expect(captured!.fonts.body).toBe(HOGWARTS_FONTS.body);
+    expect(captured!.fonts.numeric).toBe(HOGWARTS_FONTS.numeric);
+    expect(captured!.colors.primary).toBe(themes.hogwarts.light.primary);
+
+    await ReactTestRenderer.act(async () => {
+      captured!.setHogwartsHouse('gryffindor');
+    });
+    expect(spy).toHaveBeenCalledWith('@app_hogwarts_house', 'gryffindor');
+    expect(captured!.hogwartsHouse).toBe('gryffindor');
+    expect(captured!.colors.primary).toBe(hogwartsHousePalettes.gryffindor.light.primary);
+
+    await ReactTestRenderer.act(async () => {
+      captured!.setThemeMode('dark');
+    });
+    expect(captured!.isDark).toBe(true);
+    expect(captured!.colors.primary).toBe(hogwartsHousePalettes.gryffindor.dark.primary);
+  });
+
+  it('读回：预存 hogwarts + slytherin + dark + sfx=false + dynamicIcon=false 启动即生效', async () => {
+    await AsyncStorage.setItem('@app_theme_name', 'hogwarts');
+    await AsyncStorage.setItem('@app_hogwarts_house', 'slytherin');
+    await AsyncStorage.setItem('@app_theme_mode', 'dark');
+    await AsyncStorage.setItem('@app_hogwarts_sfx', 'false');
+    await AsyncStorage.setItem('@app_hogwarts_dynamic_icon', 'false');
+    await mountProvider();
+    expect(captured!.isHogwarts).toBe(true);
+    expect(captured!.isSoft).toBe(false);
+    expect(captured!.hogwartsHouse).toBe('slytherin');
+    expect(captured!.hogwartsSfxEnabled).toBe(false);
+    expect(captured!.hogwartsDynamicIconEnabled).toBe(false);
+    expect(captured!.colors.primary).toBe(hogwartsHousePalettes.slytherin.dark.primary);
+
+    const spy = jest.spyOn(AsyncStorage, 'setItem');
+    await ReactTestRenderer.act(async () => {
+      captured!.setHogwartsDynamicIconEnabled(true);
+    });
+    expect(spy).toHaveBeenCalledWith('@app_hogwarts_dynamic_icon', 'true');
+    expect(captured!.hogwartsDynamicIconEnabled).toBe(true);
   });
 });

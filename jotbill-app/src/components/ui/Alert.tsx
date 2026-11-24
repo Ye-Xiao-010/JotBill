@@ -14,6 +14,7 @@ import { ThemeColors } from '../../theme/colors';
 import { ThemeShape } from '../../theme/shape';
 import { spacing, borderRadius, borderWidth, shadow } from '../../theme/spacing';
 import { useStyles } from '../../hooks';
+import { HOGWARTS_FONTS } from '../../constants/hogwartsAssets';
 
 export interface AlertButton {
   text: string;
@@ -136,9 +137,9 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
     iconContainer: {
       width: 56,
       height: 56,
-      borderRadius: shape.isSoft ? 18 : borderRadius.medium,
-      borderWidth: shape.isSoft ? 0 : borderWidth.medium,
-      borderColor: colors.stroke,
+      borderRadius: shape.isSoft ? 18 : shape.isHogwarts ? borderRadius.round : borderRadius.medium,
+      borderWidth: shape.isSoft ? 0 : shape.isHogwarts ? 1.5 : borderWidth.medium,
+      borderColor: shape.isHogwarts ? colors.accent : colors.stroke,
       alignItems: 'center',
       justifyContent: 'center',
       marginBottom: spacing.lg,
@@ -150,14 +151,16 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
     },
     title: {
       fontSize: shape.isSoft ? 18 : 20,
-      fontWeight: shape.isSoft ? '700' : '800',
+      fontWeight: shape.isHogwarts ? undefined : shape.isSoft ? '700' : '800',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.display : undefined,
       color: colors.textPrimary,
       textAlign: 'center',
       marginBottom: spacing.md,
     },
     message: {
       fontSize: 15,
-      fontWeight: shape.isSoft ? '400' : '500',
+      fontWeight: shape.isHogwarts ? undefined : shape.isSoft ? '400' : '500',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
       color: colors.textSecondary,
       textAlign: 'center',
       lineHeight: 22,
@@ -172,19 +175,20 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
     button: {
       flex: 1,
       paddingVertical: spacing.md,
-      borderRadius: shape.isSoft ? shape.radius.button : borderRadius.button,
-      borderWidth: shape.isSoft ? 0 : borderWidth.medium,
-      borderColor: colors.stroke,
+      borderRadius: shape.radius.button,
+      borderWidth: shape.isSoft ? 0 : shape.isHogwarts ? shape.borderWidth.card : borderWidth.medium,
+      borderColor: shape.isHogwarts ? colors.cardBorder : colors.stroke,
       alignItems: 'center',
       justifyContent: 'center',
-      minHeight: 46,
-      ...(shape.isSoft ? shape.elevation.none : shadow.small),
+      minHeight: shape.isSoft ? 46 : 48,
+      ...(shape.isSoft ? shape.elevation.none : shape.isHogwarts ? shape.elevation.card : shadow.small),
     },
     singleButton: {
       flex: 1,
     },
     defaultButton: {
       backgroundColor: colors.primary,
+      borderColor: shape.isHogwarts ? colors.accent : colors.stroke,
     },
     cancelButton: {
       backgroundColor: shape.isSoft ? colors.surfaceMuted : colors.surface,
@@ -194,7 +198,8 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
     },
     buttonText: {
       fontSize: 15,
-      fontWeight: shape.isSoft ? '600' : '800',
+      fontWeight: shape.isHogwarts ? undefined : shape.isSoft ? '600' : '800',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
     },
     defaultButtonText: {
       color: colors.onPrimary,

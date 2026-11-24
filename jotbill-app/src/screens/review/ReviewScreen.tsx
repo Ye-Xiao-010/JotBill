@@ -7,6 +7,7 @@ import {
   ActivityIndicator,
   BackHandler,
   FlatList,
+  Image,
   RefreshControl,
   ScrollView,
   StyleSheet,
@@ -49,6 +50,8 @@ import { formatCurrency } from '../../utils/format';
 import AccountIcon from '../../components/business/AccountIcon';
 import { accountDisplayName, resolveAccountIcon } from '../../constants/accountIcons';
 import { useAlert, useTheme } from '../../providers';
+import { HogwartsStarDivider } from '../../components/ui';
+import { HOGWARTS_FONTS, HOGWARTS_IMAGES } from '../../constants/hogwartsAssets';
 import { borderRadius, borderWidth, spacing } from '../../theme/spacing';
 import { ThemeColors } from '../../theme/colors';
 import { ThemeShape } from '../../theme/shape';
@@ -88,6 +91,7 @@ export default function ReviewScreen() {
   const styles = useStyles(createStyles);
   const refreshControlProps = useRefreshControlProps();
   const { alert, confirm } = useAlert();
+  const { playMagicSound } = useTheme();
   const [selecting, setSelecting] = useState(false);
   const closeSelection = useCallback(() => setSelecting(false), []);
   const [retrySubmittedVersions, setRetrySubmittedVersions] = useState<
@@ -120,6 +124,7 @@ export default function ReviewScreen() {
     }) => nativeData.confirmPendingTransaction(pending.pendingId, input, pending.version),
     onSuccess: (bill) => {
       invalidateAll();
+      playMagicSound('coin_clink');
       // P1-5（2026-10-24 场景审查）：合并路径（同来源同订单号已有账单）会丢弃
       // 用户本次的修改，原生在响应里带 mergedIntoExistingBill 标志 —— 必须如实
       // 提示，不能让用户以为"按我改的记上了"。
@@ -700,13 +705,45 @@ function QueryErrorState({
 
 function EmptyState({ colors }: { colors: ThemeColors }) {
   const styles = useStyles(createStyles);
+  const { isHogwarts } = useTheme();
   return (
     <View style={styles.emptyCard}>
-      <Bell size={32} color={colors.textTertiary} />
-      <Text style={styles.emptyTitle}>暂无待确认交易</Text>
-      <Text style={styles.emptyText}>
-        AI 视觉识别或支付通知产生待确认交易时，会在此处显示。
-        确认入账后会写入本地账本并更新账户余额。
+      {isHogwarts ? (
+        <>
+          <Image
+            source={HOGWARTS_IMAGES.emptyOwl}
+            style={{
+              width: 136,
+              height: 136,
+              borderRadius: 18,
+              borderWidth: 1,
+              borderColor: colors.cardBorder,
+              marginBottom: spacing.xs,
+            }}
+            resizeMode="contain"
+          />
+          <HogwartsStarDivider color={colors.accent} width={160} />
+        </>
+      ) : (
+        <Bell size={32} color={colors.textTertiary} />
+      )}
+      <Text
+        style={[
+          styles.emptyTitle,
+          isHogwarts && { fontFamily: HOGWARTS_FONTS.display, fontWeight: undefined },
+        ]}
+      >
+        {isHogwarts ? '猫头鹰信箱已清空' : '暂无待确认交易'}
+      </Text>
+      <Text
+        style={[
+          styles.emptyText,
+          isHogwarts && { fontFamily: HOGWARTS_FONTS.body },
+        ]}
+      >
+        {isHogwarts
+          ? '猫头鹰今天尚未送来新的待确认账单，确认入账后的记录会自动归档至本地账卷。'
+          : 'AI 视觉识别或支付通知产生待确认交易时，会在此处显示。确认入账后会写入本地账本并更新账户余额。'}
       </Text>
     </View>
   );
@@ -1814,8 +1851,8 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape, isDark: boolean) =
       paddingTop: shape.isSoft ? spacing.sm : spacing.xl,
       paddingBottom: spacing.md,
       backgroundColor: shape.isSoft ? colors.background : colors.surface,
-      borderBottomWidth: shape.isSoft ? 0 : borderWidth.medium,
-      borderBottomColor: colors.stroke,
+      borderBottomWidth: shape.isSoft ? 0 : shape.isHogwarts ? shape.borderWidth.subtle : borderWidth.medium,
+      borderBottomColor: shape.isHogwarts ? colors.divider : colors.stroke,
     },
     iconButton: {
       width: 40,
@@ -1826,7 +1863,8 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape, isDark: boolean) =
     },
     headerTitle: {
       fontSize: shape.isSoft ? 18 : 20,
-      fontWeight: shape.isSoft ? '600' : '800',
+      fontWeight: shape.isHogwarts ? undefined : shape.isSoft ? '600' : '800',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.display : undefined,
       color: colors.textPrimary,
     },
     selectionEntry: {
@@ -1841,7 +1879,8 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape, isDark: boolean) =
     selectionEntryText: {
       color: colors.primary,
       fontSize: shape.isSoft ? 14 : 13,
-      fontWeight: shape.isSoft ? '600' : '700',
+      fontWeight: shape.isHogwarts ? undefined : shape.isSoft ? '600' : '700',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
     },
     softCancelText: {
       color: colors.textSecondary,
@@ -2096,34 +2135,46 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape, isDark: boolean) =
       padding: spacing.md,
       marginBottom: spacing.sm,
       backgroundColor: colors.surface,
-      borderWidth: shape.isSoft ? shape.borderWidth.card : borderWidth.thin,
-      borderColor: shape.isSoft ? colors.cardBorder : colors.stroke,
-      borderRadius: shape.isSoft ? shape.radius.card : borderRadius.card,
+      borderWidth: shape.isSoft || shape.isHogwarts ? shape.borderWidth.card : borderWidth.thin,
+      borderColor: shape.isSoft || shape.isHogwarts ? colors.cardBorder : colors.stroke,
+      borderRadius: shape.radius.card,
       ...(shape.isSoft ? shape.elevation.card : {}),
     },
     selectionRowChecked: {
       backgroundColor: shape.isSoft ? colors.surface : colors.primaryLight,
       borderWidth: shape.isSoft ? 2 : borderWidth.thin,
-      borderColor: colors.primary,
+      borderColor: shape.isHogwarts ? colors.accent : colors.primary,
     },
     selectionCheck: {
       width: shape.isSoft ? 24 : 22,
       height: shape.isSoft ? 24 : 22,
       alignItems: 'center',
       justifyContent: 'center',
-      borderRadius: shape.isSoft ? 12 : borderRadius.small,
-      borderWidth: shape.isSoft ? 2 : borderWidth.thin,
-      borderColor: shape.isSoft ? colors.stroke : colors.stroke,
+      borderRadius: shape.isSoft ? 12 : shape.radius.small,
+      borderWidth: shape.isSoft ? 2 : shape.borderWidth.subtle,
+      borderColor: shape.isHogwarts ? colors.cardBorder : colors.stroke,
     },
     selectionCheckChecked: {
       backgroundColor: colors.primary,
       borderColor: colors.primary,
     },
     selectionInfo: { flex: 1, gap: spacing.xs },
-    selectionRowTitle: { color: colors.textPrimary, fontSize: 15, fontWeight: shape.isSoft ? '600' : '700' },
-    selectionAmount: { color: shape.isSoft ? colors.expense : colors.textPrimary, fontSize: shape.isSoft ? 16 : 14, fontWeight: shape.isSoft ? '700' : '800', fontVariant: ['tabular-nums'] },
+    selectionRowTitle: {
+      color: colors.textPrimary,
+      fontSize: 15,
+      fontWeight: shape.isHogwarts ? undefined : shape.isSoft ? '600' : '700',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
+    },
+    selectionAmount: {
+      color: shape.isSoft ? colors.expense : colors.textPrimary,
+      fontSize: shape.isSoft ? 16 : 14,
+      fontWeight: shape.isHogwarts ? undefined : shape.isSoft ? '700' : '800',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.numeric : undefined,
+      fontVariant: ['tabular-nums'],
+    },
     truncatedHint: {
       fontSize: 12,
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
       color: colors.textSecondary,
       textAlign: 'center',
       paddingVertical: spacing.sm,
@@ -2133,9 +2184,10 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape, isDark: boolean) =
     statusCard: {
       padding: spacing.lg,
       backgroundColor: colors.surface,
-      borderWidth: borderWidth.medium,
-      borderColor: colors.stroke,
-      borderRadius: borderRadius.card,
+      borderWidth: shape.isHogwarts ? shape.borderWidth.card : borderWidth.medium,
+      borderColor: shape.isHogwarts ? colors.cardBorder : colors.stroke,
+      borderRadius: shape.radius.card,
+      ...(shape.isHogwarts ? shape.elevation.card : {}),
     },
     statusHeader: {
       flexDirection: 'row',
@@ -2145,7 +2197,8 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape, isDark: boolean) =
     },
     statusTitle: {
       fontSize: 15,
-      fontWeight: '800',
+      fontWeight: shape.isHogwarts ? undefined : '800',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.display : undefined,
       color: colors.textPrimary,
     },
     statusMetrics: {
@@ -2163,13 +2216,14 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape, isDark: boolean) =
     },
     metricValue: {
       fontSize: 22,
-      fontWeight: '900',
+      fontWeight: shape.isHogwarts ? undefined : '900',
       color: colors.textPrimary,
-      fontFamily: typography.fontFamily.mono,
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.numeric : typography.fontFamily.mono,
     },
     metricValueSmall: {
       fontSize: 15,
-      fontWeight: '800',
+      fontWeight: shape.isHogwarts ? undefined : '800',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
     },
     metricIconRow: {
       flexDirection: 'row',
@@ -2179,29 +2233,32 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape, isDark: boolean) =
     metricLabel: {
       marginTop: 4,
       fontSize: 12,
-      fontWeight: '600',
+      fontWeight: shape.isHogwarts ? undefined : '600',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
       color: colors.textSecondary,
     },
     emptyCard: {
       padding: spacing.xl,
       alignItems: 'center',
       backgroundColor: colors.surface,
-      borderWidth: shape.isSoft ? shape.borderWidth.card : borderWidth.thin,
-      borderColor: shape.isSoft ? colors.cardBorder : colors.stroke,
-      borderRadius: shape.isSoft ? shape.radius.card : borderRadius.card,
-      ...(shape.isSoft ? shape.elevation.card : {}),
+      borderWidth: shape.isSoft || shape.isHogwarts ? shape.borderWidth.card : borderWidth.thin,
+      borderColor: shape.isSoft || shape.isHogwarts ? colors.cardBorder : colors.stroke,
+      borderRadius: shape.radius.card,
+      ...(shape.isSoft || shape.isHogwarts ? shape.elevation.card : {}),
     },
     emptyTitle: {
       marginTop: spacing.md,
       fontSize: 16,
-      fontWeight: shape.isSoft ? '600' : '800',
+      fontWeight: shape.isHogwarts ? undefined : shape.isSoft ? '600' : '800',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.display : undefined,
       color: colors.textPrimary,
     },
     emptyText: {
       marginTop: spacing.xs,
       fontSize: 13,
-      fontWeight: shape.isSoft ? '400' : '500',
-      color: colors.textTertiary,
+      fontWeight: shape.isHogwarts ? undefined : shape.isSoft ? '400' : '500',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
+      color: shape.isSoft ? colors.textTertiary : colors.textSecondary,
       textAlign: 'center',
       lineHeight: 20,
     },
@@ -2209,10 +2266,10 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape, isDark: boolean) =
     pendingCard: {
       padding: shape.isSoft ? 14 : spacing.lg,
       backgroundColor: colors.surface,
-      borderWidth: shape.isSoft ? shape.borderWidth.card : borderWidth.thin,
-      borderColor: shape.isSoft ? colors.cardBorder : colors.stroke,
-      borderRadius: shape.isSoft ? shape.radius.card : borderRadius.card,
-      ...(shape.isSoft ? shape.elevation.card : {}),
+      borderWidth: shape.isSoft || shape.isHogwarts ? shape.borderWidth.card : borderWidth.thin,
+      borderColor: shape.isSoft || shape.isHogwarts ? colors.cardBorder : colors.stroke,
+      borderRadius: shape.radius.card,
+      ...(shape.isSoft || shape.isHogwarts ? shape.elevation.card : {}),
     },
     pendingHeader: {
       flexDirection: 'row',
@@ -2227,25 +2284,27 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape, isDark: boolean) =
     },
     pendingAmount: {
       fontSize: 22,
-      fontWeight: '900',
+      fontWeight: shape.isHogwarts ? undefined : '900',
       color: colors.textPrimary,
-      fontFamily: typography.fontFamily.mono,
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.numeric : typography.fontFamily.mono,
     },
     pendingTime: {
       fontSize: 12,
-      fontWeight: '600',
+      fontWeight: shape.isHogwarts ? undefined : '600',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.numeric : undefined,
       color: colors.textSecondary,
     },
     typeBadge: {
       paddingHorizontal: spacing.xs,
       paddingVertical: 2,
-      borderRadius: borderRadius.small,
-      borderWidth: borderWidth.thin,
-      borderColor: colors.stroke,
+      borderRadius: shape.radius.badge,
+      borderWidth: shape.borderWidth.subtle,
+      borderColor: shape.isHogwarts ? colors.cardBorder : colors.stroke,
     },
     typeBadgeText: {
       fontSize: 11,
-      fontWeight: '700',
+      fontWeight: shape.isHogwarts ? undefined : '700',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
       color: colors.textPrimary,
     },
     pendingMeta: {
@@ -2260,9 +2319,9 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape, isDark: boolean) =
       marginTop: spacing.sm,
       padding: spacing.sm,
       backgroundColor: shape.isSoft ? colors.surfaceMuted : colors.background,
-      borderWidth: shape.isSoft ? 0 : borderWidth.thin,
-      borderColor: colors.stroke,
-      borderRadius: shape.isSoft ? 14 : borderRadius.medium,
+      borderWidth: shape.isSoft ? 0 : shape.borderWidth.subtle,
+      borderColor: shape.isHogwarts ? colors.cardBorder : colors.stroke,
+      borderRadius: shape.isSoft ? 14 : shape.radius.input,
       gap: spacing.xs,
     },
     evidenceHeader: {
@@ -2272,12 +2331,14 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape, isDark: boolean) =
     },
     evidenceTitle: {
       fontSize: 12,
-      fontWeight: '800',
+      fontWeight: shape.isHogwarts ? undefined : '800',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
       color: colors.textSecondary,
     },
     evidenceEmpty: {
       fontSize: 12,
-      fontWeight: '500',
+      fontWeight: shape.isHogwarts ? undefined : '500',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
       color: colors.textTertiary,
       lineHeight: 18,
     },
@@ -2289,14 +2350,15 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape, isDark: boolean) =
       marginTop: spacing.sm,
       paddingHorizontal: spacing.md,
       paddingVertical: spacing.sm,
-      borderRadius: borderRadius.medium,
-      borderWidth: borderWidth.thin,
-      borderColor: colors.stroke,
+      borderRadius: shape.radius.button,
+      borderWidth: shape.borderWidth.subtle,
+      borderColor: shape.isHogwarts ? colors.cardBorder : colors.stroke,
       backgroundColor: colors.surface,
     },
     errorButtonText: {
       fontSize: 13,
-      fontWeight: '700',
+      fontWeight: shape.isHogwarts ? undefined : '700',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
       color: colors.textPrimary,
     },
     evidenceRetryButton: {
@@ -2306,9 +2368,9 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape, isDark: boolean) =
       gap: 4,
       paddingHorizontal: spacing.sm,
       paddingVertical: spacing.xs,
-      borderRadius: borderRadius.small,
-      borderWidth: borderWidth.thin,
-      borderColor: colors.stroke,
+      borderRadius: shape.radius.badge,
+      borderWidth: shape.borderWidth.subtle,
+      borderColor: shape.isHogwarts ? colors.cardBorder : colors.stroke,
       backgroundColor: colors.surface,
     },
     evidenceRow: {
@@ -2319,26 +2381,28 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape, isDark: boolean) =
     evidenceBadge: {
       paddingHorizontal: 6,
       paddingVertical: 2,
-      borderRadius: borderRadius.small,
-      borderWidth: borderWidth.thin,
-      borderColor: colors.stroke,
+      borderRadius: shape.radius.badge,
+      borderWidth: shape.borderWidth.subtle,
+      borderColor: shape.isHogwarts ? colors.cardBorder : colors.stroke,
       backgroundColor: colors.primaryLight,
     },
     evidenceBadgeText: {
       fontSize: 10,
-      fontWeight: '700',
-      color: colors.textPrimary,
+      fontWeight: shape.isHogwarts ? undefined : '700',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
+      color: shape.isHogwarts ? colors.primary : colors.textPrimary,
     },
     evidenceAmount: {
       fontSize: 12,
-      fontWeight: '800',
+      fontWeight: shape.isHogwarts ? undefined : '800',
       color: colors.textPrimary,
-      fontFamily: typography.fontFamily.mono,
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.numeric : typography.fontFamily.mono,
     },
     evidenceOrder: {
       flex: 1,
       fontSize: 11,
-      fontWeight: '500',
+      fontWeight: shape.isHogwarts ? undefined : '500',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
       color: colors.textSecondary,
       textAlign: 'right',
     },
@@ -2350,7 +2414,8 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape, isDark: boolean) =
     metaLabel: {
       width: 56,
       fontSize: 12,
-      fontWeight: '600',
+      fontWeight: shape.isHogwarts ? undefined : '600',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
       color: colors.textSecondary,
     },
     metaValueRow: {
@@ -2362,7 +2427,8 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape, isDark: boolean) =
     metaValue: {
       flexShrink: 1,
       fontSize: 13,
-      fontWeight: '600',
+      fontWeight: shape.isHogwarts ? undefined : '600',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
       color: colors.textPrimary,
     },
     actionRow: {
@@ -2378,14 +2444,15 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape, isDark: boolean) =
       justifyContent: 'center',
       gap: 4,
       paddingVertical: spacing.sm,
-      borderRadius: borderRadius.medium,
-      borderWidth: borderWidth.thin,
-      borderColor: colors.stroke,
+      borderRadius: shape.radius.button,
+      borderWidth: shape.borderWidth.card,
+      borderColor: shape.isHogwarts ? colors.accent : colors.stroke,
       backgroundColor: colors.primary,
     },
     confirmButtonText: {
       fontSize: 13,
-      fontWeight: '800',
+      fontWeight: shape.isHogwarts ? undefined : '800',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
       color: colors.onPrimary,
     },
     retryButton: {
@@ -2395,14 +2462,15 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape, isDark: boolean) =
       justifyContent: 'center',
       gap: 4,
       paddingVertical: spacing.sm,
-      borderRadius: borderRadius.medium,
-      borderWidth: borderWidth.thin,
-      borderColor: colors.stroke,
+      borderRadius: shape.radius.button,
+      borderWidth: shape.borderWidth.subtle,
+      borderColor: shape.isHogwarts ? colors.cardBorder : colors.stroke,
       backgroundColor: colors.surface,
     },
     retryButtonText: {
       fontSize: 13,
-      fontWeight: '700',
+      fontWeight: shape.isHogwarts ? undefined : '700',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
       color: colors.textPrimary,
     },
     ignoreButton: {
@@ -2412,14 +2480,15 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape, isDark: boolean) =
       alignItems: 'center',
       justifyContent: 'center',
       gap: 4,
-      borderRadius: borderRadius.medium,
-      borderWidth: borderWidth.thin,
-      borderColor: colors.stroke,
+      borderRadius: shape.radius.button,
+      borderWidth: shape.borderWidth.subtle,
+      borderColor: shape.isHogwarts ? colors.cardBorder : colors.stroke,
       backgroundColor: colors.surface,
     },
     ignoreButtonText: {
       fontSize: 13,
-      fontWeight: '700',
+      fontWeight: shape.isHogwarts ? undefined : '700',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
       color: colors.textSecondary,
     },
     actionButtonDisabled: {
@@ -2430,20 +2499,22 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape, isDark: boolean) =
       marginTop: spacing.sm,
       padding: spacing.md,
       backgroundColor: shape.isSoft ? colors.surfaceMuted : colors.background,
-      borderWidth: shape.isSoft ? 0 : borderWidth.thin,
-      borderColor: colors.stroke,
-      borderRadius: shape.isSoft ? 16 : borderRadius.medium,
+      borderWidth: shape.isSoft ? 0 : shape.borderWidth.subtle,
+      borderColor: shape.isHogwarts ? colors.cardBorder : colors.stroke,
+      borderRadius: shape.isSoft ? 16 : shape.isHogwarts ? shape.radius.card : borderRadius.medium,
       gap: spacing.xs,
     },
     editTitle: {
       fontSize: 13,
-      fontWeight: shape.isSoft ? '600' : '800',
+      fontWeight: shape.isHogwarts ? undefined : shape.isSoft ? '600' : '800',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.display : undefined,
       color: colors.textPrimary,
       marginBottom: spacing.xs,
     },
     editLabel: {
       fontSize: 12,
-      fontWeight: shape.isSoft ? '500' : '700',
+      fontWeight: shape.isHogwarts ? undefined : shape.isSoft ? '500' : '700',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
       color: colors.textSecondary,
       marginTop: spacing.xs,
     },
@@ -2455,15 +2526,15 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape, isDark: boolean) =
     chip: {
       paddingHorizontal: shape.isSoft ? 12 : spacing.sm,
       paddingVertical: shape.isSoft ? 6 : spacing.xs,
-      borderRadius: shape.isSoft ? 999 : borderRadius.small,
-      borderWidth: shape.isSoft ? 0 : borderWidth.thin,
-      borderColor: colors.stroke,
+      borderRadius: shape.isSoft || shape.isHogwarts ? shape.radius.pill : borderRadius.small,
+      borderWidth: shape.isSoft ? 0 : shape.borderWidth.subtle,
+      borderColor: shape.isHogwarts ? colors.cardBorder : colors.stroke,
       backgroundColor: colors.surface,
     },
     chipSelected: {
-      backgroundColor: shape.isSoft ? colors.primaryLight : colors.accent,
-      borderWidth: shape.isSoft ? 1.5 : borderWidth.medium,
-      borderColor: shape.isSoft ? colors.primary : colors.stroke,
+      backgroundColor: shape.isSoft || shape.isHogwarts ? colors.primaryLight : colors.accent,
+      borderWidth: shape.isSoft || shape.isHogwarts ? 1.5 : borderWidth.medium,
+      borderColor: shape.isSoft ? colors.primary : shape.isHogwarts ? colors.accent : colors.stroke,
     },
     chipInner: {
       flexDirection: 'row',
@@ -2472,23 +2543,26 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape, isDark: boolean) =
     },
     chipText: {
       fontSize: 12,
-      fontWeight: shape.isSoft ? '600' : '700',
+      fontWeight: shape.isHogwarts ? undefined : shape.isSoft ? '600' : '700',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
       color: colors.textPrimary,
     },
     editInput: {
       backgroundColor: colors.surface,
-      borderWidth: shape.isSoft ? 1 : borderWidth.thin,
-      borderColor: shape.isSoft ? colors.cardBorder : colors.stroke,
-      borderRadius: shape.isSoft ? 12 : borderRadius.medium,
+      borderWidth: shape.isSoft ? 1 : shape.borderWidth.subtle,
+      borderColor: shape.isSoft || shape.isHogwarts ? colors.cardBorder : colors.stroke,
+      borderRadius: shape.isSoft ? 12 : shape.radius.input,
       paddingHorizontal: spacing.md,
       paddingVertical: spacing.sm,
       fontSize: 14,
-      fontWeight: shape.isSoft ? '500' : '600',
+      fontWeight: shape.isHogwarts ? undefined : shape.isSoft ? '500' : '600',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
       color: colors.textPrimary,
     },
     editHint: {
       fontSize: 12,
-      fontWeight: '500',
+      fontWeight: shape.isHogwarts ? undefined : '500',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
       color: colors.textTertiary,
     },
     refundBillRow: {
@@ -2496,26 +2570,28 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape, isDark: boolean) =
       alignItems: 'center',
       gap: spacing.sm,
       padding: spacing.sm,
-      borderWidth: borderWidth.thin,
-      borderColor: colors.stroke,
-      borderRadius: borderRadius.small,
+      borderWidth: shape.borderWidth.subtle,
+      borderColor: shape.isHogwarts ? colors.cardBorder : colors.stroke,
+      borderRadius: shape.radius.input,
       backgroundColor: colors.surface,
     },
     refundBillAmount: {
       fontSize: 12,
-      fontWeight: '800',
+      fontWeight: shape.isHogwarts ? undefined : '800',
       color: colors.textPrimary,
-      fontFamily: typography.fontFamily.mono,
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.numeric : typography.fontFamily.mono,
     },
     refundBillText: {
       flex: 1,
       fontSize: 12,
-      fontWeight: '600',
+      fontWeight: shape.isHogwarts ? undefined : '600',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
       color: colors.textPrimary,
     },
     refundBillTime: {
       fontSize: 10,
-      fontWeight: '500',
+      fontWeight: shape.isHogwarts ? undefined : '500',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.numeric : undefined,
       color: colors.textTertiary,
     },
     createRuleButton: {
@@ -2525,15 +2601,16 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape, isDark: boolean) =
       marginTop: spacing.xs,
       paddingHorizontal: spacing.sm,
       paddingVertical: spacing.xs,
-      borderRadius: borderRadius.small,
-      borderWidth: borderWidth.thin,
+      borderRadius: shape.radius.badge,
+      borderWidth: shape.borderWidth.subtle,
       borderColor: colors.primary,
       backgroundColor: colors.surface,
       alignSelf: 'flex-start',
     },
     createRuleText: {
       fontSize: 12,
-      fontWeight: '700',
+      fontWeight: shape.isHogwarts ? undefined : '700',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
       color: colors.primary,
     },
     editActions: {
@@ -2546,14 +2623,15 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape, isDark: boolean) =
       alignItems: 'center',
       justifyContent: 'center',
       paddingVertical: spacing.sm,
-      borderRadius: shape.isSoft ? 14 : borderRadius.medium,
-      borderWidth: shape.isSoft ? 0 : borderWidth.thin,
-      borderColor: colors.stroke,
+      borderRadius: shape.isSoft ? 14 : shape.radius.button,
+      borderWidth: shape.isSoft ? 0 : shape.borderWidth.subtle,
+      borderColor: shape.isHogwarts ? colors.cardBorder : colors.stroke,
       backgroundColor: colors.surface,
     },
     editCancelButtonText: {
       fontSize: 13,
-      fontWeight: shape.isSoft ? '600' : '700',
+      fontWeight: shape.isHogwarts ? undefined : shape.isSoft ? '600' : '700',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
       color: colors.textSecondary,
     },
     editConfirmButton: {
@@ -2561,14 +2639,15 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape, isDark: boolean) =
       alignItems: 'center',
       justifyContent: 'center',
       paddingVertical: spacing.sm,
-      borderRadius: shape.isSoft ? 14 : borderRadius.medium,
-      borderWidth: shape.isSoft ? 0 : borderWidth.thin,
-      borderColor: colors.stroke,
+      borderRadius: shape.isSoft ? 14 : shape.radius.button,
+      borderWidth: shape.isSoft ? 0 : shape.borderWidth.card,
+      borderColor: shape.isHogwarts ? colors.accent : colors.stroke,
       backgroundColor: colors.primary,
     },
     editConfirmButtonText: {
       fontSize: 13,
-      fontWeight: shape.isSoft ? '600' : '800',
+      fontWeight: shape.isHogwarts ? undefined : shape.isSoft ? '600' : '800',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
       color: colors.onPrimary,
     },
   }),

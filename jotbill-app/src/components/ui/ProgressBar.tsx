@@ -8,6 +8,7 @@ import { ThemeColors } from '../../theme/colors';
 import { ThemeShape } from '../../theme/shape';
 import { borderRadius, spacing } from '../../theme/spacing';
 import { useStyles } from '../../hooks';
+import { HOGWARTS_FONTS } from '../../constants/hogwartsAssets';
 import { typography } from '../../theme';
 
 export interface ProgressBarProps {
@@ -77,29 +78,30 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
     },
     track: {
       flex: 1,
-      borderRadius: shape.isSoft ? shape.radius.pill : borderRadius.small,
+      borderRadius: shape.isSoft ? shape.radius.pill : shape.isHogwarts ? borderRadius.round : borderRadius.small,
       overflow: 'hidden',
       position: 'relative',
     },
     fill: {
-      borderRadius: shape.isSoft ? shape.radius.pill : borderRadius.small,
+      borderRadius: shape.isSoft ? shape.radius.pill : shape.isHogwarts ? borderRadius.round : borderRadius.small,
     },
     insideLabel: {
       position: 'absolute',
       right: spacing.sm,
       color: '#FFFFFF',
       fontSize: 10,
-      fontWeight: shape.isSoft ? '600' : '800',
+      fontWeight: shape.isHogwarts ? undefined : shape.isSoft ? '600' : '800',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.numeric : undefined,
       top: '50%',
       transform: [{ translateY: -6 }],
     },
     outsideLabel: {
       marginLeft: spacing.sm,
       fontSize: 12,
-      fontWeight: shape.isSoft ? '600' : '800',
+      fontWeight: shape.isHogwarts ? undefined : shape.isSoft ? '600' : '800',
       minWidth: 36,
       fontVariant: ['tabular-nums'],
-      ...(shape.isSoft ? {} : { fontFamily: typography.fontFamily.mono }),
+      fontFamily: shape.isSoft ? undefined : shape.isHogwarts ? HOGWARTS_FONTS.numeric : typography.fontFamily.mono,
     },
   }),
   _colors: colors,

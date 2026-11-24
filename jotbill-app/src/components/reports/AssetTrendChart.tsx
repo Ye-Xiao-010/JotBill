@@ -6,8 +6,10 @@ import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import { LineChart } from 'react-native-gifted-charts';
 import { ThemeColors } from '../../theme/colors';
-import { borderRadius, borderWidth, spacing, shadow } from '../../theme/spacing';
+import { ThemeShape } from '../../theme/shape';
+import { borderWidth, spacing, shadow } from '../../theme/spacing';
 import { useStyles } from '../../hooks';
+import { HOGWARTS_FONTS } from '../../constants/hogwartsAssets';
 import { typography } from '../../theme';
 
 interface AssetTrendChartProps {
@@ -82,21 +84,22 @@ export default function AssetTrendChart({ data, dateRange }: AssetTrendChartProp
   );
 }
 
-const createStyles = (colors: ThemeColors) => ({
+const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
   ...StyleSheet.create({
     container: {
       marginHorizontal: spacing.lg,
       marginBottom: spacing.lg,
       backgroundColor: colors.surface,
-      borderRadius: borderRadius.card,
-      borderWidth: borderWidth.thin,
-      borderColor: colors.stroke,
+      borderRadius: shape.radius.card,
+      borderWidth: shape.isHogwarts ? shape.borderWidth.card : borderWidth.thin,
+      borderColor: shape.isHogwarts ? colors.cardBorder : colors.stroke,
       padding: spacing.lg,
-      ...shadow.small,
+      ...(shape.isHogwarts ? shape.elevation.card : shadow.small),
     },
     title: {
       fontSize: 15,
-      fontWeight: '800',
+      fontWeight: shape.isHogwarts ? undefined : '800',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.display : undefined,
       color: colors.textPrimary,
     },
     header: {
@@ -107,6 +110,7 @@ const createStyles = (colors: ThemeColors) => ({
     },
     dateRange: {
       fontSize: 12,
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
       color: colors.textTertiary,
     },
     chartWrap: {
@@ -117,14 +121,15 @@ const createStyles = (colors: ThemeColors) => ({
       marginHorizontal: spacing.lg,
       marginBottom: spacing.lg,
       backgroundColor: colors.surface,
-      borderRadius: borderRadius.card,
-      borderWidth: borderWidth.thin,
-      borderColor: colors.stroke,
+      borderRadius: shape.radius.card,
+      borderWidth: shape.isHogwarts ? shape.borderWidth.card : borderWidth.thin,
+      borderColor: shape.isHogwarts ? colors.cardBorder : colors.stroke,
       padding: spacing.xxxl,
       alignItems: 'center',
     },
     emptyText: {
       fontSize: 14,
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
       color: colors.textTertiary,
     },
   }),

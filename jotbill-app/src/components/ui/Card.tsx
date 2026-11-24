@@ -65,13 +65,13 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
   ...StyleSheet.create({
     card: {
       backgroundColor: colors.surface,
-      borderRadius: shape.isSoft ? shape.radius.card : borderRadius.card,
-      borderWidth: shape.isSoft ? shape.borderWidth.card : borderWidth.medium,
-      borderColor: shape.isSoft ? colors.cardBorder : colors.stroke,
+      borderRadius: shape.isSoft || shape.isHogwarts ? shape.radius.card : borderRadius.card,
+      borderWidth: shape.isSoft || shape.isHogwarts ? shape.borderWidth.card : borderWidth.medium,
+      borderColor: shape.isSoft || shape.isHogwarts ? colors.cardBorder : colors.stroke,
     },
   }),
   _colors: colors,
-  _elevation: shape.isSoft ? shape.elevation.card : shadow.small,
+  _elevation: shape.isSoft || shape.isHogwarts ? shape.elevation.card : shadow.small,
 });
 
 export default Card;

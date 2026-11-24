@@ -6,8 +6,10 @@ import React, { useState } from 'react';
 import { View, Text, ScrollView, StyleSheet } from 'react-native';
 import { PieChart } from 'react-native-gifted-charts';
 import { ThemeColors } from '../../theme/colors';
-import { borderRadius, borderWidth, spacing, shadow } from '../../theme/spacing';
+import { ThemeShape } from '../../theme/shape';
+import { borderWidth, spacing, shadow } from '../../theme/spacing';
 import { useStyles } from '../../hooks';
+import { HOGWARTS_FONTS } from '../../constants/hogwartsAssets';
 import type { ReportCategoryStatistic as CategoryStatistic } from '../../utils/nativeStatistics';
 import { typography } from '../../theme';
 
@@ -145,17 +147,17 @@ export default function AssetCompositionChart({
   );
 }
 
-const createStyles = (colors: ThemeColors) => ({
+const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
   ...StyleSheet.create({
     container: {
       marginHorizontal: spacing.lg,
       marginBottom: spacing.lg,
       backgroundColor: colors.surface,
-      borderRadius: borderRadius.card,
-      borderWidth: borderWidth.thin,
-      borderColor: colors.stroke,
+      borderRadius: shape.radius.card,
+      borderWidth: shape.isHogwarts ? shape.borderWidth.card : borderWidth.thin,
+      borderColor: shape.isHogwarts ? colors.cardBorder : colors.stroke,
       padding: spacing.lg,
-      ...shadow.small,
+      ...(shape.isHogwarts ? shape.elevation.card : shadow.small),
     },
     header: {
       flexDirection: 'row',
@@ -165,11 +167,13 @@ const createStyles = (colors: ThemeColors) => ({
     },
     title: {
       fontSize: 15,
-      fontWeight: '800',
+      fontWeight: shape.isHogwarts ? undefined : '800',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.display : undefined,
       color: colors.textPrimary,
     },
     dateRange: {
       fontSize: 12,
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
       color: colors.textTertiary,
     },
     chartRow: {
@@ -182,13 +186,14 @@ const createStyles = (colors: ThemeColors) => ({
     },
     centerAmount: {
       fontSize: 13,
-      fontWeight: '800',
-      fontFamily: typography.fontFamily.mono,
+      fontWeight: shape.isHogwarts ? undefined : '800',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.numeric : typography.fontFamily.mono,
       color: colors.textPrimary,
     },
     centerText: {
       fontSize: 9,
-      fontWeight: '600',
+      fontWeight: shape.isHogwarts ? undefined : '600',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
       color: colors.textTertiary,
     },
     legendScroll: {
@@ -209,7 +214,8 @@ const createStyles = (colors: ThemeColors) => ({
     },
     legendLabel: {
       fontSize: 12,
-      fontWeight: '600',
+      fontWeight: shape.isHogwarts ? undefined : '600',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
       color: colors.textSecondary,
       flex: 1,
     },
@@ -219,14 +225,15 @@ const createStyles = (colors: ThemeColors) => ({
     },
     legendAmount: {
       fontSize: 12,
-      fontWeight: '700',
-      fontFamily: typography.fontFamily.mono,
+      fontWeight: shape.isHogwarts ? undefined : '700',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.numeric : typography.fontFamily.mono,
       color: colors.textPrimary,
       marginRight: 6,
     },
     legendPct: {
       fontSize: 11,
-      fontWeight: '600',
+      fontWeight: shape.isHogwarts ? undefined : '600',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.numeric : undefined,
       color: colors.textTertiary,
     },
     emptyBody: {
@@ -235,6 +242,7 @@ const createStyles = (colors: ThemeColors) => ({
     },
     emptyText: {
       fontSize: 14,
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
       color: colors.textTertiary,
     },
   }),

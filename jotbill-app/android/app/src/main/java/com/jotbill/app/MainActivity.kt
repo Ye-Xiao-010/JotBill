@@ -6,12 +6,19 @@ import com.facebook.react.ReactActivityDelegate
 import com.facebook.react.defaults.DefaultNewArchitectureEntryPoint.fabricEnabled
 import com.facebook.react.defaults.DefaultReactActivityDelegate
 import com.jotbill.app.keepalive.RecognitionKeepAliveService
+import com.jotbill.app.theme.LauncherIconManager
 
 class MainActivity : ReactActivity() {
 
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
     RecognitionKeepAliveService.sync(this)
+  }
+
+  override fun onStop() {
+    super.onStop()
+    // 退回后台/桌面时再切换 activity-alias，避免 MIUI/HyperOS 在设置页内当场杀进程闪退
+    LauncherIconManager.applyPendingFromPreferences(this)
   }
 
   /**

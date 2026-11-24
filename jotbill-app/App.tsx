@@ -20,7 +20,7 @@ function AppContent() {
   useAppStateManager();
 
   // 获取主题
-  const { isDark, isSoft, colors } = useTheme();
+  const { isDark, isSoft, isHogwarts, colors } = useTheme();
 
   // 热更新崩溃计数复位：JS bundle 能执行到这里即证明热包健康，必须立即复位
   // 原生侧 crash_count（原生每次启动 +1，达到 2 会静默删除热包回退内置 bundle）。
@@ -80,7 +80,7 @@ function AppContent() {
     <PaperProvider theme={paperTheme}>
       <StatusBar
         barStyle={isDark ? 'light-content' : 'dark-content'}
-        backgroundColor={isSoft ? colors.background : colors.surface}
+        backgroundColor={isSoft || isHogwarts ? colors.background : colors.surface}
       />
       <AppNavigator />
     </PaperProvider>

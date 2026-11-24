@@ -19,6 +19,7 @@ import { ThemeColors } from '../../theme/colors';
 import { ThemeShape } from '../../theme/shape';
 import { spacing, borderRadius, borderWidth, shadow } from '../../theme/spacing';
 import { useStyles } from '../../hooks';
+import { HOGWARTS_FONTS } from '../../constants/hogwartsAssets';
 
 interface ModalProps {
   visible: boolean;
@@ -150,21 +151,25 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
     },
     modal: {
       backgroundColor: colors.surface,
-      borderRadius: shape.isSoft ? 24 : borderRadius.card,
-      borderWidth: shape.isSoft ? shape.borderWidth.card : borderWidth.thick,
-      borderColor: shape.isSoft ? colors.cardBorder : colors.stroke,
+      borderRadius: shape.isSoft ? 24 : shape.isHogwarts ? shape.radius.modal : borderRadius.card,
+      borderWidth: shape.isSoft
+        ? shape.borderWidth.card
+        : shape.isHogwarts
+          ? shape.borderWidth.strong
+          : borderWidth.thick,
+      borderColor: shape.isSoft || shape.isHogwarts ? colors.cardBorder : colors.stroke,
       overflow: 'hidden',
-      ...(shape.isSoft ? shape.elevation.floating : shadow.medium),
+      ...(shape.isSoft || shape.isHogwarts ? shape.elevation.floating : shadow.medium),
     },
     bottomSheetModal: {
       flex: 1,
-      borderTopLeftRadius: shape.isSoft ? shape.radius.sheet : borderRadius.xlarge,
-      borderTopRightRadius: shape.isSoft ? shape.radius.sheet : borderRadius.xlarge,
+      borderTopLeftRadius: shape.isSoft || shape.isHogwarts ? shape.radius.sheet : borderRadius.xlarge,
+      borderTopRightRadius: shape.isSoft || shape.isHogwarts ? shape.radius.sheet : borderRadius.xlarge,
       borderBottomLeftRadius: 0,
       borderBottomRightRadius: 0,
-      borderWidth: shape.isSoft ? shape.borderWidth.card : borderWidth.thin,
+      borderWidth: shape.isSoft || shape.isHogwarts ? shape.borderWidth.card : borderWidth.thin,
       borderBottomWidth: 0,
-      ...(shape.isSoft ? shape.elevation.floating : shadow.soft),
+      ...(shape.isSoft || shape.isHogwarts ? shape.elevation.floating : shadow.soft),
     },
     bottomSheetGrabber: {
       width: 40,
@@ -180,23 +185,24 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
       justifyContent: 'space-between',
       paddingHorizontal: spacing.lg,
       paddingVertical: spacing.md,
-      borderBottomWidth: shape.isSoft ? StyleSheet.hairlineWidth : borderWidth.thin,
-      borderBottomColor: shape.isSoft ? colors.divider : colors.stroke,
+      borderBottomWidth: shape.isSoft ? StyleSheet.hairlineWidth : shape.isHogwarts ? shape.borderWidth.card : borderWidth.thin,
+      borderBottomColor: shape.isSoft || shape.isHogwarts ? colors.divider : colors.stroke,
     },
     titleContainer: {
       flex: 1,
     },
     title: {
       fontSize: shape.isSoft ? 18 : 20,
-      fontWeight: shape.isSoft ? '700' : '800',
+      fontWeight: shape.isHogwarts ? undefined : shape.isSoft ? '700' : '800',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.display : undefined,
       color: colors.textPrimary,
     },
     closeButton: {
       width: shape.isSoft ? 36 : 44,
       height: shape.isSoft ? 36 : 44,
-      borderRadius: shape.isSoft ? 12 : borderRadius.small,
-      borderWidth: shape.isSoft ? 0 : borderWidth.thin,
-      borderColor: colors.stroke,
+      borderRadius: shape.isSoft ? 12 : shape.isHogwarts ? shape.radius.small : borderRadius.small,
+      borderWidth: shape.isSoft ? 0 : shape.isHogwarts ? shape.borderWidth.card : borderWidth.thin,
+      borderColor: shape.isHogwarts ? colors.cardBorder : colors.stroke,
       alignItems: 'center',
       justifyContent: 'center',
       backgroundColor: shape.isSoft ? colors.surfaceMuted : colors.surface,

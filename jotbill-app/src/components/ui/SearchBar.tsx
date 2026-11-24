@@ -8,6 +8,7 @@ import { ThemeColors } from '../../theme/colors';
 import { ThemeShape } from '../../theme/shape';
 import { borderRadius, borderWidth, spacing } from '../../theme/spacing';
 import { useStyles } from '../../hooks';
+import { HOGWARTS_FONTS } from '../../constants/hogwartsAssets';
 
 export interface SearchBarProps {
   value: string;
@@ -63,11 +64,11 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
       flexDirection: 'row',
       alignItems: 'center',
       backgroundColor: shape.isSoft ? colors.surfaceMuted : colors.surface,
-      borderRadius: shape.isSoft ? shape.radius.pill : borderRadius.input,
+      borderRadius: shape.isSoft ? shape.radius.pill : shape.radius.input,
       paddingHorizontal: spacing.md,
       height: shape.isSoft ? 44 : 48,
-      borderWidth: shape.isSoft ? shape.borderWidth.control : borderWidth.medium,
-      borderColor: shape.isSoft ? colors.cardBorder : colors.stroke,
+      borderWidth: shape.isSoft ? shape.borderWidth.control : shape.isHogwarts ? shape.borderWidth.card : borderWidth.medium,
+      borderColor: shape.isSoft || shape.isHogwarts ? colors.cardBorder : colors.stroke,
     },
     containerFocused: {
       borderColor: shape.isSoft ? colors.primary : colors.accent,
@@ -81,16 +82,17 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
     input: {
       flex: 1,
       fontSize: 15,
-      fontWeight: shape.isSoft ? '500' : '600',
+      fontWeight: shape.isHogwarts ? undefined : shape.isSoft ? '500' : '600',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
       color: colors.textPrimary,
       padding: 0,
     },
     clearButton: {
-      width: 26,
-      height: 26,
-      borderRadius: shape.isSoft ? 13 : borderRadius.small,
-      borderWidth: shape.isSoft ? 0 : borderWidth.thin,
-      borderColor: colors.stroke,
+      width: shape.isSoft ? 26 : 28,
+      height: shape.isSoft ? 26 : 28,
+      borderRadius: shape.isSoft ? 13 : shape.isHogwarts ? borderRadius.round : borderRadius.small,
+      borderWidth: shape.isSoft ? 0 : shape.borderWidth.subtle,
+      borderColor: shape.isHogwarts ? colors.cardBorder : colors.stroke,
       backgroundColor: colors.divider,
       alignItems: 'center',
       justifyContent: 'center',

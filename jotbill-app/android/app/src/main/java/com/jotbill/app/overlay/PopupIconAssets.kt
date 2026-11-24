@@ -60,6 +60,43 @@ internal object PopupIconAssets {
         "credit_card" to R.drawable.ic_lucide_credit_card
     )
 
+    /** 魔法羊皮纸（hogwarts）主题专属 25 枚分类图标（与 RN CategoryIcon 一一对应）。 */
+    private val hogwartsCategoryIcons = mapOf(
+        "utensils" to R.drawable.ic_hp_utensils,
+        "bus" to R.drawable.ic_hp_bus,
+        "shopping-bag" to R.drawable.ic_hp_shopping_bag,
+        "gamepad-2" to R.drawable.ic_hp_gamepad_2,
+        "pill" to R.drawable.ic_hp_pill,
+        "book-open" to R.drawable.ic_hp_book_open,
+        "house" to R.drawable.ic_hp_house,
+        "circle-ellipsis" to R.drawable.ic_hp_circle_ellipsis,
+        "banknote" to R.drawable.ic_hp_banknote,
+        "trophy" to R.drawable.ic_hp_trophy,
+        "chart-line" to R.drawable.ic_hp_chart_line,
+        "laptop" to R.drawable.ic_hp_laptop,
+        "circle-dollar-sign" to R.drawable.ic_hp_circle_dollar_sign,
+        "smartphone" to R.drawable.ic_hp_smartphone,
+        "shopping-basket" to R.drawable.ic_hp_shopping_basket,
+        "party-popper" to R.drawable.ic_hp_party_popper,
+        "plane" to R.drawable.ic_hp_plane,
+        "paw-print" to R.drawable.ic_hp_paw_print,
+        "package" to R.drawable.ic_hp_package,
+        "briefcase" to R.drawable.ic_hp_briefcase,
+        "trending-up" to R.drawable.ic_hp_trending_up,
+        "gift" to R.drawable.ic_hp_gift,
+        "hand-coins" to R.drawable.ic_hp_hand_coins,
+        "rotate-ccw" to R.drawable.ic_hp_rotate_ccw,
+        "receipt" to R.drawable.ic_hp_receipt
+    )
+
+    /** 魔法羊皮纸主题账户 subtype 矢量图标（银行/微信/支付宝品牌位图仍优先）。 */
+    private val hogwartsSubtypeIcons = mapOf(
+        "cash" to R.drawable.ic_hp_acc_cash,
+        "e_wallet" to R.drawable.ic_hp_acc_ewallet,
+        "credit_card" to R.drawable.ic_hp_acc_credit_card,
+        "bank_debit" to R.drawable.ic_hp_acc_vault
+    )
+
     /** 银行 code → 方形徽标（与 `icons/banks/banks.json` 的 code 一致，96px PNG）。 */
     private val bankIconsByCode = mapOf(
         "icbc" to R.drawable.ic_bank_icbc,
@@ -102,8 +139,14 @@ internal object PopupIconAssets {
         bankIconsByCode.values.toSet()
 
     /** 分类 chip：icon 字符串是 lucide 名（后端种子）返回资源；emoji/空返回 null（保持文字回退）。 */
-    fun forCategory(icon: String?): Int? =
-        icon?.trim()?.takeIf { it.isNotEmpty() }?.let { categoryIcons[it] }
+    fun forCategory(icon: String?, useHogwarts: Boolean = false): Int? {
+        val key = icon?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+        return if (useHogwarts) {
+            hogwartsCategoryIcons[key] ?: categoryIcons[key]
+        } else {
+            categoryIcons[key]
+        }
+    }
 
     /**
      * 账户 chip：银行/品牌位图优先（`icon` 显式指定 → 品牌 id/名称 → 银行别名），
@@ -114,7 +157,8 @@ internal object PopupIconAssets {
         accountId: String,
         name: String?,
         subtype: String?,
-        icon: String? = null
+        icon: String? = null,
+        useHogwarts: Boolean = false
     ): Int? {
         // 1. 显式指定：bank:<code> / brand:<code>
         val explicit = icon?.trim()
@@ -138,8 +182,12 @@ internal object PopupIconAssets {
             val bankCode = AccountInference.bankCode(context, name)
             if (bankCode != null) bankIconsByCode[bankCode]?.let { return it }
         }
-        // 4. subtype 线性兜底
-        return subtypeIcons[subtype]
+        // 4. subtype 线性/魔法兜底
+        return if (useHogwarts) {
+            hogwartsSubtypeIcons[subtype] ?: subtypeIcons[subtype]
+        } else {
+            subtypeIcons[subtype]
+        }
     }
 
     /**

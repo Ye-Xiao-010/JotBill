@@ -8,6 +8,7 @@ import { ThemeColors } from '../../theme/colors';
 import { ThemeShape } from '../../theme/shape';
 import { borderRadius, borderWidth, spacing } from '../../theme/spacing';
 import { useStyles } from '../../hooks';
+import { HOGWARTS_FONTS } from '../../constants/hogwartsAssets';
 
 export type BadgeVariant = 'default' | 'success' | 'warning' | 'error' | 'info';
 
@@ -47,7 +48,7 @@ export default function Badge({ label, variant = 'default', size = 'medium', sty
       case 'error':
         return { bg: c.error, text: '#FFFFFF' };
       case 'info':
-        return { bg: c.primary, text: '#FFFFFF' };
+        return { bg: c.primary, text: c.onPrimary };
       default:
         return { bg: c.divider, text: c.textPrimary };
     }
@@ -85,13 +86,18 @@ export default function Badge({ label, variant = 'default', size = 'medium', sty
 const createStyles = (colors: ThemeColors, shape: ThemeShape, isDark: boolean) => ({
   ...StyleSheet.create({
     badge: {
-      borderRadius: shape.isSoft ? shape.radius.tag : borderRadius.small,
-      borderWidth: shape.isSoft ? 0 : borderWidth.thin,
-      borderColor: colors.stroke,
+      borderRadius: shape.isSoft
+        ? shape.radius.tag
+        : shape.isHogwarts
+          ? shape.radius.pill
+          : borderRadius.small,
+      borderWidth: shape.isSoft ? 0 : shape.isHogwarts ? shape.borderWidth.card : borderWidth.thin,
+      borderColor: shape.isHogwarts ? colors.cardBorder : colors.stroke,
       alignSelf: 'flex-start',
     },
     label: {
-      fontWeight: shape.isSoft ? '600' : '700',
+      fontWeight: shape.isHogwarts ? undefined : shape.isSoft ? '600' : '700',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
     },
   }),
   _colors: colors,

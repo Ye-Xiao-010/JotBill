@@ -5,8 +5,10 @@
 import React from 'react';
 import { View, Text, ScrollView, RefreshControl, StyleSheet } from 'react-native';
 import { ThemeColors } from '../../theme/colors';
-import { borderRadius, borderWidth, spacing, shadow } from '../../theme/spacing';
+import { ThemeShape } from '../../theme/shape';
+import { borderWidth, spacing, shadow } from '../../theme/spacing';
 import { useStyles } from '../../hooks';
+import { HOGWARTS_FONTS } from '../../constants/hogwartsAssets';
 import { useAssetsData } from '../../hooks/useAssetsData';
 import { AssetTrendChart } from '../../components/reports';
 import AssetCompositionChart from '../../components/reports/AssetCompositionChart';
@@ -123,7 +125,7 @@ export default function AssetsTab() {
   );
 }
 
-const createStyles = (colors: ThemeColors) => ({
+const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
   ...StyleSheet.create({
     container: {
       flex: 1,
@@ -131,22 +133,23 @@ const createStyles = (colors: ThemeColors) => ({
     balanceCard: {
       margin: spacing.lg,
       backgroundColor: colors.primary,
-      borderRadius: borderRadius.card,
-      borderWidth: borderWidth.medium,
-      borderColor: colors.stroke,
+      borderRadius: shape.radius.hero,
+      borderWidth: shape.isHogwarts ? 1.5 : borderWidth.medium,
+      borderColor: shape.isHogwarts ? colors.accent : colors.stroke,
       padding: spacing.xl,
-      ...shadow.medium,
+      ...(shape.isHogwarts ? shape.elevation.hero : shadow.medium),
     },
     balanceLabel: {
       fontSize: 13,
-      fontWeight: '700',
+      fontWeight: shape.isHogwarts ? undefined : '700',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
       color: '#FFFFFF',
-      opacity: 0.8,
+      opacity: 0.85,
     },
     balanceAmount: {
       fontSize: 32,
-      fontWeight: '900',
-      fontFamily: typography.fontFamily.mono,
+      fontWeight: shape.isHogwarts ? undefined : '900',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.numeric : typography.fontFamily.mono,
       color: '#FFFFFF',
       marginTop: spacing.sm,
       marginBottom: spacing.lg,
@@ -166,20 +169,21 @@ const createStyles = (colors: ThemeColors) => ({
     balanceDivider: {
       width: 1,
       height: 30,
-      backgroundColor: 'rgba(255,255,255,0.3)',
+      backgroundColor: shape.isHogwarts ? 'rgba(226, 188, 99, 0.35)' : 'rgba(255,255,255,0.3)',
       marginHorizontal: spacing.md,
     },
     balanceItemLabel: {
       fontSize: 12,
-      fontWeight: '600',
+      fontWeight: shape.isHogwarts ? undefined : '600',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
       color: '#FFFFFF',
-      opacity: 0.7,
+      opacity: 0.78,
       marginBottom: 4,
     },
     balanceItemValue: {
       fontSize: 16,
-      fontWeight: '800',
-      fontFamily: typography.fontFamily.mono,
+      fontWeight: shape.isHogwarts ? undefined : '800',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.numeric : typography.fontFamily.mono,
     },
     assetValue: {
       color: '#4ADE80',

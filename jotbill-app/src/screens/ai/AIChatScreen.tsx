@@ -36,6 +36,7 @@ import { useStyles } from '../../hooks';
 import { useChatSessions } from '../../hooks/useChatSessions';
 import { useRoute, useNavigation } from '@react-navigation/native';
 import { useAlert, useTheme } from '../../providers';
+import { HOGWARTS_FONTS, HOGWARTS_IMAGES } from '../../constants/hogwartsAssets';
 import { aiService } from '../../services/ai';
 import { audioRecorderService } from '../../services/audio/audioRecorderService';
 import type { RecordingProgress } from '../../services/audio/audioRecorderService';
@@ -54,6 +55,7 @@ import { typography } from '../../theme';
 
 const SIDEBAR_WIDTH = Dimensions.get('window').width * 0.78;
 const WELCOME_MESSAGE = '你好！我是你的 AI 助手，可以帮你：\n\n📝 整理待确认账单 — “午餐花了35元”\n🔍 查账 — “今天记了什么”\n📊 统计 — “这个月花了多少”\n📷 识别账单图片\n💬 闲聊 — 随便聊什么都行\n\nAI 不会直接删除或修改账单。';
+const HOGWARTS_WELCOME_MESSAGE = '欢迎回到古灵阁账房！我是你的招财巫师猫管家，随时为你施法理账：\n\n🪶 羽毛笔记账 — “黄油啤酒花了35元”\n🔮 水晶球查账 — “今天记了什么”\n📜 账卷统计 — “这个月金加隆花哪儿了”\n🦉 识别收据羊皮纸（拍照 / 传图）\n✨ 魔法闲聊 — 随便聊什么都行\n\n管家不会擅自删除或修改你的账卷记录。';
 
 // 会话分组类型
 interface SessionGroup {
@@ -981,7 +983,8 @@ const SOFT_SUGGESTIONS = [
 
 export default function AIChatScreen() {
   const styles = useStyles(createStyles);
-  const { isSoft, shape, colors } = useTheme();
+  const { isSoft, isHogwarts, shape, colors } = useTheme();
+  const themeColors = colors;
   const insets = useSafeAreaInsets();
   const { alert, confirm } = useAlert();
   const [softKeyboardVisible, setSoftKeyboardVisible] = useState(false);
@@ -2134,6 +2137,27 @@ export default function AIChatScreen() {
 
   // 渲染 AI 头像
   const renderAIAvatar = () => {
+    if (isHogwarts) {
+      return (
+        <View
+          style={[
+            styles.aiAvatarContainer,
+            {
+              overflow: 'hidden',
+              borderColor: themeColors.accent,
+              borderWidth: 1.5,
+              borderRadius: 16,
+            },
+          ]}
+        >
+          <Image
+            source={HOGWARTS_IMAGES.aiMascot}
+            style={{ width: '100%', height: '100%' }}
+            resizeMode="cover"
+          />
+        </View>
+      );
+    }
     if (defaultAIConfig?.provider) {
       return (
         <View style={styles.aiAvatarContainer}>
@@ -2365,7 +2389,9 @@ export default function AIChatScreen() {
           )}
           {item.content && (
             <Text style={[styles.messageText, item.isUser && styles.userText]}>
-              {item.content}
+              {item.id === 'welcome' && isHogwarts
+                ? HOGWARTS_WELCOME_MESSAGE
+                : item.content}
             </Text>
           )}
         </View>
@@ -2411,7 +2437,9 @@ export default function AIChatScreen() {
             ) : null}
           </View>
         ) : (
-          <Text style={styles.headerTitle} numberOfLines={1}>AI 助手</Text>
+          <Text style={styles.headerTitle} numberOfLines={1}>
+            {isHogwarts ? '招财巫师猫' : 'AI 助手'}
+          </Text>
         )}
         <TouchableOpacity
           style={styles.headerButton}
@@ -2572,7 +2600,13 @@ export default function AIChatScreen() {
               style={styles.input}
               value={inputText}
               onChangeText={setInputText}
-              placeholder={isSoft ? '问问账单，或说「午饭 28」' : '点击输入文字'}
+              placeholder={
+                isSoft
+                  ? '问问账单，或说「午饭 28」'
+                  : isHogwarts
+                    ? '问问招财巫师猫：这个月金加隆花哪儿了？'
+                    : '点击输入文字'
+              }
               placeholderTextColor={isSoft ? styles._colors.textQuaternary : styles._colors.textTertiary}
               multiline
               maxLength={500}
@@ -2648,8 +2682,8 @@ export default function AIChatScreen() {
               {
                 width: SIDEBAR_WIDTH,
                 backgroundColor: styles._colors.surface,
-                borderRightWidth: isSoft ? shape.borderWidth.card : borderWidth.thick,
-                borderRightColor: isSoft ? styles._colors.cardBorder : styles._colors.stroke,
+                borderRightWidth: isSoft ? shape.borderWidth.card : isHogwarts ? 1 : borderWidth.thick,
+                borderRightColor: isSoft || isHogwarts ? styles._colors.cardBorder : styles._colors.stroke,
               },
               isSoft && shape.elevation.floating,
               { transform: [{ translateX: sidebarAnim }] },
@@ -2661,12 +2695,21 @@ export default function AIChatScreen() {
                 sidebarStyles.panelHeader,
                 {
                   borderBottomWidth: isSoft ? StyleSheet.hairlineWidth : borderWidth.thin,
-                  borderBottomColor: isSoft ? styles._colors.divider : styles._colors.stroke,
+                  borderBottomColor: isSoft || isHogwarts ? styles._colors.divider : styles._colors.stroke,
                 },
               ]}
             >
-              <Text style={[sidebarStyles.panelTitle, { color: styles._colors.textPrimary }]}>
-                对话记录
+              <Text
+                style={[
+                  sidebarStyles.panelTitle,
+                  {
+                    color: styles._colors.textPrimary,
+                    fontFamily: isHogwarts ? HOGWARTS_FONTS.display : undefined,
+                    fontWeight: isHogwarts ? undefined : '800',
+                  },
+                ]}
+              >
+                {isHogwarts ? '古灵阁卷宗' : '对话记录'}
               </Text>
               <TouchableOpacity
                 onPress={handleNewChat}
@@ -2680,12 +2723,21 @@ export default function AIChatScreen() {
                         backgroundColor: styles._colors.primaryLight,
                       }
                     : {
-                        borderColor: styles._colors.stroke,
-                        backgroundColor: styles._colors.accent,
+                        borderColor: isHogwarts ? styles._colors.accent : styles._colors.stroke,
+                        backgroundColor: isHogwarts ? styles._colors.primary : styles._colors.accent,
                       },
                 ]}
               >
-                <SquarePen size={18} color={isSoft ? styles._colors.primary : styles._colors.textPrimary} />
+                <SquarePen
+                  size={18}
+                  color={
+                    isSoft
+                      ? styles._colors.primary
+                      : isHogwarts
+                        ? styles._colors.onPrimary
+                        : styles._colors.textPrimary
+                  }
+                />
               </TouchableOpacity>
             </View>
 
@@ -2953,8 +3005,8 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
       paddingHorizontal: shape.isSoft ? spacing.md : spacing.sm,
       paddingVertical: spacing.sm,
       backgroundColor: shape.isSoft ? colors.background : colors.surface,
-      borderBottomWidth: shape.isSoft ? 0 : borderWidth.thin,
-      borderBottomColor: colors.stroke,
+      borderBottomWidth: shape.isSoft ? 0 : shape.borderWidth.subtle,
+      borderBottomColor: shape.isHogwarts ? colors.divider : colors.stroke,
     },
     softHeaderTitleWrap: {
       flex: 1,
@@ -3059,7 +3111,8 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
     },
     headerTitle: {
       fontSize: 18,
-      fontWeight: '800',
+      fontWeight: shape.isHogwarts ? undefined : '800',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.display : undefined,
       color: colors.textPrimary,
       flex: 1,
       textAlign: 'center',
@@ -3104,16 +3157,18 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
       backgroundColor: colors.divider,
     },
     messageContent: {
-      maxWidth: '82%',
-      borderRadius: shape.isSoft ? shape.radius.card : borderRadius.card,
-      borderWidth: shape.isSoft ? shape.borderWidth.card : borderWidth.thin,
-      borderColor: shape.isSoft ? colors.cardBorder : colors.stroke,
+      maxWidth: shape.isSoft ? '82%' : '80%',
+      borderRadius: shape.radius.card,
+      borderWidth: shape.isSoft || shape.isHogwarts ? shape.borderWidth.card : borderWidth.thin,
+      borderColor: shape.isSoft || shape.isHogwarts ? colors.cardBorder : colors.stroke,
       paddingHorizontal: shape.isSoft ? 14 : spacing.md,
       paddingVertical: shape.isSoft ? 10 : spacing.md,
+      ...(shape.isHogwarts ? shape.elevation.card : {}),
     },
     userContent: {
       backgroundColor: colors.primary,
-      borderWidth: shape.isSoft ? 0 : borderWidth.thin,
+      borderWidth: shape.isSoft ? 0 : shape.isHogwarts ? shape.borderWidth.card : borderWidth.thin,
+      borderColor: shape.isHogwarts ? colors.accent : colors.stroke,
       borderBottomRightRadius: shape.isSoft ? 6 : spacing.xs,
     },
     aiContent: {
@@ -3127,7 +3182,8 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
     },
     messageText: {
       fontSize: shape.isSoft ? 14.5 : 15,
-      fontWeight: shape.isSoft ? '400' : '600',
+      fontWeight: shape.isHogwarts ? undefined : shape.isSoft ? '400' : '600',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
       color: colors.textPrimary,
       lineHeight: 22,
     },
@@ -3137,7 +3193,7 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
     chatImage: {
       width: 200,
       height: 200,
-      borderRadius: borderRadius.small,
+      borderRadius: shape.radius.small,
       marginBottom: spacing.xs,
     },
     chatImageList: {
@@ -3146,11 +3202,13 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
     },
     errorText: {
       fontSize: 15,
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
       color: '#D32F2F',
       lineHeight: 22,
     },
     loadingText: {
       fontSize: 14,
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
       color: colors.textSecondary,
       marginLeft: spacing.sm,
     },
@@ -3164,12 +3222,13 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
       marginBottom: shape.isSoft ? 8 : 0,
       borderRadius: shape.isSoft ? 16 : 0,
       backgroundColor: shape.isSoft ? colors.primaryLight : colors.primary + '1A',
-      borderTopWidth: shape.isSoft ? 0 : borderWidth.thin,
-      borderTopColor: colors.stroke,
+      borderTopWidth: shape.isSoft ? 0 : shape.borderWidth.subtle,
+      borderTopColor: shape.isHogwarts ? colors.divider : colors.stroke,
     },
     pendingText: {
       fontSize: 14,
-      fontWeight: shape.isSoft ? '600' : '700',
+      fontWeight: shape.isHogwarts ? undefined : shape.isSoft ? '600' : '700',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
       color: shape.isSoft ? colors.primaryDark : colors.primary,
     },
     saveAllButton: {
@@ -3179,19 +3238,20 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
       backgroundColor: colors.primary,
       paddingVertical: spacing.xs + 2,
       paddingHorizontal: spacing.md,
-      borderRadius: shape.isSoft ? 12 : borderRadius.button,
-      borderWidth: shape.isSoft ? 0 : borderWidth.thin,
-      borderColor: colors.stroke,
+      borderRadius: shape.isSoft ? 12 : shape.radius.button,
+      borderWidth: shape.isSoft ? 0 : shape.borderWidth.subtle,
+      borderColor: shape.isHogwarts ? colors.accent : colors.stroke,
     },
     saveAllButtonText: {
       fontSize: 14,
       color: shape.isSoft ? colors.onPrimary : '#FFFFFF',
-      fontWeight: shape.isSoft ? '600' : '700',
+      fontWeight: shape.isHogwarts ? undefined : shape.isSoft ? '600' : '700',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
     },
     pendingImagesContainer: {
       backgroundColor: colors.surface,
-      borderTopWidth: borderWidth.thin,
-      borderTopColor: colors.stroke,
+      borderTopWidth: shape.borderWidth.subtle,
+      borderTopColor: shape.isHogwarts ? colors.divider : colors.stroke,
       paddingVertical: spacing.sm,
       paddingHorizontal: spacing.md,
     },
@@ -3203,8 +3263,8 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
     pendingImagesCounter: {
       alignSelf: 'flex-end',
       fontSize: 11,
-      fontWeight: '800',
-      fontFamily: typography.fontFamily.mono,
+      fontWeight: shape.isHogwarts ? undefined : '800',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.numeric : typography.fontFamily.mono,
       color: colors.textTertiary,
       marginBottom: 2,
     },
@@ -3216,7 +3276,7 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
     pendingImageThumb: {
       width: 72,
       height: 72,
-      borderRadius: borderRadius.small,
+      borderRadius: shape.radius.small,
     },
     pendingImageRemove: {
       position: 'absolute',
@@ -3232,10 +3292,10 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
     pendingImageAdd: {
       width: 72,
       height: 72,
-      borderRadius: borderRadius.small,
+      borderRadius: shape.radius.small,
       backgroundColor: colors.background,
-      borderWidth: borderWidth.thin,
-      borderColor: colors.stroke,
+      borderWidth: shape.borderWidth.subtle,
+      borderColor: shape.isHogwarts ? colors.cardBorder : colors.stroke,
       alignItems: 'center',
       justifyContent: 'center',
     },
@@ -3250,28 +3310,29 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
       marginHorizontal: shape.isSoft ? 12 : 0,
       borderRadius: shape.isSoft ? 24 : 0,
       backgroundColor: colors.surface,
-      borderTopWidth: shape.isSoft ? shape.borderWidth.card : borderWidth.thin,
+      borderTopWidth: shape.isSoft ? shape.borderWidth.card : shape.borderWidth.subtle,
       borderWidth: shape.isSoft ? shape.borderWidth.card : 0,
-      borderColor: shape.isSoft ? colors.cardBorder : colors.stroke,
+      borderColor: shape.isSoft ? colors.cardBorder : shape.isHogwarts ? colors.divider : colors.stroke,
+      borderTopColor: shape.isSoft ? colors.cardBorder : shape.isHogwarts ? colors.divider : colors.stroke,
       gap: shape.isSoft ? 6 : spacing.sm,
       ...(shape.isSoft ? shape.elevation.floating : {}),
     },
     mediaButton: {
       width: shape.isSoft ? 36 : 48,
       height: shape.isSoft ? 36 : 48,
-      borderRadius: shape.isSoft ? 12 : borderRadius.medium,
+      borderRadius: shape.isSoft ? 12 : shape.isHogwarts ? borderRadius.large : borderRadius.medium,
       backgroundColor: shape.isSoft ? 'transparent' : colors.background,
       alignItems: 'center',
       justifyContent: 'center',
-      borderWidth: shape.isSoft ? 0 : borderWidth.thin,
-      borderColor: colors.stroke,
+      borderWidth: shape.isSoft ? 0 : shape.borderWidth.subtle,
+      borderColor: shape.isHogwarts ? colors.cardBorder : colors.stroke,
     },
     inputWrapper: {
       flex: 1,
       backgroundColor: shape.isSoft ? 'transparent' : colors.background,
-      borderRadius: shape.isSoft ? 16 : borderRadius.input,
-      borderWidth: shape.isSoft ? 0 : borderWidth.thin,
-      borderColor: colors.stroke,
+      borderRadius: shape.isSoft ? 16 : shape.radius.input,
+      borderWidth: shape.isSoft ? 0 : shape.borderWidth.subtle,
+      borderColor: shape.isHogwarts ? colors.cardBorder : colors.stroke,
       paddingHorizontal: shape.isSoft ? 6 : spacing.md,
       paddingVertical: shape.isSoft ? 0 : spacing.xs,
       minHeight: shape.isSoft ? 38 : 48,
@@ -3279,7 +3340,8 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
     },
     input: {
       fontSize: shape.isSoft ? 14 : 15,
-      fontWeight: shape.isSoft ? '400' : '600',
+      fontWeight: shape.isHogwarts ? undefined : shape.isSoft ? '400' : '600',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
       color: colors.textPrimary,
       textAlignVertical: 'center',
       maxHeight: 100,
@@ -3288,10 +3350,10 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
     sendButton: {
       width: shape.isSoft ? 38 : 48,
       height: shape.isSoft ? 38 : 48,
-      borderRadius: shape.isSoft ? 19 : borderRadius.medium,
-      backgroundColor: shape.isSoft ? colors.primary : colors.income,
-      borderWidth: shape.isSoft ? 0 : borderWidth.thin,
-      borderColor: colors.stroke,
+      borderRadius: shape.isSoft ? 19 : shape.isHogwarts ? borderRadius.large : borderRadius.medium,
+      backgroundColor: shape.isSoft || shape.isHogwarts ? colors.primary : colors.income,
+      borderWidth: shape.isSoft ? 0 : shape.borderWidth.subtle,
+      borderColor: shape.isHogwarts ? colors.accent : colors.stroke,
       alignItems: 'center',
       justifyContent: 'center',
     },
@@ -3345,6 +3407,7 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
     },
     recordingHint: {
       fontSize: 14,
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
       color: '#FFFFFF',
       marginBottom: spacing.md,
     },
@@ -3379,11 +3442,11 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
       flex: 1,
       height: shape.isSoft ? 38 : 48,
       backgroundColor: shape.isSoft ? colors.surfaceMuted : colors.background,
-      borderRadius: shape.isSoft ? 999 : borderRadius.input,
+      borderRadius: shape.isSoft ? 999 : shape.radius.input,
       alignItems: 'center',
       justifyContent: 'center',
-      borderWidth: shape.isSoft ? 0 : borderWidth.thin,
-      borderColor: colors.stroke,
+      borderWidth: shape.isSoft ? 0 : shape.borderWidth.subtle,
+      borderColor: shape.isHogwarts ? colors.cardBorder : colors.stroke,
     },
     voiceInputWrapperActive: {
       backgroundColor: colors.primary + '1A',
@@ -3395,7 +3458,8 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
     },
     voiceInputText: {
       fontSize: shape.isSoft ? 14 : 15,
-      fontWeight: shape.isSoft ? '600' : '700',
+      fontWeight: shape.isHogwarts ? undefined : shape.isSoft ? '600' : '700',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
       color: colors.textSecondary,
     },
     voiceInputTextActive: {
@@ -3405,12 +3469,12 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
     modeButton: {
       width: shape.isSoft ? 38 : 48,
       height: shape.isSoft ? 38 : 48,
-      borderRadius: shape.isSoft ? 19 : borderRadius.medium,
+      borderRadius: shape.isSoft ? 19 : shape.isHogwarts ? borderRadius.large : borderRadius.medium,
       backgroundColor: shape.isSoft ? colors.surfaceMuted : colors.background,
       alignItems: 'center',
       justifyContent: 'center',
-      borderWidth: shape.isSoft ? 0 : borderWidth.thin,
-      borderColor: colors.stroke,
+      borderWidth: shape.isSoft ? 0 : shape.borderWidth.subtle,
+      borderColor: shape.isHogwarts ? colors.cardBorder : colors.stroke,
     },
   }),
   _colors: colors,

@@ -16,6 +16,7 @@ import { ThemeColors } from '../../theme/colors';
 import { ThemeShape } from '../../theme/shape';
 import { spacing, borderRadius, borderWidth } from '../../theme/spacing';
 import { useStyles } from '../../hooks';
+import { HOGWARTS_FONTS } from '../../constants/hogwartsAssets';
 
 interface InputProps extends TextInputProps {
   label?: string;
@@ -84,7 +85,8 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
     },
     label: {
       fontSize: 14,
-      fontWeight: shape.isSoft ? '600' : '700',
+      fontWeight: shape.isHogwarts ? undefined : shape.isSoft ? '600' : '700',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
       color: colors.textPrimary,
       marginBottom: spacing.sm,
     },
@@ -93,15 +95,15 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
       fontWeight: shape.isSoft ? '600' : '800',
     },
     inputContainer: {
-      borderWidth: shape.isSoft ? 1 : borderWidth.medium,
-      borderColor: shape.isSoft ? colors.cardBorder : colors.stroke,
-      borderRadius: shape.isSoft ? shape.radius.input : borderRadius.input,
+      borderWidth: shape.isSoft || shape.isHogwarts ? 1 : borderWidth.medium,
+      borderColor: shape.isSoft || shape.isHogwarts ? colors.cardBorder : colors.stroke,
+      borderRadius: shape.isSoft || shape.isHogwarts ? shape.radius.input : borderRadius.input,
       backgroundColor: shape.isSoft ? colors.surfaceMuted : colors.surface,
     },
     focused: {
-      borderColor: shape.isSoft ? colors.primary : colors.accent,
-      borderWidth: shape.isSoft ? 1.5 : borderWidth.medium,
-      backgroundColor: shape.isSoft ? colors.surface : colors.surface,
+      borderColor: shape.isSoft || shape.isHogwarts ? colors.primary : colors.accent,
+      borderWidth: shape.isSoft ? 1.5 : shape.isHogwarts ? 1.5 : borderWidth.medium,
+      backgroundColor: colors.surface,
     },
     error: {
       borderColor: colors.error,
@@ -110,13 +112,15 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
       paddingHorizontal: spacing.md,
       paddingVertical: spacing.md,
       fontSize: 15,
-      fontWeight: shape.isSoft ? '500' : '600',
+      fontWeight: shape.isHogwarts ? undefined : shape.isSoft ? '500' : '600',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
       color: colors.textPrimary,
       minHeight: 48,
     },
     errorText: {
       fontSize: 12,
-      fontWeight: shape.isSoft ? '500' : '600',
+      fontWeight: shape.isHogwarts ? undefined : shape.isSoft ? '500' : '600',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
       color: colors.error,
       marginTop: spacing.xs,
     },
