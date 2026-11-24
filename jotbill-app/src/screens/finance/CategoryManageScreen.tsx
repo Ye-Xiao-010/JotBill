@@ -12,21 +12,19 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
-import { useQueryClient } from '@tanstack/react-query';
 import { AddCategoryModal } from '../../components/modals/AddCategoryModal';
 import CategoryIcon from '../../components/business/CategoryIcon';
 import QueryErrorBanner from '../../components/ui/QueryErrorBanner';
 import { useToast, useStyles } from '../../hooks';
 import { useAlert } from '../../providers';
 import { nativeData, type Category } from '../../native';
-import { QUERY_KEYS } from '../../lib/queryClient';
+import { invalidateCache } from '../../lib/queryClient';
 import { ThemeColors } from '../../theme/colors';
 import { spacing, borderRadius, borderWidth } from '../../theme';
 
 const CategoryManageScreen: React.FC = () => {
   const { showSuccess, showError } = useToast();
   const { confirm } = useAlert();
-  const queryClient = useQueryClient();
   const styles = useStyles(createStyles);
 
   const [categories, setCategories] = useState<Category[]>([]);
@@ -60,9 +58,9 @@ const CategoryManageScreen: React.FC = () => {
   );
 
   const refreshCategoryQueries = useCallback(() => {
-    void queryClient.invalidateQueries({ queryKey: QUERY_KEYS.categories.all });
+    invalidateCache.categories();
     void fetchCategories();
-  }, [fetchCategories, queryClient]);
+  }, [fetchCategories]);
 
   const handleDeleteCategory = (category: Category) => {
     if (category.isDefault) {

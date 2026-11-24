@@ -19,9 +19,14 @@ const PIE_COLORS = [
 
 const formatAmount = (val: number) => {
   if (Math.abs(val) >= 10000) {
-    return `¥${(val / 10000).toFixed(1)}w`;
+    return `¥${(val / 10000).toFixed(1)}万`;
   }
   return `¥${val.toFixed(0)}`;
+};
+
+const getDisplayCategoryName = (name?: string) => {
+  const trimmed = name?.trim();
+  return trimmed ? trimmed : '未分类';
 };
 
 interface CategoryPieProps {
@@ -78,9 +83,10 @@ function CategoryPie({ title, data, dateRange }: CategoryPieProps) {
             <View style={styles.centerLabel}>
               {focused ? (
                 <>
-                  <Text style={styles.centerIcon}>{focused.categoryIcon}</Text>
                   <Text style={styles.centerAmount}>{formatAmount(focused.amount)}</Text>
-                  <Text style={styles.centerText}>{focused.categoryName}</Text>
+                  <Text style={styles.centerText} numberOfLines={1}>
+                    {getDisplayCategoryName(focused.categoryName)}
+                  </Text>
                 </>
               ) : (
                 <>
@@ -100,13 +106,14 @@ function CategoryPie({ title, data, dateRange }: CategoryPieProps) {
           showsVerticalScrollIndicator={false}
         >
           {data.map((d, i) => (
-            <View key={d.categoryId} style={styles.legendItem}>
+            <View key={d.categoryId || `uncategorized-${i}`} style={styles.legendItem}>
               <View style={[
                 styles.legendDot,
                 { backgroundColor: PIE_COLORS[i % PIE_COLORS.length] },
               ]} />
-              <Text style={styles.legendIcon}>{d.categoryIcon}</Text>
-              <Text style={styles.legendLabel} numberOfLines={1}>{d.categoryName}</Text>
+              <Text style={styles.legendLabel} numberOfLines={1}>
+                {getDisplayCategoryName(d.categoryName)}
+              </Text>
               <View style={styles.legendValues}>
                 <Text style={styles.legendAmount}>{formatAmount(d.amount)}</Text>
                 <Text style={styles.legendPct}>{d.percentage.toFixed(0)}%</Text>
@@ -171,10 +178,7 @@ const createStyles = (colors: ThemeColors) => ({
     },
     centerLabel: {
       alignItems: 'center',
-    },
-    centerIcon: {
-      fontSize: 16,
-      marginBottom: 2,
+      maxWidth: 72,
     },
     centerAmount: {
       fontSize: 13,
@@ -201,11 +205,7 @@ const createStyles = (colors: ThemeColors) => ({
       width: 8,
       height: 8,
       borderRadius: 4,
-      marginRight: spacing.xs,
-    },
-    legendIcon: {
-      fontSize: 14,
-      marginRight: 4,
+      marginRight: spacing.sm,
     },
     legendLabel: {
       fontSize: 12,

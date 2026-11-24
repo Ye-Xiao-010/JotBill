@@ -179,9 +179,13 @@ export const invalidateCache = {
 
   /**
    * 使分类数据失效
+   * 同步失效依赖分类名称的统计查询，确保新增/编辑分类后资产构成页立即刷新
    */
   categories: () => {
     queryClient.invalidateQueries({ queryKey: QUERY_KEYS.categories.all });
+    queryClient.invalidateQueries({ queryKey: ['asset-trend'] });
+    queryClient.invalidateQueries({ queryKey: ['total-assets'] });
+    queryClient.invalidateQueries({ queryKey: ['statistics'] });
   },
 
   /**
