@@ -7,6 +7,7 @@ import {
   ActivityIndicator,
   BackHandler,
   FlatList,
+  Image,
   RefreshControl,
   ScrollView,
   StyleSheet,
@@ -48,7 +49,9 @@ import { formatPlatform } from '../../utils/platform';
 import { formatCurrency } from '../../utils/format';
 import AccountIcon from '../../components/business/AccountIcon';
 import { accountDisplayName, resolveAccountIcon } from '../../constants/accountIcons';
-import { useAlert } from '../../providers';
+import { useAlert, useTheme } from '../../providers';
+import { HogwartsStarDivider } from '../../components/ui';
+import { HOGWARTS_FONTS, HOGWARTS_IMAGES } from '../../constants/hogwartsAssets';
 import { borderRadius, borderWidth, spacing } from '../../theme/spacing';
 import { ThemeColors } from '../../theme/colors';
 import { useStyles } from '../../hooks';
@@ -86,6 +89,7 @@ export default function ReviewScreen() {
   const queryClient = useQueryClient();
   const styles = useStyles(createStyles);
   const { alert, confirm } = useAlert();
+  const { playMagicSound } = useTheme();
   const [selecting, setSelecting] = useState(false);
   const closeSelection = useCallback(() => setSelecting(false), []);
   const [retrySubmittedVersions, setRetrySubmittedVersions] = useState<
@@ -118,6 +122,7 @@ export default function ReviewScreen() {
     }) => nativeData.confirmPendingTransaction(pending.pendingId, input, pending.version),
     onSuccess: (bill) => {
       invalidateAll();
+      playMagicSound('coin_clink');
       // P1-5（2026-10-24 场景审查）：合并路径（同来源同订单号已有账单）会丢弃
       // 用户本次的修改，原生在响应里带 mergedIntoExistingBill 标志 —— 必须如实
       // 提示，不能让用户以为"按我改的记上了"。
@@ -576,13 +581,45 @@ function QueryErrorState({
 
 function EmptyState({ colors }: { colors: ThemeColors }) {
   const styles = useStyles(createStyles);
+  const { isHogwarts } = useTheme();
   return (
     <View style={styles.emptyCard}>
-      <Bell size={32} color={colors.textTertiary} />
-      <Text style={styles.emptyTitle}>暂无待确认交易</Text>
-      <Text style={styles.emptyText}>
-        AI 视觉识别或支付通知产生待确认交易时，会在此处显示。
-        确认入账后会写入本地账本并更新账户余额。
+      {isHogwarts ? (
+        <>
+          <Image
+            source={HOGWARTS_IMAGES.emptyOwl}
+            style={{
+              width: 136,
+              height: 136,
+              borderRadius: 18,
+              borderWidth: 1,
+              borderColor: colors.cardBorder,
+              marginBottom: spacing.xs,
+            }}
+            resizeMode="contain"
+          />
+          <HogwartsStarDivider color={colors.accent} width={160} />
+        </>
+      ) : (
+        <Bell size={32} color={colors.textTertiary} />
+      )}
+      <Text
+        style={[
+          styles.emptyTitle,
+          isHogwarts && { fontFamily: HOGWARTS_FONTS.display, fontWeight: undefined },
+        ]}
+      >
+        {isHogwarts ? '猫头鹰信箱已清空' : '暂无待确认交易'}
+      </Text>
+      <Text
+        style={[
+          styles.emptyText,
+          isHogwarts && { fontFamily: HOGWARTS_FONTS.body },
+        ]}
+      >
+        {isHogwarts
+          ? '猫头鹰今天尚未送来新的待确认账单，确认入账后的记录会自动归档至本地账卷。'
+          : 'AI 视觉识别或支付通知产生待确认交易时，会在此处显示。确认入账后会写入本地账本并更新账户余额。'}
       </Text>
     </View>
   );

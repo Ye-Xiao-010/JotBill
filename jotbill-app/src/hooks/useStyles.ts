@@ -1,47 +1,34 @@
 /**
  * useStyles Hook
- * 简化动态主题样式的创建
+ * 简化动态主题样式的创建，向后兼容只接收 (colors) 的旧调用点，
+ * 同时为新页面按需提供 (colors, shape, isDark)。
  */
 import { useMemo } from 'react';
-import { StyleSheet } from 'react-native';
 import { useTheme } from '../providers';
-import { ThemeColors } from '../theme/colors';
+import type { ThemeColors } from '../theme/colors';
+import type { ThemeShape } from '../theme/shape';
 
-type StyleCreator<T> = (colors: ThemeColors) => T;
+type StyleCreator<T> = (colors: ThemeColors, shape: ThemeShape, isDark: boolean) => T;
 
 /**
  * 创建响应主题变化的动态样式
- * @param styleCreator 样式创建函数，接收 colors 参数
- * @returns 动态样式对象
- *
- * @example
- * const styles = useStyles((colors) => StyleSheet.create({
- *   container: { backgroundColor: colors.background },
- *   text: { color: colors.textPrimary },
- * }));
  */
 export function useStyles<T>(styleCreator: StyleCreator<T>): T {
-  const { colors } = useTheme();
-  return useMemo(() => styleCreator(colors), [colors, styleCreator]);
+  const { colors, shape, isDark } = useTheme();
+  return useMemo(() => styleCreator(colors, shape, isDark), [colors, shape, isDark, styleCreator]);
 }
 
 /**
- * 创建带有静态样式和动态样式的组合
- * @param staticStyles 静态样式（不依赖主题）
- * @param dynamicStyleCreator 动态样式创建函数
- * @returns { static, dynamic } 样式对象
- *
- * @example
- * const { static: s, dynamic: d } = useThemedStyles(
- *   StyleSheet.create({ flex: { flex: 1 } }),
- *   (colors) => StyleSheet.create({ bg: { backgroundColor: colors.background } })
- * );
+ * 创建带有静态样式和动态样式的组合（保留原 V2 导出名 useThemedStyles）
  */
 export function useThemedStyles<S, D>(
   staticStyles: S,
-  dynamicStyleCreator: StyleCreator<D>
+  dynamicStyleCreator: StyleCreator<D>,
 ): { static: S; dynamic: D } {
-  const { colors } = useTheme();
-  const dynamic = useMemo(() => dynamicStyleCreator(colors), [colors, dynamicStyleCreator]);
+  const { colors, shape, isDark } = useTheme();
+  const dynamic = useMemo(
+    () => dynamicStyleCreator(colors, shape, isDark),
+    [colors, shape, isDark, dynamicStyleCreator],
+  );
   return { static: staticStyles, dynamic };
 }

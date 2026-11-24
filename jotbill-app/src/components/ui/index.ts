@@ -30,3 +30,6 @@ export type { QueryErrorBannerProps } from './QueryErrorBanner';
 
 // Neo-Brutalism 组件
 export { default as BrutalPressable } from './BrutalPressable';
+
+// 魔法羊皮纸装饰组件
+export { HogwartsStarDivider, HogwartsWaxSeal } from './HogwartsOrnaments';

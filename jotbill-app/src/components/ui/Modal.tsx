@@ -16,8 +16,10 @@ import {
   Platform,
 } from 'react-native';
 import { ThemeColors } from '../../theme/colors';
-import { spacing, borderRadius, borderWidth, shadow } from '../../theme/spacing';
+import { ThemeShape } from '../../theme/shape';
+import { spacing } from '../../theme/spacing';
 import { useStyles } from '../../hooks';
+import { HOGWARTS_FONTS } from '../../constants/hogwartsAssets';
 
 interface ModalProps {
   visible: boolean;
@@ -115,7 +117,7 @@ const Modal: React.FC<ModalProps> = ({
   );
 };
 
-const createStyles = (colors: ThemeColors) => ({
+const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
   ...StyleSheet.create({
     keyboardAvoiding: {
       flex: 1,
@@ -149,26 +151,26 @@ const createStyles = (colors: ThemeColors) => ({
     },
     modal: {
       backgroundColor: colors.surface,
-      borderRadius: borderRadius.card,
-      borderWidth: borderWidth.thick,
-      borderColor: colors.stroke,
+      borderRadius: shape.radius.modal,
+      borderWidth: shape.isHogwarts ? shape.borderWidth.strong : shape.borderWidth.strong,
+      borderColor: colors.cardBorder,
       overflow: 'hidden',
-      ...shadow.medium,
+      ...shape.elevation.floating,
     },
     bottomSheetModal: {
       flex: 1,
-      borderTopLeftRadius: borderRadius.xlarge,
-      borderTopRightRadius: borderRadius.xlarge,
+      borderTopLeftRadius: shape.radius.sheet,
+      borderTopRightRadius: shape.radius.sheet,
       borderBottomLeftRadius: 0,
       borderBottomRightRadius: 0,
-      borderWidth: borderWidth.thin,
+      borderWidth: shape.borderWidth.card,
       borderBottomWidth: 0,
-      ...shadow.soft,
+      ...shape.elevation.floating,
     },
     bottomSheetGrabber: {
       width: 40,
       height: 4,
-      borderRadius: borderRadius.round,
+      borderRadius: shape.radius.pill,
       backgroundColor: colors.divider,
       alignSelf: 'center',
       marginTop: spacing.sm,
@@ -179,23 +181,24 @@ const createStyles = (colors: ThemeColors) => ({
       justifyContent: 'space-between',
       paddingHorizontal: spacing.lg,
       paddingVertical: spacing.md,
-      borderBottomWidth: borderWidth.thin,
-      borderBottomColor: colors.stroke,
+      borderBottomWidth: shape.borderWidth.card,
+      borderBottomColor: colors.divider,
     },
     titleContainer: {
       flex: 1,
     },
     title: {
       fontSize: 20,
-      fontWeight: '800',
+      fontWeight: shape.isHogwarts ? undefined : '800',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.display : undefined,
       color: colors.textPrimary,
     },
     closeButton: {
       width: 44,
       height: 44,
-      borderRadius: borderRadius.small,
-      borderWidth: borderWidth.thin,
-      borderColor: colors.stroke,
+      borderRadius: shape.radius.small,
+      borderWidth: shape.borderWidth.card,
+      borderColor: colors.cardBorder,
       alignItems: 'center',
       justifyContent: 'center',
       backgroundColor: colors.surface,

@@ -5,8 +5,10 @@
 import React from 'react';
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import { ThemeColors } from '../../theme/colors';
-import { borderRadius, borderWidth, spacing } from '../../theme/spacing';
+import { ThemeShape } from '../../theme/shape';
+import { spacing } from '../../theme/spacing';
 import { useStyles } from '../../hooks';
+import { HOGWARTS_FONTS } from '../../constants/hogwartsAssets';
 
 export interface SegmentedControlOption {
   key: string;
@@ -53,14 +55,14 @@ export default function SegmentedControl({
   );
 }
 
-const createStyles = (colors: ThemeColors) => ({
+const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
   ...StyleSheet.create({
     container: {
       flexDirection: 'row',
-      backgroundColor: colors.surface,
-      borderRadius: borderRadius.button,
-      borderWidth: borderWidth.medium,
-      borderColor: colors.stroke,
+      backgroundColor: shape.isHogwarts ? colors.surfaceMuted : colors.surface,
+      borderRadius: shape.radius.button,
+      borderWidth: shape.borderWidth.control,
+      borderColor: colors.cardBorder,
       padding: 3,
     },
     option: {
@@ -69,21 +71,23 @@ const createStyles = (colors: ThemeColors) => ({
       paddingHorizontal: spacing.md,
       alignItems: 'center',
       justifyContent: 'center',
-      borderRadius: borderRadius.small,
+      borderRadius: shape.radius.small,
     },
     optionSelected: {
-      backgroundColor: colors.accent,
-      borderWidth: borderWidth.thin,
-      borderColor: colors.stroke,
+      backgroundColor: shape.isHogwarts ? colors.primary : colors.accent,
+      borderWidth: shape.isHogwarts ? 1 : shape.borderWidth.card,
+      borderColor: shape.isHogwarts ? colors.accent : colors.stroke,
     },
     label: {
       fontSize: 14,
-      fontWeight: '600',
+      fontWeight: shape.isHogwarts ? undefined : '600',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
       color: colors.textTertiary,
     },
     labelSelected: {
-      color: colors.textPrimary,
-      fontWeight: '800',
+      color: shape.isHogwarts ? colors.onPrimary : colors.textPrimary,
+      fontWeight: shape.isHogwarts ? undefined : '800',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
     },
   }),
   _colors: colors,

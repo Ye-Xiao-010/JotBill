@@ -13,8 +13,10 @@ import {
   TextStyle,
 } from 'react-native';
 import { ThemeColors } from '../../theme/colors';
-import { spacing, borderRadius, borderWidth } from '../../theme/spacing';
+import { ThemeShape } from '../../theme/shape';
+import { spacing } from '../../theme/spacing';
 import { useStyles } from '../../hooks';
+import { HOGWARTS_FONTS } from '../../constants/hogwartsAssets';
 
 interface InputProps extends TextInputProps {
   label?: string;
@@ -76,14 +78,15 @@ const Input: React.FC<InputProps> = ({
   );
 };
 
-const createStyles = (colors: ThemeColors) => ({
+const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
   ...StyleSheet.create({
     container: {
       marginBottom: spacing.md,
     },
     label: {
       fontSize: 14,
-      fontWeight: '700',
+      fontWeight: shape.isHogwarts ? undefined : '700',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
       color: colors.textPrimary,
       marginBottom: spacing.sm,
     },
@@ -92,13 +95,13 @@ const createStyles = (colors: ThemeColors) => ({
       fontWeight: '800',
     },
     inputContainer: {
-      borderWidth: borderWidth.medium,
-      borderColor: colors.stroke,
-      borderRadius: borderRadius.input,
+      borderWidth: shape.borderWidth.control,
+      borderColor: colors.cardBorder,
+      borderRadius: shape.radius.input,
       backgroundColor: colors.surface,
     },
     focused: {
-      borderColor: colors.accent,
+      borderColor: shape.isHogwarts ? colors.primary : colors.accent,
     },
     error: {
       borderColor: colors.error,
@@ -107,13 +110,15 @@ const createStyles = (colors: ThemeColors) => ({
       paddingHorizontal: spacing.md,
       paddingVertical: spacing.md,
       fontSize: 15,
-      fontWeight: '600',
+      fontWeight: shape.isHogwarts ? undefined : '600',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
       color: colors.textPrimary,
       minHeight: 48,
     },
     errorText: {
       fontSize: 12,
-      fontWeight: '600',
+      fontWeight: shape.isHogwarts ? undefined : '600',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
       color: colors.error,
       marginTop: spacing.xs,
     },

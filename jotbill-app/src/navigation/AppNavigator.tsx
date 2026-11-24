@@ -38,6 +38,9 @@ import ReviewScreen from '../screens/review/ReviewScreen';
 import { useTheme } from '../providers';
 import { spacing, borderRadius, borderWidth } from '../theme/spacing';
 import { ThemeColors } from '../theme/colors';
+import { ThemeShape } from '../theme/shape';
+import HogwartsIcon from '../components/icons/HogwartsIcon';
+import { HOGWARTS_FONTS } from '../constants/hogwartsAssets';
 import '../types/navigation';
 
 const Stack = createNativeStackNavigator();
@@ -74,48 +77,60 @@ const tabs: TabConfig[] = [
   { key: 'settings', label: '我的', IconComponent: UserIcon },
 ];
 
-// Neo-Brutalism 底部导航栏组件
+const HOGWARTS_TAB_ICONS: Record<string, string> = {
+  dashboard: 'nav-dashboard',
+  reports: 'nav-reports',
+  add: 'nav-add',
+  ai: 'nav-ai',
+  settings: 'nav-settings',
+};
+
+// 底部导航栏组件（积木风 / 魔法羊皮纸双态自适应）
 interface BottomTabBarProps {
   activeTab: string;
   onTabPress: (key: string) => void;
   colors: ThemeColors;
+  shape: ThemeShape;
+  isHogwarts: boolean;
 }
 
-function BottomTabBar({ activeTab, onTabPress, colors }: BottomTabBarProps) {
+function BottomTabBar({ activeTab, onTabPress, colors, shape, isHogwarts }: BottomTabBarProps) {
   const dynamicStyles = useMemo(() => StyleSheet.create({
     container: {
       flexDirection: 'row',
       backgroundColor: colors.surface,
-      borderTopWidth: borderWidth.thick,
-      borderTopColor: colors.stroke,
+      borderTopWidth: shape.borderWidth.navTop,
+      borderTopColor: isHogwarts ? colors.cardBorder : colors.stroke,
       paddingBottom: spacing.sm,
       paddingTop: spacing.sm,
     },
     tabLabel: {
       fontSize: 10,
       color: colors.textTertiary,
-      fontWeight: '600',
+      fontWeight: isHogwarts ? undefined : '600',
+      fontFamily: isHogwarts ? HOGWARTS_FONTS.body : undefined,
       marginTop: 3,
     },
     tabLabelActive: {
-      color: colors.textPrimary,
-      fontWeight: '700',
+      color: isHogwarts ? colors.primary : colors.textPrimary,
+      fontWeight: isHogwarts ? undefined : '700',
+      fontFamily: isHogwarts ? HOGWARTS_FONTS.body : undefined,
     },
     // 活跃 tab 的背景块 — 始终保留 border 占位，避免切换时 borderRadius 表现不一致
     tabIconBlock: {
       width: 36,
       height: 36,
-      borderRadius: borderRadius.small,
-      borderWidth: borderWidth.thin,
+      borderRadius: isHogwarts ? 12 : borderRadius.small,
+      borderWidth: isHogwarts ? 1 : borderWidth.thin,
       borderColor: 'transparent',
       alignItems: 'center',
       justifyContent: 'center',
     },
     tabIconBlockActive: {
       backgroundColor: colors.primaryLight,
-      borderColor: colors.stroke,
+      borderColor: isHogwarts ? colors.accent : colors.stroke,
     },
-    // 中央"+"按钮 - Neo-Brutalism 方圆角 + 实心阴影
+    // 中央"+"按钮 - 积木风方圆角硬阴影 / 魔法羊皮纸鎏金魔杖圆形 FAB
     addButtonOuter: {
       marginTop: -22,
     },
@@ -131,20 +146,22 @@ function BottomTabBar({ activeTab, onTabPress, colors }: BottomTabBarProps) {
     addButton: {
       width: 52,
       height: 52,
-      borderRadius: borderRadius.medium,
-      backgroundColor: colors.accent,
+      borderRadius: isHogwarts ? 26 : borderRadius.medium,
+      backgroundColor: isHogwarts ? colors.primary : colors.accent,
       alignItems: 'center',
       justifyContent: 'center',
-      borderWidth: borderWidth.thick,
-      borderColor: colors.stroke,
+      borderWidth: isHogwarts ? 2 : borderWidth.thick,
+      borderColor: isHogwarts ? colors.accent : colors.stroke,
+      ...(isHogwarts ? shape.elevation.floating : {}),
     },
     addButtonLabel: {
       fontSize: 10,
       color: colors.textTertiary,
-      fontWeight: '600',
+      fontWeight: isHogwarts ? undefined : '600',
+      fontFamily: isHogwarts ? HOGWARTS_FONTS.body : undefined,
       marginTop: 6,
     },
-  }), [colors]);
+  }), [colors, shape, isHogwarts]);
 
   return (
     <View style={dynamicStyles.container}>
@@ -161,9 +178,13 @@ function BottomTabBar({ activeTab, onTabPress, colors }: BottomTabBarProps) {
               activeOpacity={0.8}
             >
               <View style={dynamicStyles.addButtonOuter}>
-                <View style={dynamicStyles.addButtonShadow} />
+                {!isHogwarts ? <View style={dynamicStyles.addButtonShadow} /> : null}
                 <View style={dynamicStyles.addButton}>
-                  <Text style={tabStyles.addButtonIcon}>+</Text>
+                  {isHogwarts ? (
+                    <HogwartsIcon name="nav-add" size={24} color={colors.onPrimary} />
+                  ) : (
+                    <Text style={tabStyles.addButtonIcon}>+</Text>
+                  )}
                 </View>
               </View>
               <Text style={dynamicStyles.addButtonLabel}>{tab.label}</Text>
@@ -173,6 +194,7 @@ function BottomTabBar({ activeTab, onTabPress, colors }: BottomTabBarProps) {
 
         const IconComponent = tab.IconComponent;
         const iconColor = isActive ? colors.primary : colors.textTertiary;
+        const hpIconKey = HOGWARTS_TAB_ICONS[tab.key];
 
         return (
           <TouchableOpacity
@@ -185,7 +207,11 @@ function BottomTabBar({ activeTab, onTabPress, colors }: BottomTabBarProps) {
               dynamicStyles.tabIconBlock,
               isActive && dynamicStyles.tabIconBlockActive,
             ]}>
-              <IconComponent color={iconColor} size={22} />
+              {isHogwarts && hpIconKey ? (
+                <HogwartsIcon name={hpIconKey} size={22} color={iconColor} />
+              ) : (
+                <IconComponent color={iconColor} size={22} />
+              )}
             </View>
             <Text style={[dynamicStyles.tabLabel, isActive && dynamicStyles.tabLabelActive]}>
               {tab.label}
@@ -220,7 +246,7 @@ const tabStyles = StyleSheet.create({
 // 主导航容器组件
 function MainNavigator({ navigation }: { navigation: any }) {
   const [activeTab, setActiveTab] = useState('dashboard');
-  const { colors } = useTheme();
+  const { colors, shape, isHogwarts, playMagicSound } = useTheme();
 
   const dynamicStyles = useMemo(() => StyleSheet.create({
     container: {
@@ -231,6 +257,7 @@ function MainNavigator({ navigation }: { navigation: any }) {
 
   const handleTabPress = (key: string) => {
     if (key === 'add') {
+      playMagicSound('quill');
       Sentry.captureMessage('用户点击记账按钮', {
         level: 'info',
         tags: {
@@ -264,16 +291,22 @@ function MainNavigator({ navigation }: { navigation: any }) {
       <View style={styles.content}>
         {renderScreen()}
       </View>
-      <BottomTabBar activeTab={activeTab} onTabPress={handleTabPress} colors={colors} />
+      <BottomTabBar
+        activeTab={activeTab}
+        onTabPress={handleTabPress}
+        colors={colors}
+        shape={shape}
+        isHogwarts={isHogwarts}
+      />
     </SafeAreaView>
   );
 }
 
 // 根导航器
 export default function AppNavigator() {
-  const { isDark, colors } = useTheme();
+  const { isDark, colors, shape, isHogwarts } = useTheme();
 
-  // Neo-Brutalism 导航主题
+  // 导航主题
   const navigationTheme = useMemo(() => ({
     ...(isDark ? DarkTheme : DefaultTheme),
     colors: {
@@ -282,26 +315,27 @@ export default function AppNavigator() {
       background: colors.background,
       card: colors.surface,
       text: colors.textPrimary,
-      border: colors.stroke,
+      border: isHogwarts ? colors.cardBorder : colors.stroke,
     },
-  }), [isDark, colors]);
+  }), [isDark, colors, isHogwarts]);
 
-  // Neo-Brutalism Stack Header 样式
+  // Stack Header 样式
   const stackScreenOptions = useMemo(() => ({
     headerShown: false,
     headerStyle: {
       backgroundColor: colors.surface,
-      borderBottomWidth: borderWidth.medium,
-      borderBottomColor: colors.stroke,
+      borderBottomWidth: shape.borderWidth.control,
+      borderBottomColor: isHogwarts ? colors.cardBorder : colors.stroke,
     } as any,
     headerTitleStyle: {
       fontSize: 18,
-      fontWeight: '800' as const,
+      fontWeight: isHogwarts ? undefined : ('800' as const),
+      fontFamily: isHogwarts ? HOGWARTS_FONTS.display : undefined,
       color: colors.textPrimary,
     },
     headerTintColor: colors.textPrimary,
     headerShadowVisible: false,
-  }), [colors]);
+  }), [colors, shape, isHogwarts]);
 
   return (
     <NavigationContainer theme={navigationTheme}>

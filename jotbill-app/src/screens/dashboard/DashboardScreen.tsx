@@ -6,6 +6,8 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   AppState,
+  Image,
+  ImageBackground,
   Platform,
   View,
   Text,
@@ -19,15 +21,22 @@ import { useFocusEffect, useIsFocused, useNavigation } from '@react-navigation/n
 import { useQuery } from '@tanstack/react-query';
 import { TriangleAlert, X } from 'lucide-react-native';
 import { ThemeColors } from '../../theme/colors';
+import { ThemeShape } from '../../theme/shape';
 import {
   borderRadius,
   borderWidth,
   spacing,
   shadow,
 } from '../../theme/spacing';
-import { ProgressBar, QueryErrorBanner } from '../../components/ui';
+import { HogwartsStarDivider, ProgressBar, QueryErrorBanner } from '../../components/ui';
 import { DashboardSkeleton } from '../../components/skeleton';
 import CategoryIcon from '../../components/business/CategoryIcon';
+import HogwartsIcon from '../../components/icons/HogwartsIcon';
+import {
+  HOGWARTS_FONTS,
+  HOGWARTS_HOUSES,
+  HOGWARTS_IMAGES,
+} from '../../constants/hogwartsAssets';
 import { useDashboard, useStyles } from '../../hooks';
 import { useAlert, useDisplayPreferences, useTheme } from '../../providers';
 import { nativeData, nativeRecognition, nativeRuntime } from '../../native';
@@ -500,7 +509,8 @@ function RecognitionPermissionBanner() {
 export default function DashboardScreen() {
   const navigation = useNavigation();
   const styles = useStyles(createStyles);
-  const { colors } = useTheme();
+  const { colors, isDark, isHogwarts, hogwartsHouse, playMagicSound } = useTheme();
+  const activeHouseMeta = HOGWARTS_HOUSES[hogwartsHouse] ?? HOGWARTS_HOUSES.classic;
   // 预算与目标卡片默认关闭；偏好读取完成后才允许发起预算/目标请求
   const {
     showDashboardBudget,
@@ -633,8 +643,12 @@ export default function DashboardScreen() {
   } = useMemo(() => limitBillDayGroups(groupBillsByDay(recentBills)), [recentBills]);
 
   const currentDate = new Date();
-  const monthName = `${currentDate.getMonth() + 1}月账本`;
-  const yearName = `${currentDate.getFullYear()}`;
+  const monthName = isHogwarts
+    ? `${currentDate.getMonth() + 1}月账卷`
+    : `${currentDate.getMonth() + 1}月账本`;
+  const yearName = isHogwarts
+    ? `${currentDate.getFullYear()} · ${activeHouseMeta.label}`
+    : `${currentDate.getFullYear()}`;
 
   const onRefresh = useCallback(async () => {
     const tasks: Promise<unknown>[] = [refetch()];
@@ -646,6 +660,7 @@ export default function DashboardScreen() {
   }, [refetch, refetchBudgets, refetchGoals, budgetEnabled]);
 
   const handleAddBill = () => {
+    playMagicSound('quill');
     navigation.navigate('CreateBill' as never);
   };
 
@@ -682,10 +697,17 @@ export default function DashboardScreen() {
       showsVerticalScrollIndicator={false}
     >
       <View style={styles.header}>
-        <View>
+        <View style={styles.headerTextWrap}>
           <Text style={styles.headerTitle}>{monthName}</Text>
           <Text style={styles.headerSubtitle}>{yearName}</Text>
         </View>
+        {isHogwarts ? (
+          <Image
+            source={activeHouseMeta.crest}
+            style={styles.headerCrest}
+            resizeMode="cover"
+          />
+        ) : null}
       </View>
 
       <RecognitionPermissionBanner />
@@ -704,65 +726,128 @@ export default function DashboardScreen() {
       {pendingCount > 0 ? (
         <TouchableOpacity
           style={styles.pendingBanner}
-          onPress={() => navigation.navigate('Review' as never)}
+          onPress={() => {
+            playMagicSound('chime');
+            navigation.navigate('Review' as never);
+          }}
           activeOpacity={0.8}
           accessibilityLabel={`${pendingCount} 笔交易待确认，点击前往处理`}
           accessibilityRole="button"
         >
+          {isHogwarts ? (
+            <View style={styles.pendingOwlWrap}>
+              <HogwartsIcon name="smartphone" size={20} color={colors.primary} />
+            </View>
+          ) : null}
           <View style={styles.pendingBadge}>
             <Text style={styles.pendingBadgeText}>{pendingCount}</Text>
           </View>
-          <Text style={styles.pendingText}>有待确认的交易</Text>
+          <Text style={styles.pendingText}>
+            {isHogwarts ? '猫头鹰信箱 · 待确认交易' : '有待确认的交易'}
+          </Text>
           <Text style={styles.pendingAction}>去处理 →</Text>
         </TouchableOpacity>
       ) : null}
 
       <View style={styles.overviewCard}>
-        <View style={styles.overviewContent}>
-          <View style={styles.overviewLabelRow}>
-            <Text style={styles.overviewLabel}>本月支出</Text>
-            <TouchableOpacity
-              onPress={handleViewExpense}
-              activeOpacity={0.75}
-              accessibilityLabel="查看支出明细"
-              accessibilityRole="button"
-            >
-              <Text style={styles.overviewLink}>支出明细 →</Text>
-            </TouchableOpacity>
-          </View>
-          <Text
-            style={styles.overviewBalance}
-            numberOfLines={1}
-            adjustsFontSizeToFit
-            minimumFontScale={0.6}
+        {isHogwarts ? (
+          <ImageBackground
+            source={isDark ? HOGWARTS_IMAGES.heroDark : HOGWARTS_IMAGES.heroLight}
+            style={styles.overviewContent}
+            imageStyle={styles.heroImage}
+            resizeMode="cover"
           >
-            {formatCurrency(monthExpense)}
-          </Text>
-
-          <View style={styles.overviewDivider} />
-
-          <View style={styles.overviewStats}>
-            <TouchableOpacity
-              style={styles.statBlock}
-              onPress={handleViewIncome}
-              activeOpacity={0.75}
-              accessibilityLabel={`本月收入 ${formatCurrency(monthIncome)}`}
-              accessibilityRole="button"
+            <View style={styles.overviewLabelRow}>
+              <Text style={styles.overviewLabel}>古灵阁月度账卷 · 本月支出</Text>
+              <TouchableOpacity
+                onPress={handleViewExpense}
+                activeOpacity={0.75}
+                accessibilityLabel="查看支出明细"
+                accessibilityRole="button"
+              >
+                <Text style={styles.overviewLink}>支出明细 →</Text>
+              </TouchableOpacity>
+            </View>
+            <Text
+              style={styles.overviewBalance}
+              numberOfLines={1}
+              adjustsFontSizeToFit
+              minimumFontScale={0.6}
             >
-              <Text style={styles.statLabel}>本月收入</Text>
-              <Text style={styles.statValue} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>
-                {formatCurrency(monthIncome)}
-              </Text>
-            </TouchableOpacity>
-            <View style={styles.statDivider} />
-            <View style={styles.statBlock}>
-              <Text style={styles.statLabel}>本月结余</Text>
-              <Text style={styles.statValue} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>
-                {formatCurrency(monthBalance)}
-              </Text>
+              {formatCurrency(monthExpense)}
+            </Text>
+
+            <View style={styles.overviewDivider} />
+
+            <View style={styles.overviewStats}>
+              <TouchableOpacity
+                style={styles.statBlock}
+                onPress={handleViewIncome}
+                activeOpacity={0.75}
+                accessibilityLabel={`本月收入 ${formatCurrency(monthIncome)}`}
+                accessibilityRole="button"
+              >
+                <Text style={styles.statLabel}>本月收入</Text>
+                <Text style={styles.statValue} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>
+                  {formatCurrency(monthIncome)}
+                </Text>
+              </TouchableOpacity>
+              <View style={styles.statDivider} />
+              <View style={styles.statBlock}>
+                <Text style={styles.statLabel}>本月结余</Text>
+                <Text style={styles.statValue} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>
+                  {formatCurrency(monthBalance)}
+                </Text>
+              </View>
+            </View>
+          </ImageBackground>
+        ) : (
+          <View style={styles.overviewContent}>
+            <View style={styles.overviewLabelRow}>
+              <Text style={styles.overviewLabel}>本月支出</Text>
+              <TouchableOpacity
+                onPress={handleViewExpense}
+                activeOpacity={0.75}
+                accessibilityLabel="查看支出明细"
+                accessibilityRole="button"
+              >
+                <Text style={styles.overviewLink}>支出明细 →</Text>
+              </TouchableOpacity>
+            </View>
+            <Text
+              style={styles.overviewBalance}
+              numberOfLines={1}
+              adjustsFontSizeToFit
+              minimumFontScale={0.6}
+            >
+              {formatCurrency(monthExpense)}
+            </Text>
+
+            <View style={styles.overviewDivider} />
+
+            <View style={styles.overviewStats}>
+              <TouchableOpacity
+                style={styles.statBlock}
+                onPress={handleViewIncome}
+                activeOpacity={0.75}
+                accessibilityLabel={`本月收入 ${formatCurrency(monthIncome)}`}
+                accessibilityRole="button"
+              >
+                <Text style={styles.statLabel}>本月收入</Text>
+                <Text style={styles.statValue} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>
+                  {formatCurrency(monthIncome)}
+                </Text>
+              </TouchableOpacity>
+              <View style={styles.statDivider} />
+              <View style={styles.statBlock}>
+                <Text style={styles.statLabel}>本月结余</Text>
+                <Text style={styles.statValue} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>
+                  {formatCurrency(monthBalance)}
+                </Text>
+              </View>
             </View>
           </View>
-        </View>
+        )}
       </View>
 
       {/* 预算与目标：默认隐藏，仅在「设置 → 显示」开启后渲染并请求数据 */}
@@ -845,8 +930,25 @@ export default function DashboardScreen() {
           null
         ) : (
           <View style={styles.emptyState}>
-            <Text style={styles.emptyIcon}>📝</Text>
-            <Text style={styles.emptyText}>暂无交易记录</Text>
+            {isHogwarts ? (
+              <>
+                <Image
+                  source={HOGWARTS_IMAGES.emptyOwl}
+                  style={styles.emptyOwlArt}
+                  resizeMode="contain"
+                />
+                <HogwartsStarDivider
+                  color={colors.accent}
+                  width={160}
+                  style={styles.emptyStarDivider}
+                />
+              </>
+            ) : (
+              <Text style={styles.emptyIcon}>📝</Text>
+            )}
+            <Text style={styles.emptyText}>
+              {isHogwarts ? '账卷尚无落墨记录' : '暂无交易记录'}
+            </Text>
             <TouchableOpacity
               style={styles.emptyButton}
               onPress={handleAddBill}
@@ -854,7 +956,9 @@ export default function DashboardScreen() {
               accessibilityLabel="添加第一笔账单"
               accessibilityRole="button"
             >
-              <Text style={styles.emptyButtonText}>添加第一笔</Text>
+              <Text style={styles.emptyButtonText}>
+                {isHogwarts ? '挥杖记第一笔' : '添加第一笔'}
+              </Text>
             </TouchableOpacity>
           </View>
         )}
@@ -863,7 +967,13 @@ export default function DashboardScreen() {
   );
 }
 
-const createStyles = (colors: ThemeColors) => ({
+const createStyles = (colors: ThemeColors, shape: ThemeShape, isDark: boolean) => {
+  const hpHeroInk = isDark ? '#F3EAD7' : '#26190D';
+  const hpHeroMuted = isDark ? 'rgba(243, 234, 215, 0.84)' : 'rgba(38, 25, 13, 0.78)';
+  const hpHeroSubtle = isDark ? 'rgba(243, 234, 215, 0.72)' : 'rgba(38, 25, 13, 0.68)';
+  const hpHeroDivider = isDark ? 'rgba(226, 188, 99, 0.32)' : 'rgba(115, 83, 24, 0.28)';
+
+  return {
   ...StyleSheet.create({
     container: {
       flex: 1,
@@ -876,16 +986,31 @@ const createStyles = (colors: ThemeColors) => ({
     },
     header: {
       marginBottom: spacing.xl,
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+    },
+    headerTextWrap: {
+      flex: 1,
+    },
+    headerCrest: {
+      width: 44,
+      height: 44,
+      borderRadius: 22,
+      borderWidth: 1.5,
+      borderColor: colors.accent,
     },
     headerTitle: {
       fontSize: 28,
-      fontWeight: '800',
+      fontWeight: shape.isHogwarts ? undefined : '800',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.display : undefined,
       color: colors.textPrimary,
-      letterSpacing: -0.5,
+      letterSpacing: shape.isHogwarts ? 0.5 : -0.5,
     },
     headerSubtitle: {
       fontSize: 14,
-      fontWeight: '500',
+      fontWeight: shape.isHogwarts ? undefined : '500',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
       color: colors.textTertiary,
       marginTop: spacing.xs,
     },
@@ -947,12 +1072,15 @@ const createStyles = (colors: ThemeColors) => ({
     },
     overviewCard: {
       backgroundColor: colors.primaryDark,
-      borderRadius: borderRadius.card,
-      borderWidth: borderWidth.thin,
-      borderColor: colors.stroke,
+      borderRadius: shape.radius.hero,
+      borderWidth: shape.isHogwarts ? 1 : borderWidth.thin,
+      borderColor: shape.isHogwarts ? colors.accent : colors.stroke,
       overflow: 'hidden',
       marginBottom: spacing.xxl,
-      ...shadow.soft,
+      ...shape.elevation.hero,
+    },
+    heroImage: {
+      borderRadius: shape.radius.hero,
     },
     overviewContent: {
       padding: spacing.xl,
@@ -964,14 +1092,16 @@ const createStyles = (colors: ThemeColors) => ({
     },
     overviewLabel: {
       fontSize: 14,
-      fontWeight: '600',
-      color: colors.onPrimaryMuted,
+      fontWeight: shape.isHogwarts ? undefined : '600',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
+      color: shape.isHogwarts ? hpHeroMuted : colors.onPrimaryMuted,
       letterSpacing: 0.5,
     },
     overviewLink: {
       fontSize: 12,
-      fontWeight: '600',
-      color: colors.onPrimary,
+      fontWeight: shape.isHogwarts ? undefined : '600',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
+      color: shape.isHogwarts ? hpHeroInk : colors.onPrimary,
       paddingVertical: spacing.sm,
       paddingHorizontal: spacing.xs,
       minHeight: 44,
@@ -979,15 +1109,16 @@ const createStyles = (colors: ThemeColors) => ({
     },
     overviewBalance: {
       fontSize: 40,
-      fontWeight: '800',
-      color: colors.onPrimary,
+      fontWeight: shape.isHogwarts ? undefined : '800',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.numeric : undefined,
+      color: shape.isHogwarts ? hpHeroInk : colors.onPrimary,
       marginTop: spacing.sm,
-      letterSpacing: -1,
+      letterSpacing: shape.isHogwarts ? 0 : -1,
       fontVariant: ['tabular-nums'],
     },
     overviewDivider: {
       height: borderWidth.hairline,
-      backgroundColor: colors.onPrimaryDivider,
+      backgroundColor: shape.isHogwarts ? hpHeroDivider : colors.onPrimaryDivider,
       marginVertical: spacing.lg,
     },
     overviewStats: {
@@ -1001,18 +1132,20 @@ const createStyles = (colors: ThemeColors) => ({
     statDivider: {
       width: borderWidth.hairline,
       height: 36,
-      backgroundColor: colors.onPrimaryDivider,
+      backgroundColor: shape.isHogwarts ? hpHeroDivider : colors.onPrimaryDivider,
       marginHorizontal: spacing.lg,
     },
     statLabel: {
       fontSize: 12,
-      color: colors.onPrimarySubtle,
-      fontWeight: '500',
+      color: shape.isHogwarts ? hpHeroSubtle : colors.onPrimarySubtle,
+      fontWeight: shape.isHogwarts ? undefined : '500',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
     },
     statValue: {
       fontSize: 17,
-      fontWeight: '700',
-      color: colors.onPrimary,
+      fontWeight: shape.isHogwarts ? undefined : '700',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.numeric : undefined,
+      color: shape.isHogwarts ? hpHeroInk : colors.onPrimary,
       fontVariant: ['tabular-nums'],
     },
     progressSection: {
@@ -1145,15 +1278,18 @@ const createStyles = (colors: ThemeColors) => ({
     pendingBanner: {
       flexDirection: 'row',
       alignItems: 'center',
-      backgroundColor: colors.surface,
-      borderRadius: borderRadius.card,
-      borderWidth: borderWidth.thin,
-      borderColor: colors.stroke,
+      backgroundColor: shape.isHogwarts ? colors.primaryLight : colors.surface,
+      borderRadius: shape.radius.card,
+      borderWidth: shape.borderWidth.card,
+      borderColor: shape.isHogwarts ? colors.cardBorder : colors.stroke,
       paddingHorizontal: spacing.lg,
       paddingVertical: spacing.md,
       marginBottom: spacing.xxl,
       minHeight: 44,
-      ...shadow.soft,
+      ...shape.elevation.card,
+    },
+    pendingOwlWrap: {
+      marginRight: spacing.sm,
     },
     pendingBadge: {
       minWidth: 24,
@@ -1361,9 +1497,20 @@ const createStyles = (colors: ThemeColors) => ({
       alignItems: 'center',
       padding: spacing.xxl,
       backgroundColor: colors.surface,
-      borderRadius: borderRadius.card,
-      borderWidth: borderWidth.hairline,
-      borderColor: colors.divider,
+      borderRadius: shape.radius.card,
+      borderWidth: shape.isHogwarts ? 1 : borderWidth.hairline,
+      borderColor: shape.isHogwarts ? colors.cardBorder : colors.divider,
+    },
+    emptyOwlArt: {
+      width: 132,
+      height: 132,
+      borderRadius: 18,
+      borderWidth: 1,
+      borderColor: colors.cardBorder,
+      marginBottom: spacing.sm,
+    },
+    emptyStarDivider: {
+      marginBottom: spacing.sm,
     },
     emptyIcon: {
       fontSize: 40,
@@ -1371,23 +1518,26 @@ const createStyles = (colors: ThemeColors) => ({
     },
     emptyText: {
       fontSize: 15,
-      fontWeight: '600',
+      fontWeight: shape.isHogwarts ? undefined : '600',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
       color: colors.textTertiary,
       marginBottom: spacing.lg,
     },
     emptyButton: {
-      backgroundColor: colors.accent,
+      backgroundColor: shape.isHogwarts ? colors.primary : colors.accent,
       paddingHorizontal: spacing.xl,
       paddingVertical: spacing.md,
-      borderRadius: borderRadius.button,
-      borderWidth: borderWidth.thin,
-      borderColor: colors.stroke,
-      ...shadow.soft,
+      borderRadius: shape.radius.button,
+      borderWidth: shape.borderWidth.card,
+      borderColor: shape.isHogwarts ? colors.accent : colors.stroke,
+      ...shape.elevation.card,
     },
     emptyButtonText: {
       fontSize: 15,
-      fontWeight: '700',
-      color: colors.textPrimary,
+      fontWeight: shape.isHogwarts ? undefined : '700',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
+      color: shape.isHogwarts ? colors.onPrimary : colors.textPrimary,
     },
   }),
-});
+};
+};

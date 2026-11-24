@@ -498,15 +498,246 @@ const inkDark: ThemePalette = {
   gradientPrimaryEnd: '#D4D4D4',
 };
 
+/* ================================================================
+ * hogwarts 魔法羊皮纸（哈利波特氛围向：浅色古旧羊皮纸 / 深色礼堂星夜）
+ *
+ * 支持 5 组子风格：classic（霍格沃茨古金，默认）+ 四学院（格兰芬多 /
+ * 斯莱特林 / 拉文克劳 / 赫奇帕奇），全部 10 块色板均已通过与
+ * __tests__/themeIntegrity.test.tsx 同款 WCAG AA (>=4.5:1) 与收支色相校验：
+ * - light: textPrimary/bg 14.18:1, textTertiary/bg 6.66:1,
+ *          income/surface 6.18:1 (143.4°), expense/surface 6.80:1 (0°),
+ *          onPrimary/primary 6.43:1~10.36:1
+ * - dark:  textPrimary/bg 15.75:1, textTertiary/bg 6.17:1,
+ *          income/surface 8.54:1 (143.1°), expense/surface 6.31:1 (3.6°),
+ *          onPrimary/primary 6.31:1~10.22:1
+ * ============================================================== */
+const hogwartsParchmentLightBase = {
+  secondary: '#6B3FA0',
+  accent: '#C9A227',
+  success: '#1F6B3A',
+  successLight: '#DFEFE4',
+  warning: '#B86B14',
+  error: '#A62626',
+
+  // 四学院扩展图表色
+  pink: '#8C1D2C',
+  lime: '#1F6B3A',
+  cyan: '#1E408A',
+  orange: '#B67618',
+
+  stroke: '#CBB894',
+  strokeLight: '#DFD2B7',
+
+  textPrimary: '#26190D',
+  textSecondary: '#4A3621',
+  textTertiary: '#634C32',
+  textQuaternary: '#8E785D',
+  divider: '#E2D6BE',
+  background: '#F3E9D2',
+  surface: '#FCF7EA',
+  surfaceMuted: '#EAE0C8',
+
+  income: '#1D6A3B',
+  expense: '#A62323',
+  incomeLight: '#DCEEE1',
+  expenseLight: '#F7DCDC',
+  incomeStrong: '#14532D',
+  expenseStrong: '#8E1B1B',
+
+  onPrimary: '#FCF7EA',
+  onPrimaryMuted: 'rgba(252, 247, 234, 0.85)',
+  onPrimarySubtle: 'rgba(252, 247, 234, 0.72)',
+  onPrimaryDivider: 'rgba(252, 247, 234, 0.24)',
+
+  cardBackground: '#FCF7EA',
+  cardBorder: '#CBB894',
+
+  shadow: '#3A2812',
+  shadowDark: '#1F1408',
+  overlay: 'rgba(24, 16, 8, 0.52)',
+  overlayLight: 'rgba(24, 16, 8, 0.26)',
+} as const;
+
+const hogwartsGreatHallDarkBase = {
+  secondary: '#B392F0',
+  accent: '#E2BC63',
+  success: '#5FD08A',
+  successLight: '#163526',
+  warning: '#E5A94C',
+  error: '#F07167',
+
+  pink: '#D9535F',
+  lime: '#5FD08A',
+  cyan: '#689BF2',
+  orange: '#E2B14C',
+
+  stroke: '#3A3152',
+  strokeLight: '#493F66',
+
+  textPrimary: '#F3EAD7',
+  textSecondary: '#CFC2A8',
+  textTertiary: '#9F927C',
+  textQuaternary: '#6E6458',
+  divider: '#2A2340',
+  background: '#120F20',
+  surface: '#1C1730',
+  surfaceMuted: '#241E3D',
+
+  income: '#57CC84',
+  expense: '#F4766E',
+  incomeLight: '#163526',
+  expenseLight: '#3D1B22',
+  incomeStrong: '#6EE09A',
+  expenseStrong: '#FF8F87',
+
+  onPrimary: '#120F20',
+  onPrimaryMuted: 'rgba(18, 15, 32, 0.80)',
+  onPrimarySubtle: 'rgba(18, 15, 32, 0.64)',
+  onPrimaryDivider: 'rgba(18, 15, 32, 0.22)',
+
+  cardBackground: '#1C1730',
+  cardBorder: '#3A3152',
+
+  shadow: '#000000',
+  shadowDark: '#000000',
+  overlay: 'rgba(6, 4, 14, 0.72)',
+  overlayLight: 'rgba(6, 4, 14, 0.44)',
+} as const;
+
+const hogwartsLight: ThemePalette = {
+  ...hogwartsParchmentLightBase,
+  primary: '#735318',
+  primaryLight: '#EFE3C2',
+  primaryDark: '#52390D',
+  gradientPrimaryStart: '#634412',
+  gradientPrimaryEnd: '#825F20',
+};
+
+const hogwartsDark: ThemePalette = {
+  ...hogwartsGreatHallDarkBase,
+  primary: '#DFB960',
+  primaryLight: '#332917',
+  primaryDark: '#F0D082',
+  gradientPrimaryStart: '#231C42',
+  gradientPrimaryEnd: '#352A5E',
+};
+
+export type HogwartsHousePaletteKey =
+  | 'classic'
+  | 'gryffindor'
+  | 'slytherin'
+  | 'ravenclaw'
+  | 'hufflepuff';
+
+export const hogwartsHousePalettes = {
+  classic: { light: hogwartsLight, dark: hogwartsDark },
+  gryffindor: {
+    light: {
+      ...hogwartsParchmentLightBase,
+      primary: '#821B1F',
+      primaryLight: '#F3DADA',
+      primaryDark: '#5E1114',
+      accent: '#C9A227',
+      gradientPrimaryStart: '#6F1418',
+      gradientPrimaryEnd: '#922328',
+    },
+    dark: {
+      ...hogwartsGreatHallDarkBase,
+      primary: '#E57373',
+      primaryLight: '#3B181E',
+      primaryDark: '#F29A9A',
+      accent: '#E2BC63',
+      gradientPrimaryStart: '#4B141A',
+      gradientPrimaryEnd: '#6E1E26',
+    },
+  },
+  slytherin: {
+    light: {
+      ...hogwartsParchmentLightBase,
+      primary: '#195434',
+      primaryLight: '#D8ECE0',
+      primaryDark: '#0F3B23',
+      accent: '#8D99AE',
+      gradientPrimaryStart: '#123F26',
+      gradientPrimaryEnd: '#1E623D',
+    },
+    dark: {
+      ...hogwartsGreatHallDarkBase,
+      primary: '#66C992',
+      primaryLight: '#143324',
+      primaryDark: '#8FE0B2',
+      accent: '#CBD5E1',
+      gradientPrimaryStart: '#123322',
+      gradientPrimaryEnd: '#1B4B33',
+    },
+  },
+  ravenclaw: {
+    light: {
+      ...hogwartsParchmentLightBase,
+      primary: '#1D3975',
+      primaryLight: '#DCE4F4',
+      primaryDark: '#122654',
+      accent: '#B0793A',
+      gradientPrimaryStart: '#152B5C',
+      gradientPrimaryEnd: '#24468C',
+    },
+    dark: {
+      ...hogwartsGreatHallDarkBase,
+      primary: '#82A8F4',
+      primaryLight: '#1B284D',
+      primaryDark: '#A9C4FA',
+      accent: '#D49A59',
+      gradientPrimaryStart: '#162447',
+      gradientPrimaryEnd: '#22386B',
+    },
+  },
+  hufflepuff: {
+    light: {
+      ...hogwartsParchmentLightBase,
+      primary: '#7D510D',
+      primaryLight: '#F4E5C1',
+      primaryDark: '#593806',
+      accent: '#D99B26',
+      gradientPrimaryStart: '#664008',
+      gradientPrimaryEnd: '#8B5B12',
+    },
+    dark: {
+      ...hogwartsGreatHallDarkBase,
+      primary: '#E8B84B',
+      primaryLight: '#362A14',
+      primaryDark: '#F5CF76',
+      accent: '#F5CF76',
+      gradientPrimaryStart: '#3A2B11',
+      gradientPrimaryEnd: '#57411A',
+    },
+  },
+} satisfies Record<HogwartsHousePaletteKey, { light: ThemePalette; dark: ThemePalette }>;
+
+export function getHogwartsPalette(
+  house: HogwartsHousePaletteKey,
+  isDark: boolean,
+): ThemePalette {
+  const pair = hogwartsHousePalettes[house] ?? hogwartsHousePalettes.classic;
+  return isDark ? pair.dark : pair.light;
+}
+
 /** 主题注册表：satisfies 保证每套色板字段完整，缺 token 编译期报错 */
 export const themes = {
   blocks: { light: blocksLight, dark: blocksDark },
   mint: { light: mintLight, dark: mintDark },
   sunset: { light: sunsetLight, dark: sunsetDark },
   ink: { light: inkLight, dark: inkDark },
+  hogwarts: { light: hogwartsLight, dark: hogwartsDark },
 } satisfies Record<string, { light: ThemePalette; dark: ThemePalette }>;
 
 export type ThemeName = keyof typeof themes;
+
+/** 主题视觉家族：brutal = 积木风粗描边；hogwarts = 魔法羊皮纸鎏金细框 */
+export type ThemeStyleVariant = 'brutal' | 'hogwarts';
+
+export function getThemeStyleVariant(name: ThemeName): ThemeStyleVariant {
+  return name === 'hogwarts' ? 'hogwarts' : 'brutal';
+}
 
 /** 主题展示名（设置页选择器等 UI 使用） */
 export const THEME_LABELS: Record<ThemeName, string> = {
@@ -514,6 +745,7 @@ export const THEME_LABELS: Record<ThemeName, string> = {
   mint: '薄荷账本',
   sunset: '落日橙',
   ink: '墨黑',
+  hogwarts: '魔法羊皮纸',
 };
 
 // 兼容旧导入：默认 blocks 浅色

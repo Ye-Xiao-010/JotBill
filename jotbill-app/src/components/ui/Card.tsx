@@ -11,7 +11,8 @@ import {
   TouchableOpacityProps,
 } from 'react-native';
 import { ThemeColors } from '../../theme/colors';
-import { spacing, borderRadius, borderWidth, shadow } from '../../theme/spacing';
+import { ThemeShape } from '../../theme/shape';
+import { spacing } from '../../theme/spacing';
 import { useStyles } from '../../hooks';
 
 interface CardProps extends TouchableOpacityProps {
@@ -40,7 +41,7 @@ const Card: React.FC<CardProps> = ({
       padding: spacing[padding],
       margin: spacing[margin],
     },
-    showShadow && shadow.small,
+    showShadow && styles._shape.elevation.card,
     style,
   ];
 
@@ -60,16 +61,17 @@ const Card: React.FC<CardProps> = ({
   return <View style={cardStyle}>{children}</View>;
 };
 
-const createStyles = (colors: ThemeColors) => ({
+const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
   ...StyleSheet.create({
     card: {
       backgroundColor: colors.surface,
-      borderRadius: borderRadius.card,
-      borderWidth: borderWidth.medium,
-      borderColor: colors.stroke,
+      borderRadius: shape.radius.card,
+      borderWidth: shape.isHogwarts ? shape.borderWidth.card : shape.borderWidth.control,
+      borderColor: colors.cardBorder,
     },
   }),
   _colors: colors,
+  _shape: shape,
 });
 
 export default Card;

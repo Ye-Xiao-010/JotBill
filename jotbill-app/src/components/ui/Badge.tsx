@@ -5,8 +5,10 @@
 import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import { ThemeColors } from '../../theme/colors';
-import { borderRadius, borderWidth, spacing } from '../../theme/spacing';
+import { ThemeShape } from '../../theme/shape';
+import { spacing } from '../../theme/spacing';
 import { useStyles } from '../../hooks';
+import { HOGWARTS_FONTS } from '../../constants/hogwartsAssets';
 
 export type BadgeVariant = 'default' | 'success' | 'warning' | 'error' | 'info';
 
@@ -30,7 +32,7 @@ export default function Badge({ label, variant = 'default', size = 'medium', sty
       case 'error':
         return { bg: styles._colors.error, text: '#FFFFFF' };
       case 'info':
-        return { bg: styles._colors.primary, text: '#FFFFFF' };
+        return { bg: styles._colors.primary, text: styles._colors.onPrimary };
       default:
         return { bg: styles._colors.divider, text: styles._colors.textPrimary };
     }
@@ -65,16 +67,17 @@ export default function Badge({ label, variant = 'default', size = 'medium', sty
   );
 }
 
-const createStyles = (colors: ThemeColors) => ({
+const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
   ...StyleSheet.create({
     badge: {
-      borderRadius: borderRadius.small,
-      borderWidth: borderWidth.thin,
-      borderColor: colors.stroke,
+      borderRadius: shape.isHogwarts ? shape.radius.pill : shape.radius.small,
+      borderWidth: shape.borderWidth.card,
+      borderColor: colors.cardBorder,
       alignSelf: 'flex-start',
     },
     label: {
-      fontWeight: '700',
+      fontWeight: shape.isHogwarts ? undefined : '700',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
     },
   }),
   _colors: colors,

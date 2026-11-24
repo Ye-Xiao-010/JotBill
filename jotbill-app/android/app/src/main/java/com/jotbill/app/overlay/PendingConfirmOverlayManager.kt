@@ -19,6 +19,8 @@ import android.widget.ImageButton
 import android.widget.LinearLayout
 import android.widget.TextView
 import com.jotbill.app.R
+import com.jotbill.app.theme.MagicSoundPlayer
+import com.jotbill.app.theme.ThemePreferences
 import com.jotbill.app.bridge.BridgeDtoMapper
 import com.jotbill.app.bridge.sharedJsEventEmitter
 import com.jotbill.app.data.JotBillDatabase
@@ -1707,12 +1709,14 @@ internal object PendingConfirmOverlayManager {
                     val chip = TextView(app).apply {
                         // 银行徽标 / 品牌图标（微信/支付宝）/ subtype 线性 lucide 优先；
                         // emoji（自定义账户）维持原文字渲染。同 createCategoryView 的双模设计。
+                        val useHogwarts = ThemePreferences.isHogwarts(app)
                         val iconRes = PopupIconAssets.forAccount(
                             app,
                             account.id,
                             account.name,
                             account.subtype,
-                            account.icon
+                            account.icon,
+                            useHogwarts = useHogwarts
                         )
                         if (iconRes != null) {
                             text = account.name
@@ -1762,7 +1766,10 @@ internal object PendingConfirmOverlayManager {
         return TextView(context).apply {
             // lucide 图标（后端种子的分类）走 compound drawable，文字只留名称；
             // emoji（本地首启种子/自定义分类）维持原文字渲染，数据同步后自动升级。
-            val iconRes = PopupIconAssets.forCategory(category.icon)
+            val iconRes = PopupIconAssets.forCategory(
+                category.icon,
+                useHogwarts = ThemePreferences.isHogwarts(context)
+            )
             if (iconRes != null) {
                 text = category.name
                 tag = iconRes
@@ -1855,6 +1862,9 @@ internal object PendingConfirmOverlayManager {
     }
 
     private fun showSuccessFeedback(view: View, amountMinor: Long, categoryName: String, merged: Boolean = false) {
+        if (ThemePreferences.isHogwartsSfxActive(view.context)) {
+            MagicSoundPlayer.play(view.context, "coin_clink")
+        }
         view.findViewById<LinearLayout>(R.id.content_main)?.visibility = View.GONE
         val successContent = view.findViewById<LinearLayout>(R.id.content_success)
         successContent?.visibility = View.VISIBLE

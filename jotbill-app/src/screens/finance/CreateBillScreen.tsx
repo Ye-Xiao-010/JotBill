@@ -25,6 +25,7 @@ import AccountIcon from '../../components/business/AccountIcon';
 import { accountDisplayName, resolveAccountIcon } from '../../constants/accountIcons';
 import { DEFAULT_CATEGORIES } from '../../constants/app';
 import { useToast, useCategories, useStyles } from '../../hooks';
+import { useTheme } from '../../providers';
 import { nativeData, type Account, type Bill, type Category } from '../../native';
 import { invalidateCache, QUERY_KEYS, CACHE_TIME } from '../../lib/queryClient';
 import { findDuplicateBills } from '../../lib/billDuplicateCheck';
@@ -79,6 +80,7 @@ interface CreateBillScreenProps {
 
 const CreateBillScreen: React.FC<CreateBillScreenProps> = ({ navigation, route }) => {
   const { toastState, showSuccess, showError, hideToast } = useToast();
+  const { playMagicSound } = useTheme();
   const styles = useStyles(createStyles);
 
   const editingBill = route?.params?.bill;
@@ -506,6 +508,7 @@ const CreateBillScreen: React.FC<CreateBillScreenProps> = ({ navigation, route }
           version: editingBill!.version,
         });
         invalidateCache.bills();
+        playMagicSound('coin_drop');
         showSuccess('账单更新成功');
         navigation.goBack();
         return;
@@ -519,6 +522,7 @@ const CreateBillScreen: React.FC<CreateBillScreenProps> = ({ navigation, route }
           clientRequestId: clientRequestIdRef.current,
         });
         invalidateCache.bills();
+        playMagicSound('coin_drop');
         showSuccess('账单创建成功');
         navigation.goBack();
       };

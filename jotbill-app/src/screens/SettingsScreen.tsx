@@ -3,8 +3,9 @@
  * 描边用户卡片 + 糖果色图标块 + 描边设置分组
  * 仅保留入口标题；权限相关统一收进「权限与提醒」页。
  */
-import React from 'react';
+import React, { useState } from 'react';
 import {
+  Image,
   View,
   Text,
   ScrollView,
@@ -26,11 +27,23 @@ import {
   Tags,
   ChevronRight,
   Zap,
+  Volume2,
 } from 'lucide-react-native';
-import { ThemeColors, themes, THEME_LABELS, type ThemeName } from '../theme/colors';
-import { spacing, borderRadius, borderWidth, shadow, typography } from '../theme';
+import {
+  ThemeColors,
+  themes,
+  THEME_LABELS,
+  type ThemeName,
+} from '../theme/colors';
+import { spacing, borderRadius, borderWidth, shadow, typography, type ThemeShape } from '../theme';
 import { useStyles } from '../hooks';
 import { useDisplayPreferences, useTheme } from '../providers';
+import {
+  HOGWARTS_FONTS,
+  HOGWARTS_HOUSES,
+  HOGWARTS_HOUSE_ORDER,
+} from '../constants/hogwartsAssets';
+import type { MagicSoundKey } from '../native/theme';
 
 
 interface SettingsScreenProps {
@@ -99,12 +112,36 @@ const ICON_CANDY_COLORS: Record<SettingsIconKey, string> = {
 };
 
 export default function SettingsScreen({ navigation }: SettingsScreenProps) {
-  const { isDark, toggleTheme, colors, themeName, setThemeName } = useTheme();
+  const {
+    isDark,
+    toggleTheme,
+    colors,
+    themeName,
+    setThemeName,
+    isHogwarts,
+    hogwartsHouse,
+    setHogwartsHouse,
+    hogwartsSfxEnabled,
+    setHogwartsSfxEnabled,
+    hogwartsDynamicIconEnabled,
+    setHogwartsDynamicIconEnabled,
+    playMagicSound,
+  } = useTheme();
+  const [auditionIndex, setAuditionIndex] = useState(0);
   const {
     showDashboardBudget,
     setShowDashboardBudget,
   } = useDisplayPreferences();
   const styles = useStyles(createStyles);
+
+  const activeHouseMeta = HOGWARTS_HOUSES[hogwartsHouse] ?? HOGWARTS_HOUSES.classic;
+
+  const handleAuditionSound = () => {
+    const order: MagicSoundKey[] = ['coin_drop', 'quill', 'chime', 'coin_clink'];
+    const key = order[auditionIndex % order.length];
+    setAuditionIndex(prev => prev + 1);
+    playMagicSound(key, { force: true });
+  };
 
   const iconMap: Record<
     SettingsIconKey,
@@ -192,13 +229,27 @@ export default function SettingsScreen({ navigation }: SettingsScreenProps) {
       <View style={styles.header}>
         <View style={styles.userInfo}>
           <View style={styles.avatarContainer}>
-            <View style={styles.avatarPlaceholder}>
-              <Wallet size={32} color={colors.primary} />
-            </View>
+            {isHogwarts ? (
+              <Image
+                source={activeHouseMeta.crest}
+                style={styles.avatar}
+                resizeMode="cover"
+              />
+            ) : (
+              <View style={styles.avatarPlaceholder}>
+                <Wallet size={32} color={colors.primary} />
+              </View>
+            )}
           </View>
           <View style={styles.userDetails}>
-            <Text style={styles.userName}>本地账本</Text>
-            <Text style={styles.userType}>数据保存在此设备</Text>
+            <Text style={styles.userName}>
+              {isHogwarts ? '古灵阁本地账卷' : '本地账本'}
+            </Text>
+            <Text style={styles.userType}>
+              {isHogwarts
+                ? `${activeHouseMeta.label} · 数据保存在此设备`
+                : '数据保存在此设备'}
+            </Text>
           </View>
         </View>
       </View>
@@ -297,6 +348,102 @@ export default function SettingsScreen({ navigation }: SettingsScreenProps) {
           </View>
         </View>
 
+        {/* 魔法羊皮纸专属：四学院子风格纹章切换 + 魔法交互音效 */}
+        {isHogwarts ? (
+          <View style={styles.settingGroup}>
+            <Text style={styles.groupTitle}>🏰 学院纹章与魔法音效</Text>
+            <View style={styles.houseGrid}>
+              {HOGWARTS_HOUSE_ORDER.map(houseId => {
+                const house = HOGWARTS_HOUSES[houseId];
+                const active = houseId === hogwartsHouse;
+                return (
+                  <TouchableOpacity
+                    key={houseId}
+                    style={[styles.houseCard, active && styles.houseCardActive]}
+                    onPress={() => {
+                      setHogwartsHouse(houseId);
+                      playMagicSound('chime');
+                    }}
+                    activeOpacity={0.8}
+                    accessibilityLabel={`学院风格 ${house.label}${active ? '，当前使用中' : ''}`}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected: active }}
+                  >
+                    <Image
+                      source={house.crest}
+                      style={styles.houseCrest}
+                      resizeMode="cover"
+                    />
+                    <View style={styles.houseTextBlock}>
+                      <Text style={styles.houseLabel} numberOfLines={1}>
+                        {house.label}{active ? ' ✓' : ''}
+                      </Text>
+                      <Text style={styles.houseMotto} numberOfLines={1}>
+                        {house.motto}
+                      </Text>
+                    </View>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+
+            <View style={[styles.settingItem, styles.sfxCard]}>
+              <View style={styles.settingLeft}>
+                <View style={[styles.iconContainer, styles.sfxIconContainer]}>
+                  <Volume2 size={20} color={colors.primary} />
+                </View>
+                <View style={styles.settingTextBlock}>
+                  <Text style={styles.settingLabel}>魔法交互音效</Text>
+                  <Text style={styles.settingDescription}>
+                    记账成功金币落袋、待确认钟铃与魔杖轻响
+                  </Text>
+                </View>
+              </View>
+              <View style={styles.sfxControls}>
+                <TouchableOpacity
+                  style={styles.auditionButton}
+                  onPress={handleAuditionSound}
+                  activeOpacity={0.8}
+                  accessibilityLabel="试听魔法音效"
+                  accessibilityRole="button"
+                >
+                  <Text style={styles.auditionButtonText}>试听</Text>
+                </TouchableOpacity>
+                <Switch
+                  value={hogwartsSfxEnabled}
+                  onValueChange={setHogwartsSfxEnabled}
+                  trackColor={{ false: colors.divider, true: colors.primary }}
+                  thumbColor="#FFFFFF"
+                  accessibilityLabel="魔法交互音效"
+                />
+              </View>
+            </View>
+
+            <View style={[styles.settingItem, styles.sfxCard]}>
+              <View style={styles.settingLeft}>
+                <Image
+                  source={activeHouseMeta.crest}
+                  style={styles.desktopIconPreview}
+                  resizeMode="cover"
+                />
+                <View style={styles.settingTextBlock}>
+                  <Text style={styles.settingLabel}>同步切换桌面图标</Text>
+                  <Text style={styles.settingDescription}>
+                    随学院切换招财巫师猫 / 院徽图标，返回桌面 1–3 秒生效
+                  </Text>
+                </View>
+              </View>
+              <Switch
+                value={hogwartsDynamicIconEnabled}
+                onValueChange={setHogwartsDynamicIconEnabled}
+                trackColor={{ false: colors.divider, true: colors.primary }}
+                thumbColor="#FFFFFF"
+                accessibilityLabel="同步切换桌面图标"
+              />
+            </View>
+          </View>
+        ) : null}
+
         <View style={styles.versionInfo}>
           <Text style={styles.versionText}>招财猫猫</Text>
           <Text style={styles.copyrightText}>© 2026 招财猫猫</Text>
@@ -306,7 +453,7 @@ export default function SettingsScreen({ navigation }: SettingsScreenProps) {
   );
 }
 
-const createStyles = (colors: ThemeColors) => ({
+const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
   ...StyleSheet.create({
     container: {
       flex: 1,
@@ -316,11 +463,11 @@ const createStyles = (colors: ThemeColors) => ({
       backgroundColor: colors.surface,
       marginHorizontal: spacing.lg,
       marginTop: spacing.lg,
-      borderRadius: borderRadius.card,
-      borderWidth: borderWidth.thin,
-      borderColor: colors.stroke,
+      borderRadius: shape.radius.card,
+      borderWidth: shape.borderWidth.card,
+      borderColor: colors.cardBorder,
       padding: spacing.lg,
-      ...shadow.small,
+      ...shape.elevation.card,
     },
     userInfo: {
       flexDirection: 'row',
@@ -330,9 +477,9 @@ const createStyles = (colors: ThemeColors) => ({
     avatarContainer: {
       width: 64,
       height: 64,
-      borderRadius: borderRadius.medium,
-      borderWidth: borderWidth.medium,
-      borderColor: colors.stroke,
+      borderRadius: shape.isHogwarts ? 32 : borderRadius.medium,
+      borderWidth: shape.isHogwarts ? 2 : borderWidth.medium,
+      borderColor: shape.isHogwarts ? colors.accent : colors.stroke,
       backgroundColor: colors.accent,
       overflow: 'hidden',
     },
@@ -351,13 +498,15 @@ const createStyles = (colors: ThemeColors) => ({
     },
     userName: {
       fontSize: 18,
-      fontWeight: '800',
+      fontWeight: shape.isHogwarts ? undefined : '800',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.display : undefined,
       color: colors.textPrimary,
       marginBottom: 2,
     },
     userType: {
       fontSize: 13,
-      fontWeight: '600',
+      fontWeight: shape.isHogwarts ? undefined : '600',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
       color: colors.textSecondary,
     },
     scrollView: {
@@ -369,7 +518,8 @@ const createStyles = (colors: ThemeColors) => ({
     },
     groupTitle: {
       fontSize: 14,
-      fontWeight: '800',
+      fontWeight: shape.isHogwarts ? undefined : '800',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.display : undefined,
       color: colors.textSecondary,
       marginBottom: spacing.sm,
       paddingHorizontal: spacing.xs,
@@ -385,16 +535,16 @@ const createStyles = (colors: ThemeColors) => ({
     themeCard: {
       flexBasis: '48%',
       backgroundColor: colors.surface,
-      borderRadius: borderRadius.card,
-      borderWidth: borderWidth.thin,
-      borderColor: colors.stroke,
+      borderRadius: shape.radius.card,
+      borderWidth: shape.borderWidth.card,
+      borderColor: colors.cardBorder,
       padding: spacing.md,
       minHeight: 44,
     },
     themeCardActive: {
-      borderWidth: borderWidth.medium,
+      borderWidth: shape.isHogwarts ? 2 : borderWidth.medium,
       borderColor: colors.primary,
-      ...shadow.small,
+      ...shape.elevation.card,
     },
     themeSwatches: {
       flexDirection: 'row',
@@ -412,8 +562,82 @@ const createStyles = (colors: ThemeColors) => ({
     },
     themeName: {
       fontSize: 14,
-      fontWeight: '700',
+      fontWeight: shape.isHogwarts ? undefined : '700',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
       color: colors.textPrimary,
+    },
+    houseGrid: {
+      gap: spacing.sm,
+      marginBottom: spacing.sm,
+    },
+    houseCard: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: spacing.md,
+      backgroundColor: colors.surface,
+      borderRadius: shape.radius.card,
+      borderWidth: 1,
+      borderColor: colors.cardBorder,
+      padding: spacing.sm + 2,
+    },
+    houseCardActive: {
+      borderWidth: 2,
+      borderColor: colors.primary,
+      backgroundColor: colors.primaryLight,
+      ...shape.elevation.card,
+    },
+    houseCrest: {
+      width: 44,
+      height: 44,
+      borderRadius: 22,
+      borderWidth: 1.5,
+      borderColor: colors.accent,
+    },
+    houseTextBlock: {
+      flex: 1,
+    },
+    houseLabel: {
+      fontSize: 15,
+      fontFamily: HOGWARTS_FONTS.display,
+      color: colors.textPrimary,
+    },
+    houseMotto: {
+      fontSize: 12,
+      fontFamily: HOGWARTS_FONTS.body,
+      color: colors.textSecondary,
+      marginTop: 2,
+    },
+    sfxCard: {
+      marginTop: spacing.xs,
+    },
+    sfxIconContainer: {
+      backgroundColor: colors.primaryLight,
+      borderColor: colors.accent,
+    },
+    desktopIconPreview: {
+      width: 40,
+      height: 40,
+      borderRadius: 12,
+      borderWidth: 1.5,
+      borderColor: colors.accent,
+    },
+    sfxControls: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: spacing.sm,
+    },
+    auditionButton: {
+      paddingHorizontal: spacing.sm + 2,
+      paddingVertical: spacing.xs + 1,
+      borderRadius: shape.radius.pill,
+      backgroundColor: colors.primaryLight,
+      borderWidth: 1,
+      borderColor: colors.primary,
+    },
+    auditionButtonText: {
+      fontSize: 12,
+      fontFamily: HOGWARTS_FONTS.body,
+      color: colors.primaryDark,
     },
     settingItem: {
       flexDirection: 'row',
@@ -423,9 +647,9 @@ const createStyles = (colors: ThemeColors) => ({
       paddingHorizontal: spacing.md,
       minHeight: 56,
       backgroundColor: colors.surface,
-      borderRadius: borderRadius.card,
-      borderWidth: borderWidth.thin,
-      borderColor: colors.stroke,
+      borderRadius: shape.radius.card,
+      borderWidth: shape.borderWidth.card,
+      borderColor: colors.cardBorder,
     },
     settingLeft: {
       flexDirection: 'row',
@@ -436,15 +660,16 @@ const createStyles = (colors: ThemeColors) => ({
     iconContainer: {
       width: 40,
       height: 40,
-      borderRadius: borderRadius.small,
-      borderWidth: borderWidth.thin,
-      borderColor: colors.stroke,
+      borderRadius: shape.isHogwarts ? 12 : borderRadius.small,
+      borderWidth: shape.borderWidth.card,
+      borderColor: colors.cardBorder,
       alignItems: 'center',
       justifyContent: 'center',
     },
     settingLabel: {
       fontSize: 15,
-      fontWeight: '700',
+      fontWeight: shape.isHogwarts ? undefined : '700',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
       color: colors.textPrimary,
     },
     settingTextBlock: {

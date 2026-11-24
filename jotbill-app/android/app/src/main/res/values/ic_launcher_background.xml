@@ -2,4 +2,6 @@
 <resources>
     <!-- 自适应图标背景层：招财猫主色调暖米色 -->
     <color name="ic_launcher_background">#FFF1D1</color>
+    <!-- 魔法羊皮纸主题自适应图标背景层：暖羊皮纸底色 -->
+    <color name="ic_launcher_hp_background">#F5ECD7</color>
 </resources>

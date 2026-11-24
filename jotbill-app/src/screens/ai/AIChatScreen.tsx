@@ -32,7 +32,8 @@ import { borderRadius, borderWidth, spacing, shadow } from '../../theme/spacing'
 import { useStyles } from '../../hooks';
 import { useChatSessions } from '../../hooks/useChatSessions';
 import { useRoute, useNavigation } from '@react-navigation/native';
-import { useAlert } from '../../providers';
+import { useAlert, useTheme } from '../../providers';
+import { HOGWARTS_IMAGES } from '../../constants/hogwartsAssets';
 import { aiService } from '../../services/ai';
 import { audioRecorderService } from '../../services/audio/audioRecorderService';
 import type { RecordingProgress } from '../../services/audio/audioRecorderService';
@@ -904,6 +905,7 @@ export default function AIChatScreen() {
   const styles = useStyles(createStyles);
   const insets = useSafeAreaInsets();
   const { alert, confirm } = useAlert();
+  const { isHogwarts, colors: themeColors } = useTheme();
   const route = useRoute();
   const navigation = useNavigation();
   const routeSessionId = (route.params as any)?.sessionId as string | undefined;
@@ -2043,6 +2045,27 @@ export default function AIChatScreen() {
 
   // 渲染 AI 头像
   const renderAIAvatar = () => {
+    if (isHogwarts) {
+      return (
+        <View
+          style={[
+            styles.aiAvatarContainer,
+            {
+              overflow: 'hidden',
+              borderColor: themeColors.accent,
+              borderWidth: 1.5,
+              borderRadius: 16,
+            },
+          ]}
+        >
+          <Image
+            source={HOGWARTS_IMAGES.aiMascot}
+            style={{ width: '100%', height: '100%' }}
+            resizeMode="cover"
+          />
+        </View>
+      );
+    }
     if (defaultAIConfig?.provider) {
       return (
         <View style={styles.aiAvatarContainer}>

@@ -12,8 +12,10 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { ThemeColors } from '../../theme/colors';
-import { spacing, borderRadius, borderWidth, shadow } from '../../theme/spacing';
+import { ThemeShape } from '../../theme/shape';
+import { spacing } from '../../theme/spacing';
 import { useStyles } from '../../hooks';
+import { HOGWARTS_FONTS } from '../../constants/hogwartsAssets';
 
 type ButtonVariant = 'primary' | 'secondary' | 'outline' | 'text';
 type ButtonSize = 'small' | 'medium' | 'large';
@@ -69,7 +71,7 @@ const Button: React.FC<ButtonProps> = ({
       {loading ? (
         <ActivityIndicator
           size="small"
-          color={variant === 'primary' ? '#FFFFFF' : styles._colors.primary}
+          color={variant === 'primary' ? styles._colors.onPrimary : styles._colors.primary}
         />
       ) : (
         <>
@@ -81,21 +83,22 @@ const Button: React.FC<ButtonProps> = ({
   );
 };
 
-const createStyles = (colors: ThemeColors) => ({
+const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
   ...StyleSheet.create({
     button: {
       flexDirection: 'row',
       alignItems: 'center',
       justifyContent: 'center',
-      borderRadius: borderRadius.button,
-      borderWidth: borderWidth.medium,
+      borderRadius: shape.radius.button,
+      borderWidth: shape.borderWidth.control,
       borderColor: colors.stroke,
-      ...shadow.small,
+      ...shape.elevation.card,
     },
 
     // 变体样式
     primary: {
       backgroundColor: colors.primary,
+      borderColor: shape.isHogwarts ? colors.accent : colors.stroke,
     },
     secondary: {
       backgroundColor: colors.accent,
@@ -130,11 +133,12 @@ const createStyles = (colors: ThemeColors) => ({
 
     // 文本样式
     buttonText: {
-      fontWeight: '800',
+      fontWeight: shape.isHogwarts ? undefined : shape.fontWeight.bold,
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
       textAlign: 'center',
     },
     primaryText: {
-      color: '#FFFFFF',
+      color: colors.onPrimary,
     },
     secondaryText: {
       color: colors.textPrimary,
