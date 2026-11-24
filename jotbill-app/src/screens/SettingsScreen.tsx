@@ -38,7 +38,7 @@ import {
 import { ThemeColors, themes, THEME_LABELS, type ThemeName } from '../theme/colors';
 import { spacing, borderRadius, borderWidth, shadow, typography, type ThemeShape } from '../theme';
 import { SoftGradient } from '../components/ui';
-import { useStyles, useToast } from '../hooks';
+import { useStyles } from '../hooks';
 import { useDisplayPreferences, useTheme } from '../providers';
 import { nativeData, nativeRecognition } from '../native';
 import { CACHE_TIME, GC_TIME, QUERY_KEYS } from '../lib/queryClient';
@@ -157,7 +157,6 @@ export default function SettingsScreen({ navigation }: SettingsScreenProps) {
     showDashboardBudget,
     setShowDashboardBudget,
   } = useDisplayPreferences();
-  const { showInfo } = useToast();
   const styles = useStyles(createStyles);
 
   // 共享 React Query 缓存：待确认角标 & 账户计数（仅柔光展示，不影响原缓存策略）
@@ -181,24 +180,9 @@ export default function SettingsScreen({ navigation }: SettingsScreenProps) {
   const activeHouseMeta = HOGWARTS_HOUSES[hogwartsHouse] ?? HOGWARTS_HOUSES.classic;
 
   const handleSelectTheme = (name: ThemeName) => {
-    const prevWasHogwarts = isHogwarts;
     setThemeName(name);
     if (name === 'hogwarts') {
       playMagicSound('chime', { force: hogwartsSfxEnabled });
-      if (hogwartsDynamicIconEnabled) {
-        showInfo(`返回桌面后图标将切换为「${activeHouseMeta.label}」`);
-      }
-    } else if (prevWasHogwarts && hogwartsDynamicIconEnabled) {
-      showInfo('返回桌面后图标将恢复为默认「招财猫猫」');
-    }
-  };
-
-  const handleToggleDynamicIcon = (enabled: boolean) => {
-    setHogwartsDynamicIconEnabled(enabled);
-    if (enabled) {
-      showInfo(`返回桌面后图标将自动切换为「${activeHouseMeta.label}」`);
-    } else {
-      showInfo('已关闭同步切换，返回桌面后恢复默认图标');
     }
   };
 
@@ -694,9 +678,6 @@ export default function SettingsScreen({ navigation }: SettingsScreenProps) {
                     onPress={() => {
                       setHogwartsHouse(houseId);
                       playMagicSound('chime');
-                      if (hogwartsDynamicIconEnabled) {
-                        showInfo(`已切换「${house.label}」，返回桌面后图标同步更新`);
-                      }
                     }}
                     activeOpacity={0.8}
                     accessibilityLabel={`学院风格 ${house.label}${active ? '，当前使用中' : ''}`}
@@ -769,7 +750,7 @@ export default function SettingsScreen({ navigation }: SettingsScreenProps) {
               </View>
               <Switch
                 value={hogwartsDynamicIconEnabled}
-                onValueChange={handleToggleDynamicIcon}
+                onValueChange={setHogwartsDynamicIconEnabled}
                 trackColor={{ false: colors.divider, true: colors.primary }}
                 thumbColor="#FFFFFF"
                 accessibilityLabel="同步切换桌面图标"
