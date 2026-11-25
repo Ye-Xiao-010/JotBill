@@ -666,9 +666,9 @@ export type RuleUpdateInput = Partial<RuleInput> & {
 /**
  * AI 服务商(扩展自 LiteNote AIProvider)
  * LiteNote 原为 claude|openai|deepseek|qwen
- * JotBill 改为 qwen(主)/glm(备)/siliconflow(调试)
+ * JotBill 原生支持 qwen / glm / siliconflow / deepseek / custom
  */
-export type AiProvider = 'qwen' | 'glm' | 'siliconflow' | 'custom';
+export type AiProvider = 'qwen' | 'glm' | 'siliconflow' | 'deepseek' | 'custom';
 
 /**
  * AI 服务商配置

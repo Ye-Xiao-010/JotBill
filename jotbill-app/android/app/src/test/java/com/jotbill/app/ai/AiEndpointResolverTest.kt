@@ -72,6 +72,20 @@ class AiEndpointResolverTest {
     }
 
     @Test
+    fun `deepseek 默认地址和根地址均解析为聊天接口`() {
+        assertEquals(
+            "https://api.deepseek.com/v1/chat/completions",
+            AiEndpointResolver.chatCompletions(config(provider = "deepseek", baseUrl = null))
+        )
+        assertEquals(
+            "https://api.deepseek.com/v1/chat/completions",
+            AiEndpointResolver.chatCompletions(
+                config(provider = "deepseek", baseUrl = "https://api.deepseek.com")
+            )
+        )
+    }
+
+    @Test
     fun `自定义服务商缺少地址时拒绝请求`() {
         val error = assertThrows(AiChatException::class.java) {
             AiEndpointResolver.chatCompletions(config(provider = "custom", baseUrl = null))

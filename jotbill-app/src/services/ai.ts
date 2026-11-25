@@ -24,6 +24,7 @@ const NATIVE_PROVIDERS = new Set<AIProvider>([
   'qwen',
   'glm',
   'siliconflow',
+  'deepseek',
   'custom',
 ]);
 

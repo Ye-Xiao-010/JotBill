@@ -17,8 +17,10 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
 import java.time.YearMonth
@@ -38,7 +40,7 @@ class AiModule(
     private val chatModule by chatModuleDelegate
     private val httpClient = OkHttpClient.Builder()
         .connectTimeout(10, TimeUnit.SECONDS)
-        .readTimeout(15, TimeUnit.SECONDS)
+        .readTimeout(20, TimeUnit.SECONDS)
         .build()
 
     override fun getName(): String = "Ai"
@@ -161,23 +163,44 @@ class AiModule(
         val apiKey = config.apiKeyEncrypted?.let(secretStore::decryptSecret)
         val start = System.currentTimeMillis()
         try {
-            val baseUrl = AiEndpointResolver.baseUrl(config)
-            val requestBuilder = Request.Builder().url(baseUrl).get()
+            val endpoint = AiEndpointResolver.chatCompletions(config)
+            val probeBody = JSONObject()
+                .put("model", config.model)
+                .put(
+                    "messages",
+                    JSONArray().put(
+                        JSONObject()
+                            .put("role", "user")
+                            .put("content", "hi")
+                    )
+                )
+                .put("max_tokens", 8)
+                .put("stream", false)
+                .toString()
+            val requestBuilder = Request.Builder()
+                .url(endpoint)
+                .header("Content-Type", "application/json")
+                .post(probeBody.toRequestBody(JSON_MEDIA_TYPE))
             if (!apiKey.isNullOrBlank()) {
                 requestBuilder.header("Authorization", "Bearer $apiKey")
             }
             httpClient.newCall(requestBuilder.build()).execute().use { response ->
-                val reachable = response.code !in setOf(401, 403) && response.code < 500
+                val responseBody = runCatching { response.body?.string() }.getOrNull()
+                val (ok, message) = AiErrorFormatter.evaluateTestResponse(
+                    response.code,
+                    responseBody,
+                    config.model
+                )
                 JSONObject()
-                    .put("success", reachable)
-                    .put("message", if (reachable) "服务地址可访问" else "服务地址返回 HTTP ${response.code}")
+                    .put("success", ok)
+                    .put("message", message)
                     .put("latencyMs", System.currentTimeMillis() - start)
                     .toString()
             }
         } catch (error: Exception) {
             JSONObject()
                 .put("success", false)
-                .put("message", error.message ?: "连接失败")
+                .put("message", AiErrorFormatter.readableError(error))
                 .put("latencyMs", System.currentTimeMillis() - start)
                 .toString()
         }
@@ -369,6 +392,7 @@ class AiModule(
         const val MASKED_KEY = "********"
         const val AI_MONTHLY_BUDGET_KEY = "ai_monthly_budget_minor"
         const val DEFAULT_AI_BUDGET_MINOR = 1000L
-        val SUPPORTED_PROVIDERS = setOf("qwen", "glm", "siliconflow", "custom")
+        val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
+        val SUPPORTED_PROVIDERS = setOf("qwen", "glm", "siliconflow", "deepseek", "custom")
     }
 }

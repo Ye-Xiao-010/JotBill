@@ -25,7 +25,7 @@ import {
   NativeScrollEvent,
   NativeSyntheticEvent,
 } from 'react-native';
-import { Camera, Mic, Send, Square, X, Check, Edit2, Trash2, Keyboard, Menu, SquarePen, ChevronLeft, ChevronRight, Pin, ChevronDown, Plus, Sparkles, Pencil } from 'lucide-react-native';
+import { Camera, Mic, Send, Square, X, Check, Edit2, Trash2, Keyboard, Menu, SquarePen, ChevronLeft, ChevronRight, Pin, ChevronDown, Plus, Sparkles, Pencil, Settings, Wallet, Target, Eye } from 'lucide-react-native';
 import { launchCamera, launchImageLibrary, ImagePickerResponse } from 'react-native-image-picker';
 import ImageViewing from 'react-native-image-viewing';
 import { ThemeColors } from '../../theme/colors';
@@ -34,7 +34,7 @@ import { borderRadius, borderWidth, spacing, shadow } from '../../theme/spacing'
 import { SoftGradient } from '../../components/ui';
 import { useStyles } from '../../hooks';
 import { useChatSessions } from '../../hooks/useChatSessions';
-import { useRoute, useNavigation } from '@react-navigation/native';
+import { useFocusEffect, useRoute, useNavigation } from '@react-navigation/native';
 import { useAlert, useTheme } from '../../providers';
 import { HOGWARTS_FONTS, HOGWARTS_IMAGES } from '../../constants/hogwartsAssets';
 import { aiService } from '../../services/ai';
@@ -47,6 +47,8 @@ import { Skeleton, SkeletonCircle } from '../../components/skeleton/Skeleton';
 import type { ParsedBill, AIModelConfig, ChatSession } from '../../types/ai';
 import { ProviderIcon } from '../../components/icons';
 import CategoryIcon from '../../components/business/CategoryIcon';
+import AccountBadge from '../../components/business/AccountBadge';
+import AccountIcon from '../../components/business/AccountIcon';
 import storage from '../../utils/storage';
 import { invalidateCache } from '../../lib/queryClient';
 import { findDuplicateBills } from '../../lib/billDuplicateCheck';
@@ -54,8 +56,8 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { typography } from '../../theme';
 
 const SIDEBAR_WIDTH = Dimensions.get('window').width * 0.78;
-const WELCOME_MESSAGE = '你好！我是你的 AI 助手，可以帮你：\n\n📝 整理待确认账单 — “午餐花了35元”\n🔍 查账 — “今天记了什么”\n📊 统计 — “这个月花了多少”\n📷 识别账单图片\n💬 闲聊 — 随便聊什么都行\n\nAI 不会直接删除或修改账单。';
-const HOGWARTS_WELCOME_MESSAGE = '欢迎回到古灵阁账房！我是你的招财巫师猫管家，随时为你施法理账：\n\n🪶 羽毛笔记账 — “黄油啤酒花了35元”\n🔮 水晶球查账 — “今天记了什么”\n📜 账卷统计 — “这个月金加隆花哪儿了”\n🦉 识别收据羊皮纸（拍照 / 传图）\n✨ 魔法闲聊 — 随便聊什么都行\n\n管家不会擅自删除或修改你的账卷记录。';
+const WELCOME_MESSAGE = '你好！我是你的 AI 助手，可以帮你：\n\n📝 整理待确认账单 — “微信付午饭花了35元”\n🔍 查账 — “查一下本月餐饮账单”\n📊 统计 — “这个月各类支出占比是多少”\n💳 查账户与预算 — “看看账户余额和本月预算进度”\n📷 识别账单图片\n\nAI 不会直接删除或修改账单。';
+const HOGWARTS_WELCOME_MESSAGE = '欢迎回到古灵阁账房！我是你的招财巫师猫管家，随时为你施法理账：\n\n🪶 羽毛笔记账 — “微信买黄油啤酒花了35元”\n🔮 水晶球查账 — “查一下本月餐饮账卷”\n📜 账卷统计 — “这个月金加隆花哪儿了”\n🏦 金库与预算 — “看看各账户余额与本月预算进度”\n🦉 识别收据羊皮纸（拍照 / 传图）\n\n管家不会擅自删除或修改你的账卷记录。';
 
 // 会话分组类型
 interface SessionGroup {
@@ -107,7 +109,38 @@ const TOOL_DISPLAY_NAMES: Record<string, string> = {
   query_bills: '查询账单',
   delete_bills: '删除账单',
   get_statistics: '统计分析',
+  get_accounts: '查询账户',
+  get_budgets: '查询预算',
+  get_goals: '查询财务目标',
 };
+
+/**
+ * 按 AI 返回的账户名称或尾号匹配本地启用账户：
+ * 精确名称 → 卡号后四位 → 唯一包含匹配；多候选时返回 undefined 避免误判。
+ */
+export function matchAccountIdByName(
+  accountName: string | undefined,
+  accounts: Account[],
+): string | undefined {
+  const needle = accountName?.trim().toLowerCase();
+  if (!needle || accounts.length === 0) return undefined;
+
+  const exact = accounts.find((a) => a.name.trim().toLowerCase() === needle);
+  if (exact) return exact.id;
+
+  const tailMatches = accounts.filter(
+    (a) => Boolean(a.cardTail?.trim()) && needle.includes(a.cardTail!.trim().toLowerCase()),
+  );
+  if (tailMatches.length === 1) return tailMatches[0].id;
+
+  const fuzzy = accounts.filter((a) => {
+    const name = a.name.trim().toLowerCase();
+    return name.includes(needle) || needle.includes(name);
+  });
+  if (fuzzy.length === 1) return fuzzy[0].id;
+
+  return undefined;
+}
 
 /**
  * 多模态图片的两个硬上限，与原生 `AiChatModule` 的 companion object 保持一致：
@@ -125,12 +158,15 @@ const MAX_CONTENT_LENGTH = 8000;
 // 消息类型
 interface Message {
   id: string;
-  type: 'text' | 'bills' | 'bill_list' | 'statistics' | 'loading' | 'error' | 'streaming';
+  type: 'text' | 'bills' | 'bill_list' | 'statistics' | 'accounts' | 'budgets' | 'goals' | 'loading' | 'error' | 'streaming';
   content?: string;
   imageUrls?: string[];
   bills?: BillItem[];
   billListData?: any;
   statisticsData?: any;
+  accountsData?: any;
+  budgetsData?: any;
+  goalsData?: any;
   isUser: boolean;
   timestamp: Date;
   streamSteps?: StreamStep[];
@@ -144,6 +180,8 @@ interface EditBillModalProps {
   visible: boolean;
   bill: BillItem | null;
   categories: Category[];
+  accounts: Account[];
+  defaultAccountId?: string;
   onClose: () => void;
   onSave: (bill: BillItem) => void;
   colors: ThemeColors;
@@ -153,16 +191,20 @@ function EditBillModal({
   visible,
   bill,
   categories,
+  accounts,
+  defaultAccountId,
   onClose,
   onSave,
   colors,
 }: EditBillModalProps) {
   const { alert: showEditAlert } = useAlert();
+  const { isSoft, isHogwarts } = useTheme();
   const [amount, setAmount] = useState('');
   const [description, setDescription] = useState('');
   const [date, setDate] = useState('');
   const [type, setType] = useState<'income' | 'expense'>('expense');
   const [selectedCategoryId, setSelectedCategoryId] = useState<string | undefined>();
+  const [selectedAccountId, setSelectedAccountId] = useState<string | undefined>();
 
   useEffect(() => {
     if (bill) {
@@ -171,8 +213,11 @@ function EditBillModal({
       setDate(bill.date);
       setType(bill.type);
       setSelectedCategoryId(bill.categoryId);
+      setSelectedAccountId(
+        bill.accountId || matchAccountIdByName(bill.accountName, accounts) || defaultAccountId,
+      );
     }
-  }, [bill]);
+  }, [bill, accounts, defaultAccountId]);
 
   const handleSave = () => {
     if (!bill) return;
@@ -183,6 +228,7 @@ function EditBillModal({
     }
 
     const selectedCategory = categories.find(c => c.id === selectedCategoryId);
+    const selectedAccount = accounts.find(a => a.id === selectedAccountId);
     onSave({
       ...bill,
       amount: parsedAmount,
@@ -192,12 +238,14 @@ function EditBillModal({
       categoryId: selectedCategoryId,
       categoryName: selectedCategory?.name || bill.categoryName,
       categoryIcon: selectedCategory?.icon || bill.categoryIcon,
+      accountId: selectedAccount?.id ?? selectedAccountId,
+      accountName: selectedAccount?.name ?? bill.accountName,
     });
   };
 
   const filteredCategories = categories.filter(c => c.type === type);
 
-  const modalStyles = createEditModalStyles(colors);
+  const modalStyles = createEditModalStyles(colors, isSoft, isHogwarts);
 
   return (
     <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
@@ -263,6 +311,47 @@ function EditBillModal({
               />
             </View>
 
+            {/* 账户 */}
+            {accounts.length > 0 && (
+              <View style={modalStyles.field}>
+                <Text style={modalStyles.label}>记账账户</Text>
+                <View style={modalStyles.accountGrid}>
+                  {accounts.map(account => {
+                    const isSelected = selectedAccountId === account.id;
+                    return (
+                      <TouchableOpacity
+                        key={account.id}
+                        testID={`edit-bill-account-${account.id}`}
+                        style={[
+                          modalStyles.accountChip,
+                          isSelected && modalStyles.accountChipActive,
+                        ]}
+                        onPress={() => setSelectedAccountId(account.id)}
+                      >
+                        <AccountIcon
+                          icon={account.icon}
+                          name={account.name}
+                          subtype={account.subtype}
+                          size={16}
+                          color={isSelected ? colors.primary : colors.textSecondary}
+                        />
+                        <Text
+                          style={[
+                            modalStyles.accountChipText,
+                            isSelected && modalStyles.accountChipTextActive,
+                          ]}
+                          numberOfLines={1}
+                        >
+                          {account.name}
+                          {account.cardTail ? ` · ${account.cardTail}` : ''}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              </View>
+            )}
+
             {/* 分类 */}
             <View style={modalStyles.field}>
               <Text style={modalStyles.label}>分类</Text>
@@ -319,7 +408,11 @@ function EditBillModal({
             <TouchableOpacity style={modalStyles.cancelButton} onPress={onClose}>
               <Text style={modalStyles.cancelButtonText}>取消</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={modalStyles.saveButton} onPress={handleSave}>
+            <TouchableOpacity
+              testID="edit-bill-save-btn"
+              style={modalStyles.saveButton}
+              onPress={handleSave}
+            >
               <Text style={modalStyles.saveButtonText}>保存</Text>
             </TouchableOpacity>
           </View>
@@ -329,7 +422,7 @@ function EditBillModal({
   );
 }
 
-const createEditModalStyles = (colors: ThemeColors) =>
+const createEditModalStyles = (colors: ThemeColors, isSoft: boolean, isHogwarts: boolean) =>
   StyleSheet.create({
     overlay: {
       flex: 1,
@@ -340,7 +433,7 @@ const createEditModalStyles = (colors: ThemeColors) =>
       backgroundColor: colors.surface,
       borderTopLeftRadius: borderRadius.large,
       borderTopRightRadius: borderRadius.large,
-      maxHeight: '85%',
+      maxHeight: '88%',
     },
     header: {
       flexDirection: 'row',
@@ -353,7 +446,8 @@ const createEditModalStyles = (colors: ThemeColors) =>
     },
     title: {
       fontSize: 18,
-      fontWeight: '800',
+      fontWeight: isHogwarts ? undefined : '800',
+      fontFamily: isHogwarts ? HOGWARTS_FONTS.display : undefined,
       color: colors.textPrimary,
     },
     closeButton: {
@@ -367,7 +461,8 @@ const createEditModalStyles = (colors: ThemeColors) =>
     },
     label: {
       fontSize: 15,
-      fontWeight: '700',
+      fontWeight: isHogwarts ? undefined : '700',
+      fontFamily: isHogwarts ? HOGWARTS_FONTS.body : undefined,
       color: colors.textPrimary,
       marginBottom: spacing.sm,
     },
@@ -394,24 +489,56 @@ const createEditModalStyles = (colors: ThemeColors) =>
       alignItems: 'center',
     },
     typeButtonActive: {
-      backgroundColor: colors.expense + '1A',
+      backgroundColor: colors.expenseLight,
       borderColor: colors.expense,
     },
     typeButtonActiveIncome: {
-      backgroundColor: colors.income + '1A',
+      backgroundColor: colors.incomeLight,
       borderColor: colors.income,
     },
     typeButtonText: {
       fontSize: 15,
+      fontFamily: isHogwarts ? HOGWARTS_FONTS.body : undefined,
       color: colors.textSecondary,
     },
     typeButtonTextActive: {
       color: colors.expense,
-      fontWeight: '700',
+      fontWeight: isHogwarts ? undefined : '700',
     },
     typeButtonTextActiveIncome: {
       color: colors.income,
-      fontWeight: '700',
+      fontWeight: isHogwarts ? undefined : '700',
+    },
+    accountGrid: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      gap: spacing.sm,
+    },
+    accountChip: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 6,
+      paddingHorizontal: spacing.sm + 4,
+      paddingVertical: spacing.sm,
+      borderRadius: isSoft ? borderRadius.large : borderRadius.medium,
+      backgroundColor: colors.background,
+      borderWidth: 1,
+      borderColor: colors.divider,
+      maxWidth: '48%',
+    },
+    accountChipActive: {
+      backgroundColor: colors.primaryLight,
+      borderColor: colors.primary,
+    },
+    accountChipText: {
+      flexShrink: 1,
+      fontSize: 13,
+      fontFamily: isHogwarts ? HOGWARTS_FONTS.body : undefined,
+      color: colors.textSecondary,
+    },
+    accountChipTextActive: {
+      color: colors.primary,
+      fontWeight: isHogwarts ? undefined : '700',
     },
     categoryGrid: {
       flexDirection: 'row',
@@ -429,7 +556,7 @@ const createEditModalStyles = (colors: ThemeColors) =>
       borderColor: colors.divider,
     },
     categoryItemActive: {
-      backgroundColor: colors.primary + '1A',
+      backgroundColor: colors.primaryLight,
       borderColor: colors.primary,
     },
     categoryIcon: {
@@ -438,11 +565,12 @@ const createEditModalStyles = (colors: ThemeColors) =>
     },
     categoryName: {
       fontSize: 12,
+      fontFamily: isHogwarts ? HOGWARTS_FONTS.body : undefined,
       color: colors.textSecondary,
     },
     categoryNameActive: {
       color: colors.primary,
-      fontWeight: '700',
+      fontWeight: isHogwarts ? undefined : '700',
     },
     footer: {
       flexDirection: 'row',
@@ -462,6 +590,7 @@ const createEditModalStyles = (colors: ThemeColors) =>
     },
     cancelButtonText: {
       fontSize: 15,
+      fontFamily: isHogwarts ? HOGWARTS_FONTS.body : undefined,
       color: colors.textPrimary,
     },
     saveButton: {
@@ -473,149 +602,175 @@ const createEditModalStyles = (colors: ThemeColors) =>
     },
     saveButtonText: {
       fontSize: 15,
-      fontWeight: '700',
-      color: '#FFFFFF',
+      fontWeight: isHogwarts ? undefined : '700',
+      fontFamily: isHogwarts ? HOGWARTS_FONTS.body : undefined,
+      color: isSoft || isHogwarts ? colors.onPrimary : '#FFFFFF',
     },
   });
 
 // 账单卡片组件
 interface BillCardProps {
   bill: BillItem;
+  account?: Account;
   onEdit: (bill: BillItem) => void;
   onDelete: (id: string) => void;
   colors: ThemeColors;
 }
 
-function BillCard({ bill, onEdit, onDelete, colors }: BillCardProps) {
-  const { isSoft, shape } = useTheme();
+function BillCard({ bill, account, onEdit, onDelete, colors }: BillCardProps) {
+  const { isSoft, isHogwarts, shape } = useTheme();
   const isExpense = bill.type === 'expense';
-
-  if (isSoft) {
-    return (
-      <View style={billCardStyles.container}>
-        <View
-          style={[
-            billCardStyles.card,
-            {
-              backgroundColor: colors.surface,
-              borderRadius: shape.radius.card,
-              borderWidth: shape.borderWidth.card,
-              borderColor: colors.cardBorder,
-              ...shape.elevation.card,
-            },
-          ]}
-        >
-          <Text style={[billCardStyles.date, { color: colors.textTertiary }]}>{bill.date}</Text>
-          <View style={billCardStyles.content}>
-            <View
-              style={[
-                billCardStyles.categoryIcon,
-                {
-                  borderRadius: 14,
-                  backgroundColor: isExpense ? colors.expenseLight : colors.incomeLight,
-                },
-              ]}
-            >
-              <Text style={billCardStyles.categoryIconText}>
-                {bill.categoryIcon || (isExpense ? '💰' : '💵')}
-              </Text>
-            </View>
-            <View style={billCardStyles.info}>
-              <Text style={[billCardStyles.categoryName, { color: colors.textPrimary }]}>{bill.categoryName}</Text>
-              <Text style={[billCardStyles.description, { color: colors.textTertiary }]}>{bill.description}</Text>
-            </View>
-            <Text
-              style={[
-                billCardStyles.amount,
-                {
-                  color: isExpense ? colors.expense : colors.income,
-                  fontVariant: ['tabular-nums'],
-                },
-              ]}
-            >
-              {formatSignedCurrency(Number(bill.amount), !isExpense)}
-            </Text>
-          </View>
-          <View style={[billCardStyles.actions, { marginTop: 12, paddingTop: 10, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.divider }]}>
-            <TouchableOpacity
-              style={[billCardStyles.actionButton, { backgroundColor: colors.primaryLight, borderWidth: 0, borderRadius: 12 }]}
-              onPress={() => onEdit(bill)}
-            >
-              <Edit2 size={14} color={colors.primaryDark} />
-              <Text style={[billCardStyles.actionButtonText, { color: colors.primaryDark }]}>修改</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[billCardStyles.actionButton, { backgroundColor: colors.expenseLight, borderWidth: 0, borderRadius: 12 }]}
-              onPress={() => onDelete(bill.id)}
-            >
-              <Trash2 size={14} color={colors.expenseStrong} />
-              <Text style={[billCardStyles.actionButtonText, { color: colors.expenseStrong }]}>
-                删除
-              </Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </View>
-    );
-  }
+  const amountColor = isExpense ? colors.expense : colors.income;
+  const iconBgColor = isExpense ? colors.expenseLight : colors.incomeLight;
 
   return (
-    <View style={billCardStyles.container}>
+    <View style={billCardStyles.container} testID={`ai-bill-card-${bill.id}`}>
       <View
         style={[
           billCardStyles.card,
-          { backgroundColor: isExpense ? '#FFF3E0' : '#E8F5E9' },
-          { borderColor: isExpense ? '#FFCC80' : '#C8E6C9' },
+          {
+            backgroundColor: colors.surface,
+            borderRadius: shape.radius.card,
+            borderWidth: isSoft || isHogwarts ? shape.borderWidth.card : borderWidth.thin,
+            borderColor: isSoft || isHogwarts ? colors.cardBorder : colors.stroke,
+            ...(isSoft || isHogwarts ? shape.elevation.card : shadow.small),
+          },
         ]}
       >
-        {/* 日期 */}
-        <Text style={billCardStyles.date}>{bill.date}</Text>
+        <View style={billCardStyles.metaRow}>
+          <Text
+            style={[
+              billCardStyles.date,
+              {
+                color: colors.textTertiary,
+                fontFamily: isHogwarts ? HOGWARTS_FONTS.numeric : undefined,
+              },
+            ]}
+          >
+            {bill.date}
+          </Text>
+          {account ? (
+            <AccountBadge account={account} compact testID={`ai-bill-account-${bill.id}`} />
+          ) : null}
+        </View>
 
-        {/* 账单内容 */}
         <View style={billCardStyles.content}>
           <View
             style={[
               billCardStyles.categoryIcon,
-              { backgroundColor: isExpense ? '#FFCC80' : '#C8E6C9' },
+              isSoft ? billCardStyles.categoryIconSoft : billCardStyles.categoryIconDefault,
+              { backgroundColor: iconBgColor },
             ]}
           >
-            <Text style={billCardStyles.categoryIconText}>
-              {bill.categoryIcon || (isExpense ? '💰' : '💵')}
-            </Text>
+            <CategoryIcon
+              icon={bill.categoryIcon}
+              size={22}
+              color={amountColor}
+              emojiStyle={billCardStyles.categoryIconText}
+            />
           </View>
           <View style={billCardStyles.info}>
-            <Text style={billCardStyles.categoryName}>{bill.categoryName}</Text>
-            <Text style={billCardStyles.description}>{bill.description}</Text>
+            <Text
+              style={[
+                billCardStyles.categoryName,
+                !isHogwarts && billCardStyles.weightBold,
+                {
+                  color: colors.textPrimary,
+                  fontFamily: isHogwarts ? HOGWARTS_FONTS.display : undefined,
+                },
+              ]}
+              numberOfLines={1}
+            >
+              {bill.categoryName}
+            </Text>
+            <Text
+              style={[
+                billCardStyles.description,
+                {
+                  color: colors.textSecondary,
+                  fontFamily: isHogwarts ? HOGWARTS_FONTS.body : undefined,
+                },
+              ]}
+              numberOfLines={2}
+            >
+              {bill.description}
+            </Text>
           </View>
           <Text
             style={[
               billCardStyles.amount,
-              isExpense ? billCardStyles.expenseAmount : billCardStyles.incomeAmount,
+              !isHogwarts && billCardStyles.weightBold,
+              {
+                color: amountColor,
+                fontFamily: isHogwarts ? HOGWARTS_FONTS.numeric : undefined,
+              },
             ]}
           >
             {formatSignedCurrency(Number(bill.amount), !isExpense)}
           </Text>
         </View>
-      </View>
 
-      {/* 操作按钮 */}
-      <View style={billCardStyles.actions}>
-        <TouchableOpacity
-          style={[billCardStyles.actionButton, { borderColor: colors.primary }]}
-          onPress={() => onEdit(bill)}
+        <View
+          style={[
+            billCardStyles.actions,
+            { borderTopColor: colors.divider },
+          ]}
         >
-          <Edit2 size={14} color={colors.primary} />
-          <Text style={[billCardStyles.actionButtonText, { color: colors.primary }]}>修改</Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[billCardStyles.actionButton, billCardStyles.deleteButton]}
-          onPress={() => onDelete(bill.id)}
-        >
-          <Trash2 size={14} color="#FF3B30" />
-          <Text style={[billCardStyles.actionButtonText, billCardStyles.deleteButtonText]}>
-            删除
-          </Text>
-        </TouchableOpacity>
+          <TouchableOpacity
+            testID={`ai-bill-edit-${bill.id}`}
+            style={[
+              billCardStyles.actionButton,
+              isSoft
+                ? [billCardStyles.actionButtonSoft, { backgroundColor: colors.primaryLight }]
+                : {
+                    backgroundColor: colors.surfaceMuted,
+                    borderColor: isHogwarts ? colors.cardBorder : colors.stroke,
+                  },
+            ]}
+            onPress={() => onEdit(bill)}
+          >
+            <Edit2 size={14} color={isSoft ? colors.primaryDark : colors.primary} />
+            <Text
+              style={[
+                billCardStyles.actionButtonText,
+                !isHogwarts && billCardStyles.weightSemiBold,
+                {
+                  color: isSoft ? colors.primaryDark : colors.primary,
+                  fontFamily: isHogwarts ? HOGWARTS_FONTS.body : undefined,
+                },
+              ]}
+            >
+              修改
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            testID={`ai-bill-delete-${bill.id}`}
+            style={[
+              billCardStyles.actionButton,
+              isSoft
+                ? [billCardStyles.actionButtonSoft, { backgroundColor: colors.expenseLight }]
+                : {
+                    backgroundColor: colors.expenseLight,
+                    borderColor: colors.error,
+                  },
+            ]}
+            onPress={() => onDelete(bill.id)}
+          >
+            <Trash2 size={14} color={isSoft ? colors.expenseStrong : colors.error} />
+            <Text
+              style={[
+                billCardStyles.actionButtonText,
+                !isHogwarts && billCardStyles.weightSemiBold,
+                {
+                  color: isSoft ? colors.expenseStrong : colors.error,
+                  fontFamily: isHogwarts ? HOGWARTS_FONTS.body : undefined,
+                },
+              ]}
+            >
+              删除
+            </Text>
+          </TouchableOpacity>
+        </View>
       </View>
     </View>
   );
@@ -629,12 +784,17 @@ const billCardStyles = StyleSheet.create({
     borderRadius: borderRadius.large,
     padding: spacing.md,
     borderWidth: 1,
-    ...shadow.medium,
+  },
+  metaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
+    marginBottom: spacing.sm,
   },
   date: {
     fontSize: 12,
-    color: '#666666',
-    marginBottom: spacing.sm,
+    fontVariant: ['tabular-nums'],
   },
   content: {
     flexDirection: 'row',
@@ -648,36 +808,46 @@ const billCardStyles = StyleSheet.create({
     justifyContent: 'center',
     marginRight: spacing.md,
   },
+  categoryIconSoft: {
+    borderRadius: 14,
+  },
+  categoryIconDefault: {
+    borderRadius: borderRadius.medium,
+  },
+  weightBold: {
+    fontWeight: '700',
+  },
+  weightSemiBold: {
+    fontWeight: '600',
+  },
+  actionButtonSoft: {
+    borderWidth: 0,
+    borderRadius: 12,
+  },
   categoryIconText: {
     fontSize: 22,
   },
   info: {
     flex: 1,
+    marginRight: spacing.sm,
   },
   categoryName: {
     fontSize: 16,
-    fontWeight: '600',
-    color: '#1A1A1A',
     marginBottom: 2,
   },
   description: {
     fontSize: 13,
-    color: '#666666',
   },
   amount: {
     fontSize: 18,
-    fontWeight: '600',
-  },
-  expenseAmount: {
-    color: '#FF5722',
-  },
-  incomeAmount: {
-    color: '#4CAF50',
+    fontVariant: ['tabular-nums'],
   },
   actions: {
     flexDirection: 'row',
     gap: spacing.sm,
-    marginTop: spacing.sm,
+    marginTop: 12,
+    paddingTop: 10,
+    borderTopWidth: StyleSheet.hairlineWidth,
   },
   actionButton: {
     flexDirection: 'row',
@@ -687,65 +857,9 @@ const billCardStyles = StyleSheet.create({
     paddingHorizontal: spacing.md,
     borderRadius: borderRadius.button,
     borderWidth: 1,
-    backgroundColor: '#FFFFFF',
-  },
-  deleteButton: {
-    borderColor: '#FF3B30',
   },
   actionButtonText: {
     fontSize: 13,
-    fontWeight: '500',
-  },
-  deleteButtonText: {
-    color: '#FF3B30',
-  },
-});
-
-const toolCardStyles = StyleSheet.create({
-  billRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 6,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#E0E0E0',
-  },
-  billDate: {
-    fontSize: 12,
-    color: '#888888',
-    width: 80,
-  },
-  billDesc: {
-    flex: 1,
-    fontSize: 14,
-    color: '#333333',
-    marginHorizontal: 8,
-  },
-  billAmount: {
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  statsContainer: {
-    marginTop: spacing.sm,
-    backgroundColor: '#F5F5F5',
-    borderRadius: borderRadius.medium,
-    padding: spacing.sm,
-  },
-  statsRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: 6,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#E0E0E0',
-  },
-  statsLabel: {
-    fontSize: 14,
-    color: '#666666',
-  },
-  statsValue: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#333333',
   },
 });
 
@@ -976,9 +1090,10 @@ const chatSkeletonStyles = StyleSheet.create({
 });
 
 const SOFT_SUGGESTIONS = [
-  { key: 's1', icon: 'sparkles' as const, prompt: '这个月吃饭花了多少？' },
-  { key: 's2', icon: 'pencil' as const, prompt: '帮我记一笔：午饭 28 元' },
-  { key: 's3', icon: 'sparkles' as const, prompt: '和上个月比怎么样？' },
+  { key: 's1', icon: 'sparkles' as const, prompt: '这个月各类支出占比是多少？' },
+  { key: 's2', icon: 'pencil' as const, prompt: '帮我记一笔：微信付午饭 28 元' },
+  { key: 's3', icon: 'wallet' as const, prompt: '看看我的账户余额和净资产' },
+  { key: 's4', icon: 'target' as const, prompt: '本月预算还剩多少？' },
 ];
 
 export default function AIChatScreen() {
@@ -1022,7 +1137,12 @@ export default function AIChatScreen() {
   const [pendingBills, setPendingBills] = useState<BillItem[]>([]);
   const [savingBills, setSavingBills] = useState(false);
   const [defaultAIConfig, setDefaultAIConfig] = useState<AIModelConfig | null>(null);
+  const [allAIConfigs, setAllAIConfigs] = useState<AIModelConfig[]>([]);
+  const [selectedConfigId, setSelectedConfigId] = useState<string | null>(null);
+  const [showModelSwitcher, setShowModelSwitcher] = useState(false);
   const [configLoaded, setConfigLoaded] = useState(false);
+  const activeAIConfig =
+    allAIConfigs.find((c) => c.id === selectedConfigId) ?? defaultAIConfig;
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [sessionRestoring, setSessionRestoring] = useState(true);
   const [imageViewerVisible, setImageViewerVisible] = useState(false);
@@ -1464,6 +1584,16 @@ export default function AIChatScreen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // 返回页面时静默刷新 AI 服务商配置、账户与分类（例如刚去设置页新增/切换了服务商）
+  useFocusEffect(
+    useCallback(() => {
+      loadCategories();
+      loadAccounts();
+      loadDefaultAIConfigWithCache();
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []),
+  );
+
   // 恢复上次会话
   const restoreLastSession = async () => {
     try {
@@ -1568,6 +1698,12 @@ export default function AIChatScreen() {
         return selected.id;
       }
     }
+    if (bill.accountName) {
+      const matched = matchAccountIdByName(bill.accountName, accounts);
+      if (matched) {
+        return matched;
+      }
+    }
     const fallback = [...accounts].sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0))[0];
     return fallback?.id ?? null;
   };
@@ -1589,11 +1725,16 @@ export default function AIChatScreen() {
     try {
       const response = await aiService.getConfigs();
       if (response.success && response.data) {
-        const latestConfig = response.data.find(c => c.isDefault) || response.data[0];
+        setAllAIConfigs(response.data);
+        const latestConfig = response.data.find(c => c.isDefault) || response.data[0] || null;
+        setDefaultAIConfig(latestConfig);
+        setSelectedConfigId((prev) =>
+          prev && response.data!.some((c) => c.id === prev) ? prev : null,
+        );
         if (latestConfig) {
-          setDefaultAIConfig(latestConfig);
-          // 更新缓存
           await storage.setItem(AI_CONFIG_CACHE_KEY, latestConfig);
+        } else {
+          await storage.removeItem(AI_CONFIG_CACHE_KEY);
         }
       }
     } catch (error) {
@@ -1700,6 +1841,7 @@ export default function AIChatScreen() {
       {
         content: text || '请描述这张图片',
         sessionId: sessionId || undefined,
+        configId: activeAIConfig?.id,
         imageBase64List: images.length > 0 ? images : undefined,
       },
       {
@@ -1769,16 +1911,25 @@ export default function AIChatScreen() {
           // 根据工具类型添加对应消息（插入到流式消息前面）
           if (data.toolName === 'create_bills' && data.result.success) {
             const bills = (data.result.data?.bills || []) as any[];
-            const billsWithIds: BillItem[] = bills.map((bill: any, index: number) => ({
-              amount: bill.amount,
-              type: bill.type,
-              description: bill.description || '',
-              categoryName: bill.categoryName || '',
-              date: bill.date || new Date().toISOString().split('T')[0],
-              id: `${Date.now()}-${index}`,
-              categoryIcon: bill.categoryIcon || getCategoryIcon(bill.categoryName),
-              categoryId: bill.categoryId || getCategoryId(bill.categoryName, bill.type),
-            }));
+            const billsWithIds: BillItem[] = bills.map((bill: any, index: number) => {
+              const matchedCategoryId =
+                bill.categoryId || getCategoryId(bill.categoryName, bill.type);
+              const matchedCategory = categories.find((c) => c.id === matchedCategoryId);
+              const matchedAccountId = matchAccountIdByName(bill.accountName, accounts);
+              return {
+                amount: bill.amount,
+                type: bill.type,
+                description: bill.description || '',
+                categoryName: matchedCategory?.name || bill.categoryName || '',
+                accountName: bill.accountName || undefined,
+                date: bill.date || new Date().toISOString().split('T')[0],
+                id: `${Date.now()}-${index}`,
+                categoryIcon:
+                  bill.categoryIcon || matchedCategory?.icon || getCategoryIcon(bill.categoryName),
+                categoryId: matchedCategoryId,
+                accountId: matchedAccountId,
+              };
+            });
 
             setPendingBills(prev => [...prev, ...billsWithIds]);
             insertBeforeStream({
@@ -1798,6 +1949,27 @@ export default function AIChatScreen() {
             insertBeforeStream({
               type: 'statistics',
               statisticsData: data.result.data,
+              content: data.result.message,
+              isUser: false,
+            });
+          } else if (data.toolName === 'get_accounts' && data.result.success) {
+            insertBeforeStream({
+              type: 'accounts',
+              accountsData: data.result.data,
+              content: data.result.message,
+              isUser: false,
+            });
+          } else if (data.toolName === 'get_budgets' && data.result.success) {
+            insertBeforeStream({
+              type: 'budgets',
+              budgetsData: data.result.data,
+              content: data.result.message,
+              isUser: false,
+            });
+          } else if (data.toolName === 'get_goals' && data.result.success) {
+            insertBeforeStream({
+              type: 'goals',
+              goalsData: data.result.data,
               content: data.result.message,
               isUser: false,
             });
@@ -2158,10 +2330,10 @@ export default function AIChatScreen() {
         </View>
       );
     }
-    if (defaultAIConfig?.provider) {
+    if (activeAIConfig?.provider) {
       return (
         <View style={styles.aiAvatarContainer}>
-          <ProviderIcon provider={defaultAIConfig.provider} size={24} />
+          <ProviderIcon provider={activeAIConfig.provider} size={24} />
         </View>
       );
     }
@@ -2223,15 +2395,20 @@ export default function AIChatScreen() {
               <Text style={styles.messageText}>{item.content}</Text>
             </View>
           </View>
-          {item.bills.map(bill => (
-            <BillCard
-              key={bill.id}
-              bill={bill}
-              onEdit={handleEditBill}
-              onDelete={handleDeleteBill}
-              colors={styles._colors}
-            />
-          ))}
+          {item.bills.map(bill => {
+            const resolvedAccountId = resolveAccountId(bill);
+            const matchedAccount = accounts.find((a) => a.id === resolvedAccountId);
+            return (
+              <BillCard
+                key={bill.id}
+                bill={bill}
+                account={matchedAccount}
+                onEdit={handleEditBill}
+                onDelete={handleDeleteBill}
+                colors={styles._colors}
+              />
+            );
+          })}
         </View>
       );
     }
@@ -2245,22 +2422,43 @@ export default function AIChatScreen() {
             <View style={[styles.messageContent, styles.aiContent]}>
               <Text style={styles.messageText}>{item.content}</Text>
               {bills.length > 0 ? (
-                <View style={{ marginTop: spacing.sm }}>
-                  {bills.map((bill: any) => (
-                    <View key={bill.id} style={toolCardStyles.billRow}>
-                      <Text style={toolCardStyles.billDate}>{bill.date?.substring(0, 10)}</Text>
-                      <Text style={toolCardStyles.billDesc} numberOfLines={1}>{bill.description || '-'}</Text>
-                      <Text style={[
-                        toolCardStyles.billAmount,
-                        { color: bill.type === 'expense' ? styles._colors.expense : styles._colors.income },
-                      ]}>
-                        {formatSignedCurrency(Number(bill.amount), bill.type !== 'expense')}
-                      </Text>
-                    </View>
-                  ))}
+                <View style={styles.toolListWrap}>
+                  {bills.map((bill: any) => {
+                    const isExpenseRow = bill.type === 'expense' || bill.type === 'fee';
+                    const metaText = [
+                      bill.date?.substring(0, 10),
+                      bill.categoryName,
+                      bill.platform,
+                      bill.accountName,
+                    ]
+                      .filter(Boolean)
+                      .join(' · ');
+                    return (
+                      <View key={bill.id} style={styles.toolBillRow}>
+                        <View style={styles.toolBillLeft}>
+                          <Text style={styles.toolBillDesc} numberOfLines={1}>
+                            {bill.description || bill.categoryName || '-'}
+                          </Text>
+                          {metaText ? (
+                            <Text style={styles.toolBillMeta} numberOfLines={1}>
+                              {metaText}
+                            </Text>
+                          ) : null}
+                        </View>
+                        <Text
+                          style={[
+                            styles.toolBillAmount,
+                            { color: isExpenseRow ? styles._colors.expense : styles._colors.income },
+                          ]}
+                        >
+                          {formatSignedCurrency(Number(bill.amount), !isExpenseRow)}
+                        </Text>
+                      </View>
+                    );
+                  })}
                 </View>
               ) : (
-                <Text style={[styles.messageText, { marginTop: spacing.xs }]}>暂无账单记录</Text>
+                <Text style={[styles.messageText, styles.toolEmptyText]}>暂无账单记录</Text>
               )}
             </View>
           </View>
@@ -2270,32 +2468,330 @@ export default function AIChatScreen() {
 
     if (item.type === 'statistics' && item.statisticsData) {
       const stats = item.statisticsData;
+      const expenseByCategory = Array.isArray(stats.expenseByCategory)
+        ? stats.expenseByCategory.slice(0, 5)
+        : [];
+      const incomeByCategory = Array.isArray(stats.incomeByCategory)
+        ? stats.incomeByCategory.slice(0, 5)
+        : [];
+      const breakdownList = expenseByCategory.length > 0 ? expenseByCategory : incomeByCategory;
+      const breakdownIsExpense = expenseByCategory.length > 0;
+      const platformBreakdown = Array.isArray(stats.platformBreakdown)
+        ? stats.platformBreakdown.slice(0, 4)
+        : [];
+      const monthlyTrends = Array.isArray(stats.monthlyTrends)
+        ? stats.monthlyTrends.slice(-4)
+        : [];
+      const rangeText =
+        stats.startDate || stats.endDate
+          ? `${stats.startDate || '起始'} ~ ${stats.endDate || '至今'}`
+          : null;
+
       return (
         <View style={styles.billsContainer}>
           <View style={[styles.messageBubble, styles.aiBubble]}>
             {renderAIAvatar()}
             <View style={[styles.messageContent, styles.aiContent]}>
               <Text style={styles.messageText}>{item.content}</Text>
-              <View style={toolCardStyles.statsContainer}>
-                <View style={toolCardStyles.statsRow}>
-                  <Text style={toolCardStyles.statsLabel}>总支出</Text>
-                  <Text style={[toolCardStyles.statsValue, { color: styles._colors.expense }]}>
+              <View style={styles.toolStatsContainer}>
+                {rangeText ? <Text style={styles.toolCardCaption}>{rangeText}</Text> : null}
+                <View style={styles.toolStatsRow}>
+                  <Text style={styles.toolStatsLabel}>总支出</Text>
+                  <Text style={[styles.toolStatsValue, { color: styles._colors.expense }]}>
                     {formatCurrency(Number(stats.totalExpense || 0))}
                   </Text>
                 </View>
-                <View style={toolCardStyles.statsRow}>
-                  <Text style={toolCardStyles.statsLabel}>总收入</Text>
-                  <Text style={[toolCardStyles.statsValue, { color: styles._colors.income }]}>
+                <View style={styles.toolStatsRow}>
+                  <Text style={styles.toolStatsLabel}>总收入</Text>
+                  <Text style={[styles.toolStatsValue, { color: styles._colors.income }]}>
                     {formatCurrency(Number(stats.totalIncome || 0))}
                   </Text>
                 </View>
-                <View style={[toolCardStyles.statsRow, { borderBottomWidth: 0 }]}>
-                  <Text style={toolCardStyles.statsLabel}>结余</Text>
-                  <Text style={[toolCardStyles.statsValue, { fontWeight: '700' }]}>
+                <View style={[styles.toolStatsRow, styles.toolStatsRowLast]}>
+                  <Text style={styles.toolStatsLabel}>结余</Text>
+                  <Text style={styles.toolStatsBalance}>
                     {formatCurrency(Number(stats.totalIncome || 0) - Number(stats.totalExpense || 0))}
                   </Text>
                 </View>
+                {breakdownList.length > 0 ? (
+                  <View style={styles.toolBreakdownWrap}>
+                    <Text style={styles.toolBreakdownTitle}>
+                      {breakdownIsExpense ? '主要支出分类' : '主要收入分类'}
+                    </Text>
+                    {breakdownList.map((row: any, idx: number) => {
+                      const pct = Math.max(0, Math.min(100, Number(row.percentage || 0)));
+                      return (
+                        <View key={`${row.categoryName}-${idx}`} style={styles.toolBreakdownRow}>
+                          <View style={styles.toolBreakdownHeader}>
+                            <Text style={styles.toolBreakdownName} numberOfLines={1}>
+                              {row.categoryName} ({pct}%)
+                            </Text>
+                            <Text style={styles.toolBreakdownAmount}>
+                              {formatCurrency(Number(row.amount || 0))}
+                            </Text>
+                          </View>
+                          <View style={styles.toolProgressTrack}>
+                            <View
+                              style={[
+                                styles.toolProgressFill,
+                                {
+                                  width: `${Math.max(4, pct)}%`,
+                                  backgroundColor: breakdownIsExpense
+                                    ? styles._colors.expense
+                                    : styles._colors.income,
+                                },
+                              ]}
+                            />
+                          </View>
+                        </View>
+                      );
+                    })}
+                  </View>
+                ) : null}
+                {platformBreakdown.length > 0 ? (
+                  <View style={styles.toolBreakdownWrap}>
+                    <Text style={styles.toolBreakdownTitle}>消费平台分布</Text>
+                    {platformBreakdown.map((row: any, idx: number) => (
+                      <View key={`${row.platform}-${idx}`} style={styles.toolBreakdownHeader}>
+                        <Text style={styles.toolBreakdownName} numberOfLines={1}>
+                          {row.platform} ({Number(row.percentage || 0)}%)
+                        </Text>
+                        <Text style={styles.toolBreakdownAmount}>
+                          {formatCurrency(Number(row.amount || 0))}
+                        </Text>
+                      </View>
+                    ))}
+                  </View>
+                ) : null}
+                {monthlyTrends.length > 1 ? (
+                  <View style={styles.toolBreakdownWrap}>
+                    <Text style={styles.toolBreakdownTitle}>按月收支趋势</Text>
+                    {monthlyTrends.map((row: any, idx: number) => (
+                      <View key={`${row.month}-${idx}`} style={styles.toolBreakdownHeader}>
+                        <Text style={styles.toolBreakdownName}>{row.month}</Text>
+                        <Text style={styles.toolBreakdownAmount}>
+                          支 {formatCurrency(Number(row.expense || 0))} / 收{' '}
+                          {formatCurrency(Number(row.income || 0))}
+                        </Text>
+                      </View>
+                    ))}
+                  </View>
+                ) : null}
               </View>
+            </View>
+          </View>
+        </View>
+      );
+    }
+
+    if (item.type === 'accounts' && item.accountsData) {
+      const accountRows = Array.isArray(item.accountsData.accounts)
+        ? item.accountsData.accounts
+        : [];
+      return (
+        <View style={styles.billsContainer} testID={`ai-accounts-card-${item.id}`}>
+          <View style={[styles.messageBubble, styles.aiBubble]}>
+            {renderAIAvatar()}
+            <View style={[styles.messageContent, styles.aiContent]}>
+              <Text style={styles.messageText}>{item.content}</Text>
+              <View style={styles.toolStatsContainer}>
+                <View style={styles.toolStatsRow}>
+                  <Text style={styles.toolStatsLabel}>净资产</Text>
+                  <Text style={styles.toolStatsBalance}>
+                    {formatCurrency(Number(item.accountsData.netWorth || 0))}
+                  </Text>
+                </View>
+                <View style={styles.toolStatsRow}>
+                  <Text style={styles.toolStatsLabel}>总资产 / 总负债</Text>
+                  <Text style={styles.toolSubAmount}>
+                    {formatCurrency(Number(item.accountsData.totalAssets || 0))} /{' '}
+                    {formatCurrency(Number(item.accountsData.totalLiabilities || 0))}
+                  </Text>
+                </View>
+                {accountRows.map((acc: any, idx: number) => (
+                  <View
+                    key={acc.id || `${acc.name}-${idx}`}
+                    style={[
+                      styles.toolAccountRow,
+                      idx === accountRows.length - 1 && styles.toolStatsRowLast,
+                    ]}
+                  >
+                    <View style={styles.toolAccountLeft}>
+                      <AccountIcon
+                        name={acc.name}
+                        subtype={acc.subtype}
+                        size={16}
+                        color={styles._colors.primary}
+                      />
+                      <Text style={styles.toolAccountName} numberOfLines={1}>
+                        {acc.name}
+                        {acc.cardTail ? ` · ${acc.cardTail}` : ''}
+                      </Text>
+                    </View>
+                    <Text
+                      style={[
+                        styles.toolBillAmount,
+                        {
+                          color:
+                            acc.kind === 'liability'
+                              ? styles._colors.expense
+                              : styles._colors.textPrimary,
+                        },
+                      ]}
+                    >
+                      {formatCurrency(Number(acc.balance || 0))}
+                    </Text>
+                  </View>
+                ))}
+              </View>
+            </View>
+          </View>
+        </View>
+      );
+    }
+
+    if (item.type === 'budgets' && item.budgetsData) {
+      const budgetRows = Array.isArray(item.budgetsData.budgets)
+        ? item.budgetsData.budgets
+        : [];
+      return (
+        <View style={styles.billsContainer} testID={`ai-budgets-card-${item.id}`}>
+          <View style={[styles.messageBubble, styles.aiBubble]}>
+            {renderAIAvatar()}
+            <View style={[styles.messageContent, styles.aiContent]}>
+              <Text style={styles.messageText}>{item.content}</Text>
+              {budgetRows.length > 0 ? (
+                <View style={styles.toolStatsContainer}>
+                  {budgetRows.map((budget: any, idx: number) => {
+                    const pct = Math.max(0, Number(budget.progressPct || 0));
+                    const barColor = budget.isOverBudget
+                      ? styles._colors.error
+                      : pct >= Number(budget.alertAt || 80)
+                        ? styles._colors.warning
+                        : styles._colors.primary;
+                    return (
+                      <View
+                        key={budget.id || `${budget.name}-${idx}`}
+                        style={[
+                          styles.toolBudgetRow,
+                          idx === budgetRows.length - 1 && styles.toolStatsRowLast,
+                        ]}
+                      >
+                        <View style={styles.toolBreakdownHeader}>
+                          <Text style={styles.toolBreakdownName} numberOfLines={1}>
+                            {budget.name}
+                            {budget.periodLabel ? ` · ${budget.periodLabel}` : ''}
+                          </Text>
+                          <Text style={[styles.toolBudgetPct, { color: barColor }]}>
+                            {pct}%
+                          </Text>
+                        </View>
+                        <View style={styles.toolProgressTrack}>
+                          <View
+                            style={[
+                              styles.toolProgressFill,
+                              {
+                                width: `${Math.min(100, Math.max(pct > 0 ? 4 : 0, pct))}%`,
+                                backgroundColor: barColor,
+                              },
+                            ]}
+                          />
+                        </View>
+                        <View style={styles.toolBudgetFoot}>
+                          <Text style={styles.toolBillMeta}>
+                            已用 {formatCurrency(Number(budget.spent || 0))} /{' '}
+                            {formatCurrency(Number(budget.limit || 0))}
+                          </Text>
+                          <Text style={[styles.toolBillMeta, budget.isOverBudget && { color: styles._colors.error }]}>
+                            {budget.isOverBudget
+                              ? `超支 ${formatCurrency(Math.abs(Number(budget.remaining || 0)))}`
+                              : `剩余 ${formatCurrency(Number(budget.remaining || 0))}`}
+                          </Text>
+                        </View>
+                      </View>
+                    );
+                  })}
+                </View>
+              ) : (
+                <Text style={[styles.messageText, styles.toolEmptyText]}>暂无启用中的预算</Text>
+              )}
+            </View>
+          </View>
+        </View>
+      );
+    }
+
+    if (item.type === 'goals' && item.goalsData) {
+      const goalRows = Array.isArray(item.goalsData.goals) ? item.goalsData.goals : [];
+      return (
+        <View style={styles.billsContainer} testID={`ai-goals-card-${item.id}`}>
+          <View style={[styles.messageBubble, styles.aiBubble]}>
+            {renderAIAvatar()}
+            <View style={[styles.messageContent, styles.aiContent]}>
+              <Text style={styles.messageText}>{item.content}</Text>
+              {goalRows.length > 0 ? (
+                <View style={styles.toolStatsContainer}>
+                  {goalRows.map((goal: any, idx: number) => {
+                    const pct = Math.max(0, Number(goal.progressPct || 0));
+                    const barColor = goal.isCompleted
+                      ? styles._colors.income
+                      : styles._colors.primary;
+                    const deadlineText = goal.targetDate
+                      ? typeof goal.daysLeft === 'number' && goal.daysLeft >= 0
+                        ? ` · 剩${goal.daysLeft}天`
+                        : ` · ${goal.targetDate}`
+                      : '';
+                    return (
+                      <View
+                        key={goal.id || `${goal.name}-${idx}`}
+                        style={[
+                          styles.toolBudgetRow,
+                          idx === goalRows.length - 1 && styles.toolStatsRowLast,
+                        ]}
+                      >
+                        <View style={styles.toolBreakdownHeader}>
+                          <Text style={styles.toolBreakdownName} numberOfLines={1}>
+                            {goal.name}
+                            {deadlineText}
+                          </Text>
+                          <Text style={[styles.toolBudgetPct, { color: barColor }]}>
+                            {pct}%
+                          </Text>
+                        </View>
+                        <View style={styles.toolProgressTrack}>
+                          <View
+                            style={[
+                              styles.toolProgressFill,
+                              {
+                                width: `${Math.min(100, Math.max(pct > 0 ? 4 : 0, pct))}%`,
+                                backgroundColor: barColor,
+                              },
+                            ]}
+                          />
+                        </View>
+                        <View style={styles.toolBudgetFoot}>
+                          <Text style={styles.toolBillMeta}>
+                            已存 {formatCurrency(Number(goal.current || 0))} /{' '}
+                            {formatCurrency(Number(goal.target || 0))}
+                          </Text>
+                          <Text
+                            style={[
+                              styles.toolBillMeta,
+                              goal.isCompleted && { color: styles._colors.income },
+                            ]}
+                          >
+                            {goal.isCompleted
+                              ? '已达成'
+                              : `还差 ${formatCurrency(Number(goal.remaining || 0))}`}
+                          </Text>
+                        </View>
+                      </View>
+                    );
+                  })}
+                </View>
+              ) : (
+                <Text style={[styles.messageText, styles.toolEmptyText]}>当前未设置财务目标</Text>
+              )}
             </View>
           </View>
         </View>
@@ -2335,6 +2831,7 @@ export default function AIChatScreen() {
             {SOFT_SUGGESTIONS.map(sug => (
               <TouchableOpacity
                 key={sug.key}
+                testID={`ai-suggestion-${sug.key}`}
                 style={styles.softSuggestionCard}
                 onPress={() => handleSend(sug.prompt)}
                 disabled={isLoading}
@@ -2342,6 +2839,10 @@ export default function AIChatScreen() {
               >
                 {sug.icon === 'pencil' ? (
                   <Pencil size={16} color={colors.primary} strokeWidth={2} />
+                ) : sug.icon === 'wallet' ? (
+                  <Wallet size={16} color={colors.primary} strokeWidth={2} />
+                ) : sug.icon === 'target' ? (
+                  <Target size={16} color={colors.primary} strokeWidth={2} />
                 ) : (
                   <Sparkles size={16} color={colors.primary} strokeWidth={2} />
                 )}
@@ -2424,23 +2925,28 @@ export default function AIChatScreen() {
             <Menu size={22} color={styles._colors.textPrimary} />
           </TouchableOpacity>
         )}
-        {isSoft ? (
-          <View style={styles.softHeaderTitleWrap}>
-            <Text style={styles.softHeaderTitle} numberOfLines={1}>AI 助手</Text>
-            {defaultAIConfig?.name ? (
-              <View style={styles.softProviderPill}>
-                <View style={styles.softProviderDot} />
-                <Text style={styles.softProviderText} numberOfLines={1}>
-                  {defaultAIConfig.name}
-                </Text>
-              </View>
-            ) : null}
-          </View>
-        ) : (
-          <Text style={styles.headerTitle} numberOfLines={1}>
+        <View style={styles.headerCenterWrap}>
+          <Text
+            style={isSoft ? styles.softHeaderTitle : styles.headerTitleText}
+            numberOfLines={1}
+          >
             {isHogwarts ? '招财巫师猫' : 'AI 助手'}
           </Text>
-        )}
+          {activeAIConfig ? (
+            <TouchableOpacity
+              testID="ai-header-model-switcher"
+              style={styles.headerProviderPill}
+              onPress={() => setShowModelSwitcher(true)}
+              activeOpacity={0.7}
+            >
+              <View style={styles.softProviderDot} />
+              <Text style={styles.softProviderText} numberOfLines={1}>
+                {activeAIConfig.name}
+              </Text>
+              <ChevronDown size={12} color={styles._colors.textTertiary} />
+            </TouchableOpacity>
+          ) : null}
+        </View>
         <TouchableOpacity
           style={styles.headerButton}
           onPress={handleNewChat}
@@ -2449,6 +2955,27 @@ export default function AIChatScreen() {
           <SquarePen size={20} color={styles._colors.primary} />
         </TouchableOpacity>
       </View>
+
+      {/* 未配置 AI 服务商引导横幅 */}
+      {configLoaded && !activeAIConfig ? (
+        <View style={styles.unconfiguredCard} testID="ai-unconfigured-banner">
+          <View style={styles.unconfiguredBody}>
+            <Text style={styles.unconfiguredTitle}>尚未配置 AI 服务商</Text>
+            <Text style={styles.unconfiguredDesc}>
+              添加通义千问、DeepSeek、智谱 GLM 或自定义兼容接口后，即可开启智能记账与账务分析。
+            </Text>
+          </View>
+          <TouchableOpacity
+            testID="ai-setup-cta-btn"
+            style={styles.unconfiguredButton}
+            onPress={() => (navigation as any).navigate('AiProviders')}
+            activeOpacity={0.8}
+          >
+            <Settings size={14} color={isSoft || isHogwarts ? styles._colors.onPrimary : '#FFFFFF'} />
+            <Text style={styles.unconfiguredButtonText}>去配置</Text>
+          </TouchableOpacity>
+        </View>
+      ) : null}
 
       {/* 消息列表 */}
       {sessionRestoring ? (
@@ -2653,6 +3180,10 @@ export default function AIChatScreen() {
         visible={showEditModal}
         bill={editingBill}
         categories={categories}
+        accounts={accounts}
+        defaultAccountId={
+          [...accounts].sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0))[0]?.id
+        }
         onClose={() => {
           setShowEditModal(false);
           setEditingBill(null);
@@ -2660,6 +3191,65 @@ export default function AIChatScreen() {
         onSave={handleSaveBill}
         colors={styles._colors}
       />
+
+      {/* 模型/服务商切换弹窗 */}
+      <Modal
+        visible={showModelSwitcher}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowModelSwitcher(false)}
+      >
+        <TouchableOpacity
+          style={styles.switcherOverlay}
+          activeOpacity={1}
+          onPress={() => setShowModelSwitcher(false)}
+        >
+          <View style={styles.switcherCard}>
+            <Text style={styles.switcherTitle}>切换对话模型</Text>
+            {allAIConfigs.map((cfg) => {
+              const selected = activeAIConfig?.id === cfg.id;
+              return (
+                <TouchableOpacity
+                  key={cfg.id}
+                  testID={`ai-switcher-item-${cfg.id}`}
+                  style={[styles.switcherItem, selected && styles.switcherItemActive]}
+                  onPress={() => {
+                    setSelectedConfigId(cfg.id);
+                    setShowModelSwitcher(false);
+                  }}
+                >
+                  <ProviderIcon provider={cfg.provider} size={22} />
+                  <View style={styles.switcherItemMain}>
+                    <View style={styles.switcherItemNameRow}>
+                      <Text style={styles.switcherItemName} numberOfLines={1}>
+                        {cfg.name}
+                      </Text>
+                      {cfg.supportsVision ? (
+                        <Eye size={12} color={styles._colors.primary} />
+                      ) : null}
+                    </View>
+                    <Text style={styles.switcherItemModel} numberOfLines={1}>
+                      {cfg.model}
+                    </Text>
+                  </View>
+                  {selected ? <Check size={16} color={styles._colors.primary} /> : null}
+                </TouchableOpacity>
+              );
+            })}
+            <TouchableOpacity
+              testID="ai-switcher-manage-btn"
+              style={styles.switcherManageBtn}
+              onPress={() => {
+                setShowModelSwitcher(false);
+                (navigation as any).navigate('AiProviders');
+              }}
+            >
+              <Settings size={15} color={styles._colors.primary} />
+              <Text style={styles.switcherManageText}>管理 AI 服务商</Text>
+            </TouchableOpacity>
+          </View>
+        </TouchableOpacity>
+      </Modal>
 
       {/* 侧边栏抽屉 */}
       {sidebarVisible && (
@@ -3008,7 +3598,7 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
       borderBottomWidth: shape.isSoft ? 0 : shape.borderWidth.subtle,
       borderBottomColor: shape.isHogwarts ? colors.divider : colors.stroke,
     },
-    softHeaderTitleWrap: {
+    headerCenterWrap: {
       flex: 1,
       flexDirection: 'row',
       alignItems: 'center',
@@ -3020,15 +3610,23 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
       fontWeight: '700',
       color: colors.textPrimary,
     },
-    softProviderPill: {
+    headerTitleText: {
+      fontSize: 18,
+      fontWeight: shape.isHogwarts ? undefined : '800',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.display : undefined,
+      color: colors.textPrimary,
+    },
+    headerProviderPill: {
       flexDirection: 'row',
       alignItems: 'center',
       gap: 4,
       backgroundColor: colors.surfaceMuted,
       paddingHorizontal: 8,
       paddingVertical: 3,
-      borderRadius: 999,
-      maxWidth: 110,
+      borderRadius: shape.isSoft ? 999 : shape.radius.tag,
+      borderWidth: shape.isSoft ? 0 : StyleSheet.hairlineWidth,
+      borderColor: shape.isHogwarts ? colors.cardBorder : colors.stroke,
+      maxWidth: 132,
     },
     softProviderDot: {
       width: 6,
@@ -3037,9 +3635,298 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
       backgroundColor: colors.income,
     },
     softProviderText: {
+      flexShrink: 1,
       fontSize: 11.5,
-      fontWeight: '500',
+      fontWeight: shape.isHogwarts ? undefined : '500',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
+      color: colors.textSecondary,
+    },
+    unconfiguredCard: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: spacing.md,
+      marginHorizontal: spacing.md,
+      marginTop: spacing.sm,
+      paddingHorizontal: spacing.md,
+      paddingVertical: spacing.sm + 4,
+      backgroundColor: colors.surface,
+      borderRadius: shape.radius.card,
+      borderWidth: shape.isSoft || shape.isHogwarts ? shape.borderWidth.card : borderWidth.thin,
+      borderColor: shape.isSoft || shape.isHogwarts ? colors.cardBorder : colors.stroke,
+      ...(shape.isSoft || shape.isHogwarts ? shape.elevation.card : {}),
+    },
+    unconfiguredBody: {
+      flex: 1,
+      gap: 2,
+    },
+    unconfiguredTitle: {
+      fontSize: 14,
+      fontWeight: shape.isHogwarts ? undefined : '700',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.display : undefined,
+      color: colors.textPrimary,
+    },
+    unconfiguredDesc: {
+      fontSize: 12,
+      lineHeight: 17,
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
       color: colors.textTertiary,
+    },
+    unconfiguredButton: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 4,
+      paddingHorizontal: spacing.md,
+      paddingVertical: spacing.sm,
+      backgroundColor: colors.primary,
+      borderRadius: shape.isSoft ? 12 : shape.radius.button,
+    },
+    unconfiguredButtonText: {
+      fontSize: 12.5,
+      fontWeight: shape.isHogwarts ? undefined : '700',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
+      color: shape.isSoft || shape.isHogwarts ? colors.onPrimary : '#FFFFFF',
+    },
+    toolListWrap: {
+      marginTop: spacing.sm,
+    },
+    toolEmptyText: {
+      marginTop: spacing.xs,
+    },
+    toolBillRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      paddingVertical: 7,
+      gap: spacing.sm,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: colors.divider,
+    },
+    toolBillLeft: {
+      flex: 1,
+      gap: 2,
+    },
+    toolBillDesc: {
+      fontSize: 14,
+      fontWeight: shape.isHogwarts ? undefined : '600',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
+      color: colors.textPrimary,
+    },
+    toolBillMeta: {
+      fontSize: 11.5,
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
+      color: colors.textTertiary,
+    },
+    toolBillAmount: {
+      fontSize: 14,
+      fontWeight: shape.isHogwarts ? undefined : '700',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.numeric : undefined,
+      fontVariant: ['tabular-nums'],
+    },
+    toolStatsContainer: {
+      marginTop: spacing.sm,
+      backgroundColor: colors.surfaceMuted,
+      borderRadius: shape.radius.small,
+      padding: spacing.sm + 2,
+    },
+    toolCardCaption: {
+      fontSize: 11.5,
+      color: colors.textTertiary,
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.numeric : typography.fontFamily.mono,
+      marginBottom: spacing.xs,
+    },
+    toolStatsRow: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      paddingVertical: 6,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: colors.divider,
+    },
+    toolStatsRowLast: {
+      borderBottomWidth: 0,
+    },
+    toolStatsLabel: {
+      fontSize: 13.5,
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
+      color: colors.textSecondary,
+    },
+    toolStatsValue: {
+      fontSize: 15,
+      fontWeight: shape.isHogwarts ? undefined : '700',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.numeric : undefined,
+      fontVariant: ['tabular-nums'],
+    },
+    toolStatsBalance: {
+      fontSize: 15.5,
+      fontWeight: shape.isHogwarts ? undefined : '800',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.numeric : undefined,
+      fontVariant: ['tabular-nums'],
+      color: colors.textPrimary,
+    },
+    toolSubAmount: {
+      fontSize: 12.5,
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.numeric : undefined,
+      fontVariant: ['tabular-nums'],
+      color: colors.textSecondary,
+    },
+    toolBreakdownWrap: {
+      marginTop: spacing.sm,
+      paddingTop: spacing.sm,
+      borderTopWidth: StyleSheet.hairlineWidth,
+      borderTopColor: colors.divider,
+      gap: spacing.xs + 2,
+    },
+    toolBreakdownTitle: {
+      fontSize: 12,
+      fontWeight: shape.isHogwarts ? undefined : '700',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
+      color: colors.textSecondary,
+      marginBottom: 2,
+    },
+    toolBreakdownRow: {
+      gap: 4,
+    },
+    toolBreakdownHeader: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      gap: spacing.sm,
+    },
+    toolBreakdownName: {
+      flex: 1,
+      fontSize: 12.5,
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
+      color: colors.textPrimary,
+    },
+    toolBreakdownAmount: {
+      fontSize: 12.5,
+      fontWeight: shape.isHogwarts ? undefined : '600',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.numeric : undefined,
+      fontVariant: ['tabular-nums'],
+      color: colors.textSecondary,
+    },
+    toolProgressTrack: {
+      height: 6,
+      borderRadius: 3,
+      backgroundColor: colors.divider,
+      overflow: 'hidden',
+    },
+    toolProgressFill: {
+      height: '100%',
+      borderRadius: 3,
+    },
+    toolAccountRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      paddingVertical: 7,
+      gap: spacing.sm,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: colors.divider,
+    },
+    toolAccountLeft: {
+      flex: 1,
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 6,
+    },
+    toolAccountName: {
+      flex: 1,
+      fontSize: 13,
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
+      color: colors.textPrimary,
+    },
+    toolBudgetRow: {
+      paddingVertical: 8,
+      gap: 5,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: colors.divider,
+    },
+    toolBudgetPct: {
+      fontSize: 12.5,
+      fontWeight: shape.isHogwarts ? undefined : '700',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.numeric : undefined,
+      fontVariant: ['tabular-nums'],
+    },
+    toolBudgetFoot: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      gap: spacing.sm,
+    },
+    switcherOverlay: {
+      flex: 1,
+      backgroundColor: 'rgba(0, 0, 0, 0.45)',
+      alignItems: 'center',
+      justifyContent: 'center',
+      padding: spacing.lg,
+    },
+    switcherCard: {
+      width: '100%',
+      maxWidth: 380,
+      backgroundColor: colors.surface,
+      borderRadius: shape.radius.modal,
+      borderWidth: shape.isSoft || shape.isHogwarts ? shape.borderWidth.card : borderWidth.medium,
+      borderColor: shape.isSoft || shape.isHogwarts ? colors.cardBorder : colors.stroke,
+      padding: spacing.md,
+      gap: spacing.xs,
+      ...(shape.isSoft || shape.isHogwarts ? shape.elevation.floating : shadow.medium),
+    },
+    switcherTitle: {
+      fontSize: 16,
+      fontWeight: shape.isHogwarts ? undefined : '800',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.display : undefined,
+      color: colors.textPrimary,
+      paddingHorizontal: spacing.xs,
+      paddingBottom: spacing.xs,
+    },
+    switcherItem: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: spacing.sm + 2,
+      paddingHorizontal: spacing.sm + 2,
+      paddingVertical: spacing.sm + 2,
+      borderRadius: shape.isSoft ? 12 : borderRadius.small,
+    },
+    switcherItemActive: {
+      backgroundColor: colors.primaryLight,
+    },
+    switcherItemMain: {
+      flex: 1,
+      gap: 2,
+    },
+    switcherItemNameRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 5,
+    },
+    switcherItemName: {
+      flexShrink: 1,
+      fontSize: 14.5,
+      fontWeight: shape.isHogwarts ? undefined : '700',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
+      color: colors.textPrimary,
+    },
+    switcherItemModel: {
+      fontSize: 12,
+      color: colors.textTertiary,
+      fontFamily: typography.fontFamily.mono,
+    },
+    switcherManageBtn: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 6,
+      marginTop: spacing.xs,
+      paddingVertical: spacing.sm + 2,
+      borderTopWidth: StyleSheet.hairlineWidth,
+      borderTopColor: colors.divider,
+    },
+    switcherManageText: {
+      fontSize: 13.5,
+      fontWeight: shape.isHogwarts ? undefined : '700',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
+      color: colors.primary,
     },
     softWelcomeWrap: {
       paddingTop: 12,
@@ -3177,7 +4064,8 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
       ...(shape.isSoft ? shape.elevation.card : {}),
     },
     errorContent: {
-      backgroundColor: shape.isSoft ? colors.expenseLight : '#FFEBEE',
+      backgroundColor: colors.expenseLight,
+      borderColor: colors.error,
       borderBottomLeftRadius: shape.isSoft ? 6 : spacing.xs,
     },
     messageText: {
@@ -3203,7 +4091,7 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
     errorText: {
       fontSize: 15,
       fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
-      color: '#D32F2F',
+      color: colors.error,
       lineHeight: 22,
     },
     loadingText: {

@@ -1,7 +1,7 @@
 import { NativeEventEmitter, NativeModules } from 'react-native';
 import type { ChatMessageData, ChatSession } from '../types/ai';
 
-export type AiProvider = 'qwen' | 'glm' | 'siliconflow' | 'custom';
+export type AiProvider = 'qwen' | 'glm' | 'siliconflow' | 'deepseek' | 'custom';
 
 export interface AiProviderConfig {
   id: string;

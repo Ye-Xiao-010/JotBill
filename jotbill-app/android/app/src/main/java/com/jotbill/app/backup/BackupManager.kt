@@ -1613,7 +1613,7 @@ internal class BackupManager(
         val CHECKSUM_PATTERN = Regex("[0-9a-fA-F]{64}")
         val MONTH_PATTERN = Regex("\\d{4}-(0[1-9]|1[0-2])")
         val HTTP_SCHEMES = setOf("http", "https")
-        val AI_PROVIDERS = setOf("qwen", "glm", "siliconflow", "custom")
+        val AI_PROVIDERS = setOf("qwen", "glm", "siliconflow", "deepseek", "custom")
         val AI_REQUEST_TYPES = setOf("vision", "chat", "asr")
         val CREDENTIAL_PATH_PATTERN = Regex(
             "^(api[-_]?key|access[-_]?token|token|password|secret|credentials?|auth|key)([-_=].*)?$",

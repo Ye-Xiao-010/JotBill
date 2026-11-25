@@ -2,12 +2,12 @@
  * AI 相关类型定义
  */
 
-// 支持的 AI 服务商（原生 AiModule/AiEndpointResolver 仅实现这四家，
-// claude/openai/deepseek 预设从未在 UI 暴露，留置会误导后续接入）
+// 支持的 AI 服务商（与原生 AiModule / AiEndpointResolver 保持一致）
 export type AIProvider =
   | 'qwen'
   | 'glm'
   | 'siliconflow'
+  | 'deepseek'
   | 'custom';
 
 // AI 模型配置
@@ -62,6 +62,7 @@ export interface ParsedBill {
   amount: number;
   type: 'income' | 'expense';
   categoryName: string;
+  accountName?: string;
   description: string;
   date: string;
 }
@@ -70,6 +71,7 @@ export interface ParsedBill {
 export interface TestConnectionResult {
   success: boolean;
   message: string;
+  latencyMs?: number;
 }
 
 // ========== 聊天会话相关类型 ==========
@@ -165,19 +167,30 @@ export const AI_PROVIDERS: Record<AIProvider, ProviderPreset> = {
   qwen: {
     name: '通义千问',
     defaultUrl: 'https://dashscope.aliyuncs.com',
-    models: ['qwen-turbo', 'qwen-plus', 'qwen-max', 'qwen-vl-plus'],
+    models: ['qwen-plus', 'qwen-turbo', 'qwen-max', 'qwen-vl-plus', 'qwen3-omni-flash'],
     supportsVision: true,
+  },
+  deepseek: {
+    name: 'DeepSeek',
+    defaultUrl: 'https://api.deepseek.com',
+    models: ['deepseek-chat', 'deepseek-reasoner'],
+    supportsVision: false,
   },
   glm: {
     name: '智谱 GLM',
     defaultUrl: 'https://open.bigmodel.cn',
-    models: GLM_MODEL_OPTIONS,
+    models: [...GLM_MODEL_OPTIONS, 'glm-4-flash', 'glm-4-voice'],
     supportsVision: true,
   },
   siliconflow: {
     name: 'SiliconFlow',
     defaultUrl: 'https://api.siliconflow.cn',
-    models: ['Qwen/Qwen2.5-7B-Instruct', 'deepseek-ai/DeepSeek-V3'],
+    models: [
+      'deepseek-ai/DeepSeek-V3',
+      'deepseek-ai/DeepSeek-R1',
+      'Qwen/Qwen2.5-7B-Instruct',
+      'Qwen/Qwen2.5-VL-72B-Instruct',
+    ],
     supportsVision: false,
   },
   custom: {

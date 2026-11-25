@@ -73,6 +73,7 @@ object AiEndpointResolver {
         "qwen" -> "https://dashscope.aliyuncs.com"
         "glm" -> "https://open.bigmodel.cn"
         "siliconflow" -> "https://api.siliconflow.cn"
+        "deepseek" -> "https://api.deepseek.com"
         else -> ""
     }
 
@@ -80,6 +81,7 @@ object AiEndpointResolver {
         "qwen" -> "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
         "glm" -> "https://open.bigmodel.cn/api/paas/v4/chat/completions"
         "siliconflow" -> "https://api.siliconflow.cn/v1/chat/completions"
+        "deepseek" -> "https://api.deepseek.com/v1/chat/completions"
         "custom" -> throw AiChatException("INVALID_ARGUMENT", "自定义服务商必须填写 API 地址")
         else -> throw AiChatException("INVALID_ARGUMENT", "不支持的 AI 服务商: $provider")
     }

@@ -32,9 +32,11 @@ class StreamingSseClient(
             override fun onResponse(call: Call, response: Response) {
                 response.use {
                     if (!response.isSuccessful) {
+                        val errorBody = runCatching { response.body?.string() }.getOrNull()
+                        val serverMessage = AiErrorFormatter.extractServerErrorMessage(errorBody)
                         activeCalls.remove(sessionId, call)
                         if (terminal.compareAndSet(false, true)) {
-                            callbacks.onError(IOException("AI 服务返回 HTTP ${response.code}"))
+                            callbacks.onError(AiHttpException(response.code, serverMessage))
                         }
                         return
                     }
