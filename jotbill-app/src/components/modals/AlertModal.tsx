@@ -40,8 +40,8 @@ export const AlertModal: React.FC<AlertModalProps> = ({
   const styles = useStyles(createStyles);
 
   const handleButtonPress = (button: AlertButton) => {
-    button.onPress?.();
     onClose();
+    button.onPress?.();
   };
 
   const getButtonStyle = (style: AlertButton['style']) => {

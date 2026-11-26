@@ -41,7 +41,7 @@ import com.jotbill.app.data.entity.PendingTransactionEntity
 import com.jotbill.app.data.entity.RuleEntity
 import com.jotbill.app.data.entity.TransactionCandidateEntity
 
-const val JOT_BILL_DATABASE_VERSION = 14
+const val JOT_BILL_DATABASE_VERSION = 15
 
 @Database(
     entities = [
@@ -460,6 +460,19 @@ object DatabaseMigrations {
         }
     }
 
+    /**
+     * 2026-11-26：chat_messages 增加工具调用结果持久化字段，
+     * 便于重进历史会话时完整还原账单、统计、账户、预算与财务目标卡片。
+     * 新列均为可空 TEXT，既有消息保持 null，零迁移风险。
+     */
+    private val migration14To15 = object : Migration(14, 15) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL("ALTER TABLE `chat_messages` ADD COLUMN `tool_call_id` TEXT")
+            db.execSQL("ALTER TABLE `chat_messages` ADD COLUMN `tool_name` TEXT")
+            db.execSQL("ALTER TABLE `chat_messages` ADD COLUMN `tool_result_json` TEXT")
+        }
+    }
+
     val all: Array<Migration> = arrayOf(
         migration1To2,
         migration2To3,
@@ -473,6 +486,7 @@ object DatabaseMigrations {
         migration10To11,
         migration11To12,
         migration12To13,
-        migration13To14
+        migration13To14,
+        migration14To15
     )
 }

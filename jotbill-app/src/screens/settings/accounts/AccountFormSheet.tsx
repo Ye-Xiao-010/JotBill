@@ -10,7 +10,6 @@
  */
 import React, { useContext, useEffect, useMemo, useState } from 'react';
 import {
-  Alert,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -49,7 +48,7 @@ import { BANKS, resolveAccountIcon } from '../../../constants/accountIcons';
 import { resolveAccountBadgeStyle } from '../../../constants/accountStyles';
 import { HOGWARTS_FONTS } from '../../../constants/hogwartsAssets';
 import { useStyles } from '../../../hooks';
-import { useTheme } from '../../../providers';
+import { useAlert, useTheme } from '../../../providers';
 import { borderWidth, shadow, spacing, typography } from '../../../theme';
 import type { ThemeColors } from '../../../theme/colors';
 import type { ThemeShape } from '../../../theme/shape';
@@ -93,6 +92,7 @@ export default function AccountFormSheet({
   onSubmit,
 }: AccountFormSheetProps) {
   const { colors, styleVariant, isDark, isSoft, isHogwarts } = useTheme();
+  const { alert } = useAlert();
   const styles = useStyles(createStyles);
   const insets = useContext(SafeAreaInsetsContext) ?? { top: 0, right: 0, bottom: 0, left: 0 };
 
@@ -250,12 +250,12 @@ export default function AccountFormSheet({
   const handleSubmit = () => {
     const trimmedName = name.trim();
     if (!trimmedName) {
-      Alert.alert('提示', '请输入账户名称');
+      alert('提示', '请输入账户名称');
       return;
     }
     const trimmedTail = cardTail.trim();
     if (isBankCard && trimmedTail && !/^\d{4}$/.test(trimmedTail)) {
-      Alert.alert('提示', '卡尾号请填写后 4 位数字');
+      alert('提示', '卡尾号请填写后 4 位数字');
       return;
     }
 
@@ -274,11 +274,11 @@ export default function AccountFormSheet({
 
     const amountMinor = parseMinorInput(initialBalance || '0');
     if (amountMinor === null) {
-      Alert.alert('提示', '请输入有效的初始余额');
+      alert('提示', '请输入有效的初始余额');
       return;
     }
     if (selectedOption.kind === 'asset' && amountMinor < 0) {
-      Alert.alert('提示', '资产账户初始余额不能为负数');
+      alert('提示', '资产账户初始余额不能为负数');
       return;
     }
     const normalizedInitialBalance =

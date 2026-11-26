@@ -420,6 +420,165 @@ describe('AIChatScreen 升级回归测试', () => {
     }
   });
 
+  test('恢复历史会话时还原所有持久化工具结果卡片，且历史账单建议卡片为只读不加入待保存队列', async () => {
+    mockGetChatSession.mockResolvedValue({
+      success: true,
+      data: {
+        session: {
+          id: 'sess-history',
+          title: '历史富卡片会话',
+          isActive: true,
+          isPinned: false,
+          createdAt: '2026-11-25T10:00:00Z',
+          updatedAt: '2026-11-25T10:01:00Z',
+        },
+        messages: [
+          {
+            id: 'm1',
+            sessionId: 'sess-history',
+            seqNum: 1,
+            role: 'user',
+            content: '帮我查一下账单、账户、预算和目标，并整理一笔咖啡账单',
+            createdAt: '2026-11-25T10:00:00Z',
+          },
+          {
+            id: 'm2',
+            sessionId: 'sess-history',
+            seqNum: 2,
+            role: 'tool',
+            content: '找到 1 笔账单',
+            toolCallId: 'tc-q',
+            toolName: 'query_bills',
+            toolResult: {
+              success: true,
+              message: '找到 1 笔账单',
+              data: {
+                data: [
+                  {
+                    id: 'b-hist-1',
+                    amount: 32,
+                    type: 'expense',
+                    description: '历史美式咖啡',
+                    categoryName: '餐饮',
+                    platform: '微信',
+                    accountName: '微信',
+                    date: '2026-11-25',
+                  },
+                ],
+              },
+            },
+            createdAt: '2026-11-25T10:00:05Z',
+          },
+          {
+            id: 'm3',
+            sessionId: 'sess-history',
+            seqNum: 3,
+            role: 'tool',
+            content: '共 1 项财务目标',
+            toolCallId: 'tc-g',
+            toolName: 'get_goals',
+            toolResult: {
+              success: true,
+              message: '共 1 项财务目标',
+              data: {
+                goals: [
+                  {
+                    id: 'goal-h1',
+                    name: '历史旅行基金',
+                    target: 8000,
+                    current: 2400,
+                    remaining: 5600,
+                    progressPct: 30,
+                    isCompleted: false,
+                  },
+                ],
+              },
+            },
+            createdAt: '2026-11-25T10:00:06Z',
+          },
+          {
+            id: 'm4',
+            sessionId: 'sess-history',
+            seqNum: 4,
+            role: 'tool',
+            content: '已整理 1 条待确认账单',
+            toolCallId: 'tc-c',
+            toolName: 'create_bills',
+            toolResult: {
+              success: true,
+              message: '已整理 1 条待确认账单',
+              data: {
+                bills: [
+                  {
+                    amount: 19.9,
+                    type: 'expense',
+                    description: '瑞幸拿铁',
+                    categoryName: '餐饮',
+                    accountName: '招商银行',
+                    date: '2026-11-25',
+                  },
+                ],
+              },
+            },
+            createdAt: '2026-11-25T10:00:07Z',
+          },
+          {
+            id: 'm5',
+            sessionId: 'sess-history',
+            seqNum: 5,
+            role: 'assistant',
+            content: '以上是你的历史查账与记账整理结果。',
+            createdAt: '2026-11-25T10:00:09Z',
+          },
+        ],
+      },
+    });
+
+    // 预置上次会话 ID 让组件启动自动恢复历史
+    await AsyncStorage.clear();
+    await AsyncStorage.setItem('ai_last_session_id', JSON.stringify('sess-history'));
+    let renderer!: ReactTestRenderer.ReactTestRenderer;
+    await ReactTestRenderer.act(async () => {
+      renderer = ReactTestRenderer.create(
+        <SafeAreaProvider
+          initialMetrics={{
+            frame: { x: 0, y: 0, width: 390, height: 844 },
+            insets: { top: 0, left: 0, right: 0, bottom: 0 },
+          }}
+        >
+          <ThemeProvider>
+            <AlertProvider>
+              <AIChatScreen />
+            </AlertProvider>
+          </ThemeProvider>
+        </SafeAreaProvider>,
+      );
+    });
+    await flushMicrotasks();
+
+    try {
+      expect(mockGetChatSession).toHaveBeenCalledWith('sess-history');
+      const joined = collectTexts(renderer.root).join(' ');
+      expect(joined).toContain('历史美式咖啡');
+      expect(joined).toContain('历史旅行基金');
+      expect(joined).toContain('瑞幸拿铁');
+      expect(joined).toContain('历史账单建议（仅供查看）');
+      expect(joined).toContain('以上是你的历史查账与记账整理结果。');
+
+      // 历史 create_bills 卡片为只读，不渲染修改/删除按钮，也不出现底部批量保存栏
+      expect(
+        renderer.root.findAll(
+          (node) => typeof node.props.testID === 'string' && node.props.testID.startsWith('ai-bill-edit-'),
+        ),
+      ).toHaveLength(0);
+      expect(joined).not.toContain('一键保存');
+    } finally {
+      await ReactTestRenderer.act(async () => {
+        renderer.unmount();
+      });
+    }
+  });
+
   test.each([
     ['soft', 'light'],
     ['blocks', 'dark'],

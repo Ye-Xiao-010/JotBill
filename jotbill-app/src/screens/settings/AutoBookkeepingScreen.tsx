@@ -8,7 +8,6 @@
  */
 import React, { useCallback, useEffect, useRef } from 'react';
 import {
-  Alert,
   ScrollView,
   StyleSheet,
   Switch,
@@ -28,6 +27,8 @@ import {
 } from 'lucide-react-native';
 import { nativeAutoBookkeeping } from '../../native';
 import { QUERY_KEYS } from '../../lib/queryClient';
+import { HOGWARTS_FONTS } from '../../constants/hogwartsAssets';
+import { useAlert } from '../../providers';
 import { borderRadius, borderWidth, spacing } from '../../theme/spacing';
 import { ThemeColors } from '../../theme/colors';
 import { ThemeShape } from '../../theme/shape';
@@ -42,6 +43,7 @@ const SETTINGS_QUERY_KEY = QUERY_KEYS.bookkeeping.settings;
 export default function AutoBookkeepingScreen() {
   const navigation = useNavigation();
   const queryClient = useQueryClient();
+  const { alert } = useAlert();
   const styles = useStyles(createStyles);
 
   const settingsQuery = useQuery({
@@ -65,7 +67,7 @@ export default function AutoBookkeepingScreen() {
 
   const requestKeepAlive = useCallback(() => {
     keepAlivePromptShown.current = true;
-    Alert.alert(
+    alert(
       '开启后台守护？',
       '开启后 JotBill 会显示一条低重要性常驻通知，降低最近任务被清理后漏记的概率。\n\n它不会轮询屏幕，也不会定时唤醒；自动记账仍然只在支付事件发生时工作。',
       [
@@ -73,26 +75,22 @@ export default function AutoBookkeepingScreen() {
           text: '暂不',
           style: 'cancel',
           onPress: () => {
-            void (async () => {
-              await nativeAutoBookkeeping.markKeepAlivePrompted();
-              invalidate();
-            })();
+            nativeAutoBookkeeping.markKeepAlivePrompted().then(invalidate).catch(() => undefined);
           },
         },
         {
           text: '开启',
           onPress: () => {
-            void (async () => {
-              await nativeAutoBookkeeping.markKeepAlivePrompted();
-              await nativeAutoBookkeeping.setKeepAliveEnabled(true);
-              invalidate();
-            })();
+            nativeAutoBookkeeping
+              .markKeepAlivePrompted()
+              .then(() => nativeAutoBookkeeping.setKeepAliveEnabled(true))
+              .then(invalidate)
+              .catch(() => undefined);
           },
         },
       ],
-      { cancelable: false },
     );
-  }, [invalidate]);
+  }, [alert, invalidate]);
 
   useEffect(() => {
     if (keepAlivePromptShown.current) return;
@@ -114,12 +112,12 @@ export default function AutoBookkeepingScreen() {
         queryClient.invalidateQueries({ queryKey: QUERY_KEYS.recognition.permissions }),
       ]);
     },
-    onError: () => Alert.alert('设置失败', '无法保存静默记账设置，请重试。'),
+    onError: () => alert('设置失败', '无法保存静默记账设置，请重试。'),
   });
   const autoBookedNotificationMutation = useMutation({
     mutationFn: nativeAutoBookkeeping.setAutoBookedNotificationEnabled,
     onSuccess: invalidate,
-    onError: () => Alert.alert('设置失败', '无法保存通知设置，请重试。'),
+    onError: () => alert('设置失败', '无法保存通知设置，请重试。'),
   });
   const channelMutation = useMutation({
     mutationFn: ({ channel, enabled }: { channel: string; enabled: boolean }) =>
@@ -139,7 +137,7 @@ export default function AutoBookkeepingScreen() {
           style={styles.backButton}
           onPress={() => navigation.goBack()}
         >
-          <ChevronLeft size={24} color={styles._isSoft ? styles._colors.textPrimary : styles._colors.stroke} />
+          <ChevronLeft size={24} color={styles._isSoft || styles._isHogwarts ? styles._colors.textPrimary : styles._colors.stroke} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>自动记账</Text>
         <View style={styles.backButton} />
@@ -170,7 +168,7 @@ export default function AutoBookkeepingScreen() {
         <View style={styles.sectionCard}>
           <View style={styles.masterRow}>
             <View style={styles.iconContainer}>
-              <Zap size={20} color={styles._isSoft ? styles._colors.primary : styles._colors.stroke} />
+              <Zap size={20} color={styles._isSoft || styles._isHogwarts ? styles._colors.primary : styles._colors.stroke} />
             </View>
             <View style={styles.masterText}>
               <Text style={styles.sectionTitle}>付完钱自动记账</Text>
@@ -340,6 +338,8 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
       justifyContent: 'space-between',
       paddingHorizontal: spacing.md,
       paddingVertical: spacing.sm,
+      borderBottomWidth: shape.isHogwarts ? shape.borderWidth.card : 0,
+      borderBottomColor: colors.divider,
     },
     backButton: {
       width: 40,
@@ -348,8 +348,9 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
       justifyContent: 'center',
     },
     headerTitle: {
-      fontSize: shape.isSoft ? 18 : 17,
-      fontWeight: shape.isSoft ? '700' : '900',
+      fontSize: shape.isSoft || shape.isHogwarts ? 18 : 17,
+      fontWeight: shape.isHogwarts ? undefined : shape.isSoft ? '700' : '900',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.display : undefined,
       color: colors.textPrimary,
     },
     scrollView: {
@@ -362,11 +363,11 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
     sectionCard: {
       padding: spacing.lg,
       backgroundColor: colors.surface,
-      borderWidth: shape.isSoft ? shape.borderWidth.card : borderWidth.thin,
-      borderColor: shape.isSoft ? colors.cardBorder : colors.stroke,
+      borderWidth: shape.isSoft || shape.isHogwarts ? shape.borderWidth.card : borderWidth.thin,
+      borderColor: shape.isSoft || shape.isHogwarts ? colors.cardBorder : colors.stroke,
       borderRadius: shape.radius.card,
       gap: spacing.sm,
-      ...(shape.isSoft ? shape.elevation.card : {}),
+      ...(shape.isSoft || shape.isHogwarts ? shape.elevation.card : {}),
     },
     masterRow: {
       flexDirection: 'row',
@@ -376,9 +377,9 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
     iconContainer: {
       width: 40,
       height: 40,
-      borderRadius: shape.isSoft ? 12 : borderRadius.small,
-      borderWidth: shape.isSoft ? 0 : borderWidth.thin,
-      borderColor: colors.stroke,
+      borderRadius: shape.isSoft || shape.isHogwarts ? 12 : borderRadius.small,
+      borderWidth: shape.isSoft ? 0 : shape.isHogwarts ? shape.borderWidth.card : borderWidth.thin,
+      borderColor: shape.isHogwarts ? colors.cardBorder : colors.stroke,
       backgroundColor: colors.primaryLight,
       alignItems: 'center',
       justifyContent: 'center',
@@ -389,12 +390,14 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
     },
     sectionTitle: {
       fontSize: 15,
-      fontWeight: shape.isSoft ? '700' : '800',
+      fontWeight: shape.isHogwarts ? undefined : shape.isSoft ? '700' : '800',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.display : undefined,
       color: colors.textPrimary,
     },
     sectionText: {
       fontSize: 12,
-      fontWeight: '500',
+      fontWeight: shape.isHogwarts ? undefined : '500',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
       color: colors.textSecondary,
       lineHeight: 18,
     },
@@ -406,7 +409,8 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
     },
     channelLabel: {
       fontSize: 14,
-      fontWeight: shape.isSoft ? '600' : '700',
+      fontWeight: shape.isHogwarts ? undefined : shape.isSoft ? '600' : '700',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
       color: colors.textPrimary,
     },
     warningCard: {
@@ -414,19 +418,21 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
       alignItems: 'flex-start',
       gap: spacing.sm,
       padding: spacing.lg,
-      backgroundColor: shape.isSoft ? colors.expenseLight : colors.surface,
-      borderWidth: shape.isSoft ? 0 : borderWidth.thick,
+      backgroundColor: shape.isSoft || shape.isHogwarts ? colors.expenseLight : colors.surface,
+      borderWidth: shape.isSoft ? 0 : shape.isHogwarts ? shape.borderWidth.card : borderWidth.thick,
       borderColor: colors.error,
       borderRadius: shape.radius.card,
     },
     warningTitle: {
       fontSize: 14,
-      fontWeight: shape.isSoft ? '700' : '800',
-      color: shape.isSoft ? colors.expenseStrong : colors.error,
+      fontWeight: shape.isHogwarts ? undefined : shape.isSoft ? '700' : '800',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.display : undefined,
+      color: shape.isSoft || shape.isHogwarts ? colors.expenseStrong : colors.error,
     },
     warningText: {
       fontSize: 12,
-      fontWeight: shape.isSoft ? '500' : '600',
+      fontWeight: shape.isHogwarts ? undefined : shape.isSoft ? '500' : '600',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
       color: colors.textSecondary,
       lineHeight: 18,
       marginTop: 2,
@@ -436,15 +442,16 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
       alignSelf: 'flex-start',
       paddingHorizontal: spacing.md,
       paddingVertical: spacing.xs + 2,
-      borderRadius: shape.isSoft ? shape.radius.pill : borderRadius.small,
-      borderWidth: shape.isSoft ? 0 : borderWidth.thin,
-      borderColor: colors.stroke,
-      backgroundColor: shape.isSoft ? colors.surface : colors.primaryLight,
+      borderRadius: shape.isSoft ? shape.radius.pill : shape.isHogwarts ? shape.radius.button : borderRadius.small,
+      borderWidth: shape.isSoft ? 0 : shape.isHogwarts ? shape.borderWidth.card : borderWidth.thin,
+      borderColor: shape.isHogwarts ? colors.cardBorder : colors.stroke,
+      backgroundColor: shape.isSoft || shape.isHogwarts ? colors.surface : colors.primaryLight,
     },
     warningActionText: {
       fontSize: 12,
-      fontWeight: shape.isSoft ? '700' : '800',
-      color: shape.isSoft ? colors.expenseStrong : colors.textPrimary,
+      fontWeight: shape.isHogwarts ? undefined : shape.isSoft ? '700' : '800',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
+      color: shape.isSoft || shape.isHogwarts ? colors.expenseStrong : colors.textPrimary,
     },
     privacyRow: {
       flexDirection: 'row',
@@ -454,11 +461,13 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
     privacyText: {
       flex: 1,
       fontSize: 12,
-      fontWeight: shape.isSoft ? '500' : '600',
+      fontWeight: shape.isHogwarts ? undefined : shape.isSoft ? '500' : '600',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
       color: colors.textSecondary,
       lineHeight: 18,
     },
   }),
   _colors: colors,
   _isSoft: shape.isSoft,
+  _isHogwarts: shape.isHogwarts,
 });

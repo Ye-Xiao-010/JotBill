@@ -1,11 +1,13 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, BackHandler, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, BackHandler, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { useNavigation, usePreventRemove } from '@react-navigation/native';
 import { useQueryClient } from '@tanstack/react-query';
 import { Archive, CheckCircle2, ChevronLeft, Download, FileText, FileUp, Trash2, X } from 'lucide-react-native';
 import { nativeBackup } from '../../native';
 import type { BackupSummary, RestorePreview } from '../../../../docs/types/Native';
 import { invalidateCache } from '../../lib/queryClient';
+import { HOGWARTS_FONTS } from '../../constants/hogwartsAssets';
+import { useAlert } from '../../providers';
 import { borderRadius, borderWidth, spacing } from '../../theme/spacing';
 import { ThemeColors } from '../../theme/colors';
 import { ThemeShape } from '../../theme/shape';
@@ -41,6 +43,7 @@ const countText = (value: number): string => value.toLocaleString('zh-CN');
 export default function DataManagementScreen() {
   const navigation = useNavigation();
   const queryClient = useQueryClient();
+  const { alert } = useAlert();
   const styles = useStyles(createStyles);
   const [exporting, setExporting] = useState(false);
   const [creatingBackup, setCreatingBackup] = useState(false);
@@ -94,7 +97,7 @@ export default function DataManagementScreen() {
     setStatus(null);
     try {
       const result = await nativeBackup.exportData('csv');
-      Alert.alert('导出完成', 'CSV 文件已保存到你选择的位置。', [{ text: '知道了' }]);
+      alert('导出完成', 'CSV 文件已保存到你选择的位置。', [{ text: '知道了' }]);
       return result;
     } catch (error) {
       if (isErrorWithCode(error, 'EXPORT_CANCELLED')) return;
@@ -201,12 +204,12 @@ export default function DataManagementScreen() {
       restoringRef.current ||
       clearingRef.current
     ) return;
-    Alert.alert(
+    alert(
       '确认覆盖恢复',
       `将替换备份范围内的账单、账户、分类等数据。重复记录按替换处理，恢复失败会回滚。\n\n备份记录：${countText(preview.recordSummary.totalCount)}`,
       [
         { text: '取消', style: 'cancel' },
-        { text: '确认覆盖', style: 'destructive', onPress: () => { void executeOverwriteRestore(); } },
+        { text: '确认覆盖', style: 'destructive', onPress: () => { executeOverwriteRestore(); } },
       ],
     );
   };
@@ -226,7 +229,7 @@ export default function DataManagementScreen() {
     // 后者没了就再也无法撤销那次导入。
     // 且不可逆：BackupManager 只备份 11 张表，"先备份再清除"救不回这几类。
     // 文案必须与实际范围一致，否则用户会以为"只是清账本"。
-    Alert.alert(
+    alert(
       '清除本地数据',
       '这会清空本机全部数据，且无法撤销：\n\n' +
         '· 账单、账户、分类、预算、财务目标、规则、余额校准\n' +
@@ -252,7 +255,7 @@ export default function DataManagementScreen() {
             await nativeBackup.clearData();
             invalidateCache.all();
             queryClient.clear();
-            Alert.alert(
+            alert(
               '已清除',
               '本地全部数据已删除，包括 AI 对话历史、待确认交易与导入批次。',
             );
@@ -400,7 +403,7 @@ export default function DataManagementScreen() {
             </Text>
             <Text style={styles.panelMeta}>AI Provider 非敏感字段和成本记录会恢复；API Key、密钥和凭据不会写入备份。当前策略：覆盖，重复记录替换。</Text>
             <TouchableOpacity style={styles.restoreButton} onPress={confirmOverwriteRestore} disabled={restoring}>
-              {restoring ? <ActivityIndicator color={styles._colors.surface} /> : <Archive size={19} color={styles._colors.surface} />}
+              {restoring ? <ActivityIndicator color={styles._primaryIconColor} /> : <Archive size={19} color={styles._primaryIconColor} />}
               <Text style={styles.restoreButtonText}>确认覆盖恢复</Text>
             </TouchableOpacity>
             <TouchableOpacity style={styles.cancelButton} onPress={cancelPreview} disabled={restoring}>
@@ -448,14 +451,19 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
       paddingHorizontal: spacing.md,
       paddingTop: spacing.xl,
       paddingBottom: spacing.md,
-      backgroundColor: shape.isSoft ? colors.background : colors.surface,
-      borderBottomWidth: shape.isSoft ? 0 : borderWidth.medium,
-      borderBottomColor: colors.stroke,
+      backgroundColor: shape.isSoft || shape.isHogwarts ? colors.background : colors.surface,
+      borderBottomWidth: shape.isSoft ? 0 : shape.isHogwarts ? shape.borderWidth.card : borderWidth.medium,
+      borderBottomColor: shape.isHogwarts ? colors.divider : colors.stroke,
     },
     iconButton: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
     smallIconButton: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
     disabledButton: { opacity: 0.45 },
-    headerTitle: { fontSize: shape.isSoft ? 18 : 20, fontWeight: shape.isSoft ? '700' : '800', color: colors.textPrimary },
+    headerTitle: {
+      fontSize: shape.isSoft || shape.isHogwarts ? 18 : 20,
+      fontWeight: shape.isHogwarts ? undefined : shape.isSoft ? '700' : '800',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.display : undefined,
+      color: colors.textPrimary,
+    },
     scrollView: { flex: 1 },
     content: { padding: spacing.lg, gap: spacing.md },
     infoCard: {
@@ -464,87 +472,160 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
       gap: spacing.md,
       padding: spacing.lg,
       backgroundColor: colors.primaryLight,
-      borderWidth: shape.isSoft ? 0 : borderWidth.thin,
-      borderColor: colors.stroke,
+      borderWidth: shape.isSoft ? 0 : shape.isHogwarts ? shape.borderWidth.card : borderWidth.thin,
+      borderColor: shape.isHogwarts ? colors.cardBorder : colors.stroke,
       borderRadius: shape.radius.card,
     },
     infoMain: { flex: 1 },
-    infoTitle: { fontSize: 16, fontWeight: shape.isSoft ? '700' : '800', color: colors.textPrimary },
-    infoText: { marginTop: 4, fontSize: 13, lineHeight: 19, color: colors.textSecondary },
+    infoTitle: {
+      fontSize: 16,
+      fontWeight: shape.isHogwarts ? undefined : shape.isSoft ? '700' : '800',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.display : undefined,
+      color: colors.textPrimary,
+    },
+    infoText: {
+      marginTop: 4,
+      fontSize: 13,
+      lineHeight: 19,
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
+      color: colors.textSecondary,
+    },
     statusCard: {
       flexDirection: 'row',
       alignItems: 'flex-start',
       gap: spacing.md,
       padding: spacing.md,
-      borderWidth: shape.isSoft ? 0 : borderWidth.thin,
+      borderWidth: shape.isSoft ? 0 : shape.isHogwarts ? shape.borderWidth.card : borderWidth.thin,
       borderRadius: shape.radius.card,
     },
-    successStatus: { backgroundColor: shape.isSoft ? colors.incomeLight : colors.successLight, borderColor: colors.success },
-    errorStatus: { backgroundColor: shape.isSoft ? colors.expenseLight : '#FEE2E2', borderColor: colors.error },
+    successStatus: { backgroundColor: shape.isSoft || shape.isHogwarts ? colors.incomeLight : colors.successLight, borderColor: colors.success },
+    errorStatus: { backgroundColor: colors.expenseLight, borderColor: colors.error },
     infoStatus: { backgroundColor: colors.primaryLight, borderColor: colors.primary },
     statusMain: { flex: 1 },
-    statusTitle: { fontSize: 15, fontWeight: shape.isSoft ? '700' : '800', color: colors.textPrimary },
-    statusText: { marginTop: 4, fontSize: 13, lineHeight: 19, color: colors.textSecondary },
+    statusTitle: {
+      fontSize: 15,
+      fontWeight: shape.isHogwarts ? undefined : shape.isSoft ? '700' : '800',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.display : undefined,
+      color: colors.textPrimary,
+    },
+    statusText: {
+      marginTop: 4,
+      fontSize: 13,
+      lineHeight: 19,
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
+      color: colors.textSecondary,
+    },
     actionCard: {
       flexDirection: 'row',
       alignItems: 'center',
       gap: spacing.md,
       padding: spacing.lg,
       backgroundColor: colors.surface,
-      borderWidth: shape.isSoft ? shape.borderWidth.card : borderWidth.thin,
-      borderColor: shape.isSoft ? colors.cardBorder : colors.stroke,
+      borderWidth: shape.isSoft || shape.isHogwarts ? shape.borderWidth.card : borderWidth.thin,
+      borderColor: shape.isSoft || shape.isHogwarts ? colors.cardBorder : colors.stroke,
       borderRadius: shape.radius.card,
-      ...(shape.isSoft ? shape.elevation.card : {}),
+      ...(shape.isSoft || shape.isHogwarts ? shape.elevation.card : {}),
     },
     dangerCard: {
-      backgroundColor: shape.isSoft ? colors.expenseLight : colors.surface,
+      backgroundColor: shape.isSoft || shape.isHogwarts ? colors.expenseLight : colors.surface,
       borderColor: shape.isSoft ? 'transparent' : colors.error,
       ...(shape.isSoft ? shape.elevation.none : {}),
     },
     actionMain: { flex: 1 },
-    actionTitle: { fontSize: 16, fontWeight: shape.isSoft ? '700' : '800', color: colors.textPrimary },
-    dangerTitle: { fontSize: 16, fontWeight: shape.isSoft ? '700' : '800', color: shape.isSoft ? colors.expenseStrong : colors.error },
-    actionText: { marginTop: 4, fontSize: 13, lineHeight: 19, color: colors.textSecondary },
+    actionTitle: {
+      fontSize: 16,
+      fontWeight: shape.isHogwarts ? undefined : shape.isSoft ? '700' : '800',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.display : undefined,
+      color: colors.textPrimary,
+    },
+    dangerTitle: {
+      fontSize: 16,
+      fontWeight: shape.isHogwarts ? undefined : shape.isSoft ? '700' : '800',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.display : undefined,
+      color: shape.isSoft || shape.isHogwarts ? colors.expenseStrong : colors.error,
+    },
+    actionText: {
+      marginTop: 4,
+      fontSize: 13,
+      lineHeight: 19,
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
+      color: colors.textSecondary,
+    },
     summaryPanel: {
       padding: spacing.lg,
       backgroundColor: colors.surface,
-      borderWidth: shape.isSoft ? shape.borderWidth.card : borderWidth.thin,
-      borderColor: shape.isSoft ? colors.cardBorder : colors.strokeLight,
+      borderWidth: shape.isSoft || shape.isHogwarts ? shape.borderWidth.card : borderWidth.thin,
+      borderColor: shape.isSoft || shape.isHogwarts ? colors.cardBorder : colors.strokeLight,
       borderRadius: shape.radius.card,
-      ...(shape.isSoft ? shape.elevation.card : {}),
+      ...(shape.isSoft || shape.isHogwarts ? shape.elevation.card : {}),
     },
     previewPanel: {
       padding: spacing.lg,
       backgroundColor: colors.surface,
-      borderWidth: shape.isSoft ? shape.borderWidth.card : borderWidth.medium,
-      borderColor: shape.isSoft ? colors.cardBorder : colors.primary,
+      borderWidth: shape.isSoft ? shape.borderWidth.card : shape.isHogwarts ? shape.borderWidth.strong : borderWidth.medium,
+      borderColor: shape.isSoft || shape.isHogwarts ? colors.cardBorder : colors.primary,
       borderRadius: shape.radius.card,
-      ...(shape.isSoft ? shape.elevation.card : {}),
+      ...(shape.isSoft || shape.isHogwarts ? shape.elevation.card : {}),
     },
     previewHeader: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: spacing.sm },
     previewHeading: { flex: 1 },
-    panelTitle: { fontSize: 16, fontWeight: shape.isSoft ? '700' : '800', color: colors.textPrimary },
-    panelText: { marginTop: spacing.sm, fontSize: 12, lineHeight: 17, color: colors.textSecondary },
-    panelMeta: { marginTop: spacing.sm, fontSize: 12, lineHeight: 17, color: colors.textTertiary },
+    panelTitle: {
+      fontSize: 16,
+      fontWeight: shape.isHogwarts ? undefined : shape.isSoft ? '700' : '800',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.display : undefined,
+      color: colors.textPrimary,
+    },
+    panelText: {
+      marginTop: spacing.sm,
+      fontSize: 12,
+      lineHeight: 17,
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
+      color: colors.textSecondary,
+    },
+    panelMeta: {
+      marginTop: spacing.sm,
+      fontSize: 12,
+      lineHeight: 17,
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
+      color: colors.textTertiary,
+    },
     metricsGrid: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.md },
     sectionLabel: { marginTop: spacing.lg, marginBottom: spacing.xs },
     metricWarning: {
-      backgroundColor: shape.isSoft ? colors.expenseLight : colors.background,
+      backgroundColor: shape.isSoft || shape.isHogwarts ? colors.expenseLight : colors.background,
       borderColor: shape.isSoft ? 'transparent' : colors.error,
-      borderWidth: shape.isSoft ? 0 : borderWidth.medium,
+      borderWidth: shape.isSoft ? 0 : shape.isHogwarts ? shape.borderWidth.card : borderWidth.medium,
     },
-    warningText: { marginTop: spacing.md, fontSize: 13, lineHeight: 19, fontWeight: '700', color: shape.isSoft ? colors.expenseStrong : colors.error },
+    warningText: {
+      marginTop: spacing.md,
+      fontSize: 13,
+      lineHeight: 19,
+      fontWeight: shape.isHogwarts ? undefined : '700',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
+      color: shape.isSoft || shape.isHogwarts ? colors.expenseStrong : colors.error,
+    },
     metric: {
       flex: 1,
       minWidth: 0,
       padding: spacing.sm,
-      backgroundColor: shape.isSoft ? colors.surfaceMuted : colors.background,
-      borderWidth: shape.isSoft ? 0 : borderWidth.thin,
-      borderColor: colors.strokeLight,
-      borderRadius: shape.isSoft ? 12 : borderRadius.small,
+      backgroundColor: shape.isSoft || shape.isHogwarts ? colors.surfaceMuted : colors.background,
+      borderWidth: shape.isSoft ? 0 : shape.isHogwarts ? shape.borderWidth.card : borderWidth.thin,
+      borderColor: shape.isHogwarts ? colors.cardBorder : colors.strokeLight,
+      borderRadius: shape.isSoft || shape.isHogwarts ? 12 : borderRadius.small,
     },
-    metricValue: { fontSize: 17, fontWeight: shape.isSoft ? '700' : '800', color: colors.textPrimary, fontVariant: ['tabular-nums'] },
-    metricLabel: { marginTop: 2, fontSize: 11, color: colors.textSecondary },
+    metricValue: {
+      fontSize: 17,
+      fontWeight: shape.isHogwarts ? undefined : shape.isSoft ? '700' : '800',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.numeric : undefined,
+      color: colors.textPrimary,
+      fontVariant: ['tabular-nums'],
+    },
+    metricLabel: {
+      marginTop: 2,
+      fontSize: 11,
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
+      color: colors.textSecondary,
+    },
     restoreButton: {
       flexDirection: 'row',
       alignItems: 'center',
@@ -554,11 +635,16 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
       marginTop: spacing.lg,
       paddingHorizontal: spacing.md,
       backgroundColor: colors.primary,
-      borderWidth: shape.isSoft ? 0 : borderWidth.thin,
-      borderColor: colors.stroke,
+      borderWidth: shape.isSoft ? 0 : shape.isHogwarts ? shape.borderWidth.card : borderWidth.thin,
+      borderColor: shape.isHogwarts ? colors.accent : colors.stroke,
       borderRadius: shape.radius.button,
     },
-    restoreButtonText: { color: shape.isSoft ? colors.onPrimary : colors.surface, fontSize: 15, fontWeight: shape.isSoft ? '700' : '800' },
+    restoreButtonText: {
+      color: shape.isSoft || shape.isHogwarts ? colors.onPrimary : colors.surface,
+      fontSize: 15,
+      fontWeight: shape.isHogwarts ? undefined : shape.isSoft ? '700' : '800',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
+    },
     cancelButton: {
       flexDirection: 'row',
       alignItems: 'center',
@@ -567,12 +653,18 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
       minHeight: 42,
       marginTop: spacing.sm,
       paddingHorizontal: spacing.md,
-      backgroundColor: shape.isSoft ? colors.surfaceMuted : 'transparent',
-      borderWidth: shape.isSoft ? 0 : borderWidth.thin,
-      borderColor: colors.strokeLight,
+      backgroundColor: shape.isSoft || shape.isHogwarts ? colors.surfaceMuted : 'transparent',
+      borderWidth: shape.isSoft ? 0 : shape.isHogwarts ? shape.borderWidth.card : borderWidth.thin,
+      borderColor: shape.isHogwarts ? colors.cardBorder : colors.strokeLight,
       borderRadius: shape.radius.button,
     },
-    cancelButtonText: { color: colors.textPrimary, fontSize: 14, fontWeight: '700' },
+    cancelButtonText: {
+      color: colors.textPrimary,
+      fontSize: 14,
+      fontWeight: shape.isHogwarts ? undefined : '700',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
+    },
   }),
   _colors: colors,
+  _primaryIconColor: shape.isSoft || shape.isHogwarts ? colors.onPrimary : colors.surface,
 });

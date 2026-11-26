@@ -14,6 +14,7 @@ import {
 import { MessageCircle, Plus, Trash2, ChevronRight, AlertTriangle } from 'lucide-react-native';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { useAlert } from '../../providers';
+import { HOGWARTS_FONTS } from '../../constants/hogwartsAssets';
 import { ThemeColors } from '../../theme/colors';
 import { ThemeShape } from '../../theme/shape';
 import { borderRadius, borderWidth, spacing } from '../../theme/spacing';
@@ -228,13 +229,14 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
       alignItems: 'center',
       paddingHorizontal: spacing.lg,
       paddingVertical: spacing.md,
-      backgroundColor: shape.isSoft ? colors.background : colors.surface,
-      borderBottomWidth: shape.isSoft ? 0 : borderWidth.thin,
-      borderBottomColor: colors.stroke,
+      backgroundColor: shape.isSoft || shape.isHogwarts ? colors.background : colors.surface,
+      borderBottomWidth: shape.isSoft ? 0 : shape.isHogwarts ? shape.borderWidth.card : borderWidth.thin,
+      borderBottomColor: shape.isHogwarts ? colors.divider : colors.stroke,
     },
     headerTitle: {
       fontSize: 18,
-      fontWeight: shape.isSoft ? '700' : '800',
+      fontWeight: shape.isHogwarts ? undefined : shape.isSoft ? '700' : '800',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.display : undefined,
       color: colors.textPrimary,
     },
     newChatButton: {
@@ -244,14 +246,15 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
       backgroundColor: colors.primary,
       paddingVertical: spacing.xs + 2,
       paddingHorizontal: spacing.md,
-      borderRadius: shape.isSoft ? shape.radius.pill : borderRadius.button,
-      borderWidth: shape.isSoft ? 0 : borderWidth.thin,
-      borderColor: colors.stroke,
+      borderRadius: shape.isSoft || shape.isHogwarts ? shape.radius.pill : borderRadius.button,
+      borderWidth: shape.isSoft ? 0 : shape.isHogwarts ? shape.borderWidth.card : borderWidth.thin,
+      borderColor: shape.isHogwarts ? colors.accent : colors.stroke,
     },
     newChatButtonText: {
       fontSize: 14,
-      color: shape.isSoft ? colors.onPrimary : '#FFFFFF',
-      fontWeight: '700',
+      color: shape.isSoft || shape.isHogwarts ? colors.onPrimary : '#FFFFFF',
+      fontWeight: shape.isHogwarts ? undefined : '700',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
     },
     listContent: {
       padding: spacing.lg,
@@ -268,41 +271,43 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
     errorHint: {
       marginTop: spacing.xs,
       fontSize: 13,
-      fontWeight: '700',
+      fontWeight: shape.isHogwarts ? undefined : '700',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
       color: colors.error,
     },
     retryButton: {
       marginTop: spacing.lg,
       backgroundColor: colors.primary,
       borderRadius: shape.radius.button,
-      borderWidth: shape.isSoft ? 0 : borderWidth.thin,
-      borderColor: colors.stroke,
+      borderWidth: shape.isSoft ? 0 : shape.isHogwarts ? shape.borderWidth.card : borderWidth.thin,
+      borderColor: shape.isHogwarts ? colors.accent : colors.stroke,
       paddingHorizontal: spacing.xl,
       paddingVertical: spacing.sm,
     },
     retryButtonText: {
       fontSize: 14,
-      fontWeight: shape.isSoft ? '700' : '800',
-      color: shape.isSoft ? colors.onPrimary : '#FFFFFF',
+      fontWeight: shape.isHogwarts ? undefined : shape.isSoft ? '700' : '800',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
+      color: shape.isSoft || shape.isHogwarts ? colors.onPrimary : '#FFFFFF',
     },
     sessionCard: {
       flexDirection: 'row',
       alignItems: 'center',
       backgroundColor: colors.surface,
       borderRadius: shape.radius.card,
-      borderWidth: shape.isSoft ? shape.borderWidth.card : borderWidth.thin,
-      borderColor: shape.isSoft ? colors.cardBorder : colors.stroke,
+      borderWidth: shape.isSoft || shape.isHogwarts ? shape.borderWidth.card : borderWidth.thin,
+      borderColor: shape.isSoft || shape.isHogwarts ? colors.cardBorder : colors.stroke,
       padding: spacing.md,
       marginBottom: spacing.sm,
-      ...(shape.isSoft ? shape.elevation.card : {}),
+      ...(shape.isSoft || shape.isHogwarts ? shape.elevation.card : {}),
     },
     sessionIcon: {
       width: 40,
       height: 40,
-      borderRadius: shape.isSoft ? 12 : borderRadius.small,
-      borderWidth: shape.isSoft ? 0 : borderWidth.thin,
-      borderColor: colors.stroke,
-      backgroundColor: shape.isSoft ? colors.primaryLight : colors.accent,
+      borderRadius: shape.isSoft || shape.isHogwarts ? 12 : borderRadius.small,
+      borderWidth: shape.isSoft ? 0 : shape.isHogwarts ? shape.borderWidth.card : borderWidth.thin,
+      borderColor: shape.isHogwarts ? colors.cardBorder : colors.stroke,
+      backgroundColor: shape.isSoft || shape.isHogwarts ? colors.primaryLight : colors.accent,
       alignItems: 'center',
       justifyContent: 'center',
       marginRight: spacing.md,
@@ -312,14 +317,19 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
     },
     sessionTitle: {
       fontSize: 15,
-      fontWeight: shape.isSoft ? '600' : '700',
+      fontWeight: shape.isHogwarts ? undefined : shape.isSoft ? '600' : '700',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.display : undefined,
       color: colors.textPrimary,
       marginBottom: 2,
     },
     sessionMeta: {
       fontSize: 12,
-      fontWeight: shape.isSoft ? '500' : '600',
-      fontFamily: shape.isSoft ? undefined : typography.fontFamily.mono,
+      fontWeight: shape.isHogwarts ? undefined : shape.isSoft ? '500' : '600',
+      fontFamily: shape.isHogwarts
+        ? HOGWARTS_FONTS.numeric
+        : shape.isSoft
+          ? undefined
+          : typography.fontFamily.mono,
       fontVariant: ['tabular-nums'],
       color: colors.textTertiary,
     },
@@ -339,17 +349,19 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
     },
     emptyText: {
       fontSize: 16,
-      fontWeight: '700',
+      fontWeight: shape.isHogwarts ? undefined : '700',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.display : undefined,
       color: colors.textSecondary,
       marginTop: spacing.lg,
     },
     emptyHint: {
       fontSize: 13,
-      fontWeight: '600',
+      fontWeight: shape.isHogwarts ? undefined : '600',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
       color: colors.textTertiary,
       marginTop: spacing.xs,
     },
   }),
   _colors: colors,
-  _primaryIconColor: shape.isSoft ? colors.onPrimary : '#FFFFFF',
+  _primaryIconColor: shape.isSoft || shape.isHogwarts ? colors.onPrimary : '#FFFFFF',
 });

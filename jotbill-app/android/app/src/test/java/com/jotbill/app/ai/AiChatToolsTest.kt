@@ -8,7 +8,10 @@ import com.jotbill.app.data.entity.AccountEntity
 import com.jotbill.app.data.entity.BillEntity
 import com.jotbill.app.data.entity.BudgetEntity
 import com.jotbill.app.data.entity.CategoryEntity
+import com.jotbill.app.data.entity.ChatMessageEntity
+import com.jotbill.app.data.entity.ChatSessionEntity
 import com.jotbill.app.data.entity.FinancialGoalEntity
+import org.json.JSONObject
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -361,6 +364,87 @@ class AiChatToolsTest {
         updatedAt = 1L,
         cardTail = cardTail
     )
+
+    @Test
+    fun `chat_messages 持久化工具结果、还原 JSON 并从 LLM 历史上下文中安全过滤 role=tool`() = runBlocking {
+        val sessionId = "sess-tool-history"
+        database.chatDao().insertSession(
+            ChatSessionEntity(
+                id = sessionId,
+                title = "工具卡片恢复测试",
+                aiProviderId = null,
+                isActive = true,
+                isPinned = false,
+                createdAt = fixedNow,
+                updatedAt = fixedNow
+            )
+        )
+        val statsPayload = JSONObject()
+            .put("success", true)
+            .put("message", "本月共支出 128 元")
+            .put("data", JSONObject().put("totalExpense", 128).put("totalIncome", 0))
+
+        database.chatDao().appendMessage(
+            ChatMessageEntity(
+                id = "m-user",
+                sessionId = sessionId,
+                seqNum = 1,
+                role = "user",
+                content = "本月花了多少",
+                imageDataJson = null,
+                createdAt = fixedNow
+            ),
+            fixedNow
+        )
+        database.chatDao().appendMessage(
+            ChatMessageEntity(
+                id = "m-tool",
+                sessionId = sessionId,
+                seqNum = 2,
+                role = "tool",
+                content = "本月共支出 128 元",
+                imageDataJson = null,
+                createdAt = fixedNow + 10,
+                toolCallId = "call_stats_1",
+                toolName = "get_statistics",
+                toolResultJson = statsPayload.toString()
+            ),
+            fixedNow + 10
+        )
+        database.chatDao().appendMessage(
+            ChatMessageEntity(
+                id = "m-assistant",
+                sessionId = sessionId,
+                seqNum = 3,
+                role = "assistant",
+                content = "你本月总支出 128 元。",
+                imageDataJson = null,
+                createdAt = fixedNow + 20
+            ),
+            fixedNow + 20
+        )
+
+        val stored = database.chatDao().getMessages(sessionId)
+        assertEquals(3, stored.size)
+
+        // 1. 传给 LLM 的上下文严格过滤掉 role=tool，避免孤立 tool 消息触发 400
+        val llmHistory = AiChatModule.filterHistoryForLlm(stored)
+        assertEquals(listOf("user", "assistant"), llmHistory.map { it.role })
+
+        // 2. messageToJson 完整还原 toolCallId / toolName / 结构化 toolResult
+        val toolJson = AiChatModule.messageToJson(stored[1])
+        assertEquals("tool", toolJson.getString("role"))
+        assertEquals("call_stats_1", toolJson.getString("toolCallId"))
+        assertEquals("get_statistics", toolJson.getString("toolName"))
+        val restoredResult = toolJson.getJSONObject("toolResult")
+        assertTrue(restoredResult.getBoolean("success"))
+        assertEquals(128, restoredResult.getJSONObject("data").getInt("totalExpense"))
+
+        // 普通文本消息不携带 toolResult
+        val userJson = AiChatModule.messageToJson(stored[0])
+        assertTrue(userJson.isNull("toolResult"))
+        assertTrue(userJson.isNull("toolName"))
+    }
 
     private fun bill(
         id: String,

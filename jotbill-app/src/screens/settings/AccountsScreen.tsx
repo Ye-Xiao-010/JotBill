@@ -14,7 +14,6 @@
  */
 import React, { useCallback, useMemo, useState } from 'react';
 import {
-  Alert,
   Image,
   ImageBackground,
   RefreshControl,
@@ -56,7 +55,7 @@ import {
 } from '../../constants/hogwartsAssets';
 import { QUERY_KEYS } from '../../lib/queryClient';
 import { useRefreshControlProps, useStyles } from '../../hooks';
-import { useTheme } from '../../providers';
+import { useAlert, useTheme } from '../../providers';
 import { borderWidth, shadow, typography } from '../../theme';
 import type { ThemeColors } from '../../theme/colors';
 import type { ThemeShape } from '../../theme/shape';
@@ -85,6 +84,7 @@ export default function AccountsScreen() {
     playMagicSound,
   } = useTheme();
   const styles = useStyles(createStyles);
+  const { alert } = useAlert();
   const refreshControlProps = useRefreshControlProps();
 
   const [hideAmounts, setHideAmounts] = useState(false);
@@ -139,7 +139,7 @@ export default function AccountsScreen() {
       }
       playMagicSound('coin_clink');
     },
-    onError: (error: Error) => Alert.alert('保存失败', error.message),
+    onError: (error: Error) => alert('保存失败', error.message),
   });
 
   const activeMutation = useMutation({
@@ -152,7 +152,7 @@ export default function AccountsScreen() {
         setShowInactive(true);
       }
     },
-    onError: (error: Error) => Alert.alert('更新失败', error.message),
+    onError: (error: Error) => alert('更新失败', error.message),
   });
 
   const calibrationMutation = useMutation({
@@ -171,7 +171,7 @@ export default function AccountsScreen() {
       setCalibrationAccount(null);
       playMagicSound('chime');
     },
-    onError: (error: Error) => Alert.alert('校准失败', error.message),
+    onError: (error: Error) => alert('校准失败', error.message),
   });
 
   useFocusEffect(

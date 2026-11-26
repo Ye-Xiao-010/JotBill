@@ -168,6 +168,7 @@ interface Message {
   budgetsData?: any;
   goalsData?: any;
   isUser: boolean;
+  isHistorical?: boolean;
   timestamp: Date;
   streamSteps?: StreamStep[];
   streamingText?: string;
@@ -612,12 +613,13 @@ const createEditModalStyles = (colors: ThemeColors, isSoft: boolean, isHogwarts:
 interface BillCardProps {
   bill: BillItem;
   account?: Account;
+  readOnly?: boolean;
   onEdit: (bill: BillItem) => void;
   onDelete: (id: string) => void;
   colors: ThemeColors;
 }
 
-function BillCard({ bill, account, onEdit, onDelete, colors }: BillCardProps) {
+function BillCard({ bill, account, readOnly = false, onEdit, onDelete, colors }: BillCardProps) {
   const { isSoft, isHogwarts, shape } = useTheme();
   const isExpense = bill.type === 'expense';
   const amountColor = isExpense ? colors.expense : colors.income;
@@ -716,60 +718,77 @@ function BillCard({ bill, account, onEdit, onDelete, colors }: BillCardProps) {
             { borderTopColor: colors.divider },
           ]}
         >
-          <TouchableOpacity
-            testID={`ai-bill-edit-${bill.id}`}
-            style={[
-              billCardStyles.actionButton,
-              isSoft
-                ? [billCardStyles.actionButtonSoft, { backgroundColor: colors.primaryLight }]
-                : {
-                    backgroundColor: colors.surfaceMuted,
-                    borderColor: isHogwarts ? colors.cardBorder : colors.stroke,
-                  },
-            ]}
-            onPress={() => onEdit(bill)}
-          >
-            <Edit2 size={14} color={isSoft ? colors.primaryDark : colors.primary} />
+          {readOnly ? (
             <Text
+              testID={`ai-bill-historical-tag-${bill.id}`}
               style={[
-                billCardStyles.actionButtonText,
-                !isHogwarts && billCardStyles.weightSemiBold,
+                billCardStyles.historicalHint,
                 {
-                  color: isSoft ? colors.primaryDark : colors.primary,
+                  color: colors.textTertiary,
                   fontFamily: isHogwarts ? HOGWARTS_FONTS.body : undefined,
                 },
               ]}
             >
-              修改
+              历史账单建议（仅供查看）
             </Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            testID={`ai-bill-delete-${bill.id}`}
-            style={[
-              billCardStyles.actionButton,
-              isSoft
-                ? [billCardStyles.actionButtonSoft, { backgroundColor: colors.expenseLight }]
-                : {
-                    backgroundColor: colors.expenseLight,
-                    borderColor: colors.error,
-                  },
-            ]}
-            onPress={() => onDelete(bill.id)}
-          >
-            <Trash2 size={14} color={isSoft ? colors.expenseStrong : colors.error} />
-            <Text
-              style={[
-                billCardStyles.actionButtonText,
-                !isHogwarts && billCardStyles.weightSemiBold,
-                {
-                  color: isSoft ? colors.expenseStrong : colors.error,
-                  fontFamily: isHogwarts ? HOGWARTS_FONTS.body : undefined,
-                },
-              ]}
-            >
-              删除
-            </Text>
-          </TouchableOpacity>
+          ) : (
+            <>
+              <TouchableOpacity
+                testID={`ai-bill-edit-${bill.id}`}
+                style={[
+                  billCardStyles.actionButton,
+                  isSoft
+                    ? [billCardStyles.actionButtonSoft, { backgroundColor: colors.primaryLight }]
+                    : {
+                        backgroundColor: colors.surfaceMuted,
+                        borderColor: isHogwarts ? colors.cardBorder : colors.stroke,
+                      },
+                ]}
+                onPress={() => onEdit(bill)}
+              >
+                <Edit2 size={14} color={isSoft ? colors.primaryDark : colors.primary} />
+                <Text
+                  style={[
+                    billCardStyles.actionButtonText,
+                    !isHogwarts && billCardStyles.weightSemiBold,
+                    {
+                      color: isSoft ? colors.primaryDark : colors.primary,
+                      fontFamily: isHogwarts ? HOGWARTS_FONTS.body : undefined,
+                    },
+                  ]}
+                >
+                  修改
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                testID={`ai-bill-delete-${bill.id}`}
+                style={[
+                  billCardStyles.actionButton,
+                  isSoft
+                    ? [billCardStyles.actionButtonSoft, { backgroundColor: colors.expenseLight }]
+                    : {
+                        backgroundColor: colors.expenseLight,
+                        borderColor: colors.error,
+                      },
+                ]}
+                onPress={() => onDelete(bill.id)}
+              >
+                <Trash2 size={14} color={isSoft ? colors.expenseStrong : colors.error} />
+                <Text
+                  style={[
+                    billCardStyles.actionButtonText,
+                    !isHogwarts && billCardStyles.weightSemiBold,
+                    {
+                      color: isSoft ? colors.expenseStrong : colors.error,
+                      fontFamily: isHogwarts ? HOGWARTS_FONTS.body : undefined,
+                    },
+                  ]}
+                >
+                  删除
+                </Text>
+              </TouchableOpacity>
+            </>
+          )}
         </View>
       </View>
     </View>
@@ -816,6 +835,10 @@ const billCardStyles = StyleSheet.create({
   },
   weightBold: {
     fontWeight: '700',
+  },
+  historicalHint: {
+    fontSize: 12,
+    paddingVertical: 2,
   },
   weightSemiBold: {
     fontWeight: '600',
@@ -1647,8 +1670,89 @@ export default function AIChatScreen() {
                 timestamp: new Date(msg.createdAt),
               });
             }
+          } else if (msg.role === 'tool' && msg.toolName) {
+            const toolResult = msg.toolResult as
+              | { success?: boolean; message?: string; data?: any }
+              | null
+              | undefined;
+            if (!toolResult?.success) continue;
+            const timestamp = new Date(msg.createdAt);
+            const fallbackContent = toolResult.message || msg.content || '';
+            if (msg.toolName === 'query_bills' && toolResult.data) {
+              displayMessages.push({
+                id: `db-${msg.id}`,
+                type: 'bill_list',
+                billListData: toolResult.data,
+                content: fallbackContent,
+                isUser: false,
+                timestamp,
+              });
+            } else if (msg.toolName === 'get_statistics' && toolResult.data) {
+              displayMessages.push({
+                id: `db-${msg.id}`,
+                type: 'statistics',
+                statisticsData: toolResult.data,
+                content: fallbackContent,
+                isUser: false,
+                timestamp,
+              });
+            } else if (msg.toolName === 'get_accounts' && toolResult.data) {
+              displayMessages.push({
+                id: `db-${msg.id}`,
+                type: 'accounts',
+                accountsData: toolResult.data,
+                content: fallbackContent,
+                isUser: false,
+                timestamp,
+              });
+            } else if (msg.toolName === 'get_budgets' && toolResult.data) {
+              displayMessages.push({
+                id: `db-${msg.id}`,
+                type: 'budgets',
+                budgetsData: toolResult.data,
+                content: fallbackContent,
+                isUser: false,
+                timestamp,
+              });
+            } else if (msg.toolName === 'get_goals' && toolResult.data) {
+              displayMessages.push({
+                id: `db-${msg.id}`,
+                type: 'goals',
+                goalsData: toolResult.data,
+                content: fallbackContent,
+                isUser: false,
+                timestamp,
+              });
+            } else if (
+              msg.toolName === 'create_bills' &&
+              Array.isArray(toolResult.data?.bills)
+            ) {
+              const historicalBills: BillItem[] = toolResult.data.bills.map(
+                (bill: any, index: number) => ({
+                  amount: Number(bill.amount || 0),
+                  type: bill.type === 'income' ? 'income' : 'expense',
+                  description: bill.description || '',
+                  categoryName: bill.categoryName || '',
+                  accountName: bill.accountName || undefined,
+                  date: bill.date || '',
+                  id: `hist-${msg.id}-${index}`,
+                  categoryIcon: bill.categoryIcon || undefined,
+                  categoryId: bill.categoryId || undefined,
+                }),
+              );
+              if (historicalBills.length > 0) {
+                displayMessages.push({
+                  id: `db-${msg.id}`,
+                  type: 'bills',
+                  bills: historicalBills,
+                  content: fallbackContent,
+                  isUser: false,
+                  isHistorical: true,
+                  timestamp,
+                });
+              }
+            }
           }
-          // tool messages are represented by their results in assistant responses
         }
         if (displayMessages.length > 0) {
           setMessages(displayMessages);
@@ -2396,13 +2500,29 @@ export default function AIChatScreen() {
             </View>
           </View>
           {item.bills.map(bill => {
-            const resolvedAccountId = resolveAccountId(bill);
-            const matchedAccount = accounts.find((a) => a.id === resolvedAccountId);
+            const matchedCategory = categories.find(
+              (c) =>
+                (bill.categoryId && c.id === bill.categoryId) ||
+                (c.type === bill.type && c.name === bill.categoryName),
+            );
+            const resolvedBill: BillItem = {
+              ...bill,
+              categoryIcon:
+                bill.categoryIcon || matchedCategory?.icon || getCategoryIcon(bill.categoryName),
+            };
+            const matchedAccount = item.isHistorical
+              ? accounts.find(
+                  (a) =>
+                    (bill.accountId && a.id === bill.accountId) ||
+                    (bill.accountName && a.id === matchAccountIdByName(bill.accountName, accounts)),
+                )
+              : accounts.find((a) => a.id === resolveAccountId(bill));
             return (
               <BillCard
                 key={bill.id}
-                bill={bill}
+                bill={resolvedBill}
                 account={matchedAccount}
+                readOnly={Boolean(item.isHistorical)}
                 onEdit={handleEditBill}
                 onDelete={handleDeleteBill}
                 colors={styles._colors}

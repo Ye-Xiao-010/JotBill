@@ -44,7 +44,7 @@ class BillEntityContractTest {
 
     @Test
     fun databaseMigrationChainCoversPhase6Step() {
-        assertEquals(14, JOT_BILL_DATABASE_VERSION)
+        assertEquals(15, JOT_BILL_DATABASE_VERSION)
         assertTrue(DatabaseMigrations.all.any { it.startVersion == 9 && it.endVersion == 10 })
         assertTrue(DatabaseMigrations.all.any { it.startVersion == 10 && it.endVersion == 11 })
         // 批 6 子分类:categories.parent_id 轻量迁移
@@ -53,5 +53,7 @@ class BillEntityContractTest {
         assertTrue(DatabaseMigrations.all.any { it.startVersion == 12 && it.endVersion == 13 })
         // 2026-11-21:budgets 自定义周期字段
         assertTrue(DatabaseMigrations.all.any { it.startVersion == 13 && it.endVersion == 14 })
+        // 2026-11-26:chat_messages 工具结果富卡片持久化字段
+        assertTrue(DatabaseMigrations.all.any { it.startVersion == 14 && it.endVersion == 15 })
     }
 }

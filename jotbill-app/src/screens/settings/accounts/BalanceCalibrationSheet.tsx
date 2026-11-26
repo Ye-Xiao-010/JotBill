@@ -9,7 +9,6 @@
  */
 import React, { useContext, useEffect, useMemo, useState } from 'react';
 import {
-  Alert,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -28,7 +27,7 @@ import AccountIcon from '../../../components/business/AccountIcon';
 import { resolveAccountBadgeStyle } from '../../../constants/accountStyles';
 import { HOGWARTS_FONTS } from '../../../constants/hogwartsAssets';
 import { useStyles } from '../../../hooks';
-import { useTheme } from '../../../providers';
+import { useAlert, useTheme } from '../../../providers';
 import { borderWidth, shadow, spacing, typography } from '../../../theme';
 import type { ThemeColors } from '../../../theme/colors';
 import type { ThemeShape } from '../../../theme/shape';
@@ -58,6 +57,7 @@ export default function BalanceCalibrationSheet({
   onSubmit,
 }: BalanceCalibrationSheetProps) {
   const { colors, styleVariant, isDark } = useTheme();
+  const { alert } = useAlert();
   const styles = useStyles(createStyles);
   const insets = useContext(SafeAreaInsetsContext) ?? { top: 0, right: 0, bottom: 0, left: 0 };
 
@@ -98,7 +98,7 @@ export default function BalanceCalibrationSheet({
 
   const handleSubmit = () => {
     if (parsedActualMinor === null) {
-      Alert.alert('提示', '请输入有效余额');
+      alert('提示', '请输入有效余额');
       return;
     }
     onSubmit({

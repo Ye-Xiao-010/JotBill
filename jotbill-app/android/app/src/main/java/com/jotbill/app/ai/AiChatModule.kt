@@ -88,7 +88,7 @@ class AiChatModule(
             )
         }
 
-        val history = database.chatDao().getMessages(session.id).takeLast(MAX_HISTORY_MESSAGES)
+        val history = filterHistoryForLlm(database.chatDao().getMessages(session.id))
         val baseMessages = buildBaseMessages(history, images, content)
         emitChunk(requestId, session.id, "session_created")
         emitChunk(requestId, session.id, "thinking", round = 1)
@@ -490,7 +490,7 @@ class AiChatModule(
         })
     }
 
-    /** 执行工具调用并发射 tool_result 事件；返回 (调用, 结果) 供下一轮回传上下文。 */
+    /** 执行工具调用、按需落库富卡片结果并发射 tool_result 事件；返回 (调用, 结果) 供下一轮回传上下文。 */
     private suspend fun executeToolCalls(
         requestId: String,
         sessionId: String,
@@ -506,7 +506,41 @@ class AiChatModule(
                 toolName = call.name ?: "unknown",
                 resultJson = result.toString()
             )
+            persistToolResultSafely(sessionId, call, result)
             call to result
+        }
+    }
+
+    /** 将成功的工具结果以 role = "tool" 持久化，重进会话时由前端还原为对应富卡片。 */
+    private suspend fun persistToolResultSafely(
+        sessionId: String,
+        call: ToolCallState,
+        result: JSONObject
+    ) {
+        val toolName = call.name ?: return
+        if (!result.optBoolean("success") || toolName !in PERSISTED_TOOL_NAMES) return
+        try {
+            val now = System.currentTimeMillis()
+            database.withTransaction {
+                if (database.chatDao().getSession(sessionId) == null) return@withTransaction
+                database.chatDao().appendMessage(
+                    ChatMessageEntity(
+                        id = UUID.randomUUID().toString(),
+                        sessionId = sessionId,
+                        seqNum = database.chatDao().nextSequence(sessionId),
+                        role = "tool",
+                        content = result.optString("message").takeIf { it.isNotBlank() },
+                        imageDataJson = null,
+                        createdAt = now,
+                        toolCallId = call.id,
+                        toolName = toolName,
+                        toolResultJson = result.toString()
+                    ),
+                    now
+                )
+            }
+        } catch (error: Exception) {
+            Log.w(TAG, "工具结果落库失败", error)
         }
     }
 
@@ -637,20 +671,6 @@ class AiChatModule(
             .put("updatedAt", Instant.ofEpochMilli(session.updatedAt).toString())
             .put("_count", JSONObject().put("messages", messageCount))
 
-    private fun messageToJson(message: ChatMessageEntity): JSONObject =
-        JSONObject()
-            .put("id", message.id)
-            .put("sessionId", message.sessionId)
-            .put("seqNum", message.seqNum)
-            .put("role", message.role)
-            .put("content", message.content)
-            .put("toolCalls", JSONObject.NULL)
-            .put("toolCallId", JSONObject.NULL)
-            .put("toolName", JSONObject.NULL)
-            .put("toolResult", JSONObject.NULL)
-            .put("imageUrl", message.imageDataJson)
-            .put("createdAt", Instant.ofEpochMilli(message.createdAt).toString())
-
     private fun readImages(input: JSONArray?): List<String> {
         if (input == null) return emptyList()
         if (input.length() > MAX_IMAGES) {
@@ -703,7 +723,7 @@ class AiChatModule(
         return optString(key).trim().takeIf { it.isNotEmpty() }
     }
 
-    private companion object {
+    internal companion object {
         private const val TAG = "AiChatModule"
         val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
         const val STREAM_EVENT = "onAiStreamChunk"
@@ -715,5 +735,46 @@ class AiChatModule(
         const val MAX_TOOL_ROUNDS = 4
         /** 模型名命中任一特征才允许走 input_audio 语音转写。 */
         val ASR_CAPABLE_MODEL_HINTS = listOf("audio", "omni", "asr", "whisper", "voice")
+        /** 持久化工具结果用于重进会话还原富卡片的工具集合。 */
+        val PERSISTED_TOOL_NAMES = setOf(
+            "query_bills",
+            "get_statistics",
+            "get_accounts",
+            "get_budgets",
+            "get_goals",
+            "create_bills"
+        )
+
+        /**
+         * 构造发送给 LLM 的历史消息上下文：只保留 user / assistant 对话轮次，
+         * 过滤仅供前端恢复富卡片而落库的 role = "tool" 记录，避免孤立的 tool 消息触发接口 400 错误。
+         */
+        internal fun filterHistoryForLlm(
+            history: List<ChatMessageEntity>,
+            limit: Int = MAX_HISTORY_MESSAGES
+        ): List<ChatMessageEntity> =
+            history.filter { it.role == "user" || it.role == "assistant" }.takeLast(limit)
+
+        internal fun messageToJson(message: ChatMessageEntity): JSONObject {
+            val parsedToolResult: Any = message.toolResultJson
+                ?.takeIf { it.isNotBlank() }
+                ?.let { raw ->
+                    runCatching { JSONObject(raw) }.getOrNull()
+                        ?: runCatching { JSONArray(raw) }.getOrNull()
+                }
+                ?: JSONObject.NULL
+            return JSONObject()
+                .put("id", message.id)
+                .put("sessionId", message.sessionId)
+                .put("seqNum", message.seqNum)
+                .put("role", message.role)
+                .put("content", message.content ?: JSONObject.NULL)
+                .put("toolCalls", JSONObject.NULL)
+                .put("toolCallId", message.toolCallId ?: JSONObject.NULL)
+                .put("toolName", message.toolName ?: JSONObject.NULL)
+                .put("toolResult", parsedToolResult)
+                .put("imageUrl", message.imageDataJson ?: JSONObject.NULL)
+                .put("createdAt", Instant.ofEpochMilli(message.createdAt).toString())
+        }
     }
 }

@@ -29,5 +29,8 @@ data class ChatMessageEntity(
     val role: String,
     val content: String?,
     @ColumnInfo(name = "image_data_json") val imageDataJson: String?,
-    @ColumnInfo(name = "created_at") val createdAt: Long
+    @ColumnInfo(name = "created_at") val createdAt: Long,
+    @ColumnInfo(name = "tool_call_id") val toolCallId: String? = null,
+    @ColumnInfo(name = "tool_name") val toolName: String? = null,
+    @ColumnInfo(name = "tool_result_json") val toolResultJson: String? = null
 )
