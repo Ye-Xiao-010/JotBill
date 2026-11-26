@@ -73,6 +73,9 @@ interface BillDao {
     @Query("SELECT * FROM bills WHERE id = :id")
     suspend fun getById(id: String): BillEntity?
 
+    @Query("SELECT * FROM bills WHERE type != 'adjustment' ORDER BY occurred_at DESC, id DESC")
+    suspend fun getMutableBills(): List<BillEntity>
+
     /**
      * 去重第 1 级：按 **orderId** 精确查重（跨来源互认）。
      *
@@ -94,7 +97,10 @@ interface BillDao {
         SELECT * FROM bills
         WHERE UPPER(TRIM(order_id)) = UPPER(TRIM(:orderId))
           AND source_type != 'manual'
+          AND type != 'refund'
+          AND original_transaction_id IS NULL
           AND (:excludeId IS NULL OR id != :excludeId)
+        ORDER BY occurred_at DESC, id DESC
         LIMIT 1
         """
     )
@@ -381,19 +387,30 @@ interface BillDao {
     ): Long
 
     /**
-     * 预算期内的退款合计（不看分类、不看原单所属期）。
-     * 用户拍板口径：退款只要发生在预算期内，就按金额冲减该期已用。
+     * 预算期内的退款合计：
+     * - 总预算（categoryId == null）：本期所有退款均按金额冲减已用；
+     * - 单分类预算（categoryId != null）：排除跨分类退款，仅计入归属于该分类或其子分类
+     *   的退款（匹配退款自身 category_id，或其关联原账单 original_transaction_id 的 category_id）。
      */
     @Query(
         """
-        SELECT COALESCE(SUM(amount_minor), 0)
-        FROM bills
-        WHERE type = 'refund'
-          AND occurred_at >= :startDate
-          AND occurred_at <= :endDate
+        SELECT COALESCE(SUM(r.amount_minor), 0)
+        FROM bills r
+        LEFT JOIN bills orig ON r.original_transaction_id = orig.id
+        WHERE r.type = 'refund'
+          AND r.occurred_at >= :startDate
+          AND r.occurred_at <= :endDate
+          AND (
+            :categoryId IS NULL
+            OR r.category_id = :categoryId
+            OR r.category_id IN (SELECT id FROM categories WHERE parent_id = :categoryId)
+            OR orig.category_id = :categoryId
+            OR orig.category_id IN (SELECT id FROM categories WHERE parent_id = :categoryId)
+          )
         """
     )
     suspend fun sumRefunds(
+        categoryId: String?,
         startDate: Long,
         endDate: Long
     ): Long

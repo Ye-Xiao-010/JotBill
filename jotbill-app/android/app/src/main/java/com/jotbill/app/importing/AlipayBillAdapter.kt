@@ -113,6 +113,7 @@ internal object AlipayBillAdapter : BillImportAdapter {
         val product: Int,
         val amount: Int,
         val direction: Int,
+        val paymentMethod: Int,
         val status: Int,
         val remark: Int
     )
@@ -173,13 +174,16 @@ internal object AlipayBillAdapter : BillImportAdapter {
         val transactionId = valueAt(values, columns.tradeNo) ?: return null
         val type = mapType(direction, typeText, product, valueAt(values, columns.remark))
         val remark = buildRemark(valueAt(values, columns.remark), status, typeText, direction)
+        val paymentMethod = valueAt(values, columns.paymentMethod)
+            ?.takeIf { it != "/" }
+            ?: "支付宝"
         return ParsedImportRow(
             occurredAt = occurredAt,
             amountMinor = amountMinor,
             type = type,
             merchant = valueAt(values, columns.counterparty),
             productDescription = product,
-            paymentMethod = "支付宝",
+            paymentMethod = paymentMethod,
             transactionId = transactionId,
             // M5：商户单号提取点格式归一（与通知/结果页同一套 OrderIdNormalizer）
             merchantOrderId = OrderIdNormalizer.normalize(valueAt(values, columns.merchantOrderNo)),
@@ -212,7 +216,9 @@ internal object AlipayBillAdapter : BillImportAdapter {
                 productText.containsAny(TRANSFER_KEYWORDS) -> "transfer"
             tradeType.contains("收入") -> "income"
             tradeType.contains("支出") -> "expense"
-            else -> "adjustment"
+            // 中性未分类流水（理财/亲属卡/信用借还等）绝不落不可变的 adjustment 校准单：
+            // 归类为 transfer，缺少目标账户时导入引擎会转待确认交由用户明确处理。
+            else -> "transfer"
         }
     }
 
@@ -294,11 +300,12 @@ internal object AlipayBillAdapter : BillImportAdapter {
             merchantOrderNo = column("商家订单号"),
             createdTime = column("交易创建时间", "交易时间"),
             paidTime = column("付款时间", "交易时间"),
-            type = column("类型", "交易类型"),
+            type = column("类型", "交易类型", "交易分类"),
             counterparty = column("交易对方"),
             product = column("商品名称", "商品", "商品说明"),
             amount = column("金额（元）", "金额(元)", "金额"),
             direction = column("收/支", "收支"),
+            paymentMethod = column("收/付款方式", "支付方式"),
             status = column("交易状态"),
             remark = column("备注")
         )

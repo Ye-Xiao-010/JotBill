@@ -165,9 +165,7 @@ internal class TransferClassifier(
             )
             return@withTransaction TransferOutcome.Ignored
         }
-        val rulePatch = ruleEngine.sanitizePatch(
-            (ruleDecision as? RuleEngine.Decision.Continue)?.patch ?: RuleEngine.FieldPatch()
-        )
+        val rulePatch = ruleEngine.sanitizePatch(ruleDecision.patch)
         val forcedReview = ruleDecision is RuleEngine.Decision.ToReview
 
         // ---- 源账户：规则指定 > 支付应用默认账户 ----

@@ -46,7 +46,8 @@
      "counterparty": 1
     },
     "ruleId": 1000024,
-    "rulePkgId": 2000016
+    "rulePkgId": 2000016,
+    "jotbillType": "transfer"
    }
   ],
   "com.alipay.android.msp.ui.views.MspContainerActivity": [
@@ -81,13 +82,14 @@
     "locateToken": "转账成功",
     "locateMaxTraverseCount": 5,
     "fromApp": 3,
-    "extractPattern": "contentDesc=转账成功[￥|¥](\\d\\.\\d{2}).+text=收款方.+?text=(.+?) />",
+    "extractPattern": "contentDesc=转账成功[￥|¥](\\d+\\.\\d{2}).+text=收款方.+?text=(.+?) />",
     "extractFields": {
      "amount": 1,
      "counterparty": 2
     },
     "ruleId": 1000032,
-    "rulePkgId": 2000016
+    "rulePkgId": 2000016,
+    "jotbillType": "transfer"
    },
    {
     "note": "淘宝-收银台",
@@ -368,11 +370,19 @@
      ],
      "detailType": [
       {
+       "pattern": "(?s)(?:自动还款|信用卡还款)",
+       "staticValue": "repayment"
+      },
+      {
        "pattern": "(?s)(?:他行实时转入|入账工资|入账住房公积金|入账综合代发|入账报销款|入贷款项|转入|存入|收入|收到汇款|财付通快捷支付存入|代发工资存入|转入已到帐|跨行代付收入|银联入账|增加人民币)",
        "staticValue": "1"
       },
       {
-       "pattern": "(?s)(?:发生快捷支付扣款|完成.*?交易人民币\\s*-|支取|支付|支出|取出|扣款|柜台取款|取现|减少人民币|ATM取款|转账|汇款转出|对外汇款支出|消费|快捷支付支出|自动还款)",
+       "pattern": "(?s)(?:对外汇款支出|汇款转出|向.+?转账|给尾号为\\d+的账户转账)",
+       "staticValue": "transfer"
+      },
+      {
+       "pattern": "(?s)(?:发生快捷支付扣款|完成.*?交易人民币\\s*-|支取|支付|支出|取出|扣款|柜台取款|取现|减少人民币|ATM取款|消费|快捷支付支出)",
        "staticValue": "2"
       },
       {
@@ -558,7 +568,7 @@
     "locateToken": "发的红包",
     "locateMaxTraverseCount": 32,
     "fromApp": 3,
-    "extractPattern": "text=头像.+text=(.+?) />.+text=发的红包.+text=(\\d\\.\\d{2})元 />[\\s\\S]*?text=领取成功",
+    "extractPattern": "text=头像.+text=(.+?) />.+text=发的红包.+text=(\\d+\\.\\d{2})元 />[\\s\\S]*?text=领取成功",
     "extractFields": {
      "amount": 2,
      "counterparty": 1
@@ -573,7 +583,7 @@
     "locateToken": "发的红包",
     "locateMaxTraverseCount": 32,
     "fromApp": 3,
-    "extractPattern": "text=头像.+text=(.+?) />.+text=发的红包.+text=(\\d\\.\\d{2})元 />[\\s\\S]*?text=(红包)编号[:：]([^/<>&]+)",
+    "extractPattern": "text=头像.+text=(.+?) />.+text=发的红包.+text=(\\d+\\.\\d{2})元 />[\\s\\S]*?text=(红包)编号[:：]([^/<>&]+)",
     "extractFields": {
      "amount": 2,
      "counterparty": 1,

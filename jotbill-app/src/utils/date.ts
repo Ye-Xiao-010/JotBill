@@ -14,6 +14,33 @@ export const formatDate = (date: Date): string => {
 };
 
 /**
+ * 格式化本地月份为 YYYY-MM（避免 UTC 偏移导致月初 00:00–08:00 退回上月）
+ */
+export const formatMonth = (date: Date): string => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  return `${year}-${month}`;
+};
+
+/**
+ * 严格校验 YYYY-MM-DD 格式及真实日历日期（拒绝 2026-02-30 等越界日期）
+ */
+export const isValidDateString = (dateStr: string): boolean => {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateStr.trim());
+  if (!match) return false;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  if (month < 1 || month > 12 || day < 1 || day > 31) return false;
+  const parsed = new Date(year, month - 1, day);
+  return (
+    parsed.getFullYear() === year &&
+    parsed.getMonth() === month - 1 &&
+    parsed.getDate() === day
+  );
+};
+
+/**
  * 获取月份的第一天
  */
 export const getMonthFirstDay = (year: number, month: number): string => {
@@ -84,6 +111,13 @@ export const getCurrentYearRange = (): { startDate: string; endDate: string } =>
  * 格式化月份显示（如：2024年1月）
  */
 export const formatMonthDisplay = (dateStr: string): string => {
+  const pureDateMatch = /^(\d{4})-(\d{1,2})(?:-(\d{1,2}))?$/.exec(dateStr.trim());
+  if (pureDateMatch) {
+    return `${Number(pureDateMatch[1])}年${Number(pureDateMatch[2])}月`;
+  }
   const date = new Date(dateStr);
+  if (Number.isNaN(date.getTime())) {
+    return dateStr;
+  }
   return `${date.getFullYear()}年${date.getMonth() + 1}月`;
 };

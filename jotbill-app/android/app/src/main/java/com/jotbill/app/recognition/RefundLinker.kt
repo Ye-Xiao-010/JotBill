@@ -114,6 +114,29 @@ internal class RefundLinker(
             )
             return RefundOutcome.Duplicate
         }
+        // 首笔退款自动入账为账单后，60s 内由 SignalBillWriter 补全，60s~2分钟内的
+        // 跨通道同额退款（订单号不冲突）也判为同一笔，避免跨通道延迟退款重复入账。
+        val recentRefundBill = database.billDao().findRecentByAmountAndType(
+            type = "refund",
+            amountMinor = input.amountMinor,
+            windowStart = now - REFUND_CROSS_SOURCE_DEDUP_WINDOW_MILLIS,
+            windowEnd = now
+        )
+        if (recentRefundBill != null &&
+            (now - recentRefundBill.createdAt) > SignalBillWriter.MERGE_WINDOW_MILLIS
+        ) {
+            val ordersConflict = !input.orderId.isNullOrBlank() &&
+                !recentRefundBill.orderId.isNullOrBlank() &&
+                !input.orderId.equals(recentRefundBill.orderId, ignoreCase = true)
+            if (!ordersConflict) {
+                JotBillLog.i(
+                    "RefundLinker",
+                    "跨来源同额退款账单已存在(>60s)，判为同一笔: bill=${recentRefundBill.id.take(8)}, " +
+                        "amount=${input.amountMinor}, source=${input.sourcePackage}"
+                )
+                return RefundOutcome.Duplicate
+            }
+        }
 
         // ---- 规则引擎（阶段五 T1：纯通知路径同样执行规则）----
         val ruleDecision = ruleEngine.evaluateAndRecord(
@@ -146,9 +169,7 @@ internal class RefundLinker(
             )
             return RefundOutcome.Ignored
         }
-        val rulePatch = ruleEngine.sanitizePatch(
-            (ruleDecision as? RuleEngine.Decision.Continue)?.patch ?: RuleEngine.FieldPatch()
-        )
+        val rulePatch = ruleEngine.sanitizePatch(ruleDecision.patch)
         val forcedReview = ruleDecision is RuleEngine.Decision.ToReview
 
         // ---- 原交易关联：订单号唯一命中才绑定（否则退化为无原单退款账单）----

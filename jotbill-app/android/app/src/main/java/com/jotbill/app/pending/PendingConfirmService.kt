@@ -80,7 +80,10 @@ internal class PendingConfirmService(private val database: JotBillDatabase) {
     suspend fun confirm(pendingId: String, overrides: Overrides, confirmedDuplicate: Boolean = false): Outcome {
         val pending = database.pendingTransactionDao().getById(pendingId)
             ?: return detectRecentAutoBookedBill(overrides) ?: Outcome.AlreadyHandled
-        // 「已入账编辑卡」（2026-11-16）：账单已存在，确认只更新账户/分类。
+        if (pending.status != PendingTransactionEntity.STATUS_PENDING) {
+            return detectRecentAutoBookedBill(overrides) ?: Outcome.AlreadyHandled
+        }
+        // 「已入账编辑卡」（2026-11-16）：账单已存在，确认只更新账户/分类/备注。
         EditCardMarker.billId(pending.appliedRules)?.let { billId ->
             return confirmEditCard(pending, billId, overrides)
         }
@@ -110,18 +113,21 @@ internal class PendingConfirmService(private val database: JotBillDatabase) {
         // 阶段五 T1 时机二：确认入账前最终执行规则。ignore/send_to_review
         // 不阻断用户确认（用户明确操作优先级最高），仅记录命中。
         val ruleEngine = RuleEngine(database)
+        val platformAliases = listOfNotNull(
+            pending.platform?.takeIf { it.isNotBlank() }
+                ?.let { com.jotbill.app.bookkeeping.AutoBookkeeper.channelLabel(it) }
+        ).distinct()
         val ruleDecision = ruleEngine.evaluateAndRecord(
             RuleEngine.Subject(
                 amountMinor = amountMinor,
                 platform = pending.platform,
+                platformAliases = platformAliases,
                 merchant = pending.merchant,
                 description = pending.productDescription,
                 sourceType = sourceType
             )
         )
-        val rulePatch = ruleEngine.sanitizePatch(
-            (ruleDecision as? RuleEngine.Decision.Continue)?.patch ?: RuleEngine.FieldPatch()
-        )
+        val rulePatch = ruleEngine.sanitizePatch(ruleDecision.patch)
         val resolvedCategoryId = overrides.categoryId ?: rulePatch.categoryId ?: pending.categoryId
         val resolvedAccountId = overrides.accountId ?: rulePatch.accountId ?: pending.accountId
         // 分类/账户引用校验（2026-10-24）：`bills.category_id` / `account_id` 是
@@ -151,9 +157,10 @@ internal class PendingConfirmService(private val database: JotBillDatabase) {
             merchant = overrides.merchant ?: rulePatch.merchant ?: pending.merchant,
             productDescription = overrides.productDescription ?: pending.productDescription,
             sourceType = sourceType,
-            // 来源绑定不可改写：退款允许用户从编辑面板手动指定原交易，
-            // 否则绑定待确认的来源会话 ID，避免请求改写幂等边界。
-            originalTransactionId = overrides.originalTransactionId ?: pending.sessionId,
+            // 来源绑定不可改写：退款允许用户从编辑面板手动指定原交易（未指定时不把 sessionId 误填成原账单 ID），
+            // 其余类型绑定待确认的来源会话 ID，避免请求改写幂等边界。
+            originalTransactionId = overrides.originalTransactionId
+                ?: if (type == "refund") null else pending.sessionId,
             orderId = overrides.orderId ?: pending.orderId,
             createdAt = now,
             updatedAt = now,
@@ -196,17 +203,21 @@ internal class PendingConfirmService(private val database: JotBillDatabase) {
         } else {
             bill.accountId
         }
-        val categoryId = if (overrides.categoryTouched) {
-            overrides.categoryId ?: bill.categoryId
-        } else {
-            bill.categoryId
+        val categoryId = when {
+            overrides.categoryTouched -> overrides.categoryId ?: bill.categoryId
+            // 账单尚无分类时，弹窗自动预选的分类（界面已高亮展示）随用户点“保存”一并落库
+            bill.categoryId == null -> overrides.categoryId
+            else -> bill.categoryId
         }
+        val description = overrides.description?.trim()?.takeIf { it.isNotEmpty() } ?: bill.description
         val merchant = bill.merchant
         val changed = accountId != bill.accountId ||
-            categoryId != bill.categoryId
+            categoryId != bill.categoryId ||
+            description != bill.description
         val baseUpdated = bill.copy(
             accountId = accountId,
             categoryId = categoryId,
+            description = description,
             merchant = merchant,
             version = bill.version + 1,
             updatedAt = System.currentTimeMillis()

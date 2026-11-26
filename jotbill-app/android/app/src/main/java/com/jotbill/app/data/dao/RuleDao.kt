@@ -33,4 +33,7 @@ interface RuleDao {
     /** 命中计数 +1；只累加 hit_count 不动 updated_at（命中不算规则编辑）。 */
     @Query("UPDATE rules SET hit_count = hit_count + 1 WHERE id = :id")
     suspend fun incrementHitCount(id: String)
+
+    @Query("SELECT COUNT(*) FROM rules WHERE action = 'set_category' AND action_value = :categoryId")
+    suspend fun countByCategoryAction(categoryId: String): Int
 }

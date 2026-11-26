@@ -19,8 +19,15 @@ interface PageNode {
     /** 子节点数量。 */
     val childCount: Int
 
+    /** 是否为密码或敏感输入节点（命中时跳过自身及子树文本采集）。 */
+    val isSensitive: Boolean
+        get() = false
+
     /** 取第 index 个子节点；系统节点不可读时返回 null。 */
     fun childAt(index: Int): PageNode?
+
+    /** 释放底层系统节点引用（JVM 假实现默认空操作）。 */
+    fun release() = Unit
 }
 
 /** [PageNode] 的生产实现：包裹 AccessibilityNodeInfo，不持有任何可变状态。 */
@@ -46,9 +53,38 @@ class AccessibilityPageNode(private val node: AccessibilityNodeInfo) : PageNode 
             0
         }
 
+    override val isSensitive: Boolean
+        get() = try {
+            if (node.isPassword) {
+                true
+            } else {
+                val className = node.className?.toString().orEmpty()
+                val viewId = node.viewIdResourceName.orEmpty()
+                SENSITIVE_HINTS.any { hint ->
+                    className.contains(hint, ignoreCase = true) ||
+                        viewId.contains(hint, ignoreCase = true)
+                }
+            }
+        } catch (_: RuntimeException) {
+            false
+        }
+
     override fun childAt(index: Int): PageNode? = try {
         node.getChild(index)?.let(::AccessibilityPageNode)
     } catch (_: RuntimeException) {
         null
+    }
+
+    override fun release() {
+        try {
+            @Suppress("DEPRECATION")
+            node.recycle()
+        } catch (_: RuntimeException) {
+            // 系统节点已回收时忽略
+        }
+    }
+
+    private companion object {
+        val SENSITIVE_HINTS = listOf("password", "pin", "cvv", "verification", "secure")
     }
 }

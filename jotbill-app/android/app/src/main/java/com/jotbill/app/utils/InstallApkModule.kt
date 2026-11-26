@@ -22,7 +22,16 @@ class InstallApkModule(reactContext: ReactApplicationContext) : ReactContextBase
     companion object {
         /** 签名读不到时的哨兵值。绝不可用任何"看起来像指纹"的常量，否则两侧同时
          * 读不到签名时会互相相等 ⇒ "是否同一签名"的检查恒通过。 */
-        private const val UNREADABLE_SIGNATURE = "__unreadable_signature__"
+        internal const val UNREADABLE_SIGNATURE = "__unreadable_signature__"
+
+        internal fun signingFlags(sdkInt: Int = Build.VERSION.SDK_INT): Int {
+            return if (sdkInt >= Build.VERSION_CODES.P) {
+                PackageManager.GET_SIGNING_CERTIFICATES
+            } else {
+                @Suppress("DEPRECATION")
+                PackageManager.GET_SIGNATURES
+            }
+        }
     }
 
     override fun getName(): String = "InstallApk"
@@ -67,20 +76,14 @@ class InstallApkModule(reactContext: ReactApplicationContext) : ReactContextBase
             }
             val context = reactApplicationContext
             val packageManager = context.packageManager
-            val archive = packageManager.getPackageArchiveInfo(
-                filePath,
-                PackageManager.GET_SIGNATURES
-            ) ?: run {
+            val archive = getArchivePackageInfo(packageManager, filePath) ?: run {
                 promise.reject("INVALID_APK", "无法读取 APK 包信息")
                 return
             }
             val sha256 = sha256(file)
             val expected = expectedSha256?.trim()?.lowercase()
             val current = runCatching {
-                packageManager.getPackageInfo(
-                    context.packageName,
-                    PackageManager.GET_SIGNATURES
-                )
+                getInstalledPackageInfo(packageManager, context.packageName)
             }.getOrNull()
             val signatureConsistent = if (current == null) {
                 // ⚠️ 读不到当前包信息时**必须判为不一致**（fail-closed）。
@@ -116,15 +119,18 @@ class InstallApkModule(reactContext: ReactApplicationContext) : ReactContextBase
      * 哨兵值使"读不到"无法与"指纹相同"混淆，配合上方的 fail-closed 判据，
      * 读不到签名一律判为不一致。
      */
-    private fun signatureHash(packageInfo: PackageInfo): String {
-        val signatures = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+    internal fun signatureHash(
+        packageInfo: PackageInfo,
+        sdkInt: Int = Build.VERSION.SDK_INT
+    ): String {
+        val signatures = if (sdkInt >= Build.VERSION_CODES.P) {
             packageInfo.signingInfo?.let { info ->
                 if (info.hasMultipleSigners()) {
                     info.apkContentsSigners
                 } else {
                     info.signingCertificateHistory
                 }
-            }
+            } ?: @Suppress("DEPRECATION") packageInfo.signatures
         } else {
             @Suppress("DEPRECATION")
             packageInfo.signatures
@@ -133,6 +139,36 @@ class InstallApkModule(reactContext: ReactApplicationContext) : ReactContextBase
         return signatures.map { signature -> sha256Bytes(signature.toByteArray()) }
             .sorted()
             .joinToString(",")
+    }
+
+    private fun getArchivePackageInfo(
+        packageManager: PackageManager,
+        filePath: String
+    ): PackageInfo? {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            packageManager.getPackageArchiveInfo(
+                filePath,
+                PackageManager.PackageInfoFlags.of(signingFlags(Build.VERSION.SDK_INT).toLong())
+            )
+        } else {
+            @Suppress("DEPRECATION")
+            packageManager.getPackageArchiveInfo(filePath, signingFlags(Build.VERSION.SDK_INT))
+        }
+    }
+
+    private fun getInstalledPackageInfo(
+        packageManager: PackageManager,
+        packageName: String
+    ): PackageInfo? {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            packageManager.getPackageInfo(
+                packageName,
+                PackageManager.PackageInfoFlags.of(signingFlags(Build.VERSION.SDK_INT).toLong())
+            )
+        } else {
+            @Suppress("DEPRECATION")
+            packageManager.getPackageInfo(packageName, signingFlags(Build.VERSION.SDK_INT))
+        }
     }
 
     private fun sha256(file: File): String {

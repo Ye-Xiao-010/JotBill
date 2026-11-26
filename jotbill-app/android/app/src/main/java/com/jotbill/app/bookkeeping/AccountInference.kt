@@ -178,6 +178,9 @@ internal object AccountInference {
                 if (narrowed.size == 1) {
                     return AccountResolution.Resolved(narrowed.first().id, rankOf(narrowed.first()))
                 }
+                if (narrowed.size > 1) {
+                    return AccountResolution.NeedsReview
+                }
             }
         }
 
@@ -203,6 +206,9 @@ internal object AccountInference {
             val matched = matchAccountsByName(bankAccounts, name)
             if (matched.size == 1) {
                 return AccountResolution.Resolved(matched.first().id, rankOf(matched.first()))
+            }
+            if (matched.size > 1) {
+                return AccountResolution.NeedsReview
             }
         }
         return inferSignalThenFallback(sourcePackage, null, accounts)

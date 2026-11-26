@@ -36,8 +36,19 @@ interface AccountDao {
     @Query(
         """
         SELECT
-          COALESCE(SUM(CASE WHEN kind = 'asset' THEN current_balance_minor ELSE 0 END), 0) AS totalAssets,
-          COALESCE(SUM(CASE WHEN kind = 'liability' THEN ABS(current_balance_minor) ELSE 0 END), 0) AS totalLiabilities
+          COALESCE(SUM(
+            CASE
+              WHEN kind = 'asset' THEN current_balance_minor
+              WHEN kind = 'liability' AND current_balance_minor > 0 THEN current_balance_minor
+              ELSE 0
+            END
+          ), 0) AS totalAssets,
+          COALESCE(SUM(
+            CASE
+              WHEN kind = 'liability' AND current_balance_minor < 0 THEN -current_balance_minor
+              ELSE 0
+            END
+          ), 0) AS totalLiabilities
         FROM accounts
         WHERE is_active = 1
         """

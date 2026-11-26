@@ -98,7 +98,8 @@ object PageNodeDumper {
         locateAttribute: Int,
         maxTraverseCount: Int,
         locateMatches: (String?) -> Boolean,
-        state: State
+        state: State,
+        sensitiveAncestor: Boolean = false
     ) {
         if (node == null) {
             return
@@ -119,21 +120,24 @@ object PageNodeDumper {
         }
         val indent = "    ".repeat(depth)
         builder.append(indent).append("<View")
-        val text = node.text
-        val desc = node.contentDescription
-        val locateValue = when (locateAttribute) {
-            0 -> text
-            1 -> desc
-            else -> null
-        }
-        if (locateMatches(locateValue)) {
-            state.located = true
-        }
-        if (!text.isNullOrEmpty()) {
-            builder.append(" text=").append(text)
-        }
-        if (!desc.isNullOrEmpty()) {
-            builder.append(" contentDesc=").append(desc)
+        val nodeSensitive = sensitiveAncestor || node.isSensitive
+        if (!nodeSensitive) {
+            val text = node.text
+            val desc = node.contentDescription
+            val locateValue = when (locateAttribute) {
+                0 -> text
+                1 -> desc
+                else -> null
+            }
+            if (locateMatches(locateValue)) {
+                state.located = true
+            }
+            if (!text.isNullOrEmpty()) {
+                builder.append(" text=").append(text)
+            }
+            if (!desc.isNullOrEmpty()) {
+                builder.append(" contentDesc=").append(desc)
+            }
         }
         val childCount = node.childCount
         if (childCount <= 0) {
@@ -142,15 +146,21 @@ object PageNodeDumper {
         }
         builder.append(" >\n")
         for (i in 0 until childCount) {
-            appendNode(
-                node.childAt(i),
-                builder,
-                depth + 1,
-                locateAttribute,
-                maxTraverseCount,
-                locateMatches,
-                state
-            )
+            val child = node.childAt(i)
+            try {
+                appendNode(
+                    child,
+                    builder,
+                    depth + 1,
+                    locateAttribute,
+                    maxTraverseCount,
+                    locateMatches,
+                    state,
+                    nodeSensitive
+                )
+            } finally {
+                child?.release()
+            }
         }
         builder.append(indent).append("</View>\n")
     }

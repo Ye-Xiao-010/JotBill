@@ -368,85 +368,89 @@ class AutoBookkeepingEngine(
         val key = trackedRuleKey ?: return false
         val rules = registryRef.get()?.rulesFor(key) ?: return false
         val root = rootProvider() ?: return false
-        // 诊断留样（不足#1）：真机规则打不中时必须能看到页面 dump 长什么样，
-        // 否则正则调优无从下手。节流输出，内容只进内存日志不落盘。
-        var locatedAny = false
-        var sampleDump = ""
-        for (rule in rules) {
-            val dump = PageNodeDumper.dump(root, rule)
-            if (dump.elapsedMs > SLOW_DUMP_WARN_MILLIS) {
-                JotBillLog.w(
-                    TAG,
-                    "页面 dump 耗时异常: ${dump.elapsedMs}ms, nodes=${dump.nodeCount}, " +
-                        "ruleId=${rule.ruleId}, pkg=$sourcePackage"
-                )
-            }
-            sampleDump = dump.dump
-            if (!dump.located) {
-                continue
-            }
-            locatedAny = true
-            val fields = rule.extractFrom(dump.dump)
-            if (fields == null) {
-                logAnalyzeDiag(
-                    packageName = sourcePackage,
-                    ruleKey = key,
-                    headline = "锚点已命中但抽取正则未匹配: ruleId=${rule.ruleId}(${rule.note})"
-                        .let { "$it, pattern 差在字段抽取段" },
-                    dump = dump.dump
-                )
-                continue
-            }
-            val record = ExtractedRecord(
-                fields = fields,
-                ruleId = rule.ruleId,
-                ruleNote = rule.note,
-                fromApp = rule.fromApp,
-                jotbillType = rule.jotbillType,
-                sourcePackage = sourcePackage,
-                extractTime = clock()
-            )
-            if (rule.locateConfirm == null || rule.matchMode != MATCH_MODE_KEEP_TRACKING) {
-                reportedWindowId = trackedWindowId
-                trackedWindowId = 0
-                trackedActivityName = null
-                trackedRuleKey = null
-            }
-            if (rule.locateConfirm != null) {
-                val queue = pendingConfirms.getOrPut(sourcePackage) { ArrayDeque() }
-                if (queue.isNotEmpty()) {
-                    // 同包连付：排在队首之后，不再覆盖。队首会由它自己的确认页按序消费。
-                    JotBillLog.i(
+        try {
+            // 诊断留样（不足#1）：真机规则打不中时必须能看到页面 dump 长什么样，
+            // 否则正则调优无从下手。节流输出，内容只进内存日志不落盘。
+            var locatedAny = false
+            var sampleDump = ""
+            for (rule in rules) {
+                val dump = PageNodeDumper.dump(root, rule)
+                if (dump.elapsedMs > SLOW_DUMP_WARN_MILLIS) {
+                    JotBillLog.w(
                         TAG,
-                        "同包已有挂起确认，本笔排队: pkg=$sourcePackage, 队列=${queue.size + 1}, " +
-                            "队首ruleId=${queue.first().rule.ruleId}, 新ruleId=${rule.ruleId}"
+                        "页面 dump 耗时异常: ${dump.elapsedMs}ms, nodes=${dump.nodeCount}, " +
+                            "ruleId=${rule.ruleId}, pkg=$sourcePackage"
                     )
                 }
-                queue.addLast(
-                    PendingConfirm(
-                        record = record,
-                        rule = rule,
-                        expireAt = clock() + CONFIRM_WINDOW_MILLIS
+                sampleDump = dump.dump
+                if (!dump.located) {
+                    continue
+                }
+                locatedAny = true
+                val fields = rule.extractFrom(dump.dump)
+                if (fields == null) {
+                    logAnalyzeDiag(
+                        packageName = sourcePackage,
+                        ruleKey = key,
+                        headline = "锚点已命中但抽取正则未匹配: ruleId=${rule.ruleId}(${rule.note})"
+                            .let { "$it, pattern 差在字段抽取段" },
+                        dump = dump.dump
                     )
+                    continue
+                }
+                val record = ExtractedRecord(
+                    fields = fields,
+                    ruleId = rule.ruleId,
+                    ruleNote = rule.note,
+                    fromApp = rule.fromApp,
+                    jotbillType = rule.jotbillType,
+                    sourcePackage = sourcePackage,
+                    extractTime = clock()
                 )
-                JotBillLog.i(
-                    TAG,
-                    "规则抽取成功，挂入二次确认: ruleId=${rule.ruleId}, note=${rule.note}, " +
-                        "fields=${record.fields.keys}, pkg=$sourcePackage"
-                )
-            } else {
-                deliver(record)
+                if (rule.locateConfirm == null || rule.matchMode != MATCH_MODE_KEEP_TRACKING) {
+                    reportedWindowId = trackedWindowId
+                    trackedWindowId = 0
+                    trackedActivityName = null
+                    trackedRuleKey = null
+                }
+                if (rule.locateConfirm != null) {
+                    val queue = pendingConfirms.getOrPut(sourcePackage) { ArrayDeque() }
+                    if (queue.isNotEmpty()) {
+                        // 同包连付：排在队首之后，不再覆盖。队首会由它自己的确认页按序消费。
+                        JotBillLog.i(
+                            TAG,
+                            "同包已有挂起确认，本笔排队: pkg=$sourcePackage, 队列=${queue.size + 1}, " +
+                                "队首ruleId=${queue.first().rule.ruleId}, 新ruleId=${rule.ruleId}"
+                        )
+                    }
+                    queue.addLast(
+                        PendingConfirm(
+                            record = record,
+                            rule = rule,
+                            expireAt = clock() + CONFIRM_WINDOW_MILLIS
+                        )
+                    )
+                    JotBillLog.i(
+                        TAG,
+                        "规则抽取成功，挂入二次确认: ruleId=${rule.ruleId}, note=${rule.note}, " +
+                            "fields=${record.fields.keys}, pkg=$sourcePackage"
+                    )
+                } else {
+                    deliver(record)
+                }
+                return true
             }
-            return true
+            logAnalyzeDiag(
+                packageName = sourcePackage,
+                ruleKey = key,
+                headline = "规则未命中: locatedAny=$locatedAny, rules=${rules.size}, " +
+                    "ruleIds=${rules.joinToString(",") { it.ruleId.toString() }}",
+                dump = sampleDump
+            )
+            return false
+        } finally {
+            root.release()
         }
-        logAnalyzeDiag(
-            packageName = sourcePackage,
-            ruleKey = key,
-            headline = "规则未命中: locatedAny=$locatedAny, rules=${rules.size}, " +
-                "ruleIds=${rules.joinToString(",") { it.ruleId.toString() }}",
-            dump = sampleDump
-        )
-        return false
     }
 
     /**
@@ -540,7 +544,11 @@ class AutoBookkeepingEngine(
         val pending = pendingFor(packageName) ?: return
         val anchor = pending.rule.locateConfirm ?: return
         val root = rootProvider() ?: return
-        val result = PageNodeDumper.dumpForConfirm(root, anchor)
+        val result = try {
+            PageNodeDumper.dumpForConfirm(root, anchor)
+        } finally {
+            root.release()
+        }
         if (result.located) {
             reportedWindowId = trackedWindowId
             trackedWindowId = 0

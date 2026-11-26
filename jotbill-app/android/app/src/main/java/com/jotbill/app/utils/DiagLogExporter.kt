@@ -45,7 +45,12 @@ object DiagLogExporter {
     /** 打包产物目录（cacheDir 下，FileProvider 的 cache-path 已覆盖）。 */
     private const val EXPORT_DIR = "diag-export"
 
-    private val timeFmt = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US)
+    private val timeFmt = object : ThreadLocal<SimpleDateFormat>() {
+        override fun initialValue(): SimpleDateFormat =
+            SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US)
+    }
+
+    private fun formatNow(): String = timeFmt.get()!!.format(Date())
 
     /**
      * 打包诊断日志为 zip，返回产物文件；一个日志文件都不存在时返回 null。
@@ -69,7 +74,7 @@ object DiagLogExporter {
         sdkInt = Build.VERSION.SDK_INT,
         versionName = com.jotbill.app.BuildConfig.VERSION_NAME,
         versionCode = com.jotbill.app.BuildConfig.VERSION_CODE,
-        exportedAt = timeFmt.format(Date())
+        exportedAt = formatNow()
     )
 
     /**
@@ -97,7 +102,7 @@ object DiagLogExporter {
         ).filter { it.isFile && it.length() > 0L }
         if (sources.isEmpty()) return null
 
-        val fileName = "jotbill-diag-$manufacturer-${timeFmt.format(Date())}.zip"
+        val fileName = "jotbill-diag-$manufacturer-${formatNow()}.zip"
         val target = File(exportDir, fileName)
         ZipOutputStream(target.outputStream()).use { zip ->
             writeMeta(zip, meta)

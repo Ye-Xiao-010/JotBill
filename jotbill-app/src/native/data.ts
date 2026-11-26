@@ -200,7 +200,7 @@ export interface BudgetInput {
   anchorDate?: string;
   rangeStartDate?: string;
   rangeEndDate?: string;
-  categoryId?: string;
+  categoryId?: string | null;
   alertAt?: number;
 }
 

@@ -43,6 +43,7 @@ import type { RecordingProgress } from '../../services/audio/audioRecorderServic
 import { nativeData, type Account, type Category } from '../../native';
 import { getCategoryIcon as getDefaultCategoryIcon } from '../../constants/app';
 import { formatCurrency, formatSignedCurrency } from '../../utils/format';
+import { formatDate, isValidDateString } from '../../utils/date';
 import { Skeleton, SkeletonCircle } from '../../components/skeleton/Skeleton';
 import type { ParsedBill, AIModelConfig, ChatSession } from '../../types/ai';
 import { ProviderIcon } from '../../components/icons';
@@ -227,6 +228,11 @@ function EditBillModal({
       showEditAlert('提示', '请输入有效金额');
       return;
     }
+    const trimmedDate = date.trim();
+    if (!isValidDateString(trimmedDate)) {
+      showEditAlert('提示', '请输入有效日期（格式：YYYY-MM-DD）');
+      return;
+    }
 
     const selectedCategory = categories.find(c => c.id === selectedCategoryId);
     const selectedAccount = accounts.find(a => a.id === selectedAccountId);
@@ -234,7 +240,7 @@ function EditBillModal({
       ...bill,
       amount: parsedAmount,
       description,
-      date,
+      date: trimmedDate,
       type,
       categoryId: selectedCategoryId,
       categoryName: selectedCategory?.name || bill.categoryName,
@@ -2026,7 +2032,7 @@ export default function AIChatScreen() {
                 description: bill.description || '',
                 categoryName: matchedCategory?.name || bill.categoryName || '',
                 accountName: bill.accountName || undefined,
-                date: bill.date || new Date().toISOString().split('T')[0],
+                date: (bill.date && isValidDateString(bill.date)) ? bill.date.trim() : formatDate(new Date()),
                 id: `${Date.now()}-${index}`,
                 categoryIcon:
                   bill.categoryIcon || matchedCategory?.icon || getCategoryIcon(bill.categoryName),
@@ -2350,11 +2356,14 @@ export default function AIChatScreen() {
         // 才能保证"分类在保存瞬间是有效的"。
         const categoryId =
           bill.categoryId ?? getCategoryId(bill.categoryName ?? '', bill.type);
+        if (!bill.date || !isValidDateString(bill.date)) {
+          throw new Error('日期格式无效，请修正为 YYYY-MM-DD');
+        }
         await nativeData.addBill({
           amountMinor: Math.round(bill.amount * 100),
           type: bill.type,
           description: bill.description,
-          occurredAt: new Date(`${bill.date}T12:00:00`).toISOString(),
+          occurredAt: new Date(`${bill.date.trim()}T12:00:00`).toISOString(),
           categoryId,
           accountId,
           sourceType: 'ai_chat',

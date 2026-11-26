@@ -664,70 +664,74 @@ class DataModule(
 
     @ReactMethod
     fun updateCategory(id: String, inputJson: String, promise: Promise) = launch(promise) {
-        val existing = database.categoryDao().getById(requireId(id, "category"))
-            ?: throw BridgeException("NOT_FOUND", "Category $id was not found")
+        val categoryId = requireId(id, "category")
         val input = parseJson(inputJson)
-        // 批 6:默认分类允许改名/图标/颜色/排序(类型锁定、不可删除)
-        val type = if (existing.isDefault) {
-            existing.type
-        } else {
-            input.optionalString("type") ?: existing.type
-        }
-        validateCategoryType(type)
-        // 类型变更保护：有子分类或已被账单引用时拒绝。否则会出现两级类型不一致、
-        // 或支出账单挂在 income 分类上（账单在选择器中不可见）。
-        if (type != existing.type) {
-            if (database.categoryDao().countChildren(existing.id) > 0) {
-                throw BridgeException("DATA_CONFLICT", "该分类含子分类，不可变更类型，请先处理子分类")
-            }
-            if (database.billDao().countByCategoryId(existing.id) > 0) {
-                throw BridgeException("DATA_CONFLICT", "该分类已被账单使用，不可变更类型")
-            }
-        }
-        // 父级变更校验:父须存在、同类型、顶级;自引用禁止;
-        // "改为顶级"仅当该分类没有子分类(有子分类会制造三级体系)
-        val requestedParentId = input.optionalString("parentId") ?: existing.parentId
-        if (requestedParentId != existing.parentId) {
-            if (requestedParentId == null) {
-                if (database.categoryDao().countChildren(existing.id) > 0) {
-                    throw BridgeException("INVALID_ARGUMENT", "已含子分类的分类不可改为顶级,请先处理其子分类")
-                }
+        val updated = database.withTransaction {
+            val existing = database.categoryDao().getById(categoryId)
+                ?: throw BridgeException("NOT_FOUND", "Category $id was not found")
+            // 批 6:默认分类允许改名/图标/颜色/排序(类型锁定、不可删除)
+            val type = if (existing.isDefault) {
+                existing.type
             } else {
-                if (requestedParentId == existing.id) {
-                    throw BridgeException("INVALID_ARGUMENT", "分类不能成为自己的父分类")
-                }
+                input.optionalString("type") ?: existing.type
+            }
+            validateCategoryType(type)
+            // 类型变更保护：有子分类或已被账单引用时拒绝。否则会出现两级类型不一致、
+            // 或支出账单挂在 income 分类上（账单在选择器中不可见）。
+            if (type != existing.type) {
                 if (database.categoryDao().countChildren(existing.id) > 0) {
-                    throw BridgeException("DATA_CONFLICT", "已含子分类的分类不可移动,请先处理其子分类")
+                    throw BridgeException("DATA_CONFLICT", "该分类含子分类，不可变更类型，请先处理子分类")
                 }
-                val parent = database.categoryDao().getById(requestedParentId)
-                    ?: throw BridgeException("NOT_FOUND", "Parent category $requestedParentId was not found")
-                if (parent.type != type) {
-                    throw BridgeException("INVALID_ARGUMENT", "子分类类型必须与父分类一致")
-                }
-                if (parent.parentId != null) {
-                    throw BridgeException("INVALID_ARGUMENT", "分类体系最多两级,子分类下不能再建子分类")
+                if (database.billDao().countByCategoryId(existing.id) > 0) {
+                    throw BridgeException("DATA_CONFLICT", "该分类已被账单使用，不可变更类型")
                 }
             }
+            // 父级变更校验:父须存在、同类型、顶级;自引用禁止;
+            // 使用 updatedNullableString 允许显式传 null/"" 将子分类提升为一级分类。
+            val requestedParentId = input.updatedNullableString("parentId", existing.parentId)
+            if (requestedParentId != existing.parentId) {
+                if (requestedParentId == null) {
+                    if (database.categoryDao().countChildren(existing.id) > 0) {
+                        throw BridgeException("INVALID_ARGUMENT", "已含子分类的分类不可改为顶级,请先处理其子分类")
+                    }
+                } else {
+                    if (requestedParentId == existing.id) {
+                        throw BridgeException("INVALID_ARGUMENT", "分类不能成为自己的父分类")
+                    }
+                    if (database.categoryDao().countChildren(existing.id) > 0) {
+                        throw BridgeException("DATA_CONFLICT", "已含子分类的分类不可移动,请先处理其子分类")
+                    }
+                    val parent = database.categoryDao().getById(requestedParentId)
+                        ?: throw BridgeException("NOT_FOUND", "Parent category $requestedParentId was not found")
+                    if (parent.type != type) {
+                        throw BridgeException("INVALID_ARGUMENT", "子分类类型必须与父分类一致")
+                    }
+                    if (parent.parentId != null) {
+                        throw BridgeException("INVALID_ARGUMENT", "分类体系最多两级,子分类下不能再建子分类")
+                    }
+                }
+            }
+            // 排序:移动到新父分类下重算子分类排序;子分类升为顶级时按顶级重算;
+            // 仅编辑名称/图标时保持原 sortOrder
+            val sortOrder = when {
+                requestedParentId != null && requestedParentId != existing.parentId ->
+                    nextChildSortOrder(requestedParentId)
+                requestedParentId == null && existing.parentId != null ->
+                    nextTopLevelSortOrder(type, input.optionalInt("sortOrder") ?: existing.sortOrder)
+                else -> input.optionalInt("sortOrder") ?: existing.sortOrder
+            }
+            val next = existing.copy(
+                name = input.optionalString("name") ?: existing.name,
+                type = type,
+                icon = input.updatedNullableString("icon", existing.icon),
+                color = input.updatedNullableString("color", existing.color),
+                sortOrder = sortOrder,
+                updatedAt = System.currentTimeMillis(),
+                parentId = requestedParentId
+            )
+            database.categoryDao().update(next)
+            next
         }
-        // 排序:移动到新父分类下重算子分类排序;子分类升为顶级时按顶级重算;
-        // 仅编辑名称/图标时保持原 sortOrder
-        val sortOrder = when {
-            requestedParentId != null && requestedParentId != existing.parentId ->
-                nextChildSortOrder(requestedParentId)
-            requestedParentId == null && existing.parentId != null ->
-                nextTopLevelSortOrder(type, input.optionalInt("sortOrder") ?: existing.sortOrder)
-            else -> input.optionalInt("sortOrder") ?: existing.sortOrder
-        }
-        val updated = existing.copy(
-            name = input.optionalString("name") ?: existing.name,
-            type = type,
-            icon = input.updatedNullableString("icon", existing.icon),
-            color = input.updatedNullableString("color", existing.color),
-            sortOrder = sortOrder,
-            updatedAt = System.currentTimeMillis(),
-            parentId = requestedParentId
-        )
-        database.categoryDao().update(updated)
         events.emit("onCategoryChanged", BridgeDtoMapper.category(updated))
         BridgeDtoMapper.category(updated).toString()
     }
@@ -745,6 +749,15 @@ class DataModule(
             }
             if (database.billDao().countByCategoryId(existing.id) > 0) {
                 throw BridgeException("DATA_CONFLICT", "Category $id is referenced by bills")
+            }
+            if (database.budgetDao().countByCategoryId(existing.id) > 0) {
+                throw BridgeException("DATA_CONFLICT", "该分类已被预算使用，请先删除或修改对应预算")
+            }
+            if (database.pendingTransactionDao().countPendingByCategoryId(existing.id) > 0) {
+                throw BridgeException("DATA_CONFLICT", "该分类仍被待确认账单引用，请先处理待确认记录")
+            }
+            if (database.ruleDao().countByCategoryAction(existing.id) > 0) {
+                throw BridgeException("DATA_CONFLICT", "该分类已被规则引用，请先修改或删除对应规则")
             }
             database.categoryDao().delete(existing)
             existing
@@ -871,7 +884,7 @@ class DataModule(
                         "needsAlert",
                         snapshot.isActivePeriod &&
                             budget.alertAt in 1..100 &&
-                            snapshot.progress * 100.0 >= budget.alertAt
+                            snapshot.progressPct >= budget.alertAt
                     )
                 })
             }
@@ -960,13 +973,18 @@ class DataModule(
     fun addRule(inputJson: String, promise: Promise) = launch(promise) {
         val input = parseJson(inputJson)
         val now = System.currentTimeMillis()
+        val condition = BridgeDtoMapper.requiredString(input, "condition")
+        val conditionValue = BridgeDtoMapper.requiredString(input, "conditionValue")
+        val action = BridgeDtoMapper.requiredString(input, "action")
+        val actionValue = input.optionalString("actionValue")
+        validateRuleDefinition(condition, conditionValue, action, actionValue)
         val rule = RuleEntity(
             id = UUID.randomUUID().toString(),
             name = BridgeDtoMapper.requiredString(input, "name"),
-            condition = BridgeDtoMapper.requiredString(input, "condition"),
-            conditionValue = BridgeDtoMapper.requiredString(input, "conditionValue"),
-            action = BridgeDtoMapper.requiredString(input, "action"),
-            actionValue = input.optionalString("actionValue"),
+            condition = condition,
+            conditionValue = conditionValue,
+            action = action,
+            actionValue = actionValue,
             priority = input.optInt("priority", 0),
             isActive = true,
             // 阶段五 T1：记录创建来源；from_correction 表示用户修正记录后创建，其余按 manual
@@ -988,12 +1006,17 @@ class DataModule(
         val existing = database.ruleDao().getById(requireId(id, "rule"))
             ?: throw BridgeException("NOT_FOUND", "Rule $id was not found")
         val input = parseJson(inputJson)
+        val condition = input.optionalString("condition") ?: existing.condition
+        val conditionValue = input.optionalString("conditionValue") ?: existing.conditionValue
+        val action = input.optionalString("action") ?: existing.action
+        val actionValue = input.updatedNullableString("actionValue", existing.actionValue)
+        validateRuleDefinition(condition, conditionValue, action, actionValue)
         val updated = existing.copy(
             name = input.optionalString("name") ?: existing.name,
-            condition = input.optionalString("condition") ?: existing.condition,
-            conditionValue = input.optionalString("conditionValue") ?: existing.conditionValue,
-            action = input.optionalString("action") ?: existing.action,
-            actionValue = input.updatedNullableString("actionValue", existing.actionValue),
+            condition = condition,
+            conditionValue = conditionValue,
+            action = action,
+            actionValue = actionValue,
             priority = input.optionalInt("priority") ?: existing.priority,
             isActive = input.optionalBoolean("isActive") ?: existing.isActive,
             // 阶段五 T1：来源可随修正更新；非法值保持原值
@@ -1020,10 +1043,112 @@ class DataModule(
 
     @ReactMethod
     fun applyRulesToExisting(ruleId: String?, promise: Promise) = launch(promise) {
-        throw BridgeException(
-            "NOT_IMPLEMENTED",
-            "Applying rules requires the reconciliation engine step"
-        )
+        val targetRules = if (!ruleId.isNullOrBlank()) {
+            val single = database.ruleDao().getById(requireId(ruleId, "rule"))
+                ?: throw BridgeException("NOT_FOUND", "Rule $ruleId was not found")
+            if (!single.isActive) emptyList() else listOf(single)
+        } else {
+            database.ruleDao().getActive()
+        }
+        val patchRules = targetRules.filter {
+            it.action == RuleEngine.ACTION_SET_PLATFORM ||
+                it.action == RuleEngine.ACTION_SET_MERCHANT ||
+                it.action == RuleEngine.ACTION_SET_CATEGORY ||
+                it.action == RuleEngine.ACTION_SET_ACCOUNT
+        }
+        if (patchRules.isEmpty()) {
+            return@launch JSONObject().put("affected", 0).toString()
+        }
+        val bills = database.billDao().getMutableBills()
+        var affected = 0
+        for (bill in bills) {
+            val aliases = listOfNotNull(
+                bill.platform?.takeIf { it.isNotBlank() }
+                    ?.let { com.jotbill.app.bookkeeping.AutoBookkeeper.channelLabel(it) }
+            ).distinct()
+            val decision = ruleEngine.evaluate(
+                RuleEngine.Subject(
+                    amountMinor = bill.amountMinor,
+                    platform = bill.platform,
+                    platformAliases = aliases,
+                    merchant = bill.merchant,
+                    description = bill.description ?: bill.productDescription,
+                    sourceType = bill.sourceType
+                ),
+                patchRules
+            )
+            if (decision.hits.isEmpty()) continue
+            val patch = ruleEngine.sanitizePatch(decision.patch)
+            val nextAccountId = patch.accountId?.takeIf { candidateId ->
+                if (bill.type == "transfer" || bill.type == "repayment") {
+                    candidateId != bill.targetAccountId
+                } else {
+                    true
+                }
+            } ?: bill.accountId
+            val candidate = bill.copy(
+                platform = patch.platform ?: bill.platform,
+                merchant = patch.merchant ?: bill.merchant,
+                categoryId = patch.categoryId ?: bill.categoryId,
+                accountId = nextAccountId,
+                updatedAt = System.currentTimeMillis(),
+                version = bill.version + 1
+            )
+            val (protected, _) = FieldPriorityResolver.protectLockedUpdate(
+                bill,
+                candidate,
+                FieldPriorityResolver.Source.RULE
+            )
+            val changed = protected.platform != bill.platform ||
+                protected.merchant != bill.merchant ||
+                protected.categoryId != bill.categoryId ||
+                protected.accountId != bill.accountId
+            if (!changed) continue
+            val applied = runCatching {
+                repository.updateBillWithBalanceUpdate(
+                    bill,
+                    candidate,
+                    FieldPriorityResolver.Source.RULE
+                )
+            }.getOrDefault(false)
+            if (applied) {
+                affected += 1
+                decision.hits.forEach { hit ->
+                    database.ruleDao().incrementHitCount(hit.ruleId)
+                }
+            }
+        }
+        if (affected > 0) {
+            events.emit("onBillChanged", JSONObject().put("batchUpdated", affected))
+            maybeNotifyBudgetAlerts()
+        }
+        JSONObject().put("affected", affected).toString()
+    }
+
+    private fun validateRuleDefinition(
+        condition: String,
+        conditionValue: String,
+        action: String,
+        actionValue: String?
+    ) {
+        if (condition !in RuleEngine.VALID_CONDITIONS) {
+            throw BridgeException("INVALID_ARGUMENT", "不支持的规则条件: $condition")
+        }
+        if (action !in RuleEngine.VALID_ACTIONS) {
+            throw BridgeException("INVALID_ARGUMENT", "不支持的规则动作: $action")
+        }
+        if (condition == RuleEngine.CONDITION_AMOUNT_RANGE &&
+            RuleEngine.parseAmountRange(conditionValue) == null
+        ) {
+            throw BridgeException("INVALID_ARGUMENT", "金额区间格式不合法，应为整数分范围如 1000-5000")
+        }
+        val requiresActionValue = action == RuleEngine.ACTION_SET_PLATFORM ||
+            action == RuleEngine.ACTION_SET_MERCHANT ||
+            action == RuleEngine.ACTION_SET_CATEGORY ||
+            action == RuleEngine.ACTION_SET_ACCOUNT
+        if (requiresActionValue && actionValue.isNullOrBlank()) {
+            throw BridgeException("INVALID_ARGUMENT", "该规则动作需要填写目标值")
+        }
     }
 
     @ReactMethod

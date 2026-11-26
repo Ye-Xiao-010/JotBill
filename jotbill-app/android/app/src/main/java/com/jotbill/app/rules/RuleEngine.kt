@@ -63,12 +63,13 @@ class RuleEngine(private val database: JotBillDatabase) {
 
     /** 规则判定结果：Continue 走默认路径，Ignored 跳过记账，ToReview 强制进入待确认。 */
     sealed class Decision {
+        abstract val patch: FieldPatch
         abstract val hits: List<RuleHit>
         abstract val conflicts: List<FieldConflict>
 
         /** 无规则命中或仅字段补全：调用方按原有链路处理（自动入账或既有冲突逻辑）。 */
         data class Continue(
-            val patch: FieldPatch,
+            override val patch: FieldPatch,
             override val hits: List<RuleHit>,
             override val conflicts: List<FieldConflict>
         ) : Decision()
@@ -76,14 +77,16 @@ class RuleEngine(private val database: JotBillDatabase) {
         /** `ignore` 动作：不写 Bill、不更新余额、不进待确认，由调用方落审计记录。 */
         data class Ignored(
             override val hits: List<RuleHit>,
-            override val conflicts: List<FieldConflict>
+            override val conflicts: List<FieldConflict>,
+            override val patch: FieldPatch = FieldPatch()
         ) : Decision()
 
         /** `send_to_review` 动作：强制进入待确认中心，不自动入账。 */
         data class ToReview(
             val reason: String,
             override val hits: List<RuleHit>,
-            override val conflicts: List<FieldConflict>
+            override val conflicts: List<FieldConflict>,
+            override val patch: FieldPatch = FieldPatch()
         ) : Decision()
     }
 
@@ -115,6 +118,7 @@ class RuleEngine(private val database: JotBillDatabase) {
         val hits = mutableListOf<RuleHit>()
         val conflicts = mutableListOf<FieldConflict>()
         val patchFields = mutableMapOf<String, Pair<String, String>>() // field -> (ruleId, value)
+        var forcedAction: String? = null
 
         for (rule in rules) {
             if (!matchesCondition(subject, rule)) {
@@ -129,16 +133,16 @@ class RuleEngine(private val database: JotBillDatabase) {
             )
             when (rule.action) {
                 ACTION_IGNORE -> {
-                    hits += hit
-                    return Decision.Ignored(hits.toList(), conflicts.toList())
+                    if (forcedAction == null) {
+                        forcedAction = ACTION_IGNORE
+                        hits += hit
+                    }
                 }
                 ACTION_SEND_TO_REVIEW -> {
-                    hits += hit
-                    return Decision.ToReview(
-                        reason = "RULE_FORCED_REVIEW",
-                        hits = hits.toList(),
-                        conflicts = conflicts.toList()
-                    )
+                    if (forcedAction == null) {
+                        forcedAction = ACTION_SEND_TO_REVIEW
+                        hits += hit
+                    }
                 }
                 ACTION_SET_PLATFORM, ACTION_SET_MERCHANT,
                 ACTION_SET_CATEGORY, ACTION_SET_ACCOUNT -> {
@@ -170,7 +174,16 @@ class RuleEngine(private val database: JotBillDatabase) {
             categoryId = patchFields[FIELD_CATEGORY]?.second,
             accountId = patchFields[FIELD_ACCOUNT]?.second
         )
-        return Decision.Continue(patch, hits.toList(), conflicts.toList())
+        return when (forcedAction) {
+            ACTION_IGNORE -> Decision.Ignored(hits.toList(), conflicts.toList(), patch)
+            ACTION_SEND_TO_REVIEW -> Decision.ToReview(
+                reason = "RULE_FORCED_REVIEW",
+                hits = hits.toList(),
+                conflicts = conflicts.toList(),
+                patch = patch
+            )
+            else -> Decision.Continue(patch, hits.toList(), conflicts.toList())
+        }
     }
 
     /**
@@ -245,18 +258,15 @@ class RuleEngine(private val database: JotBillDatabase) {
     }
 
     /**
-     * 金额区间条件：conditionValue 格式为 `min-max`（单位：分）。
-     * 支持空端点：`1000-` 表示 ≥1000，`-5000` 表示 ≤5000，
-     * `1000-5000` 表示闭区间，`-` 或空串表示不限。
+     * 金额区间条件：conditionValue 格式为 `min-max`（单位：分，必须为非负整数）。
+     * 支持单边留空：`1000-` 表示 ≥1000，`-5000` 表示 ≤5000，`1000-5000` 表示闭区间。
+     * 非法格式（含小数/文字、两端皆空、或 min > max）按未命中处理，绝不退化为全量命中。
      */
     private fun matchesAmountRange(amountMinor: Long?, expected: String): Boolean {
         if (amountMinor == null) return false
-        val parts = expected.split("-", limit = 2)
-        if (parts.size != 2) return false
-        val min = parts[0].trim().toLongOrNull()
-        val max = parts[1].trim().toLongOrNull()
-        if (min != null && amountMinor < min) return false
-        if (max != null && amountMinor > max) return false
+        val range = parseAmountRange(expected) ?: return false
+        if (range.first != null && amountMinor < range.first!!) return false
+        if (range.second != null && amountMinor > range.second!!) return false
         return true
     }
 
@@ -277,6 +287,38 @@ class RuleEngine(private val database: JotBillDatabase) {
         const val CONDITION_DESCRIPTION_CONTAINS = "description_contains"
         const val CONDITION_SOURCE_EQUALS = "source_equals"
         const val CONDITION_AMOUNT_RANGE = "amount_range"
+
+        val VALID_CONDITIONS = setOf(
+            CONDITION_PLATFORM_EQUALS,
+            CONDITION_MERCHANT_EQUALS,
+            CONDITION_MERCHANT_CONTAINS,
+            CONDITION_DESCRIPTION_CONTAINS,
+            CONDITION_SOURCE_EQUALS,
+            CONDITION_AMOUNT_RANGE
+        )
+
+        val VALID_ACTIONS = setOf(
+            "set_platform",
+            "set_merchant",
+            "set_category",
+            "set_account",
+            "send_to_review",
+            "ignore"
+        )
+
+        fun parseAmountRange(expected: String): Pair<Long?, Long?>? {
+            val trimmed = expected.trim()
+            if (trimmed.isEmpty()) return null
+            val parts = trimmed.split("-", limit = 2)
+            if (parts.size != 2) return null
+            val minRaw = parts[0].trim()
+            val maxRaw = parts[1].trim()
+            if (minRaw.isEmpty() && maxRaw.isEmpty()) return null
+            val min = if (minRaw.isEmpty()) null else minRaw.toLongOrNull()?.takeIf { it >= 0L } ?: return null
+            val max = if (maxRaw.isEmpty()) null else maxRaw.toLongOrNull()?.takeIf { it >= 0L } ?: return null
+            if (min != null && max != null && min > max) return null
+            return min to max
+        }
 
         /** 动作类型（与 Native.d.ts RuleAction 一致）。 */
         const val ACTION_SET_PLATFORM = "set_platform"

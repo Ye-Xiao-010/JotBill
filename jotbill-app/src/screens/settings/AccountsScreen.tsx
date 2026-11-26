@@ -122,6 +122,8 @@ export default function AccountsScreen() {
     queryClient.invalidateQueries({ queryKey: QUERY_KEYS.accountsBalance });
     queryClient.invalidateQueries({ queryKey: ['net-worth'] });
     queryClient.invalidateQueries({ queryKey: ['asset-trend'] });
+    queryClient.invalidateQueries({ queryKey: ['dashboard'] });
+    queryClient.invalidateQueries({ queryKey: ['total-assets'] });
     queryClient.invalidateQueries({ queryKey: ['balance-reconcile-warnings'] });
   }, [queryClient]);
 

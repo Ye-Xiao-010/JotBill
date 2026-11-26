@@ -29,6 +29,7 @@ import CategoryIcon from '../../components/business/CategoryIcon';
 import AccountIcon from '../../components/business/AccountIcon';
 import { accountDisplayName, resolveAccountIcon } from '../../constants/accountIcons';
 import { HOGWARTS_FONTS } from '../../constants/hogwartsAssets';
+import { invalidateCache } from '../../lib/queryClient';
 import { nativeData, type Account, type Rule } from '../../native';
 import { borderRadius, borderWidth, spacing } from '../../theme/spacing';
 import { ThemeColors } from '../../theme/colors';
@@ -111,6 +112,9 @@ export default function RulesScreen() {
     mutationFn: (ruleId: string | undefined) => nativeData.applyRulesToExisting(ruleId),
     onSuccess: (result, ruleId) => {
       invalidateRules();
+      if (result.affected > 0) {
+        invalidateCache.bills();
+      }
       const target = ruleId ? rules.find(rule => rule.id === ruleId)?.name : '全部规则';
       alert(
         '应用完成',

@@ -48,6 +48,26 @@ import kotlinx.coroutines.launch
  * `com.google.android.accessibility.selecttospeak.SelectToSpeakService`（见 W-1），
  * 采集逻辑全部在本类。原因见该子类的注释与 `docs/` 微信节点可见性记录。
  */
+internal class PaymentResultDedupMemory {
+    private val lock = Any()
+    private val expiresAtByKey = mutableMapOf<String, Long>()
+
+    /**
+     * 线程安全 + 独立过期时间去重：
+     * 避免主线程 15 秒事件去重与 IO 线程 5 分钟页面重观测去重相互竞争，
+     * 也避免 15 秒短 TTL 清理误删 5 分钟长 TTL 记录。
+     */
+    fun mark(sourceEventKey: String, now: Long, ttlMillis: Long): Boolean = synchronized(lock) {
+        expiresAtByKey.entries.removeAll { (_, expiresAt) -> now > expiresAt }
+        val existingExpiry = expiresAtByKey[sourceEventKey]
+        if (existingExpiry != null && now <= existingExpiry) {
+            return false
+        }
+        expiresAtByKey[sourceEventKey] = now + ttlMillis
+        true
+    }
+}
+
 open class CheckoutAccessibilityService : AccessibilityService() {
     companion object {
         private const val TAG = "CheckoutAccessibilityService"
@@ -406,7 +426,7 @@ open class CheckoutAccessibilityService : AccessibilityService() {
      * 本常量须与 `CheckoutPaymentMatcher.ORPHAN_DEDUP_WINDOW_MILLIS` **保持同值** ——
      * 两道防线阈值不一致时，先失效的那道形同虚设。
      */
-    private val recentPaymentResultEventKeys = mutableMapOf<String, Long>()
+    private val recentPaymentResultEventMemory = PaymentResultDedupMemory()
 
     /**
      * 结算页门禁日志的最近打印时间，键为"包名|拒绝码"。
@@ -1064,6 +1084,7 @@ open class CheckoutAccessibilityService : AccessibilityService() {
         // 服务中断后页面观察不再连续，L3 跨帧易变观察窗口失去意义，
         // 清空防止陈旧观察污染重新连接后的判定。
         AccessibilityPageSummaryCollector.resetVolatileTracker()
+        bookkeepingEngine?.resetTracking()
         JotBillLog.w(TAG, "结算页无障碍观察服务被中断")
         // AccessibilityService.onInterrupt() 是抽象方法，无法调用 super.onInterrupt()。
     }
@@ -1081,6 +1102,7 @@ open class CheckoutAccessibilityService : AccessibilityService() {
         paymentRescanHandler.removeCallbacks(paymentRescanRunnable)
         proactiveScanHandler.removeCallbacks(proactiveScanRunnable)
         proactiveScanPackage = null
+        bookkeepingEngine?.resetTracking()
         if (activeService === this) {
             activeService = null
         }
@@ -1100,6 +1122,7 @@ open class CheckoutAccessibilityService : AccessibilityService() {
         paymentRescanHandler.removeCallbacks(paymentRescanRunnable)
         proactiveScanHandler.removeCallbacks(proactiveScanRunnable)
         proactiveScanPackage = null
+        bookkeepingEngine?.resetTracking()
         shutdownPaymentMatcher()
         evidenceFallbackScope.cancel()
         if (activeService === this) {
@@ -1371,8 +1394,21 @@ open class CheckoutAccessibilityService : AccessibilityService() {
         includeWindows: Boolean
     ): List<AccessibilityNodeInfo> {
         val roots = mutableListOf<AccessibilityNodeInfo>()
+        fun recycleSafely(node: AccessibilityNodeInfo?) {
+            if (node == null) return
+            try {
+                @Suppress("DEPRECATION")
+                node.recycle()
+            } catch (_: RuntimeException) {
+            }
+        }
         fun add(candidate: AccessibilityNodeInfo?) {
-            if (candidate == null || roots.any { it === candidate }) {
+            if (candidate == null) return
+            // AccessibilityNodeInfo.equals 比较底层节点标识（比 === 准确，避免同节点重复全树扫描）
+            if (roots.any { it === candidate || runCatching { it == candidate }.getOrDefault(false) }) {
+                if (roots.none { it === candidate }) {
+                    recycleSafely(candidate)
+                }
                 return
             }
             roots += candidate
@@ -1392,29 +1428,37 @@ open class CheckoutAccessibilityService : AccessibilityService() {
             try {
                 val inventory = mutableListOf<String>()
                 windows.forEach { window ->
-                    val rootPackage = try {
-                        window.root?.packageName?.toString().orEmpty()
+                    val wRoot = try {
+                        window.root
                     } catch (_: RuntimeException) {
-                        ""
+                        null
                     }
-                    val rootClass = try {
-                        window.root?.className?.toString().orEmpty()
-                    } catch (_: RuntimeException) {
-                        ""
-                    }
-                    inventory += "${window.type}:${rootPackage.ifBlank { "null" }}:${rootClass.substringAfterLast('.')}"
-                    // 只取活动/聚焦窗口。此前扫描全部窗口会在离开微信后把后台旧成功页
-                    // 再次解析成支付证据，产生错误金额的待确认。
-                    val windowActive = try {
-                        window.isActive || window.isFocused
-                    } catch (_: RuntimeException) {
-                        false
-                    }
-                    if (windowActive) {
-                        try {
-                            add(window.root)
+                    try {
+                        val rootPackage = try {
+                            wRoot?.packageName?.toString().orEmpty()
                         } catch (_: RuntimeException) {
-                            // 单个窗口不可读时继续检查其它窗口。
+                            ""
+                        }
+                        val rootClass = try {
+                            wRoot?.className?.toString().orEmpty()
+                        } catch (_: RuntimeException) {
+                            ""
+                        }
+                        inventory += "${window.type}:${rootPackage.ifBlank { "null" }}:${rootClass.substringAfterLast('.')}"
+                        val windowActive = try {
+                            window.isActive || window.isFocused
+                        } catch (_: RuntimeException) {
+                            false
+                        }
+                        if (windowActive && wRoot != null) {
+                            add(wRoot)
+                        } else {
+                            recycleSafely(wRoot)
+                        }
+                    } finally {
+                        runCatching {
+                            @Suppress("DEPRECATION")
+                            window.recycle()
                         }
                     }
                 }
@@ -1795,6 +1839,12 @@ open class CheckoutAccessibilityService : AccessibilityService() {
             activeRoot?.packageName?.toString()?.trim().orEmpty()
         } catch (_: RuntimeException) {
             ""
+        } finally {
+            try {
+                @Suppress("DEPRECATION")
+                activeRoot?.recycle()
+            } catch (_: RuntimeException) {
+            }
         }
         // B1 适配：停止条件按扫描上下文区分 —— 支付包上下文保持原语义（在白名单
         // 支付包之间切换仍继续）；站内（购物包）上下文只在原购物包内继续，切到
@@ -2011,17 +2061,7 @@ open class CheckoutAccessibilityService : AccessibilityService() {
         sourceEventKey: String,
         now: Long,
         ttlMillis: Long = PAYMENT_RESULT_EVENT_MEMORY_MILLIS
-    ): Boolean {
-        recentPaymentResultEventKeys.entries.removeAll {
-            now - it.value > ttlMillis
-        }
-        val previous = recentPaymentResultEventKeys[sourceEventKey]
-        if (previous != null) {
-            return false
-        }
-        recentPaymentResultEventKeys[sourceEventKey] = now
-        return true
-    }
+    ): Boolean = recentPaymentResultEventMemory.mark(sourceEventKey, now, ttlMillis)
 
     private fun collectPageText(root: AccessibilityNodeInfo): String {
         val builder = StringBuilder()

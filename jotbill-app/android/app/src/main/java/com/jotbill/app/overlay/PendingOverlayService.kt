@@ -6,6 +6,7 @@ import android.app.NotificationManager
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import com.jotbill.app.utils.JotBillLog
@@ -37,22 +38,79 @@ import com.jotbill.app.utils.JotBillLog
  */
 class PendingOverlayService : Service() {
 
+    @Volatile
+    private var foregroundStarted = false
+
     override fun onCreate() {
         super.onCreate()
         ensureChannel()
+        val started = startForegroundCompat()
+        val shouldStopImmediately = synchronized(stateLock) {
+            runningInstance = this
+            !started || stopRequested
+        }
+        if (shouldStopImmediately) {
+            stopSelf()
+        }
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        startForeground(NOTIFICATION_ID, buildNotification())
-        JotBillLog.i(TAG, "弹窗前台服务已启动: type=specialUse")
+        if (!foregroundStarted && !startForegroundCompat()) {
+            stopSelf()
+            return START_NOT_STICKY
+        }
+        val shouldStop = synchronized(stateLock) { stopRequested }
+        if (shouldStop) {
+            stopSelf()
+        }
         return START_NOT_STICKY
     }
 
     override fun onDestroy() {
+        if (foregroundStarted) {
+            runCatching {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                    stopForeground(STOP_FOREGROUND_REMOVE)
+                } else {
+                    @Suppress("DEPRECATION")
+                    stopForeground(true)
+                }
+            }
+            foregroundStarted = false
+        }
+        synchronized(stateLock) {
+            if (runningInstance === this) {
+                runningInstance = null
+                if (stopRequested) {
+                    startDispatched = false
+                }
+            }
+        }
         JotBillLog.i(TAG, "弹窗前台服务已停止")
         super.onDestroy()
+    }
+
+    private fun startForegroundCompat(): Boolean {
+        val notification = buildNotification()
+        return try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                startForeground(
+                    NOTIFICATION_ID,
+                    notification,
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+                )
+            } else {
+                startForeground(NOTIFICATION_ID, notification)
+            }
+            foregroundStarted = true
+            JotBillLog.i(TAG, "弹窗前台服务已启动: type=specialUse")
+            true
+        } catch (error: RuntimeException) {
+            JotBillLog.w(TAG, "弹窗前台服务启动失败(startForeground)", error)
+            false
+        }
     }
 
     private fun ensureChannel() {
@@ -94,8 +152,16 @@ class PendingOverlayService : Service() {
         private const val CHANNEL_ID = "pending_overlay_keepalive"
         private const val NOTIFICATION_ID = 0x4A11
 
+        private val stateLock = Any()
+        private var runningInstance: PendingOverlayService? = null
+        private var startDispatched = false
+        private var stopRequested = false
+
         /** 启动前台服务；失败只记日志，调用方继续走无 FGS 路径。 */
         fun start(context: Context) {
+            synchronized(stateLock) {
+                stopRequested = false
+            }
             try {
                 val intent = Intent(context, PendingOverlayService::class.java)
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -103,17 +169,35 @@ class PendingOverlayService : Service() {
                 } else {
                     context.startService(intent)
                 }
+                synchronized(stateLock) {
+                    startDispatched = true
+                }
             } catch (error: RuntimeException) {
                 JotBillLog.w(TAG, "弹窗前台服务启动失败", error)
             }
         }
 
-        /** 停止前台服务；幂等，未启动时调用无副作用。 */
+        /**
+         * 停止前台服务；幂等，且避免在 `startForegroundService()` 刚派发、
+         * `onCreate()` 尚未执行 `startForeground()` 的空窗期强行 `stopService()`
+         * 触发 Android 12+ `ForegroundServiceDidNotStartInTimeException`。
+         */
         fun stop(context: Context) {
-            try {
-                context.stopService(Intent(context, PendingOverlayService::class.java))
-            } catch (error: RuntimeException) {
-                JotBillLog.w(TAG, "弹窗前台服务停止失败", error)
+            val instanceToStop = synchronized(stateLock) {
+                stopRequested = true
+                val current = runningInstance
+                when {
+                    current != null && current.foregroundStarted -> current
+                    current == null && !startDispatched -> null
+                    else -> null
+                }
+            }
+            if (instanceToStop != null) {
+                try {
+                    instanceToStop.stopSelf()
+                } catch (error: RuntimeException) {
+                    JotBillLog.w(TAG, "弹窗前台服务停止失败", error)
+                }
             }
         }
     }

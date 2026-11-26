@@ -131,23 +131,32 @@ class LedgerRepository(private val database: JotBillDatabase) {
             // 漏了它就等于"能创建、不能改、不能删"的幽灵账单。口径统一在此。
             requireMutableBill(bill)
             // ---- 去重第 1 级：orderId 精确查重 + 金额/类型一致性（M1）----
-            // 一致才合并；撞号（同单号不同金额/类型）抛 [OrderConflictException]，
-            // 由调用方转待确认或向用户报错 —— 新证据绝不被静默吞进旧账单。
-            val level1 = DuplicateGuard(database).checkLevel1Consistent(
-                orderId = bill.orderId,
-                type = bill.type,
-                amountMinor = bill.amountMinor,
-                excludeId = bill.id
-            )
-            when (level1) {
-                is DuplicateGuard.Level1Check.Conflict -> throw OrderConflictException(
-                    message = "订单 ${bill.orderId} 已存在金额/类型不同的账单 " +
-                        "(existing=${level1.bill.id}, mismatches=${level1.mismatches})",
-                    existingBillId = level1.bill.id
+            // 手动记账（sourceType = manual）不参与自动订单号合流，避免吞掉用户手选分类/账户/时间；
+            // 非手动来源一致才合并，撞号抛 [OrderConflictException]。
+            if (bill.sourceType != "manual") {
+                val level1 = DuplicateGuard(database).checkLevel1Consistent(
+                    orderId = bill.orderId,
+                    type = bill.type,
+                    amountMinor = bill.amountMinor,
+                    excludeId = bill.id
                 )
-                is DuplicateGuard.Level1Check.Consistent ->
-                    return@withTransaction mergeIntoExistingBill(level1.bill, bill, now)
-                DuplicateGuard.Level1Check.Clear -> Unit
+                when (level1) {
+                    is DuplicateGuard.Level1Check.Conflict -> throw OrderConflictException(
+                        message = "订单 ${bill.orderId} 已存在金额/类型不同的账单 " +
+                            "(existing=${level1.bill.id}, mismatches=${level1.mismatches})",
+                        existingBillId = level1.bill.id
+                    )
+                    is DuplicateGuard.Level1Check.Consistent ->
+                        return@withTransaction mergeIntoExistingBill(level1.bill, bill, now)
+                    DuplicateGuard.Level1Check.Clear -> Unit
+                }
+            }
+
+            if (bill.type == "refund" && !bill.originalTransactionId.isNullOrBlank()) {
+                RefundCapGuard(database)
+                    .evaluate(bill.amountMinor, bill.originalTransactionId)
+                    ?.takeIf { it.exceeded }
+                    ?.let { throw LedgerValidationException(RefundCapGuard.REFUND_EXCEEDED_MESSAGE) }
             }
 
             if (newAccount != null) {
@@ -262,7 +271,14 @@ class LedgerRepository(private val database: JotBillDatabase) {
             val (protected, lockConflicts) = FieldPriorityResolver.protectLockedUpdate(
                 current, updated, fieldUpdateSource
             )
-            validateBillAccounts(protected, requireActiveAccounts = true)
+            // 仅当账户/目标账户发生变更时才要求新账户为启用状态；
+            // 已停用账户上的历史账单仍允许修正分类、备注、商户或日期。
+            validateBillAccounts(
+                protected,
+                requireActiveAccounts = true,
+                existingAccountId = current.accountId,
+                existingTargetAccountId = current.targetAccountId
+            )
             // B2：编辑路径的退款累计上限（此前只有自动入账/确认路径有，编辑可绕过）。
             // 覆盖两种场景：调大已有退款金额、把支出改为 refund 并关联原交易。
             // 2026-11-17 复审：只在金额/原单关联实际变化时校验 —— 否则一笔已超额
@@ -813,13 +829,15 @@ class LedgerRepository(private val database: JotBillDatabase) {
     private suspend fun validateBillAccounts(
         bill: BillEntity,
         requireActiveAccounts: Boolean,
-        missingAccountMessage: String = "Transaction requires an account"
+        missingAccountMessage: String = "Transaction requires an account",
+        existingAccountId: String? = null,
+        existingTargetAccountId: String? = null
     ) {
         val accountId = bill.accountId?.takeIf { it.isNotBlank() }
             ?: throw LedgerValidationException(missingAccountMessage)
         val account = database.accountDao().getById(accountId)
             ?: throw LedgerValidationException("Account $accountId does not exist")
-        if (requireActiveAccounts && !account.isActive) {
+        if (requireActiveAccounts && accountId != existingAccountId && !account.isActive) {
             throw LedgerValidationException("Account $accountId is inactive")
         }
 
@@ -831,7 +849,7 @@ class LedgerRepository(private val database: JotBillDatabase) {
             }
             val target = database.accountDao().getById(targetAccountId)
                 ?: throw LedgerValidationException("Target account $targetAccountId does not exist")
-            if (!target.isActive) {
+            if (requireActiveAccounts && targetAccountId != existingTargetAccountId && !target.isActive) {
                 throw LedgerValidationException("Target account $targetAccountId is inactive")
             }
         }

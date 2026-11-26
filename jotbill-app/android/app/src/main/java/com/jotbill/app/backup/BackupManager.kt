@@ -469,6 +469,7 @@ internal class BackupManager(
             validateText(row, "currency")
             validateOptionalText(row, "icon")
             validateOptionalText(row, "color")
+            validateOptionalText(row, "cardTail")
             validateMinor(requiredLong(row, "initialBalanceMinor"), allowNegative = kind == "liability")
             validateMinor(requiredLong(row, "currentBalanceMinor"), allowNegative = true)
             if (kind == "asset" && requiredLong(row, "initialBalanceMinor") < 0L) {
@@ -480,18 +481,39 @@ internal class BackupManager(
             requiredBoolean(row, "isActive")
         }
 
+        val categoryMeta = mutableMapOf<String, Pair<String, String?>>()
         forEachObject(arrays.categories) { row ->
             validateText(row, "id")
+            val id = requiredString(row, "id")
             validateText(row, "name")
-            if (requiredString(row, "type") !in CATEGORY_TYPES) {
+            val type = requiredString(row, "type")
+            if (type !in CATEGORY_TYPES) {
                 throw BackupException("BACKUP_VALIDATION_FAILED", "分类类型不合法")
             }
             validateOptionalText(row, "icon")
             validateOptionalText(row, "color")
+            validateOptionalText(row, "parentId")
             requiredBoolean(row, "isDefault")
             requiredInt(row, "sortOrder")
             validateTimestamp(row, "createdAt")
             validateTimestamp(row, "updatedAt")
+            categoryMeta[id] = type to optionalString(row, "parentId")
+        }
+        categoryMeta.forEach { (id, meta) ->
+            val (type, parentId) = meta
+            if (parentId != null) {
+                if (parentId == id) {
+                    throw BackupException("BACKUP_VALIDATION_FAILED", "分类不能引用自身作为父分类")
+                }
+                val parent = categoryMeta[parentId]
+                    ?: throw BackupException("BACKUP_VALIDATION_FAILED", "子分类引用了不存在的父分类")
+                if (parent.first != type) {
+                    throw BackupException("BACKUP_VALIDATION_FAILED", "子分类类型与父分类不一致")
+                }
+                if (parent.second != null) {
+                    throw BackupException("BACKUP_VALIDATION_FAILED", "分类层级超过两级限制")
+                }
+            }
         }
 
         forEachObject(arrays.bills) { row ->
@@ -512,6 +534,8 @@ internal class BackupManager(
             validateOptionalText(row, "productDescription")
             validateOptionalText(row, "originalTransactionId")
             validateOptionalText(row, "orderId")
+            validateOptionalText(row, "fieldLocks")
+            validateOptionalText(row, "importRecordId")
             val categoryId = optionalString(row, "categoryId")
             val accountId = optionalString(row, "accountId")
             val targetAccountId = optionalString(row, "targetAccountId")
@@ -601,6 +625,14 @@ internal class BackupManager(
             validateOptionalText(row, "actionValue")
             requiredInt(row, "priority")
             requiredBoolean(row, "isActive")
+            val hitCount = optionalInt(row, "hitCount")
+            if (hitCount != null && hitCount < 0) {
+                throw BackupException("BACKUP_VALIDATION_FAILED", "规则命中次数不能为负")
+            }
+            val source = optionalString(row, "source")
+            if (source != null && source !in RULE_SOURCES) {
+                throw BackupException("BACKUP_VALIDATION_FAILED", "规则来源不合法")
+            }
             validateTimestamp(row, "createdAt")
             validateTimestamp(row, "updatedAt")
         }
@@ -810,6 +842,7 @@ internal class BackupManager(
                 putNullable("color", cursor.string("color"))
                 put("isDefault", cursor.bool("is_default"))
                 put("sortOrder", cursor.int("sort_order"))
+                putNullable("parentId", cursor.string("parent_id"))
                 put("createdAt", cursor.long("created_at"))
                 put("updatedAt", cursor.long("updated_at"))
             }
@@ -853,6 +886,8 @@ internal class BackupManager(
                 putNullable("actionValue", cursor.string("action_value"))
                 put("priority", cursor.int("priority"))
                 put("isActive", cursor.bool("is_active"))
+                put("hitCount", cursor.int("hit_count"))
+                put("source", cursor.string("source") ?: "manual")
                 put("createdAt", cursor.long("created_at"))
                 put("updatedAt", cursor.long("updated_at"))
             }
@@ -1018,10 +1053,12 @@ internal class BackupManager(
 
     private fun deleteRestorableData(db: SupportSQLiteDatabase) {
         // 先删除引用子表，再删除账户和分类，保留未纳入 MVP 的会话与待确认数据。
+        // 同时清理 import_batches：恢复到导入前快照后若残留 file_hash，会永久阻断重新导入同文件。
         db.execSQL("DELETE FROM bills")
         db.execSQL("DELETE FROM balance_calibrations")
         db.execSQL("DELETE FROM budgets")
         db.execSQL("DELETE FROM audit_entries")
+        db.execSQL("DELETE FROM import_batches")
         db.execSQL("DELETE FROM financial_goals")
         db.execSQL("DELETE FROM rules")
         // 只替换备份允许恢复的设置，保留未纳入 MVP 的本地设置。
@@ -1078,7 +1115,11 @@ internal class BackupManager(
     }
 
     private fun insertCategories(db: SupportSQLiteDatabase, rows: JSONArray) {
-        forEachObject(rows) { row ->
+        // 先插一级分类再插子分类，保证层级顺序稳定
+        val ordered = mutableListOf<JSONObject>()
+        forEachObject(rows) { ordered += it }
+        ordered.sortBy { if (optionalString(it, "parentId") == null) 0 else 1 }
+        ordered.forEach { row ->
             insertRow(db, "categories", ContentValues().apply {
                 put("id", requiredString(row, "id"))
                 put("name", requiredString(row, "name"))
@@ -1087,6 +1128,7 @@ internal class BackupManager(
                 putNullableString("color", optionalString(row, "color"))
                 put("is_default", requiredBooleanInt(row, "isDefault"))
                 put("sort_order", requiredInt(row, "sortOrder"))
+                putNullableString("parent_id", optionalString(row, "parentId"))
                 put("created_at", requiredLong(row, "createdAt"))
                 put("updated_at", requiredLong(row, "updatedAt"))
             })
@@ -1139,6 +1181,8 @@ internal class BackupManager(
                 putNullableString("action_value", optionalString(row, "actionValue"))
                 put("priority", requiredInt(row, "priority"))
                 put("is_active", requiredBooleanInt(row, "isActive"))
+                put("hit_count", optionalInt(row, "hitCount")?.coerceAtLeast(0) ?: 0)
+                put("source", optionalString(row, "source")?.takeIf { it in RULE_SOURCES } ?: "manual")
                 put("created_at", requiredLong(row, "createdAt"))
                 put("updated_at", requiredLong(row, "updatedAt"))
             })
@@ -1624,6 +1668,7 @@ internal class BackupManager(
         val BILL_TYPES = setOf("income", "expense", "transfer", "refund", "repayment", "fee", "adjustment")
         val SOURCE_TYPES = setOf("ai_vision", "notification", "accessibility", "sms", "import", "manual", "ai_chat")
         val BUDGET_PERIODS = setOf("monthly", "weekly", "biweekly", "quarterly", "yearly", "once")
+        val RULE_SOURCES = setOf("manual", "from_correction")
         val SAFE_SETTING_KEYS = setOf("initialized", "ai_monthly_budget_minor")
     }
 }

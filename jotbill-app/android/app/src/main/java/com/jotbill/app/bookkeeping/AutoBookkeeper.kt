@@ -101,6 +101,44 @@ class AutoBookkeeper(
             record.fields["businessTime"],
             fallback = record.extractTime
         )
+        // 个人转账与信用卡自动还款绝不误记为消费支出：
+        // - 转账交给个人转账待确认链路（与 PaymentResultParser 统一口径并走跨腿查重）；
+        // - 还款交给 TransferClassifier 做还款账户归属或转待确认。
+        if (type == "transfer") {
+            try {
+                matcher.recordPersonalTransfer(
+                    amountMinor = amountMinor,
+                    paymentPackage = record.sourcePackage,
+                    recipient = merchant,
+                    occurredAt = occurredAt
+                )
+            } catch (error: Exception) {
+                if (error is kotlinx.coroutines.CancellationException) throw error
+                JotBillLog.w(TAG, "个人转账规则记录处理失败", error)
+            }
+            return
+        }
+        if (type == "repayment") {
+            try {
+                val evidence = PaymentEvidenceInput(
+                    sourcePackage = record.sourcePackage,
+                    amountMinor = amountMinor,
+                    occurredAt = occurredAt,
+                    merchant = merchant,
+                    orderId = orderId,
+                    paymentStatus = "REPAYMENT",
+                    sourceEventKey = record.sourceEventKey
+                        ?: "abk-repay:${record.ruleId}:${record.extractTime}:$amountMinor",
+                    rawTextHash = sha256Text("repay|${record.ruleId}|$amountMinor|${merchant.orEmpty()}"),
+                    targetAccountHint = record.fields["bank"] ?: merchant
+                )
+                com.jotbill.app.recognition.TransferClassifier(database).processTransfer(evidence)
+            } catch (error: Exception) {
+                if (error is kotlinx.coroutines.CancellationException) throw error
+                JotBillLog.w(TAG, "自动还款规则记录处理失败", error)
+            }
+            return
+        }
 
         // 统一入账（2026-11-16 模型调整 / 2026-11-17 审查收敛）：
         // 页面规则与银行短信都作为「信号」交给 SignalBillWriter —— 首笔直接成账，
@@ -221,12 +259,17 @@ class AutoBookkeeper(
 
     // ── 字段归一化 ─────────────────────────────────────────────────────────
 
-    private fun resolveType(record: AutoBookkeepingEngine.ExtractedRecord): String {
-        // detailType 已被 extractFieldsMapper 归一化为 "1"收入/"2"支出（小米约定）。
+    internal fun resolveType(record: AutoBookkeepingEngine.ExtractedRecord): String {
+        // detailType 已被 extractFieldsMapper 归一化为 "1"收入/"2"支出/"transfer"/"repayment"。
         return when (record.fields["detailType"]) {
             "1" -> "income"
             "2" -> "expense"
-            else -> if (record.jotbillType == "income") "income" else "expense"
+            "transfer" -> "transfer"
+            "repayment" -> "repayment"
+            else -> when (record.jotbillType) {
+                "income", "transfer", "repayment" -> record.jotbillType
+                else -> "expense"
+            }
         }
     }
 
@@ -384,25 +427,32 @@ class AutoBookkeeper(
          */
         internal fun parseBusinessTimeMillis(raw: String?, fallback: Long): Long {
             val text = raw?.trim()?.takeIf { it.isNotEmpty() } ?: return fallback
-            val zone = ZoneId.systemDefault()
-            val now = LocalDateTime.ofInstant(Instant.ofEpochMilli(fallback), zone)
+            return try {
+                val zone = ZoneId.systemDefault()
+                val now = LocalDateTime.ofInstant(Instant.ofEpochMilli(fallback), zone)
 
-            FULL_TIME_PATTERN.matcher(text).takeIf { it.find() }?.let { matcher ->
-                val time = LocalDateTime.of(
-                    matcher.group(1)!!.toInt(),
-                    matcher.group(2)!!.toInt(),
-                    matcher.group(3)!!.toInt(),
-                    matcher.group(4)!!.toInt(),
-                    matcher.group(5)!!.toInt(),
-                    matcher.group(6)?.toInt() ?: 0
-                )
-                return time.atZone(zone).toInstant().toEpochMilli()
+                FULL_TIME_PATTERN.matcher(text).takeIf { it.find() }?.let { matcher ->
+                    val year = matcher.group(1)!!.toInt()
+                    val month = matcher.group(2)!!.toInt()
+                    val day = matcher.group(3)!!.toInt()
+                    val hour = matcher.group(4)!!.toInt()
+                    val minute = matcher.group(5)!!.toInt()
+                    val second = matcher.group(6)?.toInt() ?: 0
+                    if (isValidMonthDay(year, month, day) &&
+                        hour in 0..23 && minute in 0..59 && second in 0..59
+                    ) {
+                        val time = LocalDateTime.of(year, month, day, hour, minute, second)
+                        return time.atZone(zone).toInstant().toEpochMilli()
+                    }
+                }
+
+                monthDayTime(text, now, zone)?.let { return it }
+                dayTimeDash(text, now, zone)?.let { return it }
+                hourMinuteOnly(text, now, zone)?.let { return it }
+                fallback
+            } catch (_: RuntimeException) {
+                fallback
             }
-
-            monthDayTime(text, now, zone)?.let { return it }
-            dayTimeDash(text, now, zone)?.let { return it }
-            hourMinuteOnly(text, now, zone)?.let { return it }
-            return fallback
         }
 
         internal fun monthDayTime(text: String, now: LocalDateTime, zone: ZoneId): Long? {
@@ -411,9 +461,11 @@ class AutoBookkeeper(
             val day = matcher.group(2)!!.toInt()
             val hour = matcher.group(3)!!.toInt()
             val minute = matcher.group(4)!!.toInt()
+            if (hour !in 0..23 || minute !in 0..59) return null
             if (!isValidMonthDay(now.year, month, day)) return null
             var time = LocalDate.of(now.year, month, day).atTime(hour, minute)
             if (time.isAfter(now.plusMinutes(CROSS_DAY_TOLERANCE_MINUTES))) {
+                if (!isValidMonthDay(now.year - 1, month, day)) return null
                 time = LocalDate.of(now.year - 1, month, day).atTime(hour, minute)
             }
             return time.atZone(zone).toInstant().toEpochMilli()
@@ -425,11 +477,13 @@ class AutoBookkeeper(
             val day = matcher.group(2)!!.toInt()
             val hour = matcher.group(3)!!.toInt()
             val minute = matcher.group(4)!!.toInt()
+            if (hour !in 0..23 || minute !in 0..59) return null
             if (!isValidMonthDay(now.year, month, day)) return null
             var time = LocalDate.of(now.year, month, day).atTime(hour, minute)
             // 与 monthDayTime 同款跨年容差：1 月初收到的 12-28 短信按去年解释，
             // 否则会记出一笔「未来 11 个月」的账单
             if (time.isAfter(now.plusMinutes(CROSS_DAY_TOLERANCE_MINUTES))) {
+                if (!isValidMonthDay(now.year - 1, month, day)) return null
                 time = LocalDate.of(now.year - 1, month, day).atTime(hour, minute)
             }
             return time.atZone(zone).toInstant().toEpochMilli()

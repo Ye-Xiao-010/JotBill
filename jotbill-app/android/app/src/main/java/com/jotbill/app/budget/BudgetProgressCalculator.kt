@@ -6,9 +6,10 @@ import com.jotbill.app.data.entity.BudgetEntity
 /**
  * 预算进度唯一计算入口。
  *
- * 口径（2026-11-21 用户拍板）：
+ * 口径：
  * - 支出只算 expense + fee；
- * - 退款不看分类、不追溯原单所属期，只要账单发生在预算期内就按金额冲减已用；
+ * - 退款不追溯原单所属期，只要发生在预算期内即按金额冲减已用；
+ *   总预算扣减本期全部退款，单分类预算排除跨分类退款（仅扣减自身或关联原单归属该分类/子分类的退款）；
  * - 收入（income）、转账、还款不参与预算；
  * - 净额下限为 0，避免退款多于支出时出现负进度。
  */
@@ -36,7 +37,11 @@ internal object BudgetProgressCalculator {
             range.startAt,
             range.endAt
         )
-        val refunds = database.billDao().sumRefunds(range.startAt, range.endAt)
+        val refunds = database.billDao().sumRefunds(
+            budget.categoryId,
+            range.startAt,
+            range.endAt
+        )
         val spent = (grossSpent - refunds).coerceAtLeast(0L)
         val progress = if (budget.amountMinor == 0L) {
             if (spent > 0L) 1.0 else 0.0

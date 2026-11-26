@@ -592,11 +592,12 @@ internal object PendingConfirmOverlayManager {
         scope.launch {
             val pendingRow = readPendingRow(db, info.pendingId)
             if (pendingRow == null) {
-                // 读行失败（行已被删/事务未提交）：管线终止。若本次来自队列补播，
-                // 队尾条目会失去唯一的触发点 —— 回主线程补一次 drain（幂等，
-                // 槽位忙时自动 no-op）。同因（终态）清除 TTL 起点。
-                promptQueue.forget(info.pendingId)
-                mainHandler.post { drainQueuedPrompts() }
+                // 读行失败（行已被删/事务未提交）：管线终止。PromptQueue 仅主线程访问，
+                // forget 与 drain 统一投递回主线程，避免 IO 线程并发修改。
+                mainHandler.post {
+                    promptQueue.forget(info.pendingId)
+                    drainQueuedPrompts()
+                }
                 return@launch
             }
             JotBillLog.d(
@@ -1312,6 +1313,18 @@ internal object PendingConfirmOverlayManager {
                 }
             }
             overlayView = null
+            selectedCategory = null
+            selectedAccount = null
+            categoryViews.clear()
+            accountViews.clear()
+            currentConfirmButton = null
+            currentAmountInput = null
+            activeHogwartsPalette = null
+            displayedPendingId = null
+            displayedAutoDismissInfo = null
+            displayedIsEditCard = false
+            displayedAccountTouched = false
+            displayedCategoryTouched = false
             // addView 失败 ⇒ 不再需要保活 FGS。
             PendingOverlayService.stop(context)
             // addView 失败 ⇒ 槽位空闲，补播队列（2026-10-24 复审补）。

@@ -16,6 +16,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
@@ -49,6 +50,11 @@ class RecognitionModule(
     }
 
     override fun getName(): String = MODULE_NAME
+
+    override fun invalidate() {
+        scope.cancel()
+        super.invalidate()
+    }
 
     /** 查询结算会话列表；可选 status 过滤，按 createdAt 倒序返回。 */
     @ReactMethod

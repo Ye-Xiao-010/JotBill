@@ -55,7 +55,10 @@ export const QUERY_KEYS = {
   // 资产 Tab
   accountsBalance: ['accounts', 'balance'] as const,
   accountsList: ['accounts', 'list'] as const,
-  assetTrend: (year: number) => ['asset-trend', year] as const,
+  assetTrend: (year: number, month?: number) =>
+    month !== undefined
+      ? (['asset-trend', year, month] as const)
+      : (['asset-trend', year] as const),
 
   // 收支网格
   dailyGrid: (year: number, month: number) =>

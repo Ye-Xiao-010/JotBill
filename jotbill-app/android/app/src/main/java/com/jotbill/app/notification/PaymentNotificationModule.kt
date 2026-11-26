@@ -71,6 +71,11 @@ class PaymentNotificationModule(
 
     override fun getName(): String = MODULE_NAME
 
+    override fun invalidate() {
+        reactContext.removeLifecycleEventListener(this)
+        super.invalidate()
+    }
+
     /**
      * 获取通知监听权限状态
      * 

@@ -394,7 +394,15 @@ class BackupModule(
     fun clearData(promise: Promise) {
         scope.launch {
             try {
-                database.clearAllTables()
+                importEngine.withLifecycleLock {
+                    database.clearAllTables()
+                    val initializer = com.jotbill.app.data.seed.DefaultDataInitializer(database)
+                    initializer.initializeIfFirstRun()
+                    initializer.ensurePresetSubCategories()
+                    initializer.syncDefaultCategoryIcons()
+                    initializer.syncPresetSubCategoryIcons()
+                }
+                BudgetReminderNotifier.resetAlertState(reactContext)
                 withContext(Dispatchers.Main) { promise.resolve(null) }
             } catch (error: Exception) {
                 withContext(Dispatchers.Main) {

@@ -173,6 +173,7 @@ interface PendingTransactionDao {
           AND platform != :excludedPlatform
           AND amount_minor = :amountMinor
           AND occurred_at BETWEEN :windowStart AND :windowEnd
+          AND applied_rules NOT LIKE '%editBillId%'
         ORDER BY created_at DESC
         LIMIT 1
         """
@@ -303,6 +304,9 @@ interface PendingTransactionDao {
         """
     )
     suspend fun deleteByIdIfVersion(id: String, expectedVersion: Int): Int
+
+    @Query("SELECT COUNT(*) FROM pending_transactions WHERE status = 'pending' AND category_id = :categoryId")
+    suspend fun countPendingByCategoryId(categoryId: String): Int
 
     /**
      * B1：同原单 + 同金额的退款待确认卡条数 —— 导入退款行的跨源查重判据之一。

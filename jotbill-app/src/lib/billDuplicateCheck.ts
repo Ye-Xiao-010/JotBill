@@ -1,4 +1,5 @@
 import { nativeData } from '../native';
+import { isValidDateString } from '../utils/date';
 
 /**
  * P12/M8 共享查重：「同日 + 同金额 + 同收支方向」既有账单检测。
@@ -29,8 +30,11 @@ export interface DuplicateCheckItem {
 export async function findDuplicateBills(items: DuplicateCheckItem[]): Promise<string[]> {
   const hits: string[] = [];
   for (const item of items) {
-    const dayStart = new Date(`${item.date}T00:00:00`).toISOString();
-    const dayEnd = new Date(`${item.date}T23:59:59.999`).toISOString();
+    if (!item.date || !isValidDateString(item.date)) {
+      continue;
+    }
+    const dayStart = new Date(`${item.date.trim()}T00:00:00`).toISOString();
+    const dayEnd = new Date(`${item.date.trim()}T23:59:59.999`).toISOString();
     const existing = await nativeData.getBills({
       startDate: dayStart,
       endDate: dayEnd,

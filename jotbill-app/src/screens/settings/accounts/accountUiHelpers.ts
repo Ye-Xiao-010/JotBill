@@ -110,7 +110,7 @@ export function formatAccountMoney(
     maximumFractionDigits: 2,
   });
   if (amountMinor === 0) return '¥0.00';
-  return kind === 'liability' || amountMinor < 0 ? `-¥${amount}` : `¥${amount}`;
+  return amountMinor < 0 ? `-¥${amount}` : `¥${amount}`;
 }
 
 export interface HeroAmountParts {
@@ -218,7 +218,8 @@ export function partitionAccounts(accounts: readonly Account[]): PartitionedAcco
     0,
   );
   const liabilitiesSubtotalMinor = activeLiabilities.reduce(
-    (sum, account) => sum + Math.abs(account.currentBalanceMinor),
+    (sum, account) =>
+      sum + (account.currentBalanceMinor < 0 ? -account.currentBalanceMinor : 0),
     0,
   );
 

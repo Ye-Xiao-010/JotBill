@@ -55,7 +55,12 @@ object JotBillLog {
     private const val MAX_BYTES = 10L * 1024 * 1024
 
     private val queue = LinkedBlockingQueue<String>()
-    private val timeFmt = SimpleDateFormat("MM-dd HH:mm:ss.SSS", Locale.US)
+    private val timeFmt = object : ThreadLocal<SimpleDateFormat>() {
+        override fun initialValue(): SimpleDateFormat =
+            SimpleDateFormat("MM-dd HH:mm:ss.SSS", Locale.US)
+    }
+
+    private fun formatNow(): String = timeFmt.get()!!.format(Date())
 
     @Volatile
     private var writer: FileWriter? = null
@@ -94,7 +99,7 @@ object JotBillLog {
 
         Thread({ drainLoop() }, "jotbill-diag").apply { isDaemon = true }.start()
 
-        i(TAG, "=== 诊断日志开始 ${timeFmt.format(Date())} " +
+        i(TAG, "=== 诊断日志开始 ${formatNow()} " +
             "versionName=${com.jotbill.app.BuildConfig.VERSION_NAME} " +
             "build=${com.jotbill.app.BuildConfig.VERSION_CODE} ===")
         Log.i(TAG, "诊断日志落盘已启用：${file.absolutePath}")
@@ -128,16 +133,38 @@ object JotBillLog {
     /** ⚠️ 2026-10-12 删除 `mark()`：零调用点。分隔标记的实际用法是直接在日志里写
  * `================` 文案，没有调用方需要这个转发。 */
 
+    /**
+     * Release 构建落盘脱敏：保留诊断结构（tag、包名、金额、状态码与耗时），
+     * 遮蔽会暴露个人身份或交易明细的字段（标题、商户、收款人、订单号、手机号、长卡号/密钥）。
+     */
+    internal fun redactForRelease(message: String): String {
+        var result = SentryLogger.redact(message)
+        for (pattern in RELEASE_KEY_VALUE_PATTERNS) {
+            result = pattern.replace(result) { match ->
+                "${match.groupValues[1]}***"
+            }
+        }
+        result = CHINA_MOBILE_PATTERN.replace(result, "***")
+        return result
+    }
+
+    private val RELEASE_KEY_VALUE_PATTERNS = listOf(
+        Regex("""((?:title|merchant|counterparty|recipient|sender|orderId|orderNo|order|收款人|商户|交易对方|订单号)\s*[=：:]\s*)([^,\n\]）)"}]+)""", RegexOption.IGNORE_CASE)
+    )
+    private val CHINA_MOBILE_PATTERN = Regex("""(?<!\d)1[3-9]\d{9}(?!\d)""")
+
     // ---- 内部 ----
 
     private fun sink(level: String, tag: String, message: String, tr: Throwable?) {
         if (!enabled) return
+        val safeMessage = if (com.jotbill.app.BuildConfig.DEBUG) message else redactForRelease(message)
         val line = buildString {
-            append(timeFmt.format(Date()))
-            append(' ').append(level).append('/').append(tag).append(": ").append(message)
+            append(formatNow())
+            append(' ').append(level).append('/').append(tag).append(": ").append(safeMessage)
             if (tr != null) {
                 append('\n')
-                append(StringWriter().also { tr.printStackTrace(PrintWriter(it)) }.toString().trimEnd())
+                val stack = StringWriter().also { tr.printStackTrace(PrintWriter(it)) }.toString().trimEnd()
+                append(if (com.jotbill.app.BuildConfig.DEBUG) stack else redactForRelease(stack))
             }
         }
         queue.offer(line)

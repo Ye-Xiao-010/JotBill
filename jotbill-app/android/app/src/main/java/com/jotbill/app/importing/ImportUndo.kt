@@ -2,7 +2,11 @@ package com.jotbill.app.importing
 
 import androidx.room.withTransaction
 import com.jotbill.app.data.JotBillDatabase
+import com.jotbill.app.data.entity.AuditEntryEntity
 import com.jotbill.app.data.entity.ImportBatchEntity
+import com.jotbill.app.data.entity.PendingTransactionEntity
+import com.jotbill.app.pending.PendingChangeHub
+import com.jotbill.app.pending.PendingChangeInfo
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -67,15 +71,21 @@ internal class ImportUndo(
             throw UndoException("INVALID_STATE", "只允许撤销最近一批导入")
         }
 
+        val removedPendings = mutableListOf<PendingTransactionEntity>()
         val result = database.withTransaction {
             recoverInterruptedBatchesInTransaction()
             val protectedRecords = mutableListOf<ProtectedRecord>()
             var deletedCount = 0
             var rollbackCount = 0
 
+            // 同毫秒多次合并同一账单时，按 version 严格倒序回滚，防止低版本覆盖高版本回滚结果
             val billAudits = database.auditEntryDao()
                 .getByEntityTypeAndOperator("bill", batchId)
-                .sortedByDescending { it.createdAt }
+                .sortedWith(
+                    compareByDescending<AuditEntryEntity> { it.createdAt }
+                        .thenByDescending { engine.extractAuditBillVersion(it) }
+                        .thenByDescending { it.id }
+                )
             for (entry in billAudits) {
                 when (entry.action) {
                     "import_create" -> {
@@ -111,8 +121,21 @@ internal class ImportUndo(
             val pendingAudits = database.auditEntryDao()
                 .getByEntityTypeAndOperator("pending_transaction", batchId)
             for (entry in pendingAudits) {
-                val pending = database.pendingTransactionDao().getById(entry.entityId) ?: continue
+                val pending = database.pendingTransactionDao().getById(entry.entityId)
+                if (pending == null) {
+                    // 若待确认卡片已由用户确认转正，必须记入受保护清单，避免置 UNDONE 后允许重复导入
+                    val confirmAudits = database.auditEntryDao().getByEntity("pending_transaction", entry.entityId)
+                    val confirmedAudit = confirmAudits.firstOrNull { it.action == "confirm" }
+                    if (confirmedAudit != null) {
+                        protectedRecords += ProtectedRecord(
+                            billId = confirmedAudit.newValue ?: entry.entityId,
+                            reason = "该批次产生的待确认记录已由用户确认入账"
+                        )
+                    }
+                    continue
+                }
                 database.pendingTransactionDao().delete(pending)
+                removedPendings += pending
                 pendingDeletedCount += 1
             }
 
@@ -134,6 +157,20 @@ internal class ImportUndo(
                 rollbackCount = rollbackCount,
                 pendingDeletedCount = pendingDeletedCount,
                 protectedRecords = protectedRecords.toList()
+            )
+        }
+        removedPendings.forEach { pending ->
+            PendingChangeHub.emit(
+                PendingChangeInfo(
+                    pendingId = pending.id,
+                    type = pending.type,
+                    amountMinor = pending.amountMinor,
+                    sourceType = pending.sourceType,
+                    conflictReason = pending.conflictReason,
+                    occurredAt = pending.occurredAt,
+                    isNew = false,
+                    removed = true
+                )
             )
         }
         return result
@@ -177,7 +214,7 @@ internal class ImportUndo(
         if (running.isEmpty()) return
         val now = System.currentTimeMillis()
         for (batch in running) {
-            engine.cleanupPartialBatch(batch.id, respectUserProtection = false)
+            engine.cleanupPartialBatchInTransaction(batch.id, respectUserProtection = false)
             database.importBatchDao().updateStatus(
                 id = batch.id,
                 status = ImportBatchEntity.STATUS_FAILED,

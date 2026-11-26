@@ -182,21 +182,37 @@ internal class ImportFilePreparer(
                 }
                 val outputDirectory = File(tempDirectory, "extracted").apply { mkdirs() }
                 try {
-                    // ZIP 炸弹防护：解压前按 header 校验条目数与解压后总体积，
-                    // 不直接 extractAll 把不可信压缩包全量落盘
+                    // ZIP 炸弹与 ZipSlip 防护：按真实流式解压字节累计上限，不信任可伪造的 header.uncompressedSize
                     val headers = zip.fileHeaders.filter { !it.isDirectory }
                     if (headers.size > MAX_ZIP_ENTRY_COUNT) {
                         throw ImportPreparationException("IMPORT_ZIP_INVALID", "压缩包含文件过多")
                     }
-                    var totalUncompressed = 0L
+                    val canonicalOutDir = outputDirectory.canonicalFile
+                    var totalExtracted = 0L
+                    val buffer = ByteArray(COPY_BUFFER_SIZE)
                     headers.forEach { header ->
-                        totalUncompressed += header.uncompressedSize
-                        if (totalUncompressed > MAX_ZIP_TOTAL_UNCOMPRESSED_BYTES) {
+                        if (header.uncompressedSize < 0L || header.uncompressedSize > MAX_ZIP_TOTAL_UNCOMPRESSED_BYTES) {
                             throw ImportPreparationException("IMPORT_ZIP_INVALID", "压缩包解压后体积过大")
                         }
-                    }
-                    headers.forEach { header ->
-                        zip.extractFile(header, outputDirectory.absolutePath)
+                        val targetFile = File(outputDirectory, header.fileName).canonicalFile
+                        if (!targetFile.path.startsWith(canonicalOutDir.path + File.separator)) {
+                            throw ImportPreparationException("IMPORT_ZIP_INVALID", "压缩包包含非法路径")
+                        }
+                        targetFile.parentFile?.mkdirs()
+                        zip.getInputStream(header).use { input ->
+                            FileOutputStream(targetFile).use { output ->
+                                while (true) {
+                                    val read = input.read(buffer)
+                                    if (read < 0) break
+                                    if (read == 0) continue
+                                    totalExtracted += read
+                                    if (totalExtracted > MAX_ZIP_TOTAL_UNCOMPRESSED_BYTES) {
+                                        throw ImportPreparationException("IMPORT_ZIP_INVALID", "压缩包解压后体积过大")
+                                    }
+                                    output.write(buffer, 0, read)
+                                }
+                            }
+                        }
                     }
                 } catch (error: ImportPreparationException) {
                     throw error
@@ -261,10 +277,15 @@ internal class ImportFilePreparer(
         input.use { source ->
             FileOutputStream(target).use { output ->
                 val buffer = ByteArray(COPY_BUFFER_SIZE)
+                var totalBytes = 0L
                 while (true) {
                     val read = source.read(buffer)
                     if (read < 0) break
                     if (read == 0) continue
+                    totalBytes += read
+                    if (totalBytes > MAX_RAW_IMPORT_BYTES) {
+                        throw ImportPreparationException("IMPORT_FILE_TOO_LARGE", "导入文件超过 50MB 体积上限")
+                    }
                     digest.update(buffer, 0, read)
                     output.write(buffer, 0, read)
                 }
@@ -378,7 +399,8 @@ internal class ImportFilePreparer(
         private const val IMPORT_CACHE_DIR = "imports"
         private const val COPY_BUFFER_SIZE = 64 * 1024
         private const val ENCODING_PROBE_BUFFER_SIZE = 64 * 1024
-        /** ZIP 炸弹防护：条目数与解压后总体积上限（官方账单压缩包远小于此） */
+        /** ZIP 炸弹与单文件体积防护上限（官方账单远小于此） */
+        private const val MAX_RAW_IMPORT_BYTES = 50L * 1024 * 1024
         private const val MAX_ZIP_ENTRY_COUNT = 100
         private const val MAX_ZIP_TOTAL_UNCOMPRESSED_BYTES = 64L * 1024 * 1024
     }

@@ -24,4 +24,7 @@ interface BudgetDao {
 
     @Query("SELECT * FROM budgets WHERE id = :id")
     suspend fun getById(id: String): BudgetEntity?
+
+    @Query("SELECT COUNT(*) FROM budgets WHERE category_id = :categoryId")
+    suspend fun countByCategoryId(categoryId: String): Int
 }

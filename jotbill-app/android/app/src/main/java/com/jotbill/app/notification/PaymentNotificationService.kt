@@ -387,8 +387,8 @@ class PaymentNotificationService : NotificationListenerService() {
                 data = mapOf(
                     "package_name" to packageName,
                     "filter_reason" to "unsupported_or_invalid_payment",
-                    "title_digest" to title.take(30),
-                    "title_big_digest" to (titleBig ?: "").take(30)
+                    "title_len" to title.length,
+                    "title_big_len" to titleBig.length
                 ),
                 category = "notification_filter"
             )
@@ -573,7 +573,7 @@ class PaymentNotificationService : NotificationListenerService() {
         }
     }
 
-    /** 通知退款统一交付：30 分钟内同包同额只建一张卡（重复通知/多阶段通知去重）。 */
+    /** 通知退款统一交付：30 分钟内同包同额只建一张卡（处理成功后再写入去重记忆，避免异常丢单）。 */
     private fun deliverRefundNotification(evidence: PaymentEvidenceInput, sourceLabel: String) {
         val key = "${evidence.sourcePackage}|${evidence.amountMinor}"
         if (RefundNotificationMemory.isSeen(this, key)) {
@@ -583,13 +583,16 @@ class PaymentNotificationService : NotificationListenerService() {
             )
             return
         }
-        RefundNotificationMemory.mark(this, key)
         JotBillLog.i(
             TAG,
             "[ABK诊断] $sourceLabel 退款通知命中: amount=${evidence.amountMinor}分, " +
                 "channel=${evidence.receivingAccountHint}, 转 RefundLinker"
         )
-        scope.launch { handleRefundEvidence(evidence) }
+        scope.launch {
+            if (handleRefundEvidence(evidence)) {
+                RefundNotificationMemory.mark(this@PaymentNotificationService, key)
+            }
+        }
     }
 
     /** 通知标题 + 正文 + bigText 等拼接全文（不含原始数字脱敏，日志侧自行处理）。 */
@@ -768,9 +771,9 @@ class PaymentNotificationService : NotificationListenerService() {
      *
      * @param input 解析后的退款证据输入
      */
-    private suspend fun handleRefundEvidence(input: PaymentEvidenceInput) {
-        if (!shouldProcessSource(this, input.sourcePackage)) return
-        try {
+    private suspend fun handleRefundEvidence(input: PaymentEvidenceInput): Boolean {
+        if (!shouldProcessSource(this, input.sourcePackage)) return false
+        return try {
             val database = JotBillDatabaseProvider.get(applicationContext)
             val outcome = RefundLinker(database, appContext = applicationContext).processRefund(input)
             val outcomeInfo = mapOf(
@@ -783,6 +786,7 @@ class PaymentNotificationService : NotificationListenerService() {
                 category = "refund_evidence"
             )
             JotBillLog.i(TAG, "退款证据处理完成: $outcomeInfo")
+            true
         } catch (error: RuntimeException) {
             JotBillLog.w(TAG, "退款证据处理失败", error)
             SentryLogger.addBreadcrumb(
@@ -790,6 +794,7 @@ class PaymentNotificationService : NotificationListenerService() {
                 data = mapOf("package" to input.sourcePackage),
                 category = "refund_evidence"
             )
+            false
         }
     }
 
@@ -844,6 +849,15 @@ class PaymentNotificationService : NotificationListenerService() {
      */
     private suspend fun handleFeeEvidence(parse: FeeNotificationParse) {
         if (!shouldProcessSource(this, parse.feePart.sourcePackage)) return
+        // 先处理伴随的提现/转账/还款主交易，确保主账单/待确认先行落库，
+        // 随后 FeeExtractor 才能稳定关联 originalBillId。
+        parse.mainPart?.let { mainPart ->
+            try {
+                handleTransferEvidence(mainPart)
+            } catch (error: RuntimeException) {
+                JotBillLog.w(TAG, "手续费伴随主交易处理失败", error)
+            }
+        }
         try {
             val database = JotBillDatabaseProvider.get(applicationContext)
             val outcome = FeeExtractor(database).processFee(parse.feePart, parse.mainPart)
@@ -864,16 +878,6 @@ class PaymentNotificationService : NotificationListenerService() {
                 data = mapOf("package" to parse.feePart.sourcePackage),
                 category = "fee_evidence"
             )
-        }
-
-        // 主交易与手续费是两笔独立语义：主交易继续走 T3 转账/还款归属决策，
-        // 两者的 sourceEventKey 已通过语义后缀（fee/main）互相区分，不会重复入账
-        parse.mainPart?.let { mainPart ->
-            try {
-                handleTransferEvidence(mainPart)
-            } catch (error: RuntimeException) {
-                JotBillLog.w(TAG, "手续费伴随主交易处理失败", error)
-            }
         }
     }
 

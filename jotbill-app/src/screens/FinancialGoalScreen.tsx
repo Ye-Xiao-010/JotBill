@@ -30,6 +30,7 @@ import {
   type FinancialGoalUpdateInput,
 } from '../native';
 import { QUERY_KEYS, invalidateCache } from '../lib/queryClient';
+import { isValidDateString } from '../utils/date';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { typography } from '../theme';
 
@@ -143,13 +144,25 @@ export default function FinancialGoalScreen() {
   };
 
   const handleSubmitForm = () => {
+    if (!formName.trim()) {
+      showError('请输入目标名称');
+      return;
+    }
     const target = parseFloat(formTarget);
-    if (!formName.trim() || isNaN(target) || target <= 0) {return;}
+    if (isNaN(target) || target <= 0) {
+      showError('请输入大于 0 的目标金额');
+      return;
+    }
+    const trimmedDeadline = formDeadline.trim();
+    if (trimmedDeadline && !isValidDateString(trimmedDeadline)) {
+      showError('请输入有效截止日期（格式：YYYY-MM-DD）');
+      return;
+    }
 
     const payload: FinancialGoalInput = {
       name: formName.trim(),
       targetAmountMinor: Math.round(target * 100),
-      targetDate: formDeadline.trim() || null,
+      targetDate: trimmedDeadline || null,
     };
 
     if (editingGoal) {
@@ -162,7 +175,10 @@ export default function FinancialGoalScreen() {
   const handleDeposit = () => {
     if (!depositGoal) {return;}
     const amount = parseFloat(depositAmount);
-    if (isNaN(amount) || amount === 0) {return;}
+    if (isNaN(amount) || amount === 0) {
+      showError('请输入有效的存入或取出金额');
+      return;
+    }
 
     const newAmount = Math.max(
       0,
@@ -196,10 +212,25 @@ export default function FinancialGoalScreen() {
 
   const formatDeadline = (deadline?: string) => {
     if (!deadline) {return null;}
-    const d = new Date(deadline);
+    const datePrefix = /^(\d{4})-(\d{2})-(\d{2})/.exec(deadline.trim());
+    let targetDay: Date;
+    if (datePrefix) {
+      const y = Number(datePrefix[1]);
+      const m = Number(datePrefix[2]);
+      const day = Number(datePrefix[3]);
+      targetDay = new Date(y, m - 1, day);
+      if (targetDay.getFullYear() !== y || targetDay.getMonth() !== m - 1 || targetDay.getDate() !== day) {
+        return null;
+      }
+    } else {
+      const parsed = new Date(deadline);
+      if (Number.isNaN(parsed.getTime())) {return null;}
+      targetDay = new Date(parsed.getFullYear(), parsed.getMonth(), parsed.getDate());
+    }
     const now = new Date();
-    const diff = Math.ceil((d.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
-    const dateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const diff = Math.round((targetDay.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+    const dateStr = `${targetDay.getFullYear()}-${String(targetDay.getMonth() + 1).padStart(2, '0')}-${String(targetDay.getDate()).padStart(2, '0')}`;
     if (diff < 0) {return `已过期 (${dateStr})`;}
     if (diff === 0) {return '今天截止';}
     if (diff <= 30) {return `剩余 ${diff} 天`;}

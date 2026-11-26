@@ -209,7 +209,9 @@ internal object WechatBillAdapter : BillImportAdapter {
             tradeType.containsAny(TRANSFER_KEYWORDS) -> "transfer"
             tradeType.contains("收入") -> "income"
             tradeType.contains("支出") -> "expense"
-            else -> "adjustment"
+            // 中性未分类流水（理财/亲属卡/零钱通等）绝不落不可变的 adjustment 校准单：
+            // 归类为 transfer，缺少目标账户时导入引擎会转待确认交由用户明确处理。
+            else -> "transfer"
         }
     }
 

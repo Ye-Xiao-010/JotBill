@@ -240,6 +240,7 @@ describe('accountUiHelpers', () => {
   test('formats money and hero parts with privacy masking', () => {
     expect(formatAccountMoney(4286000, 'asset')).toBe('¥42,860.00');
     expect(formatAccountMoney(-462000, 'liability')).toBe('-¥4,620.00');
+    expect(formatAccountMoney(10000, 'liability')).toBe('¥100.00');
     expect(formatAccountMoney(4286000, 'asset', true)).toBe('••••••');
     expect(splitHeroAmountParts(-12345, false)).toEqual({
       sign: '-',

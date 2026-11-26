@@ -20,13 +20,15 @@ internal object RefundNotificationMemory {
 
     private const val PRUNE_THRESHOLD = 100
 
-    fun isSeen(context: Context, key: String): Boolean {
+    private val lock = Any()
+
+    fun isSeen(context: Context, key: String): Boolean = synchronized(lock) {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         val last = prefs.getLong(key, 0L)
-        return last > 0L && System.currentTimeMillis() - last < TTL_MILLIS
+        last > 0L && System.currentTimeMillis() - last < TTL_MILLIS
     }
 
-    fun mark(context: Context, key: String) {
+    fun mark(context: Context, key: String) = synchronized(lock) {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         val now = System.currentTimeMillis()
         prefs.edit().putLong(key, now).apply()

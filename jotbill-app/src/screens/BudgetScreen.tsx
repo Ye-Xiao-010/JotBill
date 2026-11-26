@@ -270,7 +270,7 @@ export default function BudgetScreen() {
       name: formName.trim(),
       amountMinor: Math.round(amount * 100),
       period: formPeriod,
-      categoryId: formCategoryId,
+      categoryId: editingBudget ? (formCategoryId ?? null) : formCategoryId,
       alertAt,
     };
     if (formPeriod === 'monthly') {

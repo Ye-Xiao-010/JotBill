@@ -76,6 +76,37 @@ internal class DatabaseMigrationGuard(
     fun lastRecoveredAt(): Long =
         preferences.getLong(LAST_RECOVERED_AT_KEY, 0L).takeIf { it > 0L } ?: 0L
 
+    fun lastKeystoreResetAt(): Long =
+        preferences.getLong(LAST_KEYSTORE_RESET_AT_KEY, 0L).takeIf { it > 0L } ?: 0L
+
+    /**
+     * Keystore 密钥丢失导致旧 SQLCipher 库永久不可解密时，将无法解密的库文件
+     * 隔离到只读归档目录并清理原路径，打破每次冷启动必崩的死循环。
+     * 不直接丢弃原始字节，保留供事后诊断。
+     */
+    fun quarantineUnreadableDatabase(nowMillis: Long = System.currentTimeMillis()): File? {
+        val existingFiles = DATABASE_FILE_NAMES
+            .map { File(databaseFile.parentFile, it) }
+            .filter { it.isFile }
+        if (existingFiles.isEmpty()) return null
+
+        val quarantineRoot = File(backupDirectory.parentFile, QUARANTINE_RELATIVE_PATH)
+        val target = File(quarantineRoot, "unreadable-$nowMillis")
+        if (!target.mkdirs() && !target.isDirectory) {
+            throw IOException("无法创建不可解密数据库隔离目录: ${target.absolutePath}")
+        }
+        for (source in existingFiles) {
+            copyFile(source, File(target, source.name))
+            if (!source.delete()) {
+                throw IOException("无法移除不可解密的旧数据库文件: ${source.name}")
+            }
+        }
+        preferences.edit()
+            .putLong(LAST_KEYSTORE_RESET_AT_KEY, nowMillis)
+            .apply()
+        return target
+    }
+
     private fun copyFile(source: File, target: File) {
         FileInputStream(source).use { input ->
             FileOutputStream(target).use { output ->
@@ -94,7 +125,9 @@ internal class DatabaseMigrationGuard(
     companion object {
         const val PREFERENCES_NAME = "jotbill_database_migration"
         private const val LAST_RECOVERED_AT_KEY = "last_recovered_at"
+        private const val LAST_KEYSTORE_RESET_AT_KEY = "last_keystore_reset_at"
         private const val BACKUP_RELATIVE_PATH = "database_migration_backup"
+        private const val QUARANTINE_RELATIVE_PATH = "database_unreadable_quarantine"
         private const val CURRENT_DIRECTORY = "last"
         private const val COPY_BUFFER_SIZE = 64 * 1024
         private val DATABASE_FILE_NAMES = listOf(

@@ -117,9 +117,7 @@ internal class FeeExtractor(
             )
             return@withTransaction FeeOutcome.Ignored
         }
-        val rulePatch = ruleEngine.sanitizePatch(
-            (ruleDecision as? RuleEngine.Decision.Continue)?.patch ?: RuleEngine.FieldPatch()
-        )
+        val rulePatch = ruleEngine.sanitizePatch(ruleDecision.patch)
 
         // ---- 金额解析失败：整条进待确认并标记，不强行入账 ----
         val amountUnparsed = input.amountMinor == 0L

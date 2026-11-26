@@ -5,6 +5,7 @@ import android.util.Base64
 import android.util.Log
 import java.security.KeyStore
 import java.security.SecureRandom
+import javax.crypto.AEADBadTagException
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
@@ -17,17 +18,77 @@ import android.security.keystore.KeyProperties
  * The raw SQLCipher passphrase is never persisted in preferences.
  */
 class KeyStoreSecretStore(context: Context) {
+    data class DatabasePassphraseResult(
+        val passphrase: ByteArray,
+        /** True when the stored passphrase could not be decrypted because the Keystore key was lost/mismatched and a fresh passphrase had to be provisioned. */
+        val regeneratedDueToKeyLoss: Boolean,
+        /** True when no stored passphrase was reused (fresh install or recovery after preference reset). */
+        val freshlyProvisioned: Boolean
+    )
+
     private val preferences = context.applicationContext.getSharedPreferences(
         PREFERENCES_NAME,
         Context.MODE_PRIVATE
     )
 
-    fun getOrCreateDatabasePassphrase(): ByteArray {
+    fun getOrCreateDatabasePassphrase(): ByteArray = resolveDatabasePassphrase().passphrase
+
+    fun resolveDatabasePassphrase(): DatabasePassphraseResult {
         val stored = preferences.getString(DATABASE_PASSPHRASE_KEY, null)
         if (stored != null) {
-            return decrypt(Base64.decode(stored, Base64.NO_WRAP))
+            val keyStore = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
+            if (!keyStore.containsAlias(KEY_ALIAS)) {
+                Log.w(
+                    TAG,
+                    "Android Keystore 中已无 $KEY_ALIAS，但本地仍有数据库口令密文" +
+                        "（典型成因：换机恢复 / 系统重置 Keystore）。将清除不可解密密文并重新生成口令。"
+                )
+                preferences.edit().clear().commit()
+                generateKey(keyStore)
+                return DatabasePassphraseResult(
+                    passphrase = provisionAndPersistPassphrase(),
+                    regeneratedDueToKeyLoss = true,
+                    freshlyProvisioned = true
+                )
+            }
+            return try {
+                val decoded = Base64.decode(stored, Base64.NO_WRAP)
+                DatabasePassphraseResult(
+                    passphrase = decrypt(decoded),
+                    regeneratedDueToKeyLoss = false,
+                    freshlyProvisioned = false
+                )
+            } catch (error: AEADBadTagException) {
+                Log.w(
+                    TAG,
+                    "本地数据库口令密文与当前 Keystore 密钥不匹配（AEADBadTagException），重新生成口令。",
+                    error
+                )
+                preferences.edit().clear().commit()
+                DatabasePassphraseResult(
+                    passphrase = provisionAndPersistPassphrase(),
+                    regeneratedDueToKeyLoss = true,
+                    freshlyProvisioned = true
+                )
+            } catch (error: IllegalArgumentException) {
+                Log.w(TAG, "本地数据库口令密文格式损坏，重新生成口令。", error)
+                preferences.edit().clear().commit()
+                DatabasePassphraseResult(
+                    passphrase = provisionAndPersistPassphrase(),
+                    regeneratedDueToKeyLoss = true,
+                    freshlyProvisioned = true
+                )
+            }
         }
 
+        return DatabasePassphraseResult(
+            passphrase = provisionAndPersistPassphrase(),
+            regeneratedDueToKeyLoss = false,
+            freshlyProvisioned = true
+        )
+    }
+
+    private fun provisionAndPersistPassphrase(): ByteArray {
         val passphrase = ByteArray(PASSPHRASE_SIZE_BYTES).also(SecureRandom()::nextBytes)
         val encrypted = encrypt(passphrase)
         check(
@@ -128,6 +189,7 @@ class KeyStoreSecretStore(context: Context) {
     }
 
     private companion object {
+        const val TAG = "KeyStoreSecretStore"
         const val ANDROID_KEYSTORE = "AndroidKeyStore"
         const val KEY_ALIAS = "jotbill_database_key"
         const val PREFERENCES_NAME = "jotbill_secure_secrets"

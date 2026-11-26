@@ -1044,10 +1044,7 @@ internal class CheckoutPaymentMatcher(
                 outcome = OrphanOutcome(OrphanOutcome.Kind.RULE_IGNORED, pendingId)
                 return@withTransaction
             }
-            val rulePatch = ruleEngine.sanitizePatch(
-                (ruleDecision as? RuleEngine.Decision.Continue)?.patch
-                    ?: RuleEngine.FieldPatch()
-            )
+            val rulePatch = ruleEngine.sanitizePatch(ruleDecision.patch)
 
             // ---- 跨通道已入账抑制（2026-11-16 真机）----
             // 其它通道（如银行短信）刚入账的账单与卡片同额 ⇒ 证据不再建卡：卡与
@@ -2352,10 +2349,7 @@ internal class CheckoutPaymentMatcher(
             }
             else -> Unit
         }
-        val rulePatch = ruleEngine.sanitizePatch(
-            (ruleDecision as? RuleEngine.Decision.Continue)?.patch
-                ?: RuleEngine.FieldPatch()
-        )
+        val rulePatch = ruleEngine.sanitizePatch(ruleDecision.patch)
         // 审查修复：支付账户缺失/停用时不自动入账——无账户账单虽不更新余额，
         // 但会话进入 COMPLETED 会让用户误以为已正确入账；转待确认由用户补选账户；
         // 阶段五 T1：规则 set_account 指定的账户优先于包名默认映射

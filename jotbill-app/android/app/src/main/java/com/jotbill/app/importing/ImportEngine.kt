@@ -234,28 +234,41 @@ internal class ImportEngine(
         } catch (error: ImportException) {
             val cancelled = error.code == "IMPORT_CANCELLED"
             batchId?.let { id ->
-                runCatching { cleanupPartialBatch(id, respectUserProtection = false) }
-                database.importBatchDao().updateStatus(
-                    id = id,
-                    status = if (cancelled) {
+                try {
+                    val targetStatus = if (cancelled) {
                         ImportBatchEntity.STATUS_CANCELLED
                     } else {
                         ImportBatchEntity.STATUS_FAILED
-                    },
-                    updatedAt = System.currentTimeMillis(),
-                    completedAt = System.currentTimeMillis()
-                )
+                    }
+                    database.withTransaction {
+                        cleanupPartialBatchInTransaction(id, respectUserProtection = false)
+                        database.importBatchDao().updateStatus(
+                            id = id,
+                            status = targetStatus,
+                            updatedAt = System.currentTimeMillis(),
+                            completedAt = System.currentTimeMillis()
+                        )
+                    }
+                } catch (cleanupError: Exception) {
+                    android.util.Log.e("ImportEngine", "中断导入清理失败，保留 RUNNING 状态待重启恢复: batch=$id", cleanupError)
+                }
             }
             throw error
         } catch (error: Exception) {
             batchId?.let { id ->
-                runCatching { cleanupPartialBatch(id, respectUserProtection = false) }
-                database.importBatchDao().updateStatus(
-                    id = id,
-                    status = ImportBatchEntity.STATUS_FAILED,
-                    updatedAt = System.currentTimeMillis(),
-                    completedAt = System.currentTimeMillis()
-                )
+                try {
+                    database.withTransaction {
+                        cleanupPartialBatchInTransaction(id, respectUserProtection = false)
+                        database.importBatchDao().updateStatus(
+                            id = id,
+                            status = ImportBatchEntity.STATUS_FAILED,
+                            updatedAt = System.currentTimeMillis(),
+                            completedAt = System.currentTimeMillis()
+                        )
+                    }
+                } catch (cleanupError: Exception) {
+                    android.util.Log.e("ImportEngine", "异常导入清理失败，保留 RUNNING 状态待重启恢复: batch=$id", cleanupError)
+                }
             }
             throw ImportException("IMPORT_FAILED", error.message ?: "导入执行失败", error)
         } finally {
@@ -633,7 +646,7 @@ internal class ImportEngine(
             put("merged", counts.merged)
             put("skipped", counts.skipped)
             put("pending", counts.pending)
-            put("failed", counts.failed)
+            put("failed", counts.failed + loaded.parseResult.errors.size)
             put("duplicates", counts.skipped)
             put("replaced", counts.merged)
             put("duplicateRecordPolicy", "skip")
@@ -675,18 +688,33 @@ internal class ImportEngine(
         if (level3Hit != null) {
             return RowDecision(RowDecision.SKIPPED)
         }
+        // adjustment 严格保留给余额校准，绝不允许导入链路直接写库或合并进既有账单
+        if (row.type == "adjustment") {
+            return RowDecision(RowDecision.PENDING)
+        }
+        val accountsState = resolveImportAccounts(row, accounts)
         if (row.type != "refund") {
             if (!row.merchantOrderId.isNullOrBlank()) {
                 val mergeTarget = database.billDao().findByOrderIdForImportMerge(row.merchantOrderId)
-                if (mergeTarget != null) {
-                    return RowDecision(RowDecision.MERGED, mergeTargetId = mergeTarget.id)
+                // M1 一致性守卫：必须类型与金额完全一致才合并，防止拆单/定金尾款覆写金额
+                // 或将 expense 覆写为缺少目标账户的 transfer 导致余额错账与账单锁死。
+                val canSafelyMerge = mergeTarget != null &&
+                    mergeTarget.type == row.type &&
+                    mergeTarget.amountMinor == row.amountMinor &&
+                    (
+                        (row.type != "transfer" && row.type != "repayment") ||
+                            accountsState.targetAccount != null ||
+                            !mergeTarget.targetAccountId.isNullOrBlank()
+                        )
+                if (canSafelyMerge) {
+                    return RowDecision(RowDecision.MERGED, mergeTargetId = mergeTarget!!.id)
                 }
             } else {
                 // P3 拍板③：无商户订单号时的强一致合并 —— 金额精确 + 同日 +
                 // 商户模糊匹配三者全中且**唯一命中**才 MERGED；缺任一、多候选
                 // 一律退回 IMPORTED + 疑似提示（只提示不合并，保守侧）。
                 val strongTarget = findStrongIdentityMergeTarget(row)
-                if (strongTarget != null) {
+                if (strongTarget != null && strongTarget.type == row.type) {
                     return RowDecision(RowDecision.MERGED, mergeTargetId = strongTarget.id)
                 }
             }
@@ -694,7 +722,6 @@ internal class ImportEngine(
             // B1/B3：退款行的跨源查重（计数差值）与累计上限（判定逻辑唯一出处，详见方法注释）。
             checkRefundRowGuard(row, refundSkipCounter)?.let { return it }
         }
-        val accountsState = resolveImportAccounts(row, accounts)
         val similarHits = guard.findSimilar(
             type = row.type,
             amountMinor = row.amountMinor,
@@ -1021,9 +1048,9 @@ internal class ImportEngine(
             )
         )
         (resolved.conflicts + lockConflicts).forEach { conflict ->
-            database.auditEntryDao().insert(
+            database.auditEntryDao().insertIfAbsent(
                 AuditEntryEntity(
-                    id = "${existing.id}:import-lock-conflict:${batchId}:${conflict.field}",
+                    id = "${existing.id}:import-lock-conflict:${batchId}:${protected.version}:${conflict.field}",
                     entityType = "field_lock_conflict",
                     entityId = existing.id,
                     action = "reject",
@@ -1244,8 +1271,21 @@ internal class ImportEngine(
         batchId: String,
         respectUserProtection: Boolean
     ) {
+        database.withTransaction {
+            cleanupPartialBatchInTransaction(batchId, respectUserProtection)
+        }
+    }
+
+    internal suspend fun cleanupPartialBatchInTransaction(
+        batchId: String,
+        respectUserProtection: Boolean
+    ) {
         val entries = database.auditEntryDao().getByEntityTypeAndOperator("bill", batchId)
-            .sortedByDescending { it.createdAt }
+            .sortedWith(
+                compareByDescending<AuditEntryEntity> { it.createdAt }
+                    .thenByDescending { extractAuditBillVersion(it) }
+                    .thenByDescending { it.id }
+            )
         for (entry in entries) {
             when (entry.action) {
                 "import_create" -> {
@@ -1270,6 +1310,12 @@ internal class ImportEngine(
             val pending = database.pendingTransactionDao().getById(entry.entityId) ?: continue
             database.pendingTransactionDao().delete(pending)
         }
+    }
+
+    internal fun extractAuditBillVersion(entry: AuditEntryEntity): Int {
+        return billFromJson(entry.newValue)?.version
+            ?: entry.id.substringAfterLast(':').toIntOrNull()
+            ?: 0
     }
 
     /** 撤销保护判定：存在该账单在导入审计时间之后的无批次前缀更新审计，或 field_locks 非空。 */

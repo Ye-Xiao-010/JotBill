@@ -528,9 +528,7 @@ class SignalBillWriter(
             )
         }
         val patch = try {
-            RuleEngine(database).sanitizePatch(
-                (decision as? RuleEngine.Decision.Continue)?.patch ?: RuleEngine.FieldPatch()
-            )
+            RuleEngine(database).sanitizePatch(decision.patch)
         } catch (error: RuntimeException) {
             RuleEngine.FieldPatch()
         }
@@ -664,6 +662,14 @@ class SignalBillWriter(
         val orderFill = current.orderId ?: orderId
         val categoryFill = current.categoryId
             ?: categoryId?.takeIf { database.categoryDao().getById(it) != null }
+            ?: merchantFill?.let { resolvedMerchant ->
+                BookkeepingCategoryHints.guess(
+                    merchant = resolvedMerchant,
+                    platform = current.platform,
+                    ruleNote = null,
+                    type = current.type
+                )?.takeIf { database.categoryDao().getById(it) != null }
+            }
         val currentAccount = current.accountId?.let { database.accountDao().getById(it) }
         val currentRank = AccountInference.rankOf(currentAccount)
         val locks = FieldPriorityResolver.parseLocks(current.fieldLocks)

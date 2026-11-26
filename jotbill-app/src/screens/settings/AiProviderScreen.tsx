@@ -41,6 +41,7 @@ import { useAlert, useTheme } from '../../providers';
 import { AI_PROVIDERS } from '../../types/ai';
 import { ProviderIcon } from '../../components/icons';
 import { HOGWARTS_FONTS } from '../../constants/hogwartsAssets';
+import { formatMonth } from '../../utils/date';
 
 interface ProviderOption {
   value: AiProvider;
@@ -118,7 +119,7 @@ export default function AiProviderScreen() {
     const tokensIn = records.reduce((sum, item) => sum + (item.tokensIn ?? 0), 0);
     const tokensOut = records.reduce((sum, item) => sum + (item.tokensOut ?? 0), 0);
     const requestCount = budgetQuery.data?.requestCount ?? records.filter((item) => item.success).length;
-    const month = budgetQuery.data?.month ?? new Date().toISOString().slice(0, 7);
+    const month = budgetQuery.data?.month ?? formatMonth(new Date());
     return {
       month,
       requestCount,

@@ -12,6 +12,7 @@ import { toReportStatistics } from '../utils/nativeStatistics';
 export function useAssetsData() {
   const now = new Date();
   const currentYear = now.getFullYear();
+  const currentMonth = now.getMonth() + 1;
   const trendStart = new Date(now.getFullYear(), now.getMonth() - 11, 1);
   const trendEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0);
 
@@ -34,7 +35,7 @@ export function useAssetsData() {
 
   // 获取近12月统计（趋势折线图用）
   const trendQuery = useQuery({
-    queryKey: QUERY_KEYS.assetTrend(currentYear),
+    queryKey: QUERY_KEYS.assetTrend(currentYear, currentMonth),
     queryFn: async () => {
       const statistics = await nativeData.getBillStatistics({
         startDate: formatDate(trendStart),

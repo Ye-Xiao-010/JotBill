@@ -43,10 +43,13 @@ export default function BillDetailScreen() {
     queryKey: QUERY_KEYS.bills.detail(billId),
     queryFn: () => nativeData.getBillById(billId),
   });
-  const categoryType = bill?.type === 'income' || bill?.type === 'refund' ? 'income' : 'expense';
+  const isRefund = bill?.type === 'refund';
+  const categoryType = bill?.type === 'income' ? 'income' : 'expense';
   const { data: categories } = useQuery({
-    queryKey: QUERY_KEYS.categories.byType(categoryType),
-    queryFn: () => nativeData.getCategories(categoryType),
+    queryKey: isRefund
+      ? QUERY_KEYS.categories.all
+      : QUERY_KEYS.categories.byType(categoryType),
+    queryFn: () => (isRefund ? nativeData.getCategories() : nativeData.getCategories(categoryType)),
     enabled: Boolean(bill),
   });
   const accountId = bill?.accountId;
@@ -54,8 +57,14 @@ export default function BillDetailScreen() {
     queryKey: ['accounts', 'detail', accountId],
     queryFn: accountId ? () => nativeData.getAccountById(accountId) : skipToken,
   });
+  const targetAccountId = bill?.targetAccountId;
+  const targetAccountQuery = useQuery({
+    queryKey: ['accounts', 'detail', targetAccountId],
+    queryFn: targetAccountId ? () => nativeData.getAccountById(targetAccountId) : skipToken,
+  });
   const category = categories?.find(item => item.id === bill?.categoryId);
   const account = accountQuery.data;
+  const targetAccount = targetAccountQuery.data;
 
   useFocusEffect(
     useCallback(() => {
@@ -156,12 +165,18 @@ export default function BillDetailScreen() {
   const amountColor = isPositive ? styles._colors.income : styles._colors.expense;
   const accountLabel = bill.type === 'refund'
     ? '退款到账账户'
-    : bill.type === 'expense' || bill.type === 'fee'
-      ? '扣款账户'
-      : bill.type === 'income' ? '到账账户' : '账户';
+    : bill.type === 'transfer' || bill.type === 'repayment'
+      ? '转出账户'
+      : bill.type === 'expense' || bill.type === 'fee'
+        ? '扣款账户'
+        : bill.type === 'income' ? '到账账户' : '账户';
+  const targetAccountLabel = bill.type === 'repayment' ? '还款账户' : '转入账户';
   const accountName = account?.name ?? (bill.accountId
     ? accountQuery.isFetching ? '正在读取' : '账户未能读取'
     : '未关联账户');
+  const targetAccountName = targetAccount?.name ?? (bill.targetAccountId
+    ? targetAccountQuery.isFetching ? '正在读取' : '账户未能读取'
+    : '');
 
   return (
     <View style={styles.container}>
@@ -240,6 +255,25 @@ export default function BillDetailScreen() {
               <Text style={[styles.detailValue, styles.accountName]}>{accountName}</Text>
             </View>
           </View>
+          {Boolean(bill.targetAccountId) && (
+            <>
+              <View style={styles.divider} />
+              <View style={styles.detailRow}>
+                <Text style={styles.detailLabel}>{targetAccountLabel}</Text>
+                <View style={styles.accountValueContainer}>
+                  {targetAccount && (
+                    <AccountIcon
+                      icon={targetAccount.icon}
+                      name={targetAccount.name}
+                      subtype={targetAccount.subtype}
+                      size={16}
+                    />
+                  )}
+                  <Text style={[styles.detailValue, styles.accountName]}>{targetAccountName}</Text>
+                </View>
+              </View>
+            </>
+          )}
           {bill.platform && (
             <>
               <View style={styles.divider} />
