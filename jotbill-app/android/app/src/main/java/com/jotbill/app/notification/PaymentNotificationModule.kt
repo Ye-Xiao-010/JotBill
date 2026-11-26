@@ -106,22 +106,6 @@ class PaymentNotificationModule(
     }
 
     /**
-     * 检查服务是否正在运行
-     * 
-     * @param promise Promise 对象，返回布尔值
-     */
-    @ReactMethod
-    fun isServiceRunning(promise: Promise) {
-        try {
-            val isRunning = checkNotificationListenerPermission() == PERMISSION_AUTHORIZED
-            promise.resolve(isRunning)
-        } catch (e: Exception) {
-            Log.e(TAG, "检查服务状态失败", e)
-            promise.reject("ERROR", "检查服务状态失败", e)
-        }
-    }
-
-    /**
      * 检查悬浮窗权限状态
      * 
      * @param promise Promise 对象，返回权限状态字符串

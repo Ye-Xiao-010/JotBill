@@ -18,23 +18,6 @@ enum class CheckoutPageRole(val storageValue: String) {
     PAYMENT_HANDOFF("PAYMENT_APP"),
     PAYMENT_RESULT("PAYMENT_RESULT");
 
-    /**
-     * 自动通道可截图判据（`Buffer.store()` 的 `targetAllowed`）。
-     *
-     * 改造 A-2（批 V-4）：由"仅结算页"放宽为 [AUTO_DISPATCHABLE_PAGE_ROLES]
-     * （商品详情页直达收银台的场景下，用户可能全程不停留在结算页）。
-     */
-    fun canBufferSnapshot(): Boolean = this in AUTO_DISPATCHABLE_PAGE_ROLES
-
-    /** 用户主动截图允许引用任何非敏感的购物普通页；未知页与结算页由手动截图放宽稳定窗口。 */
-    internal fun canBufferUserRetrySnapshot(): Boolean = this in setOf(
-        SHOPPING_HOME,
-        PRODUCT_DETAIL,
-        CART,
-        CHECKOUT,
-        UNKNOWN
-    )
-
     companion object {
         fun fromStorageValue(value: String?): CheckoutPageRole = when (value) {
             "BROWSING" -> SHOPPING_HOME
@@ -46,20 +29,11 @@ enum class CheckoutPageRole(val storageValue: String) {
 }
 
 /**
- * 自动通道"可截图 / 可派发"的页面角色集合（改造 A-2，批 V-4 定案：`IMPL_PLAN` §8.5）。
+ * 自动通道"可派发"的页面角色集合（改造 A-2，批 V-4 定案：`IMPL_PLAN` §8.5）。
  *
- * **单一出处**：本常量是该集合的唯一定义点，下列消费点**只允许写 `in/!in` 判定**：
- * 1. [CheckoutPageRole.canBufferSnapshot]（`Buffer.store()` 的 `targetAllowed`）；
- * 2. `CheckoutPageDetector.detect()` 的页面角色门禁；
- * 3. `CheckoutPurchaseIntentCoordinator.routeLocked` 的门禁 2；
- * 4. 批 V-4b：`CheckoutSnapshotBuffer` 的消费守卫与"槽内选择"判据。
- *
- * ⚠️ **严禁复用 `canBufferUserRetrySnapshot()`**：该集合含 `SHOPPING_HOME` / `UNKNOWN`
- *（G2.7 已证实为死配置集合），按字面复用会把首页与未知页放进自动通道门禁，
- * 与"宽进仅到可截三类、不放开 UNKNOWN/BROWSING"的红线冲突。
- *
- * ⚠️ 该集合**只约束自动通道**；断言通道（用户显式点击）不受页面分类约束，
- * 其判据是 [CheckoutPageRole.canBufferUserRetrySnapshot]，两者是不同分支、不得合并。
+ * **单一出处**：本常量是该集合的唯一定义点，消费点只允许写 `in/!in` 判定
+ * （如 `CheckoutPageDetector.detect()` 与 `CheckoutPaymentMatcher.findReferenceForPayment()`）。
+ * 不得放开 `SHOPPING_HOME` / `UNKNOWN`。
  */
 internal val AUTO_DISPATCHABLE_PAGE_ROLES: Set<CheckoutPageRole> = setOf(
     CheckoutPageRole.PRODUCT_DETAIL,
@@ -172,50 +146,6 @@ enum class SnapshotSourceReason(val wireValue: String) {
     CHECKOUT_STABLE("CHECKOUT_STABLE"),
     MANUAL_CAPTURE("MANUAL_CAPTURE")
 }
-
-/** 仅供内部截图协调器区分真实结算截图和用户主动重试截图。 */
-internal enum class SnapshotCaptureTarget {
-    CHECKOUT,
-    USER_RETRY
-}
-
-/** 节点树确认后可用于手动截图的最小安全上下文，不包含原始页面文本。 */
-internal data class UserRetryCaptureContext(
-    val observation: CheckoutPageObservation,
-    val sessionId: String? = null,
-    val isNodeTreeAvailable: Boolean = true
-) {
-    val shoppingPackage: String
-        get() = observation.shoppingPackage
-
-    val pageRole: CheckoutPageRole
-        get() = observation.pageRole
-
-    val pageFingerprint: String
-        get() = observation.pageFingerprint
-
-    val isSensitivePage: Boolean
-        get() = observation.isSensitivePage
-
-    fun hasSafeDisplayContext(): Boolean =
-        shoppingPackage.isNotBlank() &&
-            pageFingerprint.isSha256PageFingerprint() &&
-            !isSensitivePage &&
-            pageRole.canBufferUserRetrySnapshot()
-
-    fun isComplete(): Boolean =
-        hasSafeDisplayContext() &&
-            isNodeTreeAvailable
-
-    fun withSessionId(value: String): UserRetryCaptureContext = copy(sessionId = value)
-}
-
-internal fun String?.isSha256PageFingerprint(): Boolean =
-    !isNullOrBlank() &&
-        length == 64 &&
-        all { character ->
-            character in '0'..'9' || character in 'a'..'f' || character in 'A'..'F'
-        }
 
 /**
  * 公开会话状态，严格对应 Native.d.ts 中声明的 8 个值。

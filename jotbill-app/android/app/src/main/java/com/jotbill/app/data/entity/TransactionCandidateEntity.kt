@@ -31,9 +31,8 @@ data class TransactionCandidateEntity(
     @ColumnInfo(name = "evidence_amount_minor") val evidenceAmountMinor: Long?,
     @ColumnInfo(name = "evidence_merchant") val evidenceMerchant: String?,
     @ColumnInfo(name = "evidence_order_id") val evidenceOrderId: String?,
-    // TODO(2026-11-04 死代码标注)：aiOrderId / aiOccurredAt 由 AI 候选链路填充，
-    //  该链路已随截图识别链路 4c62779 删除 ⇒ 全仓写入恒为 null、消费点恒走空值分支。
-    //  保留待「AI 候选恢复」功能决策；删除需用户拍板。
+    // 注（2026-11-26 核实）：aiOrderId 仅在历史 AI 候选链路填充，当前写入恒为 null；
+    // aiOccurredAt 仍在 CheckoutPaymentMatcher 中由支付信号写入与时间窗口比对消费，不可误删。
     @ColumnInfo(name = "ai_order_id") val aiOrderId: String?,
     @ColumnInfo(name = "ai_occurred_at") val aiOccurredAt: Long?,
     val matched: Boolean,

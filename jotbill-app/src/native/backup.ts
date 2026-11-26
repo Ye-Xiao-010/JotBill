@@ -264,7 +264,7 @@ async function invokeVoid(
 
 type LegacyBackupModule = Omit<
   BackupModule,
-  'inspectImport' | 'executeImport' | 'cancelImport' | 'undoImport' | 'getImportBatches'
+  'importData' | 'inspectImport' | 'executeImport' | 'cancelImport' | 'undoImport' | 'getImportBatches'
 >;
 
 export const nativeBackup: LegacyBackupModule = {

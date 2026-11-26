@@ -25,7 +25,6 @@ import {
   ChevronLeft,
   Clock3,
   Copy,
-  Inbox,
   ListChecks,
   Loader2,
   Pencil,

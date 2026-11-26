@@ -65,7 +65,7 @@ async function fetchManifest(): Promise<UpdateManifest> {
 }
 
 export const appVersionApi = {
-  async checkUpdate(currentVersion: string): Promise<CheckUpdateResponse> {
+  async checkUpdate(_currentVersion: string): Promise<CheckUpdateResponse> {
     const currentVersionCode = Number.parseInt(env.get('BUILD_NUMBER') || '0', 10);
     const manifest = await fetchManifest();
     const latestVersion = manifest.latest;

@@ -6,7 +6,7 @@
 import React, { memo } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import { ThemeColors } from '../../theme/colors';
-import { borderRadius, borderWidth, spacing } from '../../theme/spacing';
+import { borderRadius, borderWidth } from '../../theme/spacing';
 import { formatNumber } from '../../utils/format';
 import { useStyles } from '../../hooks';
 import { typography } from '../../theme';

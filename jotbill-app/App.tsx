@@ -1,6 +1,5 @@
 import React, { useEffect } from 'react';
 import { NativeModules, NativeEventEmitter, StatusBar } from 'react-native';
-import { Provider as PaperProvider, MD3DarkTheme, MD3LightTheme } from 'react-native-paper';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { queryClient, invalidateCache } from './src/lib/queryClient';
@@ -71,19 +70,14 @@ function AppContent() {
     return () => subscription.remove();
   }, []);
 
-  // 配置 Paper 主题
-  const paperTheme = isDark
-    ? { ...MD3DarkTheme, colors: { ...MD3DarkTheme.colors, primary: colors.primary } }
-    : { ...MD3LightTheme, colors: { ...MD3LightTheme.colors, primary: colors.primary } };
-
   return (
-    <PaperProvider theme={paperTheme}>
+    <>
       <StatusBar
         barStyle={isDark ? 'light-content' : 'dark-content'}
         backgroundColor={isSoft || isHogwarts ? colors.background : colors.surface}
       />
       <AppNavigator />
-    </PaperProvider>
+    </>
   );
 }
 

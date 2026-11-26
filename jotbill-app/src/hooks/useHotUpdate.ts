@@ -10,9 +10,7 @@ import {
   getNativeVersion,
   markBundleLoaded,
   type HotUpdateState,
-  type UpdateStatus,
 } from '../services/hotUpdate';
-import type { HotUpdateBundleInfo } from '../services/update/hotUpdate';
 
 interface UseHotUpdateOptions {
   /** 是否在 hook 挂载时自动检查热更新，默认关闭，避免页面挂载触发联网。 */

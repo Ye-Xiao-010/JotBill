@@ -1481,7 +1481,6 @@ open class CheckoutAccessibilityService : AccessibilityService() {
             return
         }
 
-        var sawResultPage = false
         var sawSensitiveFrame = false
         try {
             for ((rootIndex, root) in roots.withIndex()) {
@@ -1519,9 +1518,6 @@ open class CheckoutAccessibilityService : AccessibilityService() {
 
                     if (!recognitionEnabled) continue
 
-                    if (observation.pageRole == CheckoutPageRole.PAYMENT_RESULT) {
-                        sawResultPage = true
-                    }
                     if (observation.pageRole != CheckoutPageRole.PAYMENT_RESULT) {
                         val rootPackage = try {
                             root.packageName?.toString().orEmpty()

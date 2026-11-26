@@ -16,8 +16,9 @@ import { ThemeShape } from '../../theme/shape';
 import { spacing, borderRadius, borderWidth, shadow } from '../../theme';
 import { useToast, useStyles } from '../../hooks';
 import { nativeData, type Category } from '../../native';
-import type { BillType } from '../../types/bill';
 import Modal from '../ui/Modal';
+
+type BillType = Category['type'];
 
 interface AddCategoryModalProps {
   visible: boolean;

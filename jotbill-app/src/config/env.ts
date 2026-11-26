@@ -30,7 +30,7 @@ class EnvironmentConfig {
     
     this.config = {
       NODE_ENV: nodeEnv,
-      API_BASE_URL: Config.API_BASE_URL || this.getDefaultApiUrl(nodeEnv),
+      API_BASE_URL: Config.API_BASE_URL || this.getDefaultApiUrl(),
       API_TIMEOUT: parseInt(Config.API_TIMEOUT || '10000', 10),
       ENABLE_LOGS: Config.ENABLE_LOGS === 'true',
       ENABLE_FLIPPER: Config.ENABLE_FLIPPER === 'true',
@@ -50,7 +50,7 @@ class EnvironmentConfig {
   /**
    * 根据环境获取默认API地址
    */
-  private getDefaultApiUrl(env: Environment): string {
+  private getDefaultApiUrl(): string {
     // 实际地址由 .env 文件提供，此处仅为缺失时的安全 fallback
     return 'http://localhost:3006/';
   }

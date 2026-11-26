@@ -33,7 +33,7 @@ import {
   Plus,
   X,
 } from 'lucide-react-native';
-import { Toast, SegmentedControl } from '../../components';
+import { SegmentedControl } from '../../components';
 import { AddCategoryModal, ConfirmModal } from '../../components/modals';
 import SoftBillKeypad from '../../components/finance/SoftBillKeypad';
 import CategoryIcon from '../../components/business/CategoryIcon';
@@ -106,7 +106,7 @@ interface CreateBillScreenProps {
 }
 
 const CreateBillScreen: React.FC<CreateBillScreenProps> = ({ navigation, route }) => {
-  const { toastState, showSuccess, showError, hideToast } = useToast();
+  const { showSuccess, showError } = useToast();
   const styles = useStyles(createStyles);
   const { isSoft, isDark, colors, playMagicSound } = useTheme();
   const insets = useSafeAreaInsets();

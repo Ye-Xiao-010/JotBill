@@ -6,7 +6,7 @@ import React, { useEffect, useRef } from 'react';
 import { View, Animated, StyleSheet, ViewStyle } from 'react-native';
 import { ThemeColors } from '../../theme/colors';
 import { ThemeShape } from '../../theme/shape';
-import { borderRadius, borderWidth } from '../../theme/spacing';
+import { borderWidth } from '../../theme/spacing';
 import { useStyles } from '../../hooks';
 
 interface SkeletonProps {

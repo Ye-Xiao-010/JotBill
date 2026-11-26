@@ -6,5 +6,4 @@ export { default as YearGrid } from './YearGrid';
 export { default as DailySummaryList } from './DailySummaryList';
 export { default as MonthlySummaryList } from './MonthlySummaryList';
 export { default as AssetTrendChart } from './AssetTrendChart';
-export { default as AssetPieChart } from './AssetPieChart';
 export { default as AssetCompositionChart } from './AssetCompositionChart';

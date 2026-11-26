@@ -2,7 +2,7 @@
  * Toast 提示组件 - Neo-Brutalism 风格
  * 粗描边 + 实心阴影 + 粗文字
  */
-import React, { useEffect, useRef } from 'react';
+import React, { useCallback, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -40,6 +40,25 @@ const Toast: React.FC<ToastProps> = ({
   const styles = useStyles(createStyles);
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const translateY = useRef(new Animated.Value(50)).current;
+  const onHideRef = useRef(onHide);
+  onHideRef.current = onHide;
+
+  const hideToast = useCallback(() => {
+    Animated.parallel([
+      Animated.timing(fadeAnim, {
+        toValue: 0,
+        duration: 200,
+        useNativeDriver: true,
+      }),
+      Animated.timing(translateY, {
+        toValue: 50,
+        duration: 200,
+        useNativeDriver: true,
+      }),
+    ]).start(() => {
+      onHideRef.current?.();
+    });
+  }, [fadeAnim, translateY]);
 
   useEffect(() => {
     if (visible) {
@@ -64,24 +83,7 @@ const Toast: React.FC<ToastProps> = ({
     } else {
       hideToast();
     }
-  }, [visible, duration]);
-
-  const hideToast = () => {
-    Animated.parallel([
-      Animated.timing(fadeAnim, {
-        toValue: 0,
-        duration: 200,
-        useNativeDriver: true,
-      }),
-      Animated.timing(translateY, {
-        toValue: 50,
-        duration: 200,
-        useNativeDriver: true,
-      }),
-    ]).start(() => {
-      onHide?.();
-    });
-  };
+  }, [visible, duration, fadeAnim, translateY, hideToast]);
 
   const getToastConfig = () => {
     switch (type) {

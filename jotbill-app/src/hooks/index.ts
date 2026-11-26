@@ -3,7 +3,6 @@
  */
 
 export { useToast } from './useToast';
-export { useAlert } from './useAlert';
 export { useAppStateManager } from './useAppState';
 export { useDashboard } from './useDashboard';
 export { useCategories } from './useCategories';

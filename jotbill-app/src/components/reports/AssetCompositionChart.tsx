@@ -2,7 +2,7 @@
  * AssetCompositionChart - 收支分类构成饼图
  * 展示近12月的收入/支出按分类的构成比例
  */
-import React, { useState } from 'react';
+import React, { useCallback, useState } from 'react';
 import { View, Text, ScrollView, StyleSheet } from 'react-native';
 import { PieChart } from 'react-native-gifted-charts';
 import { ThemeColors } from '../../theme/colors';
@@ -42,6 +42,28 @@ function CategoryPie({ title, data, dateRange }: CategoryPieProps) {
   const [focusedIndex, setFocusedIndex] = useState(-1);
 
   const total = data.reduce((sum, d) => sum + d.amount, 0);
+  const focused = focusedIndex >= 0 && focusedIndex < data.length ? data[focusedIndex] : null;
+
+  const renderCenterLabel = useCallback(
+    () => (
+      <View style={styles.centerLabel}>
+        {focused ? (
+          <>
+            <Text style={styles.centerAmount}>{formatAmount(focused.amount)}</Text>
+            <Text style={styles.centerText} numberOfLines={1}>
+              {getDisplayCategoryName(focused.categoryName)}
+            </Text>
+          </>
+        ) : (
+          <>
+            <Text style={styles.centerAmount}>{formatAmount(total)}</Text>
+            <Text style={styles.centerText}>总计</Text>
+          </>
+        )}
+      </View>
+    ),
+    [focused, styles, total],
+  );
 
   if (total === 0) {
     return (
@@ -66,8 +88,6 @@ function CategoryPie({ title, data, dateRange }: CategoryPieProps) {
     onPress: () => setFocusedIndex(focusedIndex === i ? -1 : i),
   }));
 
-  const focused = focusedIndex >= 0 && focusedIndex < data.length ? data[focusedIndex] : null;
-
   return (
     <View style={styles.container}>
       <View style={styles.header}>
@@ -81,23 +101,7 @@ function CategoryPie({ title, data, dateRange }: CategoryPieProps) {
           innerRadius={40}
           radius={62}
           innerCircleColor={styles._colors.surface}
-          centerLabelComponent={() => (
-            <View style={styles.centerLabel}>
-              {focused ? (
-                <>
-                  <Text style={styles.centerAmount}>{formatAmount(focused.amount)}</Text>
-                  <Text style={styles.centerText} numberOfLines={1}>
-                    {getDisplayCategoryName(focused.categoryName)}
-                  </Text>
-                </>
-              ) : (
-                <>
-                  <Text style={styles.centerAmount}>{formatAmount(total)}</Text>
-                  <Text style={styles.centerText}>总计</Text>
-                </>
-              )}
-            </View>
-          )}
+          centerLabelComponent={renderCenterLabel}
           focusOnPress
           isAnimated
           animationDuration={600}

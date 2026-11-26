@@ -29,7 +29,7 @@ export default function DailySummaryList({ data, onDayPress }: DailySummaryListP
 
   const formatDate = (dateStr: string) => {
     const parts = dateStr.split('-');
-    return `${parseInt(parts[1])}月${parseInt(parts[2])}日`;
+    return `${parseInt(parts[1], 10)}月${parseInt(parts[2], 10)}日`;
   };
 
   const renderItem = ({ item }: { item: DaySummary }) => {
