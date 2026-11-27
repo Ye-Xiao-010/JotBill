@@ -273,7 +273,11 @@ class SignalBillWriter(
             return@withTransaction Tx.Enriched(recent.id)
         }
 
-        val categoryId = patch.categoryId?.takeIf { database.categoryDao().getById(it) != null }
+        val categoryId = patch.categoryId?.takeIf { id ->
+            database.categoryDao().getById(id)?.let { category ->
+                RuleEngine.isCategoryCompatibleWithBillType(category.type, signal.type)
+            } == true
+        }
             ?: BookkeepingCategoryHints.guess(
                 merchant = merchant,
                 platform = signal.channelLabel ?: signal.platform,
@@ -661,7 +665,11 @@ class SignalBillWriter(
         val merchantFill = current.merchant ?: merchant
         val orderFill = current.orderId ?: orderId
         val categoryFill = current.categoryId
-            ?: categoryId?.takeIf { database.categoryDao().getById(it) != null }
+            ?: categoryId?.takeIf { id ->
+                database.categoryDao().getById(id)?.let { category ->
+                    RuleEngine.isCategoryCompatibleWithBillType(category.type, current.type)
+                } == true
+            }
             ?: merchantFill?.let { resolvedMerchant ->
                 BookkeepingCategoryHints.guess(
                     merchant = resolvedMerchant,

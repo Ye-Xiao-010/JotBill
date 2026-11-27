@@ -320,6 +320,17 @@ class RuleEngine(private val database: JotBillDatabase) {
             return min to max
         }
 
+        /**
+         * 判断目标分类类型（expense/income）与账单类型是否兼容。
+         * 防止支出分类规则误覆盖收入/退款/转账/还款/校准账单。
+         */
+        fun isCategoryCompatibleWithBillType(categoryType: String, billType: String): Boolean =
+            when (billType) {
+                "expense", "fee" -> categoryType == "expense"
+                "income" -> categoryType == "income"
+                else -> false
+            }
+
         /** 动作类型（与 Native.d.ts RuleAction 一致）。 */
         const val ACTION_SET_PLATFORM = "set_platform"
         const val ACTION_SET_MERCHANT = "set_merchant"

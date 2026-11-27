@@ -274,6 +274,17 @@ export default function BillDetailScreen() {
               </View>
             </>
           )}
+          {bill.merchant && (
+            <>
+              <View style={styles.divider} />
+              <View style={styles.detailRow}>
+                <Text style={styles.detailLabel}>商户</Text>
+                <Text style={[styles.detailValue, styles.accountName]} numberOfLines={2}>
+                  {bill.merchant}
+                </Text>
+              </View>
+            </>
+          )}
           {bill.platform && (
             <>
               <View style={styles.divider} />

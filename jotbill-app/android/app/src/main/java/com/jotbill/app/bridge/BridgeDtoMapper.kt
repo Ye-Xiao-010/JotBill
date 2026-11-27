@@ -142,6 +142,8 @@ internal object BridgeDtoMapper {
         putOptional("actionValue", entity.actionValue)
         put("priority", entity.priority)
         put("isActive", entity.isActive)
+        put("hitCount", entity.hitCount)
+        put("source", entity.source)
         put("createdAt", formatTimestamp(entity.createdAt))
         put("updatedAt", formatTimestamp(entity.updatedAt))
     }

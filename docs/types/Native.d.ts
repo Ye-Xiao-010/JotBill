@@ -633,6 +633,8 @@ export type RuleAction =
   | 'ignore'
   | 'send_to_review';
 
+export type RuleSource = 'manual' | 'from_correction';
+
 export interface Rule {
   id: string;
   name: string;
@@ -642,6 +644,8 @@ export interface Rule {
   actionValue?: string;
   priority: number;
   isActive: boolean;
+  hitCount?: number;
+  source?: RuleSource;
   createdAt: string;
   updatedAt: string;
 }
@@ -653,11 +657,39 @@ export interface RuleInput {
   action: RuleAction;
   actionValue?: string;
   priority?: number;
+  source?: RuleSource;
 }
 
 export type RuleUpdateInput = Partial<RuleInput> & {
   isActive?: boolean;
 };
+
+export type CategoryRuleSuggestionStatus =
+  | 'ineligible'
+  | 'already_covered'
+  | 'create'
+  | 'update';
+
+export interface CategoryRuleSuggestionInput {
+  merchant: string;
+  categoryId: string;
+  billType: TransactionType;
+  excludeBillId?: string;
+}
+
+export interface CategoryRuleSuggestion {
+  status: CategoryRuleSuggestionStatus;
+  merchant: string;
+  categoryId: string;
+  categoryName?: string;
+  existingRuleId?: string;
+  existingRuleName?: string;
+  existingCategoryId?: string;
+  existingCategoryName?: string;
+  matchingHistoricalCount: number;
+  lockedSkippedCount: number;
+  suggestedPriority: number;
+}
 
 // ============================================================================
 // 第九部分:AI 服务商配置类型(对应设计文档 FR-013)
@@ -1186,6 +1218,7 @@ export interface DataModule {
   updateRule(id: string, input: RuleUpdateInput): Promise<Rule>;
   deleteRule(id: string): Promise<void>;
   applyRulesToExisting(ruleId?: string): Promise<{ affected: number }>;
+  previewCategoryRuleSuggestion(input: CategoryRuleSuggestionInput): Promise<CategoryRuleSuggestion>;
 }
 
 /**

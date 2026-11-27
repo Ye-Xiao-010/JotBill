@@ -1259,7 +1259,6 @@ interface PendingEditPanelProps {
 function PendingEditPanel({ pending, submitting, onCancel, onSubmit }: PendingEditPanelProps) {
   const styles = useStyles(createStyles);
   const { alert, confirm: confirmDialog } = useAlert();
-  const queryClient = useQueryClient();
   const [type, setType] = useState<TransactionType>(pending.type);
   const [amountText, setAmountText] = useState(
     pending.amountMinor > 0 ? (pending.amountMinor / 100).toFixed(2) : '',
@@ -1340,8 +1339,9 @@ function PendingEditPanel({ pending, submitting, onCancel, onSubmit }: PendingEd
             action: 'set_account',
             actionValue: accountId,
             priority: 100,
+            source: 'from_correction',
           });
-          queryClient.invalidateQueries({ queryKey: ['rules'] });
+          invalidateCache.rules();
           alert('规则已创建', '后续匹配交易将自动应用该账户。');
         } catch (error) {
           const message = error instanceof Error ? error.message : '创建规则失败';

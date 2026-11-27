@@ -6,7 +6,10 @@ import {
   nativeData,
   type Bill,
   type BillInput,
+  type CategoryRuleSuggestion,
+  type CategoryRuleSuggestionInput,
   type FinancialGoalUpdateInput,
+  type RuleInput,
   type RuleUpdateInput,
 } from '../src/native/data';
 import { nativeRuntime, type RuntimeHealth } from '../src/native/runtime';
@@ -16,7 +19,10 @@ import type {
   AiChatSession as DeclaredAiChatSession,
   AiBudgetSummary as DeclaredAiBudgetSummary,
   BillInput as DeclaredBillInput,
+  CategoryRuleSuggestion as DeclaredCategoryRuleSuggestion,
+  CategoryRuleSuggestionInput as DeclaredCategoryRuleSuggestionInput,
   FinancialGoalUpdateInput as DeclaredFinancialGoalUpdateInput,
+  RuleInput as DeclaredRuleInput,
   RuleUpdateInput as DeclaredRuleUpdateInput,
   RuntimeHealth as DeclaredRuntimeHealth,
 } from '../../docs/types/Native';
@@ -49,7 +55,14 @@ const declaredRuntime = (value: DeclaredRuntimeHealth): RuntimeHealth => value;
 const declaredFinancialGoalUpdate = (
   value: DeclaredFinancialGoalUpdateInput,
 ): FinancialGoalUpdateInput => value;
+const declaredRuleInput = (value: DeclaredRuleInput): RuleInput => value;
 const declaredRuleUpdate = (value: DeclaredRuleUpdateInput): RuleUpdateInput => value;
+const declaredSuggestionInput = (
+  value: DeclaredCategoryRuleSuggestionInput,
+): CategoryRuleSuggestionInput => value;
+const declaredSuggestion = (
+  value: DeclaredCategoryRuleSuggestion,
+): CategoryRuleSuggestion => value;
 const declaredChatSession = (value: ChatSession): DeclaredAiChatSession => value;
 const declaredChatMessage = (value: ChatMessageData): DeclaredAiChatMessage => value;
 
@@ -102,7 +115,21 @@ test('Data 和 Ai 更新及会话 DTO 与 Native.d.ts 一致', () => {
   expect(declaredFinancialGoalUpdate({ currentAmountMinor: 300 })).toEqual({
     currentAmountMinor: 300,
   });
-  expect(declaredRuleUpdate({ isActive: false })).toEqual({ isActive: false });
+  expect(declaredRuleUpdate({ isActive: false, source: 'from_correction' })).toEqual({
+    isActive: false,
+    source: 'from_correction',
+  });
+  expect(
+    declaredRuleInput({
+      name: '瑞幸咖啡 → 咖啡',
+      condition: 'merchant_equals',
+      conditionValue: '瑞幸咖啡',
+      action: 'set_category',
+      actionValue: 'cat-coffee',
+      priority: 100,
+      source: 'from_correction',
+    }),
+  ).toMatchObject({ source: 'from_correction' });
 
   const session: ChatSession = {
     id: 'session-1',
@@ -275,4 +302,31 @@ test('Recognition 拒绝未声明的支付证据来源', async () => {
   await expect(nativeRecognition.getPaymentEvidence('session-1')).rejects.toThrow(
     'Native Recognition returned an invalid evidence source',
   );
+});
+
+test('Data 模块改分类自学习预览契约与 Native.d.ts 一致', async () => {
+  const input = declaredSuggestionInput({
+    merchant: '瑞幸咖啡',
+    categoryId: 'cat-coffee',
+    billType: 'expense',
+    excludeBillId: 'bill-1',
+  });
+  const response = declaredSuggestion({
+    status: 'create',
+    merchant: '瑞幸咖啡',
+    categoryId: 'cat-coffee',
+    categoryName: '咖啡',
+    matchingHistoricalCount: 3,
+    lockedSkippedCount: 1,
+    suggestedPriority: 100,
+  });
+  const previewCategoryRuleSuggestion = jest
+    .fn()
+    .mockResolvedValue(JSON.stringify(response));
+  modules.Data = { previewCategoryRuleSuggestion };
+
+  await expect(nativeData.previewCategoryRuleSuggestion(input)).resolves.toEqual(
+    response,
+  );
+  expect(previewCategoryRuleSuggestion).toHaveBeenCalledWith(JSON.stringify(input));
 });

@@ -251,6 +251,8 @@ export type FinancialGoalUpdateInput = Partial<FinancialGoalInput> & {
   currentAmountMinor?: number;
 };
 
+export type RuleSource = 'manual' | 'from_correction';
+
 export interface Rule {
   id: string;
   name: string;
@@ -260,6 +262,8 @@ export interface Rule {
   actionValue?: string;
   priority: number;
   isActive: boolean;
+  hitCount?: number;
+  source?: RuleSource;
   createdAt: string;
   updatedAt: string;
 }
@@ -295,11 +299,39 @@ export interface RuleInput {
   action: string;
   actionValue?: string;
   priority?: number;
+  source?: RuleSource;
 }
 
 export type RuleUpdateInput = Partial<RuleInput> & {
   isActive?: boolean;
 };
+
+export type CategoryRuleSuggestionStatus =
+  | 'ineligible'
+  | 'already_covered'
+  | 'create'
+  | 'update';
+
+export interface CategoryRuleSuggestionInput {
+  merchant: string;
+  categoryId: string;
+  billType: TransactionType;
+  excludeBillId?: string;
+}
+
+export interface CategoryRuleSuggestion {
+  status: CategoryRuleSuggestionStatus;
+  merchant: string;
+  categoryId: string;
+  categoryName?: string;
+  existingRuleId?: string;
+  existingRuleName?: string;
+  existingCategoryId?: string;
+  existingCategoryName?: string;
+  matchingHistoricalCount: number;
+  lockedSkippedCount: number;
+  suggestedPriority: number;
+}
 
 export interface PendingTransaction {
   pendingId: string;
@@ -438,6 +470,7 @@ interface RawDataModule {
   updateRule(id: string, inputJson: string): Promise<string>;
   deleteRule(id: string): Promise<null>;
   applyRulesToExisting(ruleId: string | null): Promise<string>;
+  previewCategoryRuleSuggestion(inputJson: string): Promise<string>;
   getPendingTransactions(filterJson?: string | null): Promise<string>;
   getPendingTransaction(id: string): Promise<string>;
   ignorePendingTransaction(id: string, version: number): Promise<null>;
@@ -694,6 +727,15 @@ export const nativeData = {
     return parseJson(
       await getRawDataModule().applyRulesToExisting(ruleId ?? null),
       'applyRulesToExisting',
+    );
+  },
+
+  async previewCategoryRuleSuggestion(
+    input: CategoryRuleSuggestionInput,
+  ): Promise<CategoryRuleSuggestion> {
+    return parseJson(
+      await getRawDataModule().previewCategoryRuleSuggestion(JSON.stringify(input)),
+      'previewCategoryRuleSuggestion',
     );
   },
 

@@ -77,6 +77,9 @@ export const QUERY_KEYS = {
   // 财务目标
   financialGoals: ['financial-goals'] as const,
 
+  // 个人规则
+  rules: ['rules'] as const,
+
   // 识别链路相关
   recognition: {
     status: ['recognition', 'status'] as const,
@@ -206,6 +209,13 @@ export const invalidateCache = {
   financialGoals: () => {
     queryClient.invalidateQueries({ queryKey: QUERY_KEYS.financialGoals });
     queryClient.invalidateQueries({ queryKey: ['dashboard'] });
+  },
+
+  /**
+   * 使个人规则相关缓存失效
+   */
+  rules: () => {
+    queryClient.invalidateQueries({ queryKey: QUERY_KEYS.rules });
   },
 
   /**

@@ -1,9 +1,8 @@
 /**
- * 规则管理页 - 阶段五 T7
- * 规则列表 + 创建/编辑/启停/删除 + "应用到历史"入口。
- * 命中次数（hitCount）契约未暴露，批准前不引用（契约缺口处理说明见提交信息）。
+ * 规则管理页 - 阶段五 T7 + 改分类自学习展示
+ * 规则列表 + 创建/编辑/启停/删除 + "应用到历史"入口 + 自动学习来源与命中次数展示。
  */
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   Modal,
   RefreshControl,
@@ -15,7 +14,7 @@ import {
   View,
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery } from '@tanstack/react-query';
 import {
   CheckCircle2,
   ChevronLeft,
@@ -23,13 +22,14 @@ import {
   Pencil,
   Play,
   Plus,
+  Sparkles,
   Trash2,
 } from 'lucide-react-native';
 import CategoryIcon from '../../components/business/CategoryIcon';
 import AccountIcon from '../../components/business/AccountIcon';
 import { accountDisplayName, resolveAccountIcon } from '../../constants/accountIcons';
 import { HOGWARTS_FONTS } from '../../constants/hogwartsAssets';
-import { invalidateCache } from '../../lib/queryClient';
+import { invalidateCache, QUERY_KEYS } from '../../lib/queryClient';
 import { nativeData, type Account, type Rule } from '../../native';
 import { borderRadius, borderWidth, spacing } from '../../theme/spacing';
 import { ThemeColors } from '../../theme/colors';
@@ -75,7 +75,6 @@ const CONDITION_PLACEHOLDERS: Record<string, string> = {
 
 export default function RulesScreen() {
   const navigation = useNavigation();
-  const queryClient = useQueryClient();
   const styles = useStyles(createStyles);
   const refreshControlProps = useRefreshControlProps();
   const { alert, confirm } = useAlert();
@@ -83,11 +82,28 @@ export default function RulesScreen() {
   const [editingRule, setEditingRule] = useState<Rule | null>(null);
   const [formVisible, setFormVisible] = useState(false);
 
-  const query = useQuery({ queryKey: ['rules'], queryFn: () => nativeData.getRules() });
+  const query = useQuery({ queryKey: QUERY_KEYS.rules, queryFn: () => nativeData.getRules() });
+  const categoriesQuery = useQuery({
+    queryKey: QUERY_KEYS.categories.all,
+    queryFn: () => nativeData.getCategories(),
+  });
+  const accountsQuery = useQuery({
+    queryKey: QUERY_KEYS.accountsList,
+    queryFn: () => nativeData.getAccounts(),
+  });
   const rules = query.data ?? [];
 
+  const categoryNameById = useMemo(
+    () => new Map((categoriesQuery.data ?? []).map(category => [category.id, category.name])),
+    [categoriesQuery.data],
+  );
+  const accountNameById = useMemo(
+    () => new Map((accountsQuery.data ?? []).map(account => [account.id, account.name])),
+    [accountsQuery.data],
+  );
+
   /** 规则变更后失效规则列表缓存。 */
-  const invalidateRules = () => queryClient.invalidateQueries({ queryKey: ['rules'] });
+  const invalidateRules = () => invalidateCache.rules();
 
   const toggleMutation = useMutation({
     mutationFn: ({ rule }: { rule: Rule }) =>
@@ -200,6 +216,7 @@ export default function RulesScreen() {
             <RuleCard
               key={rule.id}
               rule={rule}
+              actionValueLabel={formatRuleActionValue(rule, categoryNameById, accountNameById)}
               styles={styles}
               onToggle={() => toggleMutation.mutate({ rule })}
               onEdit={() => handleEdit(rule)}
@@ -230,9 +247,25 @@ export default function RulesScreen() {
   );
 }
 
-/** 单条规则卡片：展示条件/动作/优先级，提供启停/编辑/删除/应用操作。 */
+function formatRuleActionValue(
+  rule: Rule,
+  categoryNameById: Map<string, string>,
+  accountNameById: Map<string, string>,
+): string | undefined {
+  if (!rule.actionValue) return undefined;
+  if (rule.action === ACTION_SELECT_CATEGORY) {
+    return categoryNameById.get(rule.actionValue) ?? rule.actionValue;
+  }
+  if (rule.action === ACTION_SELECT_ACCOUNT) {
+    return accountNameById.get(rule.actionValue) ?? rule.actionValue;
+  }
+  return rule.actionValue;
+}
+
+/** 单条规则卡片：展示条件/动作/优先级/来源/命中数，提供启停/编辑/删除/应用操作。 */
 interface RuleCardProps {
   rule: Rule;
+  actionValueLabel?: string;
   styles: ReturnType<typeof createStyles>;
   onToggle: () => void;
   onEdit: () => void;
@@ -243,18 +276,45 @@ interface RuleCardProps {
   isApplying: boolean;
 }
 
-function RuleCard({ rule, styles, onToggle, onEdit, onDelete, onApply, isToggling, isDeleting, isApplying }: RuleCardProps) {
+function RuleCard({
+  rule,
+  actionValueLabel,
+  styles,
+  onToggle,
+  onEdit,
+  onDelete,
+  onApply,
+  isToggling,
+  isDeleting,
+  isApplying,
+}: RuleCardProps) {
+  const isLearned = rule.source === 'from_correction';
+  const hitCount = rule.hitCount ?? 0;
+
   return (
     <View style={[styles.ruleCard, !rule.isActive && styles.ruleCardInactive]}>
       <View style={styles.ruleHeader}>
-        <TouchableOpacity style={styles.ruleToggle} onPress={onToggle} disabled={isToggling} activeOpacity={0.7}>
-          <CheckCircle2
-            size={18}
-            color={rule.isActive ? styles._colors.success : styles._colors.textTertiary}
-          />
-          <Text style={styles.ruleStatus}>{rule.isActive ? '启用' : '停用'}</Text>
-        </TouchableOpacity>
-        <Text style={styles.rulePriority}>#{rule.priority}</Text>
+        <View style={styles.ruleHeaderLeft}>
+          <TouchableOpacity style={styles.ruleToggle} onPress={onToggle} disabled={isToggling} activeOpacity={0.7}>
+            <CheckCircle2
+              size={18}
+              color={rule.isActive ? styles._colors.success : styles._colors.textTertiary}
+            />
+            <Text style={styles.ruleStatus}>{rule.isActive ? '启用' : '停用'}</Text>
+          </TouchableOpacity>
+          {isLearned ? (
+            <View style={styles.learnedBadge}>
+              <Sparkles size={11} color={styles._colors.primary} />
+              <Text style={styles.learnedBadgeText}>自动学习</Text>
+            </View>
+          ) : null}
+        </View>
+        <View style={styles.ruleHeaderRight}>
+          {hitCount > 0 ? (
+            <Text style={styles.ruleHitCount}>命中 {hitCount} 次</Text>
+          ) : null}
+          <Text style={styles.rulePriority}>#{rule.priority}</Text>
+        </View>
       </View>
       <Text style={styles.ruleName} numberOfLines={1}>{rule.name}</Text>
       <Text style={styles.ruleText}>
@@ -262,7 +322,7 @@ function RuleCard({ rule, styles, onToggle, onEdit, onDelete, onApply, isTogglin
       </Text>
       <Text style={styles.ruleText}>
         则{ACTION_LABELS[rule.action] ?? rule.action}
-        {rule.actionValue ? `：${rule.actionValue}` : ''}
+        {actionValueLabel ? `：${actionValueLabel}` : ''}
       </Text>
       <View style={styles.ruleActions}>
         <TouchableOpacity style={styles.ruleActionButton} onPress={onApply} disabled={isApplying} activeOpacity={0.85}>
@@ -573,7 +633,32 @@ const createStyles = (colors: ThemeColors, shape: ThemeShape) => ({
     },
     ruleCardInactive: { opacity: 0.6 },
     ruleHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+    ruleHeaderLeft: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs + 2 },
+    ruleHeaderRight: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs + 2 },
     ruleToggle: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+    learnedBadge: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 3,
+      paddingHorizontal: spacing.xs + 2,
+      paddingVertical: 2,
+      borderRadius: shape.isSoft || shape.isHogwarts ? shape.radius.pill : borderRadius.small,
+      backgroundColor: colors.primaryLight,
+      borderWidth: shape.isSoft ? 0 : shape.borderWidth.subtle,
+      borderColor: shape.isHogwarts ? colors.cardBorder : colors.stroke,
+    },
+    learnedBadgeText: {
+      fontSize: 11,
+      fontWeight: shape.isHogwarts ? undefined : '700',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
+      color: shape.isSoft ? colors.primaryDark : colors.primary,
+    },
+    ruleHitCount: {
+      fontSize: 11,
+      fontWeight: shape.isHogwarts ? undefined : '600',
+      fontFamily: shape.isHogwarts ? HOGWARTS_FONTS.body : undefined,
+      color: colors.textTertiary,
+    },
     ruleStatus: {
       fontSize: 12,
       fontWeight: shape.isHogwarts ? undefined : '700',

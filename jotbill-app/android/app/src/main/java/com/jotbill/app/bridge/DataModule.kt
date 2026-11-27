@@ -15,6 +15,7 @@ import com.jotbill.app.data.dao.escapeLikeKeyword
 import com.jotbill.app.data.seed.DefaultDataInitializer
 import com.jotbill.app.data.entity.AccountEntity
 import com.jotbill.app.data.entity.BillEntity
+import com.jotbill.app.rules.CategoryRuleLearningService
 import com.jotbill.app.rules.FieldPriorityResolver
 import com.jotbill.app.data.entity.BudgetEntity
 import com.jotbill.app.data.entity.CategoryEntity
@@ -1059,6 +1060,7 @@ class DataModule(
         if (patchRules.isEmpty()) {
             return@launch JSONObject().put("affected", 0).toString()
         }
+        val categoriesById = database.categoryDao().getAll().associateBy { it.id }
         val bills = database.billDao().getMutableBills()
         var affected = 0
         for (bill in bills) {
@@ -1079,6 +1081,11 @@ class DataModule(
             )
             if (decision.hits.isEmpty()) continue
             val patch = ruleEngine.sanitizePatch(decision.patch)
+            val nextCategoryId = patch.categoryId?.takeIf { candidateId ->
+                categoriesById[candidateId]?.let { category ->
+                    RuleEngine.isCategoryCompatibleWithBillType(category.type, bill.type)
+                } == true
+            } ?: bill.categoryId
             val nextAccountId = patch.accountId?.takeIf { candidateId ->
                 if (bill.type == "transfer" || bill.type == "repayment") {
                     candidateId != bill.targetAccountId
@@ -1089,7 +1096,7 @@ class DataModule(
             val candidate = bill.copy(
                 platform = patch.platform ?: bill.platform,
                 merchant = patch.merchant ?: bill.merchant,
-                categoryId = patch.categoryId ?: bill.categoryId,
+                categoryId = nextCategoryId,
                 accountId = nextAccountId,
                 updatedAt = System.currentTimeMillis(),
                 version = bill.version + 1
@@ -1123,6 +1130,35 @@ class DataModule(
             maybeNotifyBudgetAlerts()
         }
         JSONObject().put("affected", affected).toString()
+    }
+
+    @ReactMethod
+    fun previewCategoryRuleSuggestion(inputJson: String, promise: Promise) = launch(promise) {
+        val input = parseJson(inputJson)
+        val merchant = input.optionalString("merchant")
+        val categoryId = BridgeDtoMapper.requiredString(input, "categoryId")
+        val billType = BridgeDtoMapper.requiredString(input, "billType")
+        BridgeDtoMapper.validateBillType(billType)
+        val excludeBillId = input.optionalString("excludeBillId")
+        val suggestion = CategoryRuleLearningService(database).preview(
+            rawMerchant = merchant,
+            categoryId = categoryId,
+            billType = billType,
+            excludeBillId = excludeBillId
+        )
+        JSONObject().apply {
+            put("status", suggestion.status)
+            put("merchant", suggestion.merchant)
+            put("categoryId", suggestion.categoryId)
+            suggestion.categoryName?.let { put("categoryName", it) }
+            suggestion.existingRuleId?.let { put("existingRuleId", it) }
+            suggestion.existingRuleName?.let { put("existingRuleName", it) }
+            suggestion.existingCategoryId?.let { put("existingCategoryId", it) }
+            suggestion.existingCategoryName?.let { put("existingCategoryName", it) }
+            put("matchingHistoricalCount", suggestion.matchingHistoricalCount)
+            put("lockedSkippedCount", suggestion.lockedSkippedCount)
+            put("suggestedPriority", suggestion.suggestedPriority)
+        }.toString()
     }
 
     private fun validateRuleDefinition(

@@ -34,7 +34,7 @@ import {
   X,
 } from 'lucide-react-native';
 import { SegmentedControl } from '../../components';
-import { AddCategoryModal, ConfirmModal } from '../../components/modals';
+import { AddCategoryModal, CategoryRuleLearningModal, ConfirmModal } from '../../components/modals';
 import SoftBillKeypad from '../../components/finance/SoftBillKeypad';
 import CategoryIcon from '../../components/business/CategoryIcon';
 import AccountIcon from '../../components/business/AccountIcon';
@@ -42,9 +42,20 @@ import { accountDisplayName, resolveAccountIcon } from '../../constants/accountI
 import { DEFAULT_CATEGORIES, getCategoryColor } from '../../constants/app';
 import { useToast, useCategories, useStyles } from '../../hooks';
 import { useTheme } from '../../providers';
-import { nativeData, type Account, type Bill, type Category } from '../../native';
+import {
+  nativeData,
+  type Account,
+  type Bill,
+  type Category,
+  type CategoryRuleSuggestion,
+} from '../../native';
 import { invalidateCache, QUERY_KEYS, CACHE_TIME } from '../../lib/queryClient';
 import { findDuplicateBills } from '../../lib/billDuplicateCheck';
+import {
+  applyLearnedCategoryRule,
+  checkCategoryRuleSuggestion,
+  dismissCategoryRuleSuggestion,
+} from '../../lib/categoryRuleLearning';
 import {
   applyKeypadInput,
   evaluateAmountExpression,
@@ -195,6 +206,10 @@ const CreateBillScreen: React.FC<CreateBillScreenProps> = ({ navigation, route }
   const [showDuplicateConfirm, setShowDuplicateConfirm] = useState(false);
   const [duplicateHint, setDuplicateHint] = useState('');
   const pendingDuplicateActionRef = useRef<(() => Promise<void>) | null>(null);
+  // 改分类自学习规则弹窗状态
+  const [ruleSuggestion, setRuleSuggestion] = useState<CategoryRuleSuggestion | null>(null);
+  const [ruleSuggestionCategory, setRuleSuggestionCategory] = useState<Category | null>(null);
+  const [ruleLearningSaving, setRuleLearningSaving] = useState(false);
 
   // 转账/还款不计收支，无分类概念
   const isTransferLike = type === 'transfer' || type === 'repayment';
@@ -600,6 +615,7 @@ const CreateBillScreen: React.FC<CreateBillScreenProps> = ({ navigation, route }
       };
 
       if (isEditing) {
+        const updatedCategory = isTransferLike ? null : selectedCategory;
         await nativeData.updateBill(editingBill!.id, {
           ...billData,
           version: editingBill!.version,
@@ -608,6 +624,23 @@ const CreateBillScreen: React.FC<CreateBillScreenProps> = ({ navigation, route }
         if (isSoft) triggerSoftHaptic('success');
         playMagicSound('coin_drop');
         showSuccess('账单更新成功');
+        if (updatedCategory) {
+          try {
+            const suggestion = await checkCategoryRuleSuggestion({
+              bill: editingBill!,
+              nextBillType: billData.type,
+              nextCategoryId: updatedCategory.id,
+            });
+            if (suggestion) {
+              Keyboard.dismiss();
+              setRuleSuggestion(suggestion);
+              setRuleSuggestionCategory(updatedCategory);
+              return;
+            }
+          } catch (suggestionError) {
+            console.warn('检查改分类自学习规则建议失败，跳过提示', suggestionError);
+          }
+        }
         navigation.goBack();
         return;
       }
@@ -683,6 +716,63 @@ const CreateBillScreen: React.FC<CreateBillScreenProps> = ({ navigation, route }
     } finally {
       setLoading(false);
     }
+  };
+
+  /** 改分类自学习弹窗确认：创建/更新规则并按需同步历史账单。 */
+  const handleRuleLearningConfirm = async (applyToHistory: boolean) => {
+    if (!ruleSuggestion || ruleLearningSaving) return;
+    const activeSuggestion = ruleSuggestion;
+    const categoryName =
+      ruleSuggestionCategory?.name || activeSuggestion.categoryName || '该分类';
+    const isUpdate = activeSuggestion.status === 'update';
+    setRuleLearningSaving(true);
+    try {
+      const result = await applyLearnedCategoryRule(
+        activeSuggestion,
+        categoryName,
+        applyToHistory,
+      );
+      setRuleSuggestion(null);
+      setRuleSuggestionCategory(null);
+      if (result.historyApplyFailed) {
+        showSuccess(
+          isUpdate
+            ? '规则已更新，历史账单可稍后在规则页手动应用'
+            : '已记住规则，历史账单可稍后在规则页手动应用',
+        );
+      } else if (applyToHistory && result.appliedCount > 0) {
+        showSuccess(
+          isUpdate
+            ? `已更新规则，并同步更新 ${result.appliedCount} 笔历史账单`
+            : `已记住规则，并同步更新 ${result.appliedCount} 笔历史账单`,
+        );
+      } else {
+        showSuccess(
+          isUpdate
+            ? `已更新规则：以后「${activeSuggestion.merchant}」将自动归为「${categoryName}」`
+            : `已记住：以后「${activeSuggestion.merchant}」将自动归为「${categoryName}」`,
+        );
+      }
+      navigation.goBack();
+    } catch (error: any) {
+      showError(error?.message || '保存自动分类规则失败');
+      setRuleSuggestion(null);
+      setRuleSuggestionCategory(null);
+      navigation.goBack();
+    } finally {
+      setRuleLearningSaving(false);
+    }
+  };
+
+  /** 改分类自学习弹窗忽略：本会话内不再重复提示同一商户与分类组合。 */
+  const handleRuleLearningDismiss = () => {
+    if (ruleLearningSaving) return;
+    if (ruleSuggestion) {
+      dismissCategoryRuleSuggestion(ruleSuggestion.merchant, ruleSuggestion.categoryId);
+    }
+    setRuleSuggestion(null);
+    setRuleSuggestionCategory(null);
+    navigation.goBack();
   };
 
 
@@ -849,6 +939,16 @@ const CreateBillScreen: React.FC<CreateBillScreenProps> = ({ navigation, route }
           setShowDuplicateConfirm(false);
           pendingDuplicateActionRef.current = null;
         }}
+      />
+      {/* 改分类一键生成规则自学习 */}
+      <CategoryRuleLearningModal
+        visible={ruleSuggestion !== null}
+        suggestion={ruleSuggestion}
+        categoryName={ruleSuggestionCategory?.name || ruleSuggestion?.categoryName || ''}
+        categoryIcon={ruleSuggestionCategory?.icon}
+        submitting={ruleLearningSaving}
+        onConfirm={handleRuleLearningConfirm}
+        onDismiss={handleRuleLearningDismiss}
       />
     </>
   );
